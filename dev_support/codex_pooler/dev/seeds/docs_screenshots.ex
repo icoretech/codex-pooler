@@ -45,8 +45,11 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     result = Full.run(context)
     pools = update_pools!(result.pools)
     api_keys = update_api_keys!(result.api_keys)
-    upstream_identities = update_identities!(result.upstream_identities)
-    assignments = update_assignments!(result.assignments)
+    {screenshot_identities, extra_identities} = Enum.split(result.upstream_identities, 8)
+    {screenshot_assignments, extra_assignments} = split_assignments(result.assignments)
+    upstream_identities = update_identities!(screenshot_identities)
+    assignments = update_assignments!(screenshot_assignments)
+    remove_extra_rows!(extra_assignments, extra_identities)
     models = update_models!(result.models, pools)
     catalog_sync_runs = seed_catalog_sync_runs!(pools, models)
     model_serving_overrides = seed_model_serving_overrides!(pools)
@@ -118,6 +121,17 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
       |> PoolUpstreamAssignment.changeset(%{assignment_label: label})
       |> Repo.update!()
     end)
+  end
+
+  defp split_assignments(assignments) do
+    screenshot_assignments = Enum.take(assignments, 9)
+    extra_assignments = Enum.drop(assignments, 9)
+    {screenshot_assignments, extra_assignments}
+  end
+
+  defp remove_extra_rows!(assignments, identities) do
+    Enum.each(assignments, &Repo.delete!/1)
+    Enum.each(identities, &Repo.delete!/1)
   end
 
   defp update_models!(models, pools) do

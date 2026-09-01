@@ -72,7 +72,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert route_state.visible_model_context.requested_model == setup.model.exposed_model_id
     assert route_state.visible_model_context.effective_model == setup.model.exposed_model_id
     assert Enum.map(route_state.visible_models, & &1.id) == [setup.model.id]
-    assert [_window] = Map.fetch!(route_state.quota_window_snapshots, identity.id)
+    assert [_window] = RouteState.quota_windows_for_identity(route_state, identity)
     assert Map.fetch!(route_state.circuit_snapshots, assignment.id).eligible? == true
     assert Map.fetch!(route_state.circuit_eligibility_snapshots, assignment.id).eligible? == true
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
@@ -274,7 +274,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
 
     route_state = prepared.route_state
-    refreshed_route_state = RouteState.refresh_quota_window_snapshots(route_state)
+    refreshed_route_state = RouteState.refresh_quota_snapshots(route_state)
 
     assert refreshed_route_state.visible_model == route_state.visible_model
     assert refreshed_route_state.visible_model_context == route_state.visible_model_context
@@ -346,7 +346,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       |> RouteState.put_saved_reset_auto_cohort([alternate_candidate])
       |> RouteState.put_candidates([candidate])
       |> RouteState.preload_routing_snapshots(auth, setup.model, request_options)
-      |> RouteState.refresh_quota_window_snapshots()
+      |> RouteState.refresh_quota_snapshots()
 
     assert replaced.candidates == [candidate]
     assert replaced.saved_reset_auto_cohort == [alternate_candidate]
@@ -356,13 +356,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     snapshot_at = ~U[2026-07-25 12:00:00.000000Z]
 
-    snapshots =
-      QuotaWindows.list_quota_windows_by_identity_ids(
-        [setup.identity.id],
-        DateTime.utc_now() |> DateTime.truncate(:microsecond)
-      )
+    snapshots = QuotaWindows.load_routing_quota_snapshots([setup.identity.id], snapshot_at)
 
-    assert [_window] = Map.fetch!(snapshots, setup.identity.id)
+    assert %{raw_windows: [_window], as_of: ^snapshot_at} =
+             Map.fetch!(snapshots, setup.identity.id)
 
     route_state =
       RouteState.new(%{
@@ -370,34 +367,62 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         candidates: [{setup.assignment, setup.identity}]
       })
 
-    assert route_state.quota_window_snapshots == %{}
-    assert route_state.quota_snapshot_at == nil
+    assert route_state.quota_snapshots == %{}
 
-    updated_route_state =
-      RouteState.put_quota_window_snapshot(route_state, snapshots, snapshot_at)
+    updated_route_state = RouteState.put_quota_snapshots(route_state, snapshots)
 
-    assert updated_route_state.quota_window_snapshots == snapshots
-    assert updated_route_state.quota_snapshot_at == snapshot_at
+    assert updated_route_state.quota_snapshots == snapshots
+
+    assert RouteState.quota_snapshot_for_identity(updated_route_state, setup.identity).as_of ==
+             snapshot_at
+
     assert updated_route_state.visible_model == route_state.visible_model
     assert updated_route_state.circuit_snapshots == route_state.circuit_snapshots
 
-    assert %RouteState{quota_window_snapshots: %{}, quota_snapshot_at: nil} =
-             RouteState.put_quota_window_snapshot(updated_route_state, %{}, nil)
-
-    assert_raise ArgumentError, fn ->
-      RouteState.put_quota_window_snapshot(route_state, snapshots, nil)
-    end
+    assert %RouteState{quota_snapshots: %{}} =
+             RouteState.put_quota_snapshots(updated_route_state, %{})
 
     assert_raise ArgumentError, fn ->
       RouteState.new(%{
         visible_model: setup.model,
         candidates: [{setup.assignment, setup.identity}],
-        quota_window_snapshots: snapshots
+        quota_snapshots: %{setup.identity.id => []}
       })
     end
+  end
 
-    assert_raise ArgumentError, fn ->
-      RouteState.put_quota_window_snapshot(route_state, snapshots, :invalid_timestamp)
+  test "snapshot load failure aborts without installing a partial or older generation" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    route_state =
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: [{setup.assignment, setup.identity}]
+      })
+      |> RouteState.refresh_quota_snapshots()
+
+    original_snapshots = route_state.quota_snapshots
+
+    assert_raise CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot.LoadError, fn ->
+      RouteState.refresh_quota_snapshots(route_state, fn _identity_ids, _as_of ->
+        raise CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot.LoadError
+      end)
+    end
+
+    assert route_state.quota_snapshots == original_snapshots
+  end
+
+  test "missing identity snapshot entry fails instead of becoming zero-row coverage" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    route_state =
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: [{setup.assignment, setup.identity}]
+      })
+
+    assert_raise KeyError, fn ->
+      RouteState.quota_windows_for_identity(route_state, setup.identity)
     end
   end
 
@@ -417,7 +442,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         candidates: [{setup.assignment, setup.identity}]
       })
 
-    traced_mfa = {QuotaWindows, :list_quota_windows_by_identity_ids, 2}
+    traced_mfa = {QuotaWindows, :load_routing_quota_snapshots, 2}
     {:module, QuotaWindows} = Code.ensure_loaded(QuotaWindows)
     :erlang.trace_pattern(traced_mfa, true, [])
 
@@ -445,16 +470,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       after_preload = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       assert_receive {:trace, pid, :call,
-                      {QuotaWindows, :list_quota_windows_by_identity_ids,
+                      {QuotaWindows, :load_routing_quota_snapshots,
                        [[identity_id], %DateTime{} = read_at]}}
                      when pid == task.pid and identity_id == setup.identity.id
 
-      assert preloaded.quota_snapshot_at == read_at
+      assert RouteState.quota_snapshot_for_identity(preloaded, setup.identity).as_of == read_at
       assert DateTime.compare(read_at, before_preload) in [:eq, :gt]
       assert DateTime.compare(read_at, after_preload) in [:eq, :lt]
 
-      assert preloaded.quota_window_snapshots ==
-               QuotaWindows.list_quota_windows_by_identity_ids([setup.identity.id], read_at)
+      assert preloaded.quota_snapshots ==
+               QuotaWindows.load_routing_quota_snapshots([setup.identity.id], read_at)
     after
       :erlang.trace_pattern(traced_mfa, false, [])
 
@@ -561,14 +586,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
           PartitionRoutability.routable_assignment_ids_by_model_id(
             [setup.model],
             route_state.visible_model_context.candidates_by_model_id,
-            route_state.quota_window_snapshots,
-            route_state.quota_snapshot_at
+            route_state.quota_snapshots
           )
         end
       )
 
     assert route_state.visible_models == [setup.model]
-    assert Map.keys(route_state.quota_window_snapshots) == [setup.identity.id]
+    assert Map.keys(route_state.quota_snapshots) == [setup.identity.id]
     assert RouteState.codex_models_etag(route_state) == expected_catalog.etag
   end
 
@@ -735,7 +759,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       end)
 
     assert {:ok, prepared} = result
-    assert Map.get(queries, "account_quota_windows", 0) == 1
+    assert Map.get(queries, "upstream_identities", 0) == 1
+    assert Map.get(queries, "account_quota_windows", 0) == 0
 
     models_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
     assert %{"models" => [%{"slug" => slug}]} = json_response(models_conn, 200)
@@ -838,7 +863,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              lane
 
       snapshot_identity_ids =
-        prepared.route_state.quota_window_snapshots
+        prepared.route_state.quota_snapshots
         |> Map.keys()
         |> Enum.sort()
 
@@ -1399,13 +1424,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              divergent.assignment.id
            ]
 
-    assert Map.keys(prepared.route_state.quota_window_snapshots) |> Enum.sort() ==
+    assert Map.keys(prepared.route_state.quota_snapshots) |> Enum.sort() ==
              Enum.sort([setup.identity.id, divergent.identity.id])
 
     assert Map.keys(prepared.route_state.circuit_snapshots) |> Enum.sort() ==
              Enum.sort([setup.assignment.id, divergent.assignment.id])
 
-    assert Map.get(queries, "account_quota_windows", 0) == 1
+    assert Map.get(queries, "upstream_identities", 0) == 1
+    assert Map.get(queries, "account_quota_windows", 0) == 0
     assert Map.get(queries, "routing_circuit_states", 0) == 1
   end
 
@@ -1687,7 +1713,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Enum.sort(candidate_ids(prepared.candidates)) == every_assignment_id
 
     # Quota is now read for every identity, healthy ones included.
-    assert Enum.sort(Map.keys(prepared.route_state.quota_window_snapshots)) ==
+    assert Enum.sort(Map.keys(prepared.route_state.quota_snapshots)) ==
              Enum.sort(starved.exhausted_identity_ids ++ starved.healthy_identity_ids)
 
     # A single partition carries no partition-filtering evidence.
@@ -1798,7 +1824,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     # One quota read backs the routing cap and the models ETag build; the two
     # selections resolve from the same observation by construction.
-    assert Map.get(queries, "account_quota_windows", 0) == 1
+    assert Map.get(queries, "upstream_identities", 0) == 1
+    assert Map.get(queries, "account_quota_windows", 0) == 0
 
     policy = prepared.request_options.routing.api_key_policy
     pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)

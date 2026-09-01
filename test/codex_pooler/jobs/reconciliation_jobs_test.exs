@@ -31,6 +31,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
@@ -1291,6 +1292,66 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       assert {"authorization", "Bearer " <> ^refreshed_access_token} =
                List.keyfind(retried_usage_request.headers, "authorization", 0)
+    end
+
+    test "successful token refresh persists the retried probe observation timestamp" do
+      refreshed_access_token = "rotated-observation-access-token-do-not-leak"
+      refresh_token = "observation-refresh-token-do-not-leak"
+      initial_observed_at = ~U[2026-08-30 10:00:00.000000Z]
+      retry_observed_at = ~U[2026-08-30 10:00:05.000000Z]
+
+      upstream =
+        start_upstream(
+          {:sequence,
+           [
+             FakeUpstream.json_response(%{"error" => "expired"}, 401),
+             FakeUpstream.json_response(%{
+               "access_token" => refreshed_access_token,
+               "expires_in" => 3_600
+             }),
+             FakeUpstream.json_response(%{
+               "plan_type" => "plus",
+               "rate_limit" => %{"allowed" => true, "limit_reached" => false}
+             })
+           ]}
+        )
+
+      {pool, assignment} =
+        active_assignment_fixture(
+          %{"base_url" => FakeUpstream.url(upstream)},
+          identity_metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        )
+
+      identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(identity, %{
+                 secret_kind: "refresh_token",
+                 plaintext: refresh_token
+               })
+
+      assert {:ok, result} =
+               Upstreams.reconcile_pool_account(pool, assignment,
+                 observed_at: initial_observed_at,
+                 retry_observed_at: retry_observed_at
+               )
+
+      assert result.status == :succeeded
+
+      snapshot =
+        identity
+        |> Repo.reload!()
+        |> Map.fetch!(:metadata)
+        |> Map.fetch!(AccountAvailabilityStore.metadata_key())
+
+      assert snapshot ==
+               AccountAvailabilityStore.encode!(
+                 :available,
+                 retry_observed_at,
+                 snapshot["credential_epoch"]
+               )
+
+      refute snapshot["observed_at"] == DateTime.to_iso8601(initial_observed_at)
     end
 
     test "definitive provider usage auth rejection disables the identity assignment" do
@@ -5330,7 +5391,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     test "scheduled reconciliation policy and expiry negatives enqueue nothing" do
       scenarios = [
         {:policy_disabled, [policy_enabled?: false], :ok},
-        {:no_weekly_usage, [weekly_used_percent: nil], :error},
+        {:no_weekly_usage, [weekly_used_percent: nil], :ok},
         {:natural_reset_buffer, [weekly_reset_after_seconds: 30 * 60], :ok},
         {:blocked_only, [expiration?: false, weekly_used_percent: 100], :ok},
         {:threshold_only,
@@ -7053,12 +7114,15 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   end
 
   defp usage_payload do
+    reset_at = DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
+
     %{
       "rate_limit" => %{
         "primary_window" => %{
           "used_percent" => 25,
           "limit_window_seconds" => 18_000,
-          "reset_after_seconds" => 3_600
+          "reset_after_seconds" => 3_600,
+          "reset_at" => reset_at
         }
       }
     }
@@ -7072,12 +7136,15 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   end
 
   defp weekly_usage_payload do
+    reset_at = DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
+
     %{
       "rate_limit" => %{
         "secondary_window" => %{
           "used_percent" => 25,
           "limit_window_seconds" => 604_800,
-          "reset_after_seconds" => 3_600
+          "reset_after_seconds" => 3_600,
+          "reset_at" => reset_at
         }
       }
     }
@@ -7141,13 +7208,15 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
             "secondary_window" => %{
               "used_percent" => used_percent,
               "limit_window_seconds" => 604_800,
+              "reset_after_seconds" =>
+                Keyword.get(opts, :weekly_reset_after_seconds, 2 * 60 * 60),
               "reset_at" =>
                 observed_at
                 |> DateTime.add(
                   Keyword.get(opts, :weekly_reset_after_seconds, 2 * 60 * 60),
                   :second
                 )
-                |> DateTime.to_iso8601()
+                |> DateTime.to_unix()
             }
           }
       end

@@ -137,7 +137,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
               "used_percent" => used_percent,
               "limit_window_seconds" => @window_seconds,
               "reset_after_seconds" => reset_after_seconds,
-              "reset_at" => DateTime.to_iso8601(reset_at)
+              "reset_at" => DateTime.to_unix(reset_at)
             }
           }
         }
@@ -185,7 +185,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     secondary_window = %{
       "used_percent" => used_percent,
       "reset_after_seconds" => reset_after_seconds,
-      "reset_at" => DateTime.to_iso8601(reset_at)
+      "reset_at" => DateTime.to_unix(reset_at)
     }
 
     secondary_window =
@@ -220,7 +220,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
               "used_percent" => used_percent,
               "limit_window_seconds" => @window_seconds,
               "reset_after_seconds" => @window_seconds,
-              "reset_at" => DateTime.to_iso8601(reset_at)
+              "reset_at" => DateTime.to_unix(reset_at)
             }
           }
         }
@@ -1560,7 +1560,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert DateTime.compare(row.reset_at, anchored_reset) == :eq
     assert DateTime.compare(row.observed_at, observed_at) == :eq
     assert DateTime.compare(row.last_sync_at, observed_at) == :eq
-    assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(observed_at)
+    assert row.metadata["__quota_relative_liveness_v1"] == provider_iso8601(observed_at)
     assert :none = EvidenceStore.parse_candidate(row.metadata)
     refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
     refute Map.has_key?(row.metadata, "__quota_cycle_confirmation_v1")
@@ -1619,7 +1619,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert DateTime.compare(row.reset_at, floating.reset_at) == :eq
     assert DateTime.compare(row.observed_at, observed_at) == :eq
     assert DateTime.compare(row.last_sync_at, observed_at) == :eq
-    assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(observed_at)
+    assert row.metadata["__quota_relative_liveness_v1"] == provider_iso8601(observed_at)
     assert :none = EvidenceStore.parse_candidate(row.metadata)
     refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
     refute Map.has_key?(row.metadata, "__quota_cycle_confirmation_v1")
@@ -1660,7 +1660,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
         assert DateTime.compare(row.last_sync_at, observed_at) == :eq
         assert :none = EvidenceStore.parse_candidate(row.metadata)
         refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
-        assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(observed_at)
+        assert row.metadata["__quota_relative_liveness_v1"] == provider_iso8601(observed_at)
       end
     end
   end
@@ -1772,7 +1772,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     refute Map.has_key?(anchored.metadata, "__quota_relative_candidate_liveness_v1")
 
     assert anchored.metadata["__quota_relative_liveness_v1"] ==
-             DateTime.to_iso8601(anchored_at)
+             provider_iso8601(anchored_at)
 
     replayed_at = DateTime.add(anchored_at, 60, :second)
     record_spark_payload!(identity, anchored_payload, replayed_at)
@@ -1895,7 +1895,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert pending.metadata["__quota_relative_liveness_v1"] == canonical_provider_watermark
 
     assert pending.metadata["__quota_relative_candidate_liveness_v1"] ==
-             DateTime.to_iso8601(candidate_at)
+             provider_iso8601(candidate_at)
 
     before_confirmation_at = DateTime.add(candidate_at, 2, :minute)
     equivalent_reset = DateTime.add(fixed_reset, 5, :second)
@@ -1914,7 +1914,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert DateTime.compare(retained.observed_at, floating.observed_at) == :eq
 
     assert retained.metadata["__quota_relative_candidate_liveness_v1"] ==
-             DateTime.to_iso8601(candidate_at)
+             provider_iso8601(candidate_at)
 
     confirmed_at = DateTime.add(candidate_at, 3, :minute)
 
@@ -1950,7 +1950,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert DateTime.compare(anchored.reset_at, floating.reset_at) == :lt
     assert DateTime.compare(anchored.observed_at, confirmed_at) == :eq
     assert DateTime.compare(anchored.last_sync_at, confirmed_at) == :eq
-    assert anchored.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(confirmed_at)
+    assert anchored.metadata["__quota_relative_liveness_v1"] == provider_iso8601(confirmed_at)
     assert :none = EvidenceStore.parse_candidate(anchored.metadata)
     refute Map.has_key?(anchored.metadata, "__quota_relative_candidate_liveness_v1")
     refute Map.has_key?(anchored.metadata, "__quota_cycle_confirmation_v1")
@@ -2046,7 +2046,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert DateTime.compare(restarted_candidate.reset_at, mismatched_reset) == :eq
 
     assert restarted.metadata["__quota_relative_candidate_liveness_v1"] ==
-             DateTime.to_iso8601(restarted_at)
+             provider_iso8601(restarted_at)
 
     assert DateTime.compare(restarted.reset_at, floating.reset_at) == :eq
     assert DateTime.compare(restarted.observed_at, floating.observed_at) == :eq
@@ -2087,7 +2087,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert DateTime.compare(restarted_candidate.reset_at, fixed_reset) == :eq
 
     assert restarted.metadata["__quota_relative_candidate_liveness_v1"] ==
-             DateTime.to_iso8601(restarted_at)
+             provider_iso8601(restarted_at)
 
     assert DateTime.compare(restarted.reset_at, floating.reset_at) == :eq
     assert DateTime.compare(restarted.observed_at, floating.observed_at) == :eq
@@ -2591,7 +2591,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     cached_row = model_weekly_row(identity)
     refute cached_row.metadata["reset_state"] == "floating"
     assert Decimal.equal?(cached_row.used_percent, Decimal.new("64"))
-    assert DateTime.compare(cached_row.reset_at, fixed_reset) == :eq
+    assert DateTime.compare(cached_row.reset_at, DateTime.truncate(fixed_reset, :second)) == :eq
 
     t3 = DateTime.add(t0, 600, :second)
 
@@ -2608,6 +2608,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     live_row = model_weekly_row(identity)
     assert live_row.metadata["reset_state"] == "floating"
     assert Decimal.equal?(live_row.used_percent, Decimal.new("0"))
-    assert DateTime.compare(live_row.reset_at, moving_reset) == :eq
+    assert DateTime.compare(live_row.reset_at, DateTime.truncate(moving_reset, :second)) == :eq
   end
+
+  defp provider_iso8601(datetime),
+    do: datetime |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 end

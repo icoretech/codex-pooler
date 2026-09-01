@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
   alias CodexPooler.Admin.UpstreamCircuitReadiness
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
@@ -17,6 +18,43 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
 
   setup :register_and_log_in_user
+
+  test "account snapshot preserves fresh provider availability without fabricating quota rows", %{
+    scope: scope
+  } do
+    as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    pool = pool_fixture()
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Example Available Without Windows",
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:available, as_of, 1)
+        }
+      })
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+
+    assert account.identity.id == identity.id
+    assert account.quota_readiness.state == "provider_available_no_windows"
+    assert account.quota_readiness.label == "Provider available"
+    assert account.quota_readiness.tone == :warning
+    assert account.quota_readiness.routing_ready_now?
+    assert account.quota_limits |> Enum.all?(&is_nil(&1.reset_at))
+    projected = Map.drop(account, [:identity])
+    refute inspect(projected) =~ AccountAvailabilityStore.metadata_key()
+    refute inspect(projected) =~ "credential_epoch"
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+    assert cockpit.quota_readiness == account.quota_readiness
+    assert cockpit.charts.pool_contribution.items != []
+    assert Enum.all?(cockpit.charts.pool_contribution.items, & &1.routing_usable?)
+
+    async_metrics = UpstreamCockpitReadModel.request_metrics(scope, cockpit)
+    assert Enum.all?(async_metrics.pool_contribution.items, & &1.routing_usable?)
+  end
 
   test "owner snapshot attaches sorted observed and preserved model rows",
        %{conn: conn, scope: scope} do
@@ -706,8 +744,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
 
     assert visible_identity_id == visible_identity.id
     assert confirmation.confirmation_state == :awaiting_confirmation
-    assert Map.get(queries, "account_quota_windows", 0) == 1
-    assert fold_count == 1
+    assert Map.get(queries, "account_quota_windows", 0) == 0
+    assert Map.get(queries, "upstream_identities", 0) >= 1
+    assert fold_count == 0
 
     projection = inspect(accounts)
     refute projection =~ hidden_identity.id
@@ -1075,7 +1114,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
         pool_assignments =
           for index <- 1..size do
             pool = pool_fixture()
-            %{assignment: assignment} = upstream_assignment_fixture(pool)
+            %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
             model_id = "gpt-example-read-model-#{size}-#{index}"
 
             model_fixture(pool, %{
@@ -1083,15 +1122,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
               metadata: %{"source_assignment_models" => %{assignment.id => %{}}}
             })
 
-            {pool, assignment}
+            {pool, identity, assignment}
           end
 
         pools = Enum.map(pool_assignments, &elem(&1, 0))
+        expected_identity_ids = MapSet.new(pool_assignments, &elem(&1, 1).id)
 
         parameter_probes =
           pool_assignments
           |> Enum.with_index()
-          |> Map.new(fn {{_pool, assignment}, index} ->
+          |> Map.new(fn {{_pool, _identity, assignment}, index} ->
             {index, assignment.id}
           end)
 
@@ -1102,6 +1142,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
           )
 
         assert length(accounts) == size
+        assert MapSet.new(accounts, & &1.identity.id) == expected_identity_ids
+        assert source_count(query_events, "pool_upstream_assignments") == 1
         assert source_count(query_events, "models") == 1
         assert source_count(query_events, "ledger_entries") == 2
 

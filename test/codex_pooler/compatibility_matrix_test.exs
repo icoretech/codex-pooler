@@ -5,6 +5,42 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   alias CodexPooler.Pools.RoutingSettings
 
   describe "catalog and Responses runtime contract" do
+    test "pins provider-attested windowless routing below reset-bearing quota evidence" do
+      feature = CompatibilityMatrix.by_slug!(:degraded_routing)
+      fixture = CompatibilityMatrix.fixture!(:degraded_routing)
+
+      assert feature.quota_evidence == %{
+               normal_authority: "fresh_reset_bearing_windows",
+               lower_priority_fallback: "provider_attested_windowless_availability",
+               operator_or_sku_gate: false,
+               synthetic_window_or_reset: false
+             }
+
+      assert fixture.windowless_provider_availability == %{
+               routing_state: "windowless_provider_available",
+               required_metadata: ["version", "state", "observed_at", "credential_epoch"],
+               requires_current_credential_epoch: true,
+               requires_fresh_observation: true,
+               requires_no_account_window_evidence: true,
+               precedence: "below_reset_bearing_windows",
+               fabricated_window_or_reset: false
+             }
+
+      assert fixture.fail_closed == %{
+               status: 503,
+               blocked_error_code: "quota_exhausted",
+               unavailable_error_code: "quota_evidence_unavailable",
+               states: [
+                 "provider_blocked",
+                 "provider_unknown",
+                 "stale_provider_availability",
+                 "credential_epoch_mismatch",
+                 "malformed_provider_availability",
+                 "applicable_model_or_additional_blocker"
+               ]
+             }
+    end
+
     test "distinguishes public terminal compaction triggers from the unsupported compact route" do
       fixture = CompatibilityMatrix.fixture!(:responses_chat)
 

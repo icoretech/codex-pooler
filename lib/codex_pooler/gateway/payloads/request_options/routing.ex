@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
     credit_backed_probe_candidate_count
     weekly_probe_candidate_count
     reset_probe_candidate_count
+    windowless_provider_available_candidate_count
     eligible_candidate_count
     refreshed_stale_quota
   )

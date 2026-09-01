@@ -9,6 +9,19 @@ defmodule CodexPooler.Accounting.MetadataTest do
   import CodexPooler.AccountingTestSupport
 
   describe "sanitize_metadata/1" do
+    test "preserves bounded windowless quota decision state and candidate count" do
+      metadata = %{
+        "quota_decision" => %{
+          "allowed" => true,
+          "routing_state" => "windowless_provider_available",
+          "windowless_provider_available_candidate_count" => 2,
+          "eligible_candidate_count" => 2
+        }
+      }
+
+      assert Accounting.sanitize_metadata(metadata) == metadata
+    end
+
     test "preserves the five exact bounded rejection metadata key names" do
       metadata = %{
         "rejection_error_code" => "invalid_request",

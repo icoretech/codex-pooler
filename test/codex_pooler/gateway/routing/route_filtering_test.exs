@@ -4,6 +4,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
+    only: [gateway_setup: 2, start_upstream: 1]
+
+  alias CodexPooler.Accounting.Attempt
   alias CodexPooler.Catalog
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -17,8 +21,11 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Gateway.Routing.SavedResetAutoRedeem
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -127,6 +134,153 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
               }} = RouteFiltering.filter_candidates(filter_input)
     end
 
+    test "provider blocker keeps the exact exhausted contract even when quota is optional" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool)
+      snapshot_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      blocked_identity = %{
+        identity
+        | metadata:
+            Map.put(
+              identity.metadata,
+              AccountAvailabilityStore.metadata_key(),
+              AccountAvailabilityStore.encode!(:blocked, snapshot_at, 1)
+            )
+      }
+
+      filter_input =
+        filter_input(pool, api_key, assignment, blocked_identity, "provider-blocked-optional")
+
+      route_state =
+        RouteState.new(%{
+          visible_model: filter_input.model,
+          candidates: filter_input.candidates,
+          circuit_snapshots: %{assignment.id => true}
+        })
+        |> put_test_quota_snapshots(%{blocked_identity.id => []}, snapshot_at)
+
+      for opts <- [[], [quota_mode: :optional]] do
+        assert {:error,
+                %{
+                  status: 503,
+                  code: "quota_exhausted",
+                  message: "upstream quota is exhausted until its reset time",
+                  candidate_exclusions: [
+                    %{
+                      reasons: [
+                        %{
+                          "code" => "quota_window_unusable",
+                          "message" => "recorded quota evidence is not usable for routing",
+                          "reason_codes" => ["exhausted"],
+                          "quota_key" => "account",
+                          "quota_scope" => "account",
+                          "quota_family" => "account"
+                        } = reason
+                      ]
+                    }
+                  ]
+                }} =
+                 RouteFiltering.filter_candidates_with_route_state(
+                   filter_input,
+                   route_state,
+                   opts
+                 )
+
+        refute Map.has_key?(reason, "window_kind")
+        refute Map.has_key?(reason, "reset_at")
+      end
+    end
+
+    test "stale availability refreshed to blocked keeps required and optional routes exhausted" do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "plan_type" => "plus",
+            "rate_limit" => %{
+              "allowed" => false,
+              "limit_reached" => true,
+              "primary_window" => nil,
+              "secondary_window" => nil
+            }
+          })
+        )
+
+      setup = gateway_setup(upstream, quota?: false)
+      snapshot_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      stale_at = DateTime.add(snapshot_at, -Evidence.freshness_ttl_seconds() - 1, :second)
+
+      identity =
+        setup.identity
+        |> Ecto.Changeset.change(
+          metadata:
+            Map.put(
+              setup.identity.metadata,
+              AccountAvailabilityStore.metadata_key(),
+              AccountAvailabilityStore.encode!(:available, stale_at, 1)
+            )
+        )
+        |> Repo.update!()
+
+      filter_input =
+        filter_input(
+          setup.pool,
+          setup.api_key,
+          setup.assignment,
+          identity,
+          "stale-provider-blocker"
+        )
+
+      route_state =
+        RouteState.new(%{
+          visible_model: filter_input.model,
+          candidates: filter_input.candidates,
+          circuit_snapshots: %{setup.assignment.id => true}
+        })
+        |> RouteState.put_quota_snapshots(
+          QuotaWindows.load_routing_quota_snapshots([identity.id], snapshot_at)
+        )
+
+      for opts <- [[], [quota_mode: :optional]] do
+        assert {:error,
+                %{
+                  status: 503,
+                  code: "quota_exhausted",
+                  message: "upstream quota is exhausted until its reset time",
+                  quota_refresh_attempted: true,
+                  candidate_exclusions: [
+                    %{
+                      reasons: [
+                        %{
+                          "code" => "quota_window_unusable",
+                          "message" => "recorded quota evidence is not usable for routing",
+                          "reason_codes" => ["exhausted"],
+                          "quota_key" => "account",
+                          "quota_scope" => "account",
+                          "quota_family" => "account"
+                        } = reason
+                      ]
+                    }
+                  ]
+                }} =
+                 RouteFiltering.filter_candidates_with_route_state(
+                   filter_input,
+                   route_state,
+                   opts
+                 )
+
+        refute Map.has_key?(reason, "window_kind")
+        refute Map.has_key?(reason, "reset_at")
+      end
+
+      assert Repo.all(Attempt) == []
+      assert FakeUpstream.count(upstream) == 4
+
+      assert Enum.all?(FakeUpstream.requests(upstream), fn request ->
+               request.path in ["/backend-api/wham/usage", "/backend-api/codex/usage"]
+             end)
+    end
+
     test "route-state filtering excludes a post-snapshot observation until the snapshot advances" do
       %{pool: pool, api_key: api_key} = active_api_key_fixture()
       %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool)
@@ -147,16 +301,18 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           candidates: filter_input.candidates,
           circuit_snapshots: %{assignment.id => true}
         })
-        |> RouteState.put_quota_window_snapshot(snapshots, snapshot_at)
+        |> put_test_quota_snapshots(snapshots, snapshot_at)
 
       assert {:ok, [{^assignment, ^identity}], request_options, returned_route_state} =
                RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
 
       assert request_options.routing.quota_decision["routing_state"] == "precise"
-      assert returned_route_state.quota_snapshot_at == snapshot_at
+
+      assert RouteState.quota_snapshot_for_identity(returned_route_state, identity).as_of ==
+               snapshot_at
 
       refreshed_route_state =
-        RouteState.put_quota_window_snapshot(route_state, snapshots, refreshed_at)
+        put_test_quota_snapshots(route_state, snapshots, refreshed_at)
 
       assert {:error, %{code: "quota_exhausted"}} =
                RouteFiltering.filter_candidates_with_route_state(
@@ -991,7 +1147,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           candidates: filter_input.candidates,
           circuit_snapshots: %{assignment.id => circuit_snapshot}
         })
-        |> RouteState.put_quota_window_snapshot(
+        |> put_test_quota_snapshots(
           %{identity.id => QuotaWindows.list_quota_windows(identity, historical_scan_at)},
           historical_scan_at
         )
@@ -1024,10 +1180,11 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert_receive {:saved_reset_refilter_clock, persisted_primary_id}
       refute_received {:saved_reset_refilter_clock, _other_primary_id}
 
-      assert refreshed_route_state.quota_snapshot_at == post_snapshot
+      assert RouteState.quota_snapshot_for_identity(refreshed_route_state, identity).as_of ==
+               post_snapshot
 
       assert DateTime.diff(
-               refreshed_route_state.quota_snapshot_at,
+               RouteState.quota_snapshot_for_identity(refreshed_route_state, identity).as_of,
                historical_scan_at,
                :microsecond
              ) == 1
@@ -1035,7 +1192,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert refreshed_route_state.visible_model_context == visible_model_context
       assert refreshed_route_state.circuit_snapshots[assignment.id] == circuit_snapshot
       assert refreshed_route_state.saved_reset_auto_cohort == route_state.saved_reset_auto_cohort
-      assert route_state.quota_snapshot_at == historical_scan_at
+
+      assert RouteState.quota_snapshot_for_identity(route_state, identity).as_of ==
+               historical_scan_at
+
       assert route_state.visible_model_context == visible_model_context
       assert route_state.circuit_snapshots[assignment.id] == circuit_snapshot
 
@@ -1043,7 +1203,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       refute Enum.any?(old_rows, &(&1.window_kind == "primary"))
 
       assert Enum.any?(
-               refreshed_route_state.quota_window_snapshots[identity.id],
+               RouteState.quota_windows_for_identity(refreshed_route_state, identity),
                &(&1.id == persisted_primary_id and &1.window_kind == "primary" and
                    Decimal.equal?(&1.used_percent, Decimal.new(10)))
              )
@@ -2714,6 +2874,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   end
 
   defp usage_payload(available_count) do
+    reset_at = System.system_time(:second) + 900
+
     %{
       "plan_type" => "pro",
       "rate_limit_reset_credits" => %{"available_count" => available_count},
@@ -2721,9 +2883,23 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
         "primary_window" => %{
           "used_percent" => 10,
           "limit_window_seconds" => 18_000,
-          "reset_after_seconds" => 900
+          "reset_after_seconds" => 900,
+          "reset_at" => reset_at
         }
       }
     }
+  end
+
+  defp put_test_quota_snapshots(route_state, windows_by_identity_id, as_of) do
+    identities =
+      Map.new(route_state.candidates, fn {_assignment, identity} -> {identity.id, identity} end)
+
+    snapshots =
+      Map.new(windows_by_identity_id, fn {identity_id, windows} ->
+        {identity_id,
+         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+      end)
+
+    RouteState.put_quota_snapshots(route_state, snapshots)
   end
 end

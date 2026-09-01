@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   alias CodexPooler.Quotas.ModelWeeklyResetSemantics
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationProjection
@@ -85,6 +86,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     UpstreamQuotaReadiness.from_windows(windows, snapshot_at)
   end
 
+  @spec readiness(RoutingQuotaSnapshot.t(), DateTime.t()) :: UpstreamQuotaReadiness.t()
+  def readiness(%RoutingQuotaSnapshot{as_of: snapshot_at} = snapshot, %DateTime{} = snapshot_at) do
+    UpstreamQuotaReadiness.from_snapshot(snapshot)
+  end
+
   @spec assignment_priming_status(map()) :: String.t()
   def assignment_priming_status(%{metadata: %{"quota_priming" => %{"status" => status}}})
       when is_binary(status),
@@ -123,6 +129,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
   defp put_derived_quota_priming(assignment, %{state: "weekly_only_probe"}) do
     put_quota_priming(assignment, "weekly_only_probe")
+  end
+
+  defp put_derived_quota_priming(assignment, %{state: "provider_available_no_windows"}) do
+    put_quota_priming(assignment, "known")
   end
 
   defp put_derived_quota_priming(assignment, _quota_readiness), do: assignment

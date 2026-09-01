@@ -49,7 +49,8 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
                  "primary_window" => %{
                    "used_percent" => 25,
                    "limit_window_seconds" => 18_000,
-                   "reset_at" => DateTime.to_iso8601(future_reset)
+                   "reset_after_seconds" => 900,
+                   "reset_at" => DateTime.to_unix(future_reset)
                  }
                }
              }},
@@ -91,7 +92,8 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
           "primary_window" => %{
             "used_percent" => 25,
             "limit_window_seconds" => 18_000,
-            "reset_at" => DateTime.to_iso8601(future_reset)
+            "reset_after_seconds" => 900,
+            "reset_at" => DateTime.to_unix(future_reset)
           }
         }
       }
@@ -228,7 +230,8 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
                  "primary_window" => %{
                    "used_percent" => 67,
                    "limit_window_seconds" => 604_800,
-                   "reset_at" => DateTime.to_iso8601(future_reset)
+                   "reset_after_seconds" => 300,
+                   "reset_at" => DateTime.to_unix(future_reset)
                  }
                }
              }},

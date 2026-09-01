@@ -7,7 +7,9 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
@@ -17,6 +19,164 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
 
   @observed_at ~U[2026-05-22 12:00:00Z]
   @spark_weekly_seconds 604_800
+
+  describe "routing_quota_eligibility_from_snapshot/2" do
+    test "fresh current-epoch availability without account or applicable unusable rows routes last" do
+      assert %{
+               eligible?: true,
+               routing_state: :windowless_provider_available,
+               exclusions: []
+             } =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:available, []),
+                 routing_scope_opts()
+               )
+
+      assert %{routing_state: :windowless_provider_available} =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:available, [
+                   model_window(model: "unrelated-model", upstream_model: "unrelated-upstream")
+                 ]),
+                 routing_scope_opts()
+               )
+    end
+
+    test "current blocker vetoes ordinary five-hour and weekly evidence without fabricating a window" do
+      for window <- [account_primary_window(), account_secondary_window([])] do
+        assert %{
+                 eligible?: false,
+                 routing_state: :blocked,
+                 exclusions: [
+                   %{
+                     code: "quota_window_unusable",
+                     message: "recorded quota evidence is not usable for routing",
+                     reason_codes: ["exhausted"],
+                     quota_key: "account",
+                     quota_scope: "account",
+                     quota_family: "account"
+                   } = exclusion
+                 ]
+               } =
+                 Windows.routing_quota_eligibility_from_snapshot(
+                   routing_snapshot(:blocked, [window]),
+                   routing_scope_opts()
+                 )
+
+        refute Map.has_key?(exclusion, :window_kind)
+        refute Map.has_key?(exclusion, :reset_at)
+      end
+    end
+
+    test "aged and within-skew future blockers retain the same precedence" do
+      observed_times = [
+        DateTime.add(@observed_at, -2 * Evidence.freshness_ttl_seconds(), :second),
+        DateTime.add(@observed_at, Evidence.future_observed_skew_seconds(), :second)
+      ]
+
+      for observed_at <- observed_times, windows <- [[], [account_primary_window()]] do
+        assert %{
+                 eligible?: false,
+                 exclusions: [%{reason_codes: ["exhausted"]}]
+               } =
+                 Windows.routing_quota_eligibility_from_snapshot(
+                   routing_snapshot(:blocked, windows, observed_at: observed_at),
+                   routing_scope_opts()
+                 )
+      end
+    end
+
+    test "beyond-skew blocker preserves ordinary evidence and otherwise fails as unavailable" do
+      future_at = DateTime.add(@observed_at, Evidence.future_observed_skew_seconds() + 1, :second)
+
+      assert %{eligible?: true, routing_state: :precise} =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:blocked, [account_primary_window()], observed_at: future_at),
+                 routing_scope_opts()
+               )
+
+      assert %{
+               eligible?: false,
+               exclusions: [%{code: "quota_evidence_missing"}]
+             } =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:blocked, [], observed_at: future_at),
+                 routing_scope_opts()
+               )
+    end
+
+    test "only stale current-epoch availability emits the refreshable not-fresh exclusion" do
+      stale_at = DateTime.add(@observed_at, -Evidence.freshness_ttl_seconds() - 1, :second)
+
+      assert %{
+               eligible?: false,
+               exclusions: [
+                 %{
+                   code: "quota_window_unusable",
+                   message: "recorded quota evidence is not usable for routing",
+                   reason_codes: ["not_fresh"],
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account"
+                 } = exclusion
+               ]
+             } =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:available, [], observed_at: stale_at),
+                 routing_scope_opts()
+               )
+
+      refute Map.has_key?(exclusion, :window_kind)
+      refute Map.has_key?(exclusion, :reset_at)
+
+      assert %{exclusions: [%{code: "quota_evidence_missing"}]} =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:available, [], credential_epoch: 2),
+                 routing_scope_opts()
+               )
+    end
+
+    test "non-authoritative availability states never veto usable ordinary evidence" do
+      stale_at = DateTime.add(@observed_at, -Evidence.freshness_ttl_seconds() - 1, :second)
+      future_at = DateTime.add(@observed_at, Evidence.future_observed_skew_seconds() + 1, :second)
+
+      snapshots = [
+        routing_snapshot(:unknown, [account_primary_window()]),
+        routing_snapshot(:available, [account_primary_window()], observed_at: stale_at),
+        routing_snapshot(:available, [account_primary_window()], observed_at: future_at),
+        routing_snapshot(:available, [account_primary_window()], credential_epoch: 2),
+        %{routing_snapshot(:available, [account_primary_window()]) | availability: nil}
+      ]
+
+      for snapshot <- snapshots do
+        assert %{eligible?: true, routing_state: :precise, exclusions: []} =
+                 Windows.routing_quota_eligibility_from_snapshot(snapshot, routing_scope_opts())
+      end
+    end
+
+    test "retained account rows and applicable unusable rows block only the windowless fallback" do
+      for source <- [
+            "codex_response_headers",
+            "codex_rate_limit_event",
+            "codex_rate_limit_error",
+            "local_reconciliation",
+            "future_account_source"
+          ] do
+        retained_account = account_primary_window(source: source)
+
+        assert %{routing_state: :precise} =
+                 Windows.routing_quota_eligibility_from_snapshot(
+                   routing_snapshot(:available, [retained_account]),
+                   routing_scope_opts()
+                 )
+      end
+
+      assert %{eligible?: false, exclusions: [%{reason_codes: ["exhausted"]}]} =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:available, [model_window(used_percent: Decimal.new("100"))]),
+                 routing_scope_opts()
+               )
+    end
+  end
 
   describe "lifecycle routing eligibility" do
     test "definitive provider rejection excludes retained high-percent quota immediately" do
@@ -1135,6 +1295,33 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
     )
   end
 
+  defp routing_snapshot(state, windows, attrs \\ []) do
+    observed_at = Keyword.get(attrs, :observed_at, @observed_at)
+
+    %RoutingQuotaSnapshot{
+      upstream_identity_id: "00000000-0000-0000-0000-000000000321",
+      raw_windows: windows,
+      availability: %AccountAvailabilityStore.Snapshot{
+        state: state,
+        observed_at: observed_at,
+        credential_epoch: Keyword.get(attrs, :availability_credential_epoch, 1)
+      },
+      credential_epoch: Keyword.get(attrs, :credential_epoch, 1),
+      as_of: @observed_at
+    }
+  end
+
+  defp routing_scope_opts do
+    [
+      model: "sample-codex-spark",
+      requested_model: "sample-codex-spark",
+      catalog_model: "sample-codex-spark",
+      exposed_model_id: "sample-codex-spark",
+      upstream_model: "sample-codex-spark-upstream",
+      upstream_model_id: "sample-codex-spark-upstream"
+    ]
+  end
+
   defp window_shape(windows) do
     windows
     |> Enum.map(&{&1.quota_key, &1.window_kind, &1.window_minutes})
@@ -1205,7 +1392,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
           "used_percent" => 12,
           "limit_window_seconds" => 18_000,
           "reset_after_seconds" => 900,
-          "reset_at" => DateTime.to_iso8601(DateTime.add(observed_at, 900, :second))
+          "reset_at" => DateTime.to_unix(DateTime.add(observed_at, 900, :second))
         }
       },
       "additional_rate_limits" => [
@@ -1218,7 +1405,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
               "used_percent" => used_percent,
               "limit_window_seconds" => @spark_weekly_seconds,
               "reset_after_seconds" => reset_after_seconds,
-              "reset_at" => DateTime.to_iso8601(reset_at)
+              "reset_at" => DateTime.to_unix(reset_at)
             }
           }
         }

@@ -5,6 +5,32 @@ defmodule CodexPooler.Quotas.CodexParsersAdditionalIdentityTest do
 
   @observed_at ~U[2026-08-25 10:00:00Z]
 
+  test "windows-only compatibility accepts legacy selected windows while strict results reject them" do
+    legacy_payload = %{
+      "plan_type" => "sample_plan",
+      "rate_limit" => %{
+        "primary_window" => %{
+          "used_percent" => 25,
+          "limit_window_seconds" => 18_000,
+          "reset_after_seconds" => 900
+        }
+      }
+    }
+
+    assert {:ok, [legacy_window]} =
+             CodexParsers.parse_codex_usage_payload(legacy_payload, @observed_at)
+
+    assert legacy_window.window_minutes == 300
+    assert legacy_window.reset_at == DateTime.add(@observed_at, 900, :second)
+
+    assert {:ok, %{windows: [], account_availability: availability}} =
+             CodexParsers.parse_codex_usage_result(legacy_payload, @observed_at)
+
+    assert availability.state == :unknown
+    assert availability.basis == :conflict
+    assert availability.account_windows == :unknown
+  end
+
   test "same-label additional meters retain the shared legacy window identity" do
     assert {:ok, evidences} =
              CodexParsers.parse_codex_usage_payload(same_label_meter_payload(), @observed_at)
@@ -87,6 +113,7 @@ defmodule CodexPooler.Quotas.CodexParsersAdditionalIdentityTest do
         "primary_window" => %{
           "used_percent" => used_percent,
           "limit_window_seconds" => 604_800,
+          "reset_after_seconds" => 604_800,
           "reset_at" => 1_778_000_000
         }
       }

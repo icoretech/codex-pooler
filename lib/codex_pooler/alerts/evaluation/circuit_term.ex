@@ -85,6 +85,7 @@ defmodule CodexPooler.Alerts.Evaluation.CircuitTerm do
               order_by: [asc: fragment("lower(?)", model.exposed_model_id)],
               select: %{
                 exposed_model_id: model.exposed_model_id,
+                upstream_model_id: model.upstream_model_id,
                 metadata: model.metadata
               }
           )
@@ -111,11 +112,17 @@ defmodule CodexPooler.Alerts.Evaluation.CircuitTerm do
   defp resolved_models(models, nil), do: {:resolved, models}
 
   defp resolved_models(models, model) do
-    normalized_model = normalize_model(model)
-
-    case Enum.find(models, &(normalize_model(&1.exposed_model_id) == normalized_model)) do
-      nil -> {:unresolved, []}
-      resolved -> {:resolved, [resolved]}
+    with normalized_model when is_binary(normalized_model) <- normalize_model(model),
+         resolved when not is_nil(resolved) <-
+           Enum.find(models, &(normalize_model(&1.exposed_model_id) == normalized_model)),
+         exposed_model_id when is_binary(exposed_model_id) <-
+           normalize_model(resolved.exposed_model_id),
+         upstream_model_id when is_binary(upstream_model_id) <-
+           normalize_model(resolved.upstream_model_id) do
+      {:resolved,
+       [%{resolved | exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id}]}
+    else
+      _invalid_or_unresolved -> {:unresolved, []}
     end
   end
 
@@ -255,6 +262,12 @@ defmodule CodexPooler.Alerts.Evaluation.CircuitTerm do
     )
   end
 
-  defp normalize_model(model) when is_binary(model),
-    do: model |> String.trim() |> String.downcase()
+  defp normalize_model(model) when is_binary(model) do
+    case model |> String.trim() |> String.downcase() do
+      "" -> nil
+      model -> model
+    end
+  end
+
+  defp normalize_model(_model), do: nil
 end

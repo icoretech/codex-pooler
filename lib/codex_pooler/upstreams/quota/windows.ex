@@ -9,6 +9,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
 
   alias CodexPooler.Upstreams.{
     Quota,
+    Quota.RoutingQuotaSnapshot,
     Quota.Windows.Attributes,
     Quota.Windows.EvidenceStore,
     Quota.Windows.Routing,
@@ -154,8 +155,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   defp maybe_delete_missing_quota_windows(multi, _identity, _windows, false, _coverage),
     do: multi
 
-  defp maybe_delete_missing_quota_windows(multi, _identity, [], true, _coverage), do: multi
-
   defp maybe_delete_missing_quota_windows(multi, _identity, _windows, true, coverage)
        when not is_struct(coverage, MapSet),
        do: multi
@@ -261,6 +260,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     end)
   end
 
+  @spec load_routing_quota_snapshots([Ecto.UUID.t()], DateTime.t()) ::
+          RoutingQuotaSnapshot.snapshot_map()
+  def load_routing_quota_snapshots(identity_ids, %DateTime{} = as_of)
+      when is_list(identity_ids) do
+    RoutingQuotaSnapshot.load_by_identity_ids(identity_ids, as_of)
+  end
+
   @spec list_evidence_by_identity_ids([Ecto.UUID.t()]) :: %{
           optional(Ecto.UUID.t()) => [Quota.AccountQuotaWindow.t()]
         }
@@ -318,6 +324,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   @spec routing_quota_eligibility_from_windows([Quota.AccountQuotaWindow.t()], keyword()) :: map()
   def routing_quota_eligibility_from_windows(windows, opts \\ []) when is_list(windows) do
     Routing.eligibility_from_windows(windows, opts)
+  end
+
+  @spec routing_quota_eligibility_from_snapshot(RoutingQuotaSnapshot.t(), keyword()) :: map()
+  def routing_quota_eligibility_from_snapshot(%RoutingQuotaSnapshot{} = snapshot, opts \\ []) do
+    Routing.eligibility_from_snapshot(snapshot, opts)
   end
 
   @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::

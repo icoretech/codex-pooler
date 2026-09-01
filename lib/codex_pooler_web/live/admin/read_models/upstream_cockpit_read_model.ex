@@ -150,6 +150,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:saved_reset_policy) => SavedResets.auto_policy_projection(),
           required(:saved_reset_confirmation) => QuotaProjection.saved_reset_confirmation() | nil,
           required(:quota_limits) => [UpstreamAccountsReadModel.quota_limit_row()],
+          required(:quota_readiness) => UpstreamAccountsReadModel.quota_readiness(),
           required(:flags) => flags()
         }
 
@@ -174,6 +175,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
     pool_contribution =
       UpstreamCockpitMetrics.pool_contribution(scope, identity_id, assignments)
+
+    %{request_health: request_health, pool_contribution: pool_contribution}
+  end
+
+  @spec request_metrics(Scope.t(), t()) :: %{
+          request_health: request_health(),
+          pool_contribution: pool_contribution()
+        }
+  def request_metrics(%Scope{} = scope, %{identity: %{id: identity_id}} = cockpit) do
+    request_health = UpstreamCockpitMetrics.request_health(scope, identity_id)
+
+    pool_contribution =
+      UpstreamCockpitMetrics.pool_contribution_from_readiness(
+        scope,
+        identity_id,
+        cockpit.assignments.items,
+        cockpit.quota_readiness
+      )
 
     %{request_health: request_health, pool_contribution: pool_contribution}
   end
@@ -227,13 +246,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp from_account_snapshot(%{identity: %UpstreamIdentity{}} = account, scope, options) do
+    quota_readiness =
+      Map.get(account, :quota_readiness) ||
+        get_in(account, [:routing_readiness, :quota_readiness]) ||
+        %{routing_ready_now?: false}
+
     safe_identity = safe_identity(account)
     header = header(account, safe_identity)
     assignments = assignments(account)
-    quota_health = quota_health(account.identity, assignments, scope)
+    quota_health = quota_health(account, assignments, scope)
 
     {request_health, pool_contribution} =
-      request_metrics(account.identity, assignments, scope, options)
+      request_metrics(account.identity, assignments, quota_readiness, scope, options)
 
     flags = flags(account, assignments, quota_health, request_health)
     charts = charts(flags, quota_health, request_health, pool_contribution)
@@ -256,21 +280,48 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       saved_reset_policy: saved_reset_policy,
       saved_reset_confirmation: saved_reset_confirmation,
       quota_limits: quota_limits(account),
+      quota_readiness: quota_readiness,
       oauth_flows: oauth_flows,
       sections: sections,
       flags: flags
     }
   end
 
-  defp request_metrics(identity, assignments, scope, options) do
+  defp request_metrics(identity, assignments, quota_readiness, scope, options) do
     if Keyword.get(options, :request_metrics?, true) do
-      {request_health(identity, scope), pool_contribution(identity, assignments, scope)}
+      {
+        request_health(identity, scope),
+        pool_contribution_from_readiness(identity, assignments, quota_readiness, scope)
+      }
     else
       {
         UpstreamCockpitMetrics.request_health_without_request_data(),
         UpstreamCockpitMetrics.pool_contribution_without_request_data(assignments.items)
       }
     end
+  end
+
+  defp pool_contribution_from_readiness(
+         %UpstreamIdentity{} = identity,
+         %{items: assignments},
+         quota_readiness,
+         %Scope{} = scope
+       ) do
+    UpstreamCockpitMetrics.pool_contribution_from_readiness(
+      scope,
+      identity,
+      assignments,
+      quota_readiness
+    )
+  end
+
+  defp pool_contribution_from_readiness(
+         %UpstreamIdentity{},
+         %{items: assignments},
+         _quota_readiness,
+         _scope
+       ) do
+    UpstreamCockpitMetrics.pool_contribution_without_request_data(assignments)
   end
 
   defp oauth_flows(_account, nil), do: UpstreamAccountsReadModel.empty_oauth_flow_state()
@@ -394,16 +445,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  @spec pool_contribution(UpstreamIdentity.t(), assignments(), Scope.t() | term()) ::
-          pool_contribution()
-  defp pool_contribution(%UpstreamIdentity{} = identity, %{items: assignments}, %Scope{} = scope) do
-    UpstreamCockpitMetrics.pool_contribution(scope, identity, assignments)
-  end
-
-  defp pool_contribution(%UpstreamIdentity{}, %{items: assignments}, _scope) do
-    UpstreamCockpitMetrics.pool_contribution_without_request_data(assignments)
-  end
-
   @spec request_health(UpstreamIdentity.t(), Scope.t() | term()) :: request_health()
   defp request_health(%UpstreamIdentity{} = identity, %Scope{} = scope) do
     UpstreamCockpitMetrics.request_health(scope, identity)
@@ -413,12 +454,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     UpstreamCockpitMetrics.request_health_without_request_data()
   end
 
-  @spec quota_health(UpstreamIdentity.t(), assignments(), Scope.t() | term()) :: quota_health()
-  defp quota_health(%UpstreamIdentity{} = identity, %{items: assignments}, %Scope{} = scope) do
-    UpstreamCockpitMetrics.quota_health(scope, identity, assignments)
+  defp quota_health(
+         %{identity: %UpstreamIdentity{} = identity, quota_readiness: readiness},
+         %{items: assignments},
+         %Scope{} = scope
+       ) do
+    UpstreamCockpitMetrics.quota_health_from_readiness(scope, identity, assignments, readiness)
   end
 
-  defp quota_health(%UpstreamIdentity{}, %{items: assignments}, _scope) do
+  defp quota_health(%{identity: %UpstreamIdentity{}}, %{items: assignments}, _scope) do
     UpstreamCockpitMetrics.quota_health_without_quota_data(assignments)
   end
 

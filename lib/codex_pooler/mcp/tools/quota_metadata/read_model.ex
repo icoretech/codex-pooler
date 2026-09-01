@@ -8,6 +8,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @default_limit 50
@@ -59,10 +60,16 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
 
     visible_pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
 
+    identities = Upstreams.list_visible_upstream_identities(scope)
+
+    snapshots =
+      identities
+      |> Enum.map(& &1.id)
+      |> RoutingQuotaSnapshot.load_by_identity_ids(timestamp)
+
     accounts =
-      scope
-      |> Upstreams.list_visible_upstream_identities()
-      |> Enum.map(&account_summary(&1, timestamp, visible_pool_ids))
+      identities
+      |> Enum.map(&account_summary(&1, timestamp, visible_pool_ids, snapshots))
       |> Enum.sort_by(&account_sort_key/1)
 
     %{
@@ -87,13 +94,20 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
   end
 
   defp account_summary(%UpstreamIdentity{} = identity, timestamp, visible_pool_ids) do
+    snapshots = RoutingQuotaSnapshot.load_by_identity_ids([identity.id], timestamp)
+    account_summary(identity, timestamp, visible_pool_ids, snapshots)
+  end
+
+  defp account_summary(%UpstreamIdentity{} = identity, timestamp, visible_pool_ids, snapshots) do
     # the effective window view must be computed at the same timestamp the
     # serialization and usability checks below use: a historical `at` must
     # neither see future evidence nor select rows that only became effective
     # after that instant
+    snapshot = Map.fetch!(snapshots, identity.id)
+
     all_windows =
-      identity
-      |> Quota.Windows.list_quota_windows(timestamp)
+      snapshot
+      |> RoutingQuotaSnapshot.effective_windows()
       |> Enum.map(&quota_window(&1, timestamp))
       |> Enum.sort_by(&window_sort_key/1)
 
@@ -108,7 +122,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
       status: identity.status,
       plan_family: present_string(identity.plan_family),
       assignment_summary: assignment_summary(identity, visible_pool_ids),
-      quota_summary: quota_summary(all_windows),
+      quota_summary: quota_summary(snapshot, all_windows),
       quota_windows: returned_windows
     }
   end
@@ -168,25 +182,20 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
     }
   end
 
-  defp quota_summary([]) do
-    %{
-      window_count: 0,
-      truncated: false,
-      freshness_status: @freshness_unknown,
-      routing_usable: false,
-      has_unknown: true,
-      has_stale: false
-    }
-  end
+  defp quota_summary(snapshot, windows) do
+    eligibility =
+      Quota.Windows.routing_quota_eligibility_from_snapshot(snapshot, account_only: true)
 
-  defp quota_summary(windows) do
-    has_stale = Enum.any?(windows, &(&1.freshness_status == @freshness_stale))
-    has_unknown = Enum.any?(windows, &(&1.freshness_status == @freshness_unknown))
+    account_windows = Enum.filter(windows, &(&1.quota_scope == "account"))
+    has_stale = Enum.any?(account_windows, &(&1.freshness_status == @freshness_stale))
+    has_unknown = Enum.any?(account_windows, &(&1.freshness_status == @freshness_unknown))
 
     freshness_status =
       cond do
         has_stale -> @freshness_stale
         has_unknown -> @freshness_unknown
+        eligibility.routing_state == :windowless_provider_available -> @freshness_fresh
+        account_windows == [] -> @freshness_unknown
         true -> @freshness_fresh
       end
 
@@ -194,8 +203,8 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
       window_count: length(windows),
       truncated: length(windows) > @max_windows_per_account,
       freshness_status: freshness_status,
-      routing_usable: Enum.any?(windows, & &1.routing_usable),
-      has_unknown: has_unknown,
+      routing_usable: eligibility.eligible?,
+      has_unknown: has_unknown or (account_windows == [] and not eligibility.eligible?),
       has_stale: has_stale
     }
   end

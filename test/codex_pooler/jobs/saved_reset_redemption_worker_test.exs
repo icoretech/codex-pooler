@@ -593,6 +593,8 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
   end
 
   defp usage_payload(available_count) do
+    reset_at = System.system_time(:second) + 900
+
     %{
       "plan_type" => "pro",
       "rate_limit_reset_credits" => %{"available_count" => available_count},
@@ -600,7 +602,8 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
         "primary_window" => %{
           "used_percent" => 10,
           "limit_window_seconds" => 18_000,
-          "reset_after_seconds" => 900
+          "reset_after_seconds" => 900,
+          "reset_at" => reset_at
         }
       }
     }

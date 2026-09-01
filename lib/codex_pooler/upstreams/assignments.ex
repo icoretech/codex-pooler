@@ -30,6 +30,9 @@ defmodule CodexPooler.Upstreams.Assignments do
   @spec list_pool_assignments(Pool.t() | Ecto.UUID.t()) :: [PoolUpstreamAssignment.t()]
   defdelegate list_pool_assignments(pool_or_id), to: PoolAssignments
 
+  @spec list_pool_assignments_for_pool_ids([Ecto.UUID.t()]) :: [PoolUpstreamAssignment.t()]
+  defdelegate list_pool_assignments_for_pool_ids(pool_ids), to: PoolAssignments
+
   @spec count_pool_assignments_by_pool_ids([Ecto.UUID.t()]) :: %{
           optional(Ecto.UUID.t()) => non_neg_integer()
         }

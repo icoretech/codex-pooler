@@ -3,7 +3,7 @@ title: Upstreams
 description: Understand the admin Upstreams page, account cards, OpenAI OAuth linking, auth.json import, quota readiness, and account recovery actions.
 ---
 
-The Upstreams page is the operator surface for Codex account capacity. An upstream is an account identity that Codex Pooler can assign to one or more Pools and consider for runtime routing when it is active, fresh, compatible, and inside usable quota windows.
+The Upstreams page is the operator surface for Codex account capacity. An upstream is an account identity that Codex Pooler can assign to one or more Pools and consider for runtime routing when it is active, fresh, compatible, and supported by usable quota evidence.
 
 Use this page when you need to answer:
 
@@ -31,7 +31,7 @@ An upstream controls:
 5. model and route compatibility evidence observed from the account
 6. operator-facing labels used in cards, logs, audit events, and recovery views
 
-Routing still happens at request time. A visible active upstream can be skipped if it is not assigned to the Pool, does not support the requested model or route shape, has stale credentials, is temporarily demoted, or is outside usable quota evidence.
+Routing still happens at request time. A visible active upstream can be skipped if it is not assigned to the Pool, does not support the requested model or route shape, has stale credentials, is temporarily demoted, or lacks usable quota evidence.
 
 ## Page Actions
 
@@ -63,7 +63,7 @@ The card body is split into status, token burn, quota windows, and footer metric
   <tbody>
     <tr>
       <td>Status</td>
-      <td>Current lifecycle and route-readiness state for the account. Active means the account can be considered, but final routing still checks Pool assignment, model support, freshness, and quota evidence.</td>
+      <td>Current lifecycle and route-readiness state for the account. Active means the account can be considered, but final routing still checks Pool assignment, model support, credential freshness, and quota evidence.</td>
     </tr>
     <tr>
       <td>Token burn</td>
@@ -93,6 +93,12 @@ The card body is split into status, token burn, quota windows, and footer metric
 </table>
 
 The account quota percentage always follows the provider's reported usage window while included Codex quota remains. A provider-reported credit balance may still appear as a raw balance beside the solid bar, but a positive balance does not make the bar striped before included quota is exhausted and the balance is never presented as a fabricated `balance / capacity` total. When the provider reports the included window at 100% and a positive balance remains, the bar becomes striped and continues to show only the current raw credit balance. An explicit depleted balance is shown as `0 credits` without stripes. If the provider omits the balance, the card says `credits not reported` instead of leaving the detail blank. Provider credit units are not a currency amount, so they should not be compared directly with the monetary balance shown in ChatGPT billing.
+
+Fresh reset-bearing windows remain the normal authority for quota readiness. If the provider returns no account windows, a card can instead show provider-attested availability when a fresh observation for the current credential generation explicitly allows requests or reports usable credits, and no retained account window, applicable model limit, or additional-limit blocker applies. This is a distinct lower-priority state: the card does not invent a quota bar, percentage, duration, reset time, or remaining-capacity value.
+
+Provider-attested availability remains conservative. Explicit blocked, contradictory, unknown, stale, credential-mismatched, malformed, model-exhausted, or additional-limit-blocked evidence keeps routing fail closed. Plan badges and plan metadata are descriptive only; no operator setting, plan name, or SKU enables this fallback.
+
+This state comes from Codex Pooler's direct provider usage response. Current Codex client quota projections omit the raw availability flags, so a client-side quota snapshot cannot independently confirm the same no-window observation.
 
 ## Saved Resets
 
@@ -172,10 +178,14 @@ Common upstream states are:
       <td>Quota exhausted</td>
       <td>Observed quota evidence says the account should not receive matching work until one or more windows reset.</td>
     </tr>
+    <tr>
+      <td>Provider available</td>
+      <td>No account window is reported, but a fresh current-credential provider observation explicitly reports availability and no stronger account, model, or additional-limit evidence blocks routing. No reset or quota window is inferred.</td>
+    </tr>
   </tbody>
 </table>
 
-Readiness is intentionally conservative. If quota evidence is missing, stale, or exhausted, Codex Pooler may keep an account out of routing even when the card still exists and the account is assigned to a Pool.
+Readiness is intentionally conservative. Missing, stale, unknown, malformed, credential-mismatched, or exhausted quota evidence can keep an account out of routing even when the card still exists and the account is assigned to a Pool. A no-window account is routeable only through the narrow provider-attested state described above.
 
 ## Import auth.json
 
@@ -404,8 +414,8 @@ When an upstream is not routing as expected, check it in this order:
 2. confirm it is assigned to the Pool used by the client API key
 3. confirm the Pool itself is active
 4. inspect the routing footer for lifecycle-aware runtime routing readiness across identity state, Pool assignment, credential freshness, quota signals, and request posture
-5. inspect quota bars for exhausted account-level or model-specific windows; quota readiness is only one input to routing readiness
-6. confirm token freshness and quota freshness are recent enough to trust
+5. inspect quota bars for exhausted account-level or model-specific windows; if no account bars exist, check whether the routing label says `Provider available` or reports missing/blocked evidence
+6. confirm token freshness and quota freshness are recent enough to trust; a no-window observation must belong to the current credential generation
 7. open the upstream cockpit when the card shows degraded, stale, or recovery states
 8. use Request logs filtered by Pool or upstream metadata to confirm whether traffic selected this account
 9. use Audit logs when lifecycle, assignment, import, pause, or rename actions changed recently

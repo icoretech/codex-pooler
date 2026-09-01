@@ -28,9 +28,11 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
   }
 
   alias CodexPooler.MCP.Tools.QuotaMetadata.ReadModel
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   setup do
@@ -217,6 +219,44 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     refute Enum.any?(account.quota_windows, &(&1.window_minutes == 10_080))
   end
 
+  test "superseded raw account evidence blocks fallback but is omitted from detail and count", %{
+    scope: scope
+  } do
+    as_of = ~U[2026-09-01 12:00:00.000000Z]
+    frozen_at = DateTime.add(as_of, -(Evidence.freshness_ttl_seconds() + 1), :second)
+    pool = pool_fixture()
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:available, as_of, 1)
+        }
+      })
+
+    assert {:ok, [_primary, _secondary]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               primary_quota_window_attrs(%{
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(as_of, -1, :second),
+                 observed_at: frozen_at,
+                 last_sync_at: frozen_at
+               }),
+               weekly_quota_window_attrs(%{
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(as_of, 6, :day),
+                 observed_at: as_of,
+                 last_sync_at: as_of
+               })
+             ])
+
+    assert %{items: [account]} = ReadModel.list_accounts(scope, at: as_of)
+    assert account.quota_summary.routing_usable == false
+    assert account.quota_summary.window_count == 1
+    assert [%{quota_kind: "account_secondary"}] = account.quota_windows
+  end
+
   test "read model reports unknown when no quota windows exist", %{scope: scope} do
     pool = pool_fixture()
 
@@ -234,6 +274,89 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
              freshness_status: "unknown",
              routing_usable: false,
              has_unknown: true,
+             has_stale: false
+           }
+  end
+
+  test "read model reports fresh available zero-window identity as routing usable", %{
+    scope: scope
+  } do
+    as_of = ~U[2026-09-01 12:00:00.000000Z]
+    pool = pool_fixture()
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: "acct-quota-windowless",
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:available, as_of, 1)
+        }
+      })
+
+    assert %{items: [account]} = ReadModel.list_accounts(scope, at: as_of)
+    assert account.id == identity.id
+    assert account.quota_windows == []
+
+    assert account.quota_summary == %{
+             window_count: 0,
+             truncated: false,
+             freshness_status: "fresh",
+             routing_usable: true,
+             has_unknown: false,
+             has_stale: false
+           }
+
+    refute inspect(account) =~ AccountAvailabilityStore.metadata_key()
+    refute inspect(account) =~ "credential_epoch"
+  end
+
+  test "top-level account summary ignores unrelated model staleness while returning its detail",
+       %{
+         scope: scope
+       } do
+    as_of = ~U[2026-09-01 12:00:00.000000Z]
+    stale_at = DateTime.add(as_of, -(Evidence.freshness_ttl_seconds() + 1), :second)
+    pool = pool_fixture()
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: "acct-quota-windowless-model-detail",
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:available, as_of, 1)
+        }
+      })
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "gpt-example-unrelated",
+                 quota_scope: "model",
+                 quota_family: "codex_model",
+                 model: "gpt-example-unrelated",
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("25"),
+                 reset_at: DateTime.add(as_of, 1, :hour),
+                 observed_at: stale_at,
+                 last_sync_at: stale_at,
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "stale"
+               }
+             ])
+
+    assert %{items: [account]} = ReadModel.list_accounts(scope, at: as_of)
+    assert [%{quota_kind: "model_primary", freshness_status: "stale"}] = account.quota_windows
+
+    assert account.quota_summary == %{
+             window_count: 1,
+             truncated: false,
+             freshness_status: "fresh",
+             routing_usable: true,
+             has_unknown: false,
              has_stale: false
            }
   end

@@ -12,6 +12,10 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.ExecutorTest do
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.QuotaRefresh.Executor
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   test "refresh failures stay best-effort and return the structured quota error" do
@@ -90,7 +94,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.ExecutorTest do
         candidates: [candidate],
         circuit_snapshots: %{setup.assignment.id => true}
       })
-      |> RouteState.put_quota_window_snapshot(%{setup.identity.id => []}, old_snapshot_at)
+      |> put_test_quota_snapshots(%{setup.identity.id => []}, old_snapshot_at)
 
     refresh_plan = %{
       filter_input: filter_input,
@@ -102,17 +106,113 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.ExecutorTest do
     assert {:ok, [^candidate], _decision, refreshed_route_state} =
              Executor.refresh_stale_candidates(refresh_plan)
 
-    assert %DateTime{} = refreshed_route_state.quota_snapshot_at
-    assert DateTime.compare(refreshed_route_state.quota_snapshot_at, old_snapshot_at) == :gt
+    refreshed_at =
+      RouteState.quota_snapshot_for_identity(refreshed_route_state, setup.identity).as_of
 
-    assert refreshed_route_state.quota_window_snapshots ==
-             QuotaWindows.list_quota_windows_by_identity_ids(
+    assert %DateTime{} = refreshed_at
+    assert DateTime.compare(refreshed_at, old_snapshot_at) == :gt
+
+    assert refreshed_route_state.quota_snapshots ==
+             QuotaWindows.load_routing_quota_snapshots(
                [setup.identity.id],
-               refreshed_route_state.quota_snapshot_at
+               refreshed_at
              )
 
     assert refreshed_route_state.visible_model == route_state.visible_model
     assert refreshed_route_state.circuit_snapshots == route_state.circuit_snapshots
     assert refreshed_route_state.saved_reset_auto_cohort == route_state.saved_reset_auto_cohort
+  end
+
+  test "stale provider availability refreshes once into a fresh windowless candidate" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "plan_type" => "plus",
+          "rate_limit" => %{
+            "allowed" => true,
+            "limit_reached" => false,
+            "primary_window" => nil,
+            "secondary_window" => nil
+          }
+        })
+      )
+
+    setup = gateway_setup(upstream, quota?: false)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    stale_at = DateTime.add(now, -Evidence.freshness_ttl_seconds() - 1, :second)
+
+    identity =
+      setup.identity
+      |> Ecto.Changeset.change(
+        metadata:
+          Map.put(
+            setup.identity.metadata,
+            AccountAvailabilityStore.metadata_key(),
+            AccountAvailabilityStore.encode!(:available, stale_at, 1)
+          )
+      )
+      |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "refresh availability"}
+
+    request_options =
+      RequestOptions.build(
+        %{upstream_endpoint: "/backend-api/codex/responses"},
+        "/backend-api/codex/responses",
+        payload
+      )
+
+    candidate = {setup.assignment, identity}
+
+    filter_input =
+      CandidateEligibility.FilterInput.new(%{
+        auth: auth,
+        model: setup.model,
+        endpoint: "/backend-api/codex/responses",
+        payload: payload,
+        request_options: request_options,
+        candidates: [candidate]
+      })
+
+    route_state =
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: [candidate],
+        circuit_snapshots: %{setup.assignment.id => true}
+      })
+      |> RouteState.put_quota_snapshots(
+        QuotaWindows.load_routing_quota_snapshots([identity.id], now)
+      )
+
+    assert {:refreshable_quota, refresh_plan} =
+             CandidateEligibility.filter_quota_eligible_candidates(filter_input, route_state)
+
+    assert refresh_plan.refreshable_candidates == [candidate]
+
+    assert {:ok, [^candidate], decision, refreshed_route_state} =
+             Executor.refresh_stale_candidates(refresh_plan)
+
+    assert decision["routing_state"] == "windowless_provider_available"
+    assert decision["windowless_provider_available_candidate_count"] == 1
+    assert decision["refreshed_stale_quota"] == true
+
+    refreshed_snapshot = RouteState.quota_snapshot_for_identity(refreshed_route_state, identity)
+    assert refreshed_snapshot.raw_windows == []
+    assert refreshed_snapshot.availability.state == :available
+    assert DateTime.compare(refreshed_snapshot.availability.observed_at, stale_at) == :gt
+  end
+
+  defp put_test_quota_snapshots(route_state, windows_by_identity_id, as_of) do
+    identities =
+      Map.new(route_state.candidates, fn {_assignment, identity} -> {identity.id, identity} end)
+
+    snapshots =
+      Map.new(windows_by_identity_id, fn {identity_id, windows} ->
+        {identity_id,
+         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+      end)
+
+    RouteState.put_quota_snapshots(route_state, snapshots)
   end
 end

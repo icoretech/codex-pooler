@@ -133,8 +133,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          :ok <- validate_payload_once(payload, request_options, validation_authority),
          {:ok, candidate_snapshots} <-
            CandidateEligibility.routable_candidates(visible_model_context, model),
-         {quota_window_snapshots, quota_snapshot_at} =
-           RouteState.load_quota_window_snapshots(
+         quota_snapshots =
+           RouteState.load_quota_snapshots(
              quota_snapshot_candidates(
                visible_model_context,
                candidate_snapshots,
@@ -146,8 +146,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
            put_selected_partition_assignment_ids(
              visible_model_context,
              model,
-             quota_window_snapshots,
-             quota_snapshot_at
+             quota_snapshots
            ),
          request_options =
            put_canonical_partition_metadata(request_options, visible_model_context),
@@ -159,8 +158,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              effective_model_serving_modes: effective_model_serving_modes,
              candidate_snapshots: candidate_snapshots,
              candidates: candidate_snapshots,
-             quota_window_snapshots: quota_window_snapshots,
-             quota_snapshot_at: quota_snapshot_at,
+             quota_snapshots: quota_snapshots,
              routing_settings: PoolRouting.routing_settings_with_defaults(auth.pool)
            })
            |> maybe_put_codex_models_etag(endpoint, request_options),
@@ -334,8 +332,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   defp put_selected_partition_assignment_ids(
          visible_model_context,
          %Model{} = model,
-         quota_window_snapshots,
-         quota_snapshot_at
+         quota_snapshots
        ) do
     candidates_by_model_id = Map.get(visible_model_context, :candidates_by_model_id, %{})
 
@@ -346,8 +343,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           PartitionRoutability.routable_assignment_ids_by_model_id(
             [model],
             candidates_by_model_id,
-            quota_window_snapshots,
-            quota_snapshot_at
+            quota_snapshots
           )
         end
       )
@@ -543,8 +539,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
             PartitionRoutability.routable_assignment_ids_by_model_id(
               visible_models,
               candidates_by_model_id,
-              route_state.quota_window_snapshots,
-              route_state.quota_snapshot_at
+              route_state.quota_snapshots
             )
           end
         )

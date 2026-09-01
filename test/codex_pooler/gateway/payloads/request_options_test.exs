@@ -1353,6 +1353,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
         "routing_state" => "reset_probe",
         "summary" => "guarded probe after saved reset pending confirmation",
         "reset_probe_candidate_count" => 1,
+        "windowless_provider_available_candidate_count" => 2,
         "eligible_candidate_count" => 1,
         "reset_probe" => %{
           "token" => token,

@@ -9,6 +9,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   test "request health and pool contribution are scoped to the caller's visible pools" do
@@ -154,6 +155,54 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
     assert visible_pool_id == visible_pool.id
     refute inspect(quota_health) =~ "Quota Hidden"
     refute inspect(quota_health) =~ "Quota hidden assignment"
+  end
+
+  test "quota health and pool contribution consume central windowless readiness" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    scope = Scope.for_user(owner)
+
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: unique_slug("windowless"), name: "Windowless Cockpit"})
+
+    as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:available, as_of, 1)
+        }
+      })
+
+    assignments = [assignment_summary(assignment, pool)]
+
+    readiness = %{
+      state: "provider_available_no_windows",
+      label: "Provider available",
+      tone: :warning,
+      routing_ready_now?: true,
+      reason_codes: [],
+      primary_window: nil,
+      primary_30d_window: nil,
+      weekly_window: nil
+    }
+
+    quota_health =
+      UpstreamCockpitMetrics.quota_health_from_readiness(scope, identity, assignments, readiness)
+
+    contribution =
+      UpstreamCockpitMetrics.pool_contribution_from_readiness(
+        scope,
+        identity,
+        assignments,
+        readiness
+      )
+
+    assert quota_health.kpis.routing_usable_count == 1
+    assert [%{state: "fresh", routing_usable?: true, reset_at: nil}] = quota_health.items
+    assert contribution.kpis.active_assignment_count == 1
+    assert [%{assignment_state: "active", routing_usable?: true}] = contribution.items
   end
 
   test "request aggregates count retried requests once and retain the lower median latency" do

@@ -3194,7 +3194,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert [summary] = Quota.ReadModel.account_summaries_for_pool_ids([pool.id], as_of)
       assert summary.state == :exhausted
       assert summary.primary_5h.freshness_state == "fresh"
-      assert summary.primary_5h.routing_usable?
+      refute summary.primary_5h.routing_usable?
     end
 
     test "replaces authoritative windows and derives usable selection data" do
@@ -5356,13 +5356,16 @@ defmodule CodexPooler.UpstreamsTest do
 
     @tag :quota_probe_envelope
     test "duplicate rich identities keep preferred endpoint payload path and window coherent" do
+      now = System.system_time(:second)
+
       previous_payload =
         weekly_only_payload(%{
           "rate_limit" => %{
             "secondary_window" => %{
               "used_percent" => 31,
               "limit_window_seconds" => 604_800,
-              "reset_after_seconds" => 3_600
+              "reset_after_seconds" => 3_600,
+              "reset_at" => now + 3_600
             }
           }
         })
@@ -5373,12 +5376,14 @@ defmodule CodexPooler.UpstreamsTest do
           "primary_window" => %{
             "used_percent" => 12,
             "limit_window_seconds" => 18_000,
-            "reset_after_seconds" => 900
+            "reset_after_seconds" => 900,
+            "reset_at" => now + 900
           },
           "secondary_window" => %{
             "used_percent" => 47,
             "limit_window_seconds" => 604_800,
-            "reset_after_seconds" => 3_600
+            "reset_after_seconds" => 3_600,
+            "reset_at" => now + 3_600
           }
         }
       }

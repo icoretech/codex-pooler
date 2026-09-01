@@ -7278,7 +7278,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         "primary_window" => %{
           "used_percent" => 12,
           "limit_window_seconds" => 18_000,
-          "reset_at" => DateTime.to_iso8601(reset_at)
+          "reset_after_seconds" => 900,
+          "reset_at" => DateTime.to_unix(reset_at)
         }
       }
     }
@@ -7380,7 +7381,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         "primary_window" => %{
           "used_percent" => 100,
           "limit_window_seconds" => 18_000,
-          "reset_at" => DateTime.to_iso8601(reset_at)
+          "reset_after_seconds" => 900,
+          "reset_at" => DateTime.to_unix(reset_at)
         }
       }
     }
@@ -7450,7 +7452,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                "continuity_family" => "pinned_codex_session",
                "pin_mode" => "hard",
                "pin_reason" => "live_upstream_websocket",
-               "internal_reason" => "quota_evidence_unavailable",
+               "internal_reason" => "quota_exhausted",
                "pool_upstream_assignment_id" => setup.assignment.id,
                "upstream_identity_id" => setup.identity.id
              }

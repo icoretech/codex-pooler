@@ -323,7 +323,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     do: request_options.routing.effective_model || model.exposed_model_id
 
   defp refilter_after_redemption(
-         result,
+         _result,
          %{filter_input: %CandidateEligibility.FilterInput{} = input} = plan,
          scan_timestamp,
          opts
@@ -361,11 +361,6 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
             {:ok, candidates, decision}
         end
     end
-  rescue
-    exception in [DBConnection.ConnectionError, Ecto.QueryError, Postgrex.Error] ->
-      Logger.warning("saved reset quota refilter failed reason=#{safe_reason(exception)}")
-
-      result
   end
 
   defp without_refreshed_route_state({:ok, candidates, decision, %RouteState{}}),
@@ -658,9 +653,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       route_state.candidates
       |> Enum.map(fn {_assignment, identity} -> identity.id end)
       |> Enum.uniq()
-      |> Windows.list_quota_windows_by_identity_ids(timestamp)
+      |> Windows.load_routing_quota_snapshots(timestamp)
 
-    RouteState.put_quota_window_snapshot(route_state, snapshots, timestamp)
+    RouteState.put_quota_snapshots(route_state, snapshots)
   end
 
   defp newer_timestamp(%DateTime{} = previous_timestamp) do

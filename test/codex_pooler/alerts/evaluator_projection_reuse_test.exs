@@ -48,7 +48,8 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluatorProjectionReuseTest do
       end)
 
     assert command_count(query_counts, "pool_upstream_assignments", "SELECT") == 1
-    assert command_count(query_counts, "account_quota_windows", "SELECT") == 1
+    assert command_count(query_counts, "account_quota_windows", "SELECT") == 0
+    assert command_count(query_counts, "upstream_identities", "SELECT") == 1
     assert command_count(query_counts, "models", "SELECT") == 1
     assert command_count(query_counts, "routing_circuit_states", "SELECT") == 0
   end
@@ -274,16 +275,17 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluatorProjectionReuseTest do
 
     assert select_sources(counts) ==
              MapSet.new([
-               "account_quota_windows",
                "models",
                "pool_upstream_assignments",
-               "routing_circuit_states"
+               "routing_circuit_states",
+               "upstream_identities"
              ])
   end
 
   defp assert_budget(counts, circuit_count, model_count) do
     assert command_count(counts, "pool_upstream_assignments", "SELECT") == 1
-    assert command_count(counts, "account_quota_windows", "SELECT") == 1
+    assert command_count(counts, "account_quota_windows", "SELECT") == 0
+    assert command_count(counts, "upstream_identities", "SELECT") == 1
     assert command_count(counts, "routing_circuit_states", "SELECT") == circuit_count
     assert command_count(counts, "models", "SELECT") == model_count
   end

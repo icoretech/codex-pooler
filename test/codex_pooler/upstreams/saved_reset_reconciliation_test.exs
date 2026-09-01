@@ -39,12 +39,14 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
                   "primary_window" => %{
                     "used_percent" => 20,
                     "limit_window_seconds" => 18_000,
-                    "reset_after_seconds" => 900
+                    "reset_after_seconds" => 900,
+                    "reset_at" => DateTime.to_unix(DateTime.add(now, 900, :second))
                   },
                   "secondary_window" => %{
                     "used_percent" => 26,
                     "limit_window_seconds" => 604_800,
-                    "resets_at" => now |> DateTime.add(2, :day) |> DateTime.to_iso8601()
+                    "reset_after_seconds" => 2 * 24 * 60 * 60,
+                    "reset_at" => DateTime.to_unix(DateTime.add(now, 2, :day))
                   }
                 }
               }}
@@ -150,10 +152,8 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
                     "used_percent" => 0,
                     "limit_window_seconds" => window_seconds,
                     "reset_after_seconds" => window_seconds,
-                    "resets_at" =>
-                      call_started_at
-                      |> DateTime.add(window_seconds, :second)
-                      |> DateTime.to_iso8601()
+                    "reset_at" =>
+                      DateTime.to_unix(DateTime.add(call_started_at, window_seconds, :second))
                   }
                 }
               }}
@@ -340,7 +340,8 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
                   "secondary_window" => %{
                     "used_percent" => 100,
                     "limit_window_seconds" => window_seconds,
-                    "reset_after_seconds" => 4 * 24 * 60 * 60
+                    "reset_after_seconds" => 4 * 24 * 60 * 60,
+                    "reset_at" => DateTime.to_unix(DateTime.add(now, 4, :day))
                   }
                 }
               }}
@@ -1410,10 +1411,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
                     "used_percent" => 0,
                     "limit_window_seconds" => window_seconds,
                     "reset_after_seconds" => window_seconds,
-                    "resets_at" =>
-                      now
-                      |> DateTime.add(window_seconds, :second)
-                      |> DateTime.to_iso8601()
+                    "reset_at" => DateTime.to_unix(DateTime.add(now, window_seconds, :second))
                   }
                 }
               }}
@@ -1892,6 +1890,8 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   end
 
   defp usage_payload(available_count) do
+    reset_at = System.system_time(:second) + 900
+
     %{
       "plan_type" => "pro",
       "rate_limit_reset_credits" => %{"available_count" => available_count},
@@ -1899,7 +1899,8 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
         "primary_window" => %{
           "used_percent" => 10,
           "limit_window_seconds" => 18_000,
-          "reset_after_seconds" => 900
+          "reset_after_seconds" => 900,
+          "reset_at" => reset_at
         }
       }
     }

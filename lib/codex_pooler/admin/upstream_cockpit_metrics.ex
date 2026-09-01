@@ -12,6 +12,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics do
     RequestHealth
   }
 
+  alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
@@ -174,6 +175,23 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics do
     QuotaHealth.quota_health(scope, identity_or_id, assignments, Common.now())
   end
 
+  @spec quota_health_from_readiness(
+          Scope.t(),
+          identity_ref(),
+          [assignment_summary()],
+          UpstreamQuotaReadiness.t()
+        ) :: quota_health()
+  def quota_health_from_readiness(%Scope{} = scope, identity_or_status, assignments, readiness)
+      when is_list(assignments) and is_map(readiness) do
+    QuotaHealth.quota_health_from_readiness(
+      scope,
+      identity_or_status,
+      assignments,
+      readiness,
+      Common.now()
+    )
+  end
+
   @spec quota_health_without_quota_data([assignment_summary()]) :: quota_health()
   def quota_health_without_quota_data(assignments) when is_list(assignments) do
     QuotaHealth.without_quota_data(assignments, Common.now())
@@ -184,6 +202,28 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics do
   def pool_contribution(%Scope{} = scope, identity_or_id, assignments)
       when is_list(assignments) do
     PoolContribution.pool_contribution(scope, identity_or_id, assignments, Common.now())
+  end
+
+  @spec pool_contribution_from_readiness(
+          Scope.t(),
+          identity_ref(),
+          [assignment_summary()],
+          UpstreamQuotaReadiness.t()
+        ) :: pool_contribution()
+  def pool_contribution_from_readiness(
+        %Scope{} = scope,
+        identity_or_status,
+        assignments,
+        readiness
+      )
+      when is_list(assignments) and is_map(readiness) do
+    PoolContribution.pool_contribution_from_readiness(
+      scope,
+      identity_or_status,
+      assignments,
+      readiness,
+      Common.now()
+    )
   end
 
   @spec pool_contribution_without_request_data([assignment_summary()]) :: pool_contribution()

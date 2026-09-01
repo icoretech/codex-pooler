@@ -23,7 +23,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.{AccountAvailabilityStore, AccountQuotaWindow}
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   describe "hydrated model visibility" do
@@ -571,6 +572,42 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
   end
 
   describe "preloaded routing state" do
+    test "quota classification keeps windowless provider availability after every ordinary group" do
+      snapshot_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      precise_identity = upstream_identity("precise-windowless-order")
+      windowless_identity = available_upstream_identity("windowless-order", snapshot_at)
+      precise_candidate = {assignment("precise-order", precise_identity), precise_identity}
+
+      windowless_candidate =
+        {assignment("windowless-order", windowless_identity), windowless_identity}
+
+      route_state =
+        RouteState.new(%{
+          visible_model: quota_model(),
+          candidates: [windowless_candidate, precise_candidate]
+        })
+        |> put_test_quota_snapshots(
+          %{
+            precise_identity.id => [account_window_at(Decimal.new("15"), snapshot_at)],
+            windowless_identity.id => []
+          },
+          snapshot_at
+        )
+
+      assert {:ok, [^precise_candidate, ^windowless_candidate], decision} =
+               CandidateEligibility.filter_quota_eligible_candidates(
+                 filter_input(quota_model(), %{"model" => "sample-model"}, request_options(), [
+                   windowless_candidate,
+                   precise_candidate
+                 ]),
+                 route_state
+               )
+
+      assert decision["routing_state"] == "precise"
+      assert decision["windowless_provider_available_candidate_count"] == 1
+      assert decision["eligible_candidate_count"] == 2
+    end
+
     test "quota eligibility consumes route-state windows without querying the repository" do
       eligible_identity = upstream_identity("eligible-identity")
       missing_identity = upstream_identity("missing-identity")
@@ -590,7 +627,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
           visible_model: quota_model(),
           candidates: [eligible_candidate, missing_candidate]
         })
-        |> RouteState.put_quota_window_snapshot(
+        |> put_test_quota_snapshots(
           snapshots,
           DateTime.utc_now() |> DateTime.truncate(:microsecond)
         )
@@ -625,7 +662,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
           visible_model: quota_model(),
           candidates: [weekly_candidate, credit_candidate, precise_candidate]
         })
-        |> RouteState.put_quota_window_snapshot(
+        |> put_test_quota_snapshots(
           snapshots,
           DateTime.utc_now() |> DateTime.truncate(:microsecond)
         )
@@ -678,10 +715,10 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
           visible_model: quota_model(),
           candidates: [candidate]
         })
-        |> RouteState.put_quota_window_snapshot(snapshots, snapshot_at)
+        |> put_test_quota_snapshots(snapshots, snapshot_at)
 
       before_only_route_state =
-        RouteState.put_quota_window_snapshot(
+        put_test_quota_snapshots(
           route_state,
           %{identity.id => [hd(snapshots[identity.id])]},
           snapshot_at
@@ -694,7 +731,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                )
 
       equal_only_route_state =
-        RouteState.put_quota_window_snapshot(
+        put_test_quota_snapshots(
           route_state,
           %{identity.id => [account_window_at(Decimal.new("100"), snapshot_at)]},
           snapshot_at
@@ -710,7 +747,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                CandidateEligibility.filter_quota_eligible_candidates(filter_input, route_state)
 
       refreshed_route_state =
-        RouteState.put_quota_window_snapshot(route_state, snapshots, refreshed_at)
+        put_test_quota_snapshots(route_state, snapshots, refreshed_at)
 
       assert {:refreshable_quota,
               %{
@@ -925,6 +962,15 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
     %UpstreamIdentity{id: id, metadata: %{}}
   end
 
+  defp available_upstream_identity(id, observed_at) do
+    metadata = %{
+      AccountAvailabilityStore.metadata_key() =>
+        AccountAvailabilityStore.encode!(:available, observed_at, 1)
+    }
+
+    %UpstreamIdentity{id: id, metadata: metadata}
+  end
+
   defp request_options do
     RequestOptions.build(%{}, "/backend-api/codex/responses", %{"model" => "sample-model"})
   end
@@ -1116,4 +1162,17 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
     do: Enum.any?(values, &legacy_has_input_image?/1)
 
   defp legacy_has_input_image?(_value), do: false
+
+  defp put_test_quota_snapshots(route_state, windows_by_identity_id, as_of) do
+    identities =
+      Map.new(route_state.candidates, fn {_assignment, identity} -> {identity.id, identity} end)
+
+    snapshots =
+      Map.new(windows_by_identity_id, fn {identity_id, windows} ->
+        {identity_id,
+         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+      end)
+
+    RouteState.put_quota_snapshots(route_state, snapshots)
+  end
 end

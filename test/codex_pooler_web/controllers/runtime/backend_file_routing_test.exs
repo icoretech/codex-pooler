@@ -516,7 +516,8 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
       end)
 
     assert %{"file_id" => "file_batched_quota_3"} = json_response(conn, 200)
-    assert command_count(query_counts, "account_quota_windows", "SELECT") == 1
+    assert command_count(query_counts, "upstream_identities", "SELECT") == 2
+    assert command_count(query_counts, "account_quota_windows", "SELECT") == 0
 
     assert [{1, first_upstream}, {2, second_upstream}, {3, third_upstream}] = upstreams
     assert FakeUpstream.requests(first_upstream) == []

@@ -13,14 +13,14 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.Quota
-  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   @type model_id :: Ecto.UUID.t()
   @type assignment_id :: Ecto.UUID.t()
   @type candidate :: CandidateEligibility.candidate()
   @type candidates_by_model_id :: %{optional(model_id()) => [candidate()]}
-  @type quota_window_snapshots :: %{optional(Ecto.UUID.t()) => [AccountQuotaWindow.t()]}
+  @type quota_snapshots :: RoutingQuotaSnapshot.snapshot_map()
   @type routable_assignment_ids_by_model_id :: %{
           required(model_id()) => MapSet.t(assignment_id())
         }
@@ -30,7 +30,7 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
   each model independently.
 
   Callers that already hold a snapshot covering the same candidates should use
-  `routable_assignment_ids_by_model_id/4` instead of paying for a second read.
+  `routable_assignment_ids_by_model_id/3` instead of paying for a second read.
   """
   @spec routable_assignment_ids_by_model_id([Model.t()], candidates_by_model_id()) ::
           routable_assignment_ids_by_model_id()
@@ -47,34 +47,27 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
     routable_assignment_ids_by_model_id(
       models,
       candidates_by_model_id,
-      QuotaWindows.list_quota_windows_by_identity_ids(identity_ids, at),
-      at
+      QuotaWindows.load_routing_quota_snapshots(identity_ids, at)
     )
   end
 
   @spec routable_assignment_ids_by_model_id(
           [Model.t()],
           candidates_by_model_id(),
-          quota_window_snapshots(),
-          DateTime.t()
+          quota_snapshots()
         ) :: routable_assignment_ids_by_model_id()
   def routable_assignment_ids_by_model_id(
         models,
         candidates_by_model_id,
-        quota_window_snapshots,
-        %DateTime{} = at
+        quota_snapshots
       )
-      when is_list(models) and is_map(candidates_by_model_id) and is_map(quota_window_snapshots) do
+      when is_list(models) and is_map(candidates_by_model_id) and is_map(quota_snapshots) do
     Map.new(models, fn %Model{} = model ->
       assignment_ids =
         for {assignment, identity} = candidate <-
               Map.get(candidates_by_model_id, model.id, []),
-            Quota.quota_routable?(
-              model,
-              candidate,
-              Map.get(quota_window_snapshots, identity.id, []),
-              at
-            ),
+            snapshot = Map.fetch!(quota_snapshots, identity.id),
+            Quota.quota_routable?(model, candidate, snapshot, snapshot.as_of),
             into: MapSet.new(),
             do: assignment.id
 

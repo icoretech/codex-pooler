@@ -5,6 +5,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
 
   alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   @account_quota_key "account"
@@ -54,6 +55,47 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
     })
   end
 
+  @spec from_snapshot(RoutingQuotaSnapshot.t()) :: t()
+  def from_snapshot(%RoutingQuotaSnapshot{} = snapshot) do
+    routing_snapshot = %{
+      snapshot
+      | raw_windows: Enum.reject(snapshot.raw_windows, &usage_zero_capacity_primary_window?/1)
+    }
+
+    eligibility =
+      QuotaWindows.routing_quota_eligibility_from_snapshot(routing_snapshot, account_only: true)
+
+    snapshot
+    |> RoutingQuotaSnapshot.effective_windows()
+    |> project_readiness(eligibility, snapshot.as_of)
+  end
+
+  defp project_readiness(windows, eligibility, as_of) do
+    account_windows = Enum.filter(windows, &account_window?/1)
+    routing_account_windows = Enum.reject(account_windows, &usage_zero_capacity_primary_window?/1)
+    primary_window = get_in(eligibility, [:selection, :primary])
+    primary_30d_window = primary_30d_window(primary_window)
+    weekly_window = get_in(eligibility, [:selection, :secondary])
+    reason_codes = reason_codes(eligibility, account_windows, as_of)
+
+    state =
+      readiness_state(
+        routing_account_windows,
+        eligibility,
+        [primary_window, weekly_window],
+        as_of
+      )
+
+    state
+    |> state_projection()
+    |> Map.merge(%{
+      reason_codes: reason_codes,
+      primary_window: primary_window,
+      primary_30d_window: primary_30d_window,
+      weekly_window: weekly_window
+    })
+  end
+
   @spec primary_30d_window(window() | nil) :: window() | nil
   defp primary_30d_window(%Quota.AccountQuotaWindow{} = window) do
     if WindowClassifier.monthly_primary?(window), do: window, else: nil
@@ -62,7 +104,19 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
   defp primary_30d_window(_window), do: nil
 
   @spec readiness_state([window()], map(), [window() | nil], DateTime.t()) :: String.t()
-  defp readiness_state([], _eligibility, _selected_windows, _as_of), do: "missing_evidence"
+  defp readiness_state(
+         [],
+         %{routing_state: :windowless_provider_available},
+         _selected_windows,
+         _as_of
+       ),
+       do: "provider_available_no_windows"
+
+  defp readiness_state([], %{exclusions: exclusions}, _selected_windows, _as_of) do
+    if Enum.any?(exclusions, &("exhausted" in Map.get(&1, :reason_codes, []))),
+      do: "blocked",
+      else: "missing_evidence"
+  end
 
   defp readiness_state(_account_windows, %{routing_state: :precise}, _selected_windows, _as_of),
     do: "ready"
@@ -109,6 +163,19 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
     %{
       state: "weekly_only_probe",
       label: "Weekly quota probe",
+      tone: :warning,
+      routing_ready_now?: true,
+      reason_codes: [],
+      primary_window: nil,
+      primary_30d_window: nil,
+      weekly_window: nil
+    }
+  end
+
+  defp state_projection("provider_available_no_windows") do
+    %{
+      state: "provider_available_no_windows",
+      label: "Provider available",
       tone: :warning,
       routing_ready_now?: true,
       reason_codes: [],

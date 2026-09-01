@@ -14,6 +14,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
   alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @typep quota_window_spec :: %{
@@ -244,6 +245,24 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "active",
         "pro",
         "Pro"
+      ),
+      windowless_identity_attrs(
+        owner,
+        "dev-acct-provider-available-no-windows",
+        "Sample Provider Available",
+        :available
+      ),
+      windowless_identity_attrs(
+        owner,
+        "dev-acct-provider-blocked-no-windows",
+        "Sample Provider Blocked",
+        :blocked
+      ),
+      windowless_identity_attrs(
+        owner,
+        "dev-acct-provider-unknown-no-windows",
+        "Sample Provider Unknown",
+        :unknown
       )
     ]
     |> Enum.map(fn attrs ->
@@ -259,7 +278,10 @@ defmodule CodexPooler.Dev.Seeds.Full do
          reauth,
          paused,
          clear,
-         absent
+         absent,
+         available_no_windows,
+         blocked_no_windows,
+         unknown_no_windows
        ]) do
     [
       assignment_attrs(
@@ -338,6 +360,35 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "active",
         "eligible",
         metadata: %{"quota_priming" => %{"status" => "known"}}
+      ),
+      assignment_attrs(
+        owner,
+        pool,
+        available_no_windows,
+        "Sample Available Assignment",
+        "active",
+        "active",
+        "eligible",
+        metadata: %{"quota_priming" => %{"status" => "known"}}
+      ),
+      assignment_attrs(
+        owner,
+        pool,
+        blocked_no_windows,
+        "Sample Blocked Assignment",
+        "active",
+        "active",
+        "eligible",
+        metadata: %{"quota_priming" => %{"status" => "blocked"}}
+      ),
+      assignment_attrs(
+        owner,
+        pool,
+        unknown_no_windows,
+        "Sample Unknown Assignment",
+        "active",
+        "active",
+        "eligible"
       )
     ]
     |> Enum.map(&seed_assignment!/1)
@@ -357,7 +408,10 @@ defmodule CodexPooler.Dev.Seeds.Full do
            _reauth_assignment,
            _paused_assignment,
            clear_assignment,
-           absent_assignment
+           absent_assignment,
+           _available_no_windows_assignment,
+           _blocked_no_windows_assignment,
+           _unknown_no_windows_assignment
          ],
          _secondary_assignment
        ) do
@@ -421,7 +475,10 @@ defmodule CodexPooler.Dev.Seeds.Full do
            _reauth_assignment,
            _paused_assignment,
            clear_assignment,
-           _absent_assignment
+           _absent_assignment,
+           _available_no_windows_assignment,
+           _blocked_no_windows_assignment,
+           _unknown_no_windows_assignment
          ],
          [
            active_identity,
@@ -431,7 +488,10 @@ defmodule CodexPooler.Dev.Seeds.Full do
            _reauth_identity,
            _paused_identity,
            clear_identity,
-           _absent_identity
+           _absent_identity,
+           _available_no_windows_identity,
+           _blocked_no_windows_identity,
+           _unknown_no_windows_identity
          ]
        ) do
     [
@@ -489,7 +549,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
     }
   end
 
-  defp seed_quota_windows!([active, ready, exhausted, plus, reauth, paused, clear, absent]) do
+  defp seed_quota_windows!([active, ready, exhausted, plus, reauth, paused, clear, absent | _]) do
     windows = [
       quota_attrs(active, quota_window_spec("primary", 300, "account", 1000, 640, "36", "fresh")),
       quota_attrs(
@@ -964,6 +1024,21 @@ defmodule CodexPooler.Dev.Seeds.Full do
       updated_at: timestamp,
       metadata: %{"dev_seed" => @seed_key, "state" => status}
     }
+  end
+
+  defp windowless_identity_attrs(owner, account_id, label, availability_state) do
+    observed_at = now()
+
+    owner
+    |> identity_attrs(account_id, label, "active", "sample", "Sample")
+    |> Map.update!(:metadata, fn metadata ->
+      metadata
+      |> Map.put("credential_epoch", 1)
+      |> Map.put(
+        AccountAvailabilityStore.metadata_key(),
+        AccountAvailabilityStore.encode!(availability_state, observed_at, 1)
+      )
+    end)
   end
 
   defp assignment_attrs(owner, pool, identity, label, status, health, eligibility, extras \\ []) do

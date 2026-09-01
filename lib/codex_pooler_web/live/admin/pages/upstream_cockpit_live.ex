@@ -430,7 +430,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       cockpit_metrics_rerun?: false
     )
     |> start_async({:cockpit_metrics, generation}, fn ->
-      UpstreamCockpitReadModel.request_metrics(scope, cockpit.identity.id, cockpit.assignments)
+      UpstreamCockpitReadModel.request_metrics(scope, cockpit)
     end)
   end
 

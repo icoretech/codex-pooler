@@ -280,6 +280,32 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert CompatibilityMatrix.pending_gaps() == []
     end
 
+    test "keeps routeable windowless quota distinct from preserved 503 failures" do
+      feature = CompatibilityMatrix.by_slug!(:degraded_routing)
+      fixture = CompatibilityMatrix.fixture!(:degraded_routing)
+
+      assert feature.quota_evidence.lower_priority_fallback ==
+               "provider_attested_windowless_availability"
+
+      assert feature.quota_evidence.normal_authority == "fresh_reset_bearing_windows"
+      assert feature.quota_evidence.operator_or_sku_gate == false
+      assert feature.quota_evidence.synthetic_window_or_reset == false
+
+      assert fixture.windowless_provider_availability.routing_state ==
+               "windowless_provider_available"
+
+      assert fixture.windowless_provider_availability.required_metadata == [
+               "version",
+               "state",
+               "observed_at",
+               "credential_epoch"
+             ]
+
+      assert fixture.fail_closed.status == 503
+      assert fixture.fail_closed.blocked_error_code == "quota_exhausted"
+      assert fixture.fail_closed.unavailable_error_code == "quota_evidence_unavailable"
+    end
+
     test "keeps the registered usage aliases on the shared dynamic freshness contract" do
       feature =
         Enum.find(CompatibilityMatrix.features(), &(&1.slug == :usage_alias_meter_identity))

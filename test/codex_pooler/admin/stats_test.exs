@@ -1,6 +1,7 @@
 defmodule CodexPooler.Admin.StatsTest do
   use CodexPooler.DataCase, async: false
 
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   import CodexPooler.AccountsFixtures
@@ -80,6 +81,40 @@ defmodule CodexPooler.Admin.StatsTest do
                quota_state: :unknown
              }
            ] = Tables.upstream_table([], [quota_account])
+  end
+
+  test "admin stats reports fresh provider-available zero-window accounts as available" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-windowless-available"})
+    as_of = now()
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          "quota_account_availability" => %{
+            "version" => 1,
+            "state" => "available",
+            "observed_at" => DateTime.to_iso8601(as_of),
+            "credential_epoch" => 1
+          }
+        }
+      })
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(scope, %{
+               "pool_id" => pool.id,
+               "window" => "24h",
+               as_of: as_of
+             })
+
+    assert dashboard.quota.summary.state == :available
+    assert dashboard.quota.summary.available == 1
+
+    assert [%{upstream_identity_id: id, state: :available, evidence_count: 0}] =
+             dashboard.quota.accounts
+
+    assert id == identity.id
   end
 
   test "upstream_table/2 calculates shares and sorts by requests before tokens" do
@@ -1976,6 +2011,46 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.quota.summary.missing_evidence == 1
     assert [account] = dashboard.quota.accounts
     assert account.primary_5h.freshness_state == "stale"
+    refute account.primary_5h.routing_usable?
+  end
+
+  test "admin stats marks an exhausted account primary non-routeable like the shared classifier" do
+    scope = owner_scope()
+    as_of = ~U[2026-08-08 12:00:00Z]
+    pool = pool_fixture(%{slug: "stats-exhausted-primary", name: "Stats Exhausted Primary"})
+    %{identity: identity} = upstream_assignment_fixture(pool)
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(as_of, 4, :hour),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 freshness_state: "fresh",
+                 observed_at: as_of,
+                 last_sync_at: as_of
+               }
+             ])
+
+    snapshot = RoutingQuotaSnapshot.load_by_identity_ids([identity.id], as_of)[identity.id]
+
+    assert %{eligible?: false, routing_state: :blocked, exclusions: exclusions} =
+             QuotaWindows.routing_quota_eligibility_from_snapshot(snapshot, account_only: true)
+
+    assert Enum.any?(exclusions, &("exhausted" in Map.get(&1, :reason_codes, [])))
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h", as_of: as_of})
+
+    assert dashboard.quota.summary.state == :exhausted
+    assert [account] = dashboard.quota.accounts
+    assert account.state == :exhausted
     refute account.primary_5h.routing_usable?
   end
 

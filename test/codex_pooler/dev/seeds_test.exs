@@ -23,6 +23,7 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.PoolForm
@@ -280,12 +281,18 @@ defmodule CodexPooler.Dev.SeedsTest do
              "active",
              "active",
              "active",
+             "active",
+             "active",
+             "active",
              "paused",
              "reauth_required",
              "refresh_due"
            ]
 
     assert statuses_for(PoolUpstreamAssignment) == [
+             "active",
+             "active",
+             "active",
              "active",
              "active",
              "active",
@@ -366,6 +373,35 @@ defmodule CodexPooler.Dev.SeedsTest do
              "Quota exhausted"
 
     assert Enum.find(exhausted_windows, &(&1.window_kind == "secondary")).credits == 0
+
+    windowless_states =
+      for {label, _expected} <- [
+            {"Sample Provider Available",
+             {"provider_available_no_windows", "Provider available", :warning, true}},
+            {"Sample Provider Blocked", {"blocked", "Quota blocked", :warning, false}},
+            {"Sample Provider Unknown", {"missing_evidence", "Quota missing", :warning, false}}
+          ],
+          into: %{} do
+        identity = Repo.get_by!(UpstreamIdentity, account_label: label)
+
+        snapshot =
+          RoutingQuotaSnapshot.from_identity(identity, quota_windows_for(identity), snapshot_at)
+
+        readiness = UpstreamQuotaReadiness.from_snapshot(snapshot)
+
+        assert readiness.primary_window == nil
+        assert readiness.primary_30d_window == nil
+        assert readiness.weekly_window == nil
+
+        {label, {readiness.state, readiness.label, readiness.tone, readiness.routing_ready_now?}}
+      end
+
+    assert windowless_states == %{
+             "Sample Provider Available" =>
+               {"provider_available_no_windows", "Provider available", :warning, true},
+             "Sample Provider Blocked" => {"blocked", "Quota blocked", :warning, false},
+             "Sample Provider Unknown" => {"missing_evidence", "Quota missing", :warning, false}
+           }
 
     seeded_jobs =
       Repo.all(from job in Oban.Job, where: job.meta["dev_seed"] == "codex_pooler_dev_seed")
@@ -531,11 +567,11 @@ defmodule CodexPooler.Dev.SeedsTest do
              "Dev Active Secondary Assignment"
            ]
 
-    assert {length(full.upstream_identities), length(full.assignments)} == {8, 9}
+    assert {length(full.upstream_identities), length(full.assignments)} == {11, 12}
 
     assert {Repo.aggregate(UpstreamIdentity, :count),
             Repo.aggregate(PoolUpstreamAssignment, :count)} ==
-             {8, 9}
+             {11, 12}
 
     Seeds.docs_screenshots()
     docs = Seeds.docs_screenshots()
@@ -572,9 +608,9 @@ defmodule CodexPooler.Dev.SeedsTest do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     later_observed_at = DateTime.add(observed_at, 2, :hour)
 
-    assert {length(result.upstream_identities), length(result.assignments)} == {8, 9}
-    assert Repo.aggregate(UpstreamIdentity, :count) == 8
-    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 9
+    assert {length(result.upstream_identities), length(result.assignments)} == {11, 12}
+    assert Repo.aggregate(UpstreamIdentity, :count) == 11
+    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 12
     assert Repo.aggregate(Model, :count) == 6
     assert Repo.aggregate(AccountQuotaWindow, :count) == 14
     assert Repo.aggregate(RoutingCircuitState, :count) == 3
@@ -587,7 +623,10 @@ defmodule CodexPooler.Dev.SeedsTest do
              "dev-acct-reauth",
              "dev-acct-paused",
              "dev-acct-circuit-clear",
-             "dev-acct-circuit-absent"
+             "dev-acct-circuit-absent",
+             "dev-acct-provider-available-no-windows",
+             "dev-acct-provider-blocked-no-windows",
+             "dev-acct-provider-unknown-no-windows"
            ]
 
     assert Enum.map(result.assignments, & &1.assignment_label) == [
@@ -599,7 +638,10 @@ defmodule CodexPooler.Dev.SeedsTest do
              "Dev Paused Assignment",
              "Dev Active Secondary Assignment",
              "Dev Circuit Clear Assignment",
-             "Dev Circuit Absent Assignment"
+             "Dev Circuit Absent Assignment",
+             "Sample Available Assignment",
+             "Sample Blocked Assignment",
+             "Sample Unknown Assignment"
            ]
 
     fixtures =

@@ -58,7 +58,8 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutabilityTest do
              exhausted_model.id => MapSet.new()
            }
 
-    assert command_count(commands, "account_quota_windows", "SELECT") == 1
+    assert command_count(commands, "upstream_identities", "SELECT") == 1
+    assert command_count(commands, "account_quota_windows", "SELECT") == 0
   end
 
   defp unique_model_id(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"

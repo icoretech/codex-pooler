@@ -9,7 +9,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
   alias CodexPooler.Admin.UpstreamCockpitMetrics.Common
   alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
 
   @spec pool_contribution(
           Scope.t(),
@@ -31,6 +31,33 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
     quota_readiness = quota_readiness(identity_or_id, visible_assignments, as_of)
 
     from_rows(identity_or_id, visible_assignments, rows, quota_readiness)
+  end
+
+  @spec pool_contribution_from_readiness(
+          Scope.t(),
+          term(),
+          [UpstreamCockpitMetrics.assignment_summary()],
+          UpstreamQuotaReadiness.t(),
+          DateTime.t()
+        ) :: UpstreamCockpitMetrics.pool_contribution()
+  def pool_contribution_from_readiness(
+        %Scope{} = scope,
+        identity_or_status,
+        assignments,
+        readiness,
+        %DateTime{} = as_of
+      )
+      when is_list(assignments) and is_map(readiness) do
+    pool_ids = Common.visible_pool_ids(scope)
+    visible_assignments = Common.filter_assignments_by_pool_ids(assignments, pool_ids)
+    start_7d = Common.seven_day_window_start(as_of)
+
+    rows =
+      identity_or_status
+      |> Common.identity_id()
+      |> pool_contribution_rows(pool_ids, start_7d, as_of)
+
+    from_rows(identity_or_status, visible_assignments, rows, readiness)
   end
 
   @spec without_request_data([UpstreamCockpitMetrics.assignment_summary()], DateTime.t()) ::
@@ -185,9 +212,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
     do: "Disabled or unusable assignment"
 
   defp quota_readiness_for_identity(identity_id, as_of) when is_binary(identity_id) do
-    identity_id
-    |> QuotaWindows.list_quota_windows(as_of)
-    |> UpstreamQuotaReadiness.from_windows(as_of)
+    [identity_id]
+    |> RoutingQuotaSnapshot.load_by_identity_ids(as_of)
+    |> Map.fetch!(identity_id)
+    |> UpstreamQuotaReadiness.from_snapshot()
   end
 
   defp quota_readiness_for_identity(_identity_id, as_of),

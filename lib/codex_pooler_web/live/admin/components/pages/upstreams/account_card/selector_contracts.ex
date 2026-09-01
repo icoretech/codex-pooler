@@ -37,7 +37,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SelectorContra
         </span>
       </section>
 
-      <section id={"upstream-account-#{@account.identity.id}-quota-readiness-contract"}>
+      <section
+        id={"upstream-account-#{@account.identity.id}-quota-readiness-contract"}
+        data-quota-tone={@account.quota_readiness.tone}
+        data-routing-ready-now={to_string(@account.quota_readiness.routing_ready_now?)}
+      >
         quota readiness
         <span id={"upstream-account-#{@account.identity.id}-quota-readiness-state"}>
           {@account.quota_readiness.state}

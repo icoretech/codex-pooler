@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.OAuthFlows
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.PrimingState
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
@@ -61,6 +62,66 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     Repo.delete_all(Oban.Job)
     :ok
+  end
+
+  test "renders windowless availability readiness through stable account selectors", %{conn: conn} do
+    as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    pool = pool_fixture(%{name: "Windowless readiness Pool"})
+
+    fixtures =
+      for {state, label} <- [
+            {:available, "Sample Available Without Windows"},
+            {:blocked, "Sample Blocked Without Windows"},
+            {:unknown, "Sample Unknown Without Windows"}
+          ],
+          into: %{} do
+        %{identity: identity} =
+          upstream_assignment_fixture(pool, %{
+            account_label: label,
+            identity_metadata: %{
+              "credential_epoch" => 1,
+              AccountAvailabilityStore.metadata_key() =>
+                AccountAvailabilityStore.encode!(state, as_of, 1)
+            }
+          })
+
+        {state, identity}
+      end
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams")
+
+    expected = %{
+      available: {"provider_available_no_windows", "Provider available", "warning", "true"},
+      blocked: {"blocked", "Quota blocked", "warning", "false"},
+      unknown: {"missing_evidence", "Quota missing", "warning", "false"}
+    }
+
+    for {state, identity} <- fixtures do
+      {readiness_state, readiness_label, tone, ready_now} = Map.fetch!(expected, state)
+      prefix = "upstream-account-#{identity.id}"
+
+      routing_state =
+        if state == :available, do: "provider_available_no_windows", else: "quota_blocked"
+
+      card_html = view |> element("##{prefix}") |> render()
+      assert card_html =~ ~s(data-routing-state="#{routing_state}")
+      assert card_html =~ ~s(data-routing-tone="#{tone}")
+      assert card_html =~ ~s(data-routing-ready-now="#{ready_now}")
+
+      assert has_element?(view, "##{prefix}-quota-readiness-contract[data-quota-tone='#{tone}']")
+
+      contract_html = view |> element("##{prefix}-quota-readiness-contract") |> render()
+      assert contract_html =~ ~s(data-routing-ready-now="#{ready_now}")
+
+      assert has_element?(view, "##{prefix}-quota-readiness-state", readiness_state)
+      assert has_element?(view, "##{prefix}-quota-readiness-label", readiness_label)
+      refute has_element?(view, "##{prefix}-limits [data-countdown-at]")
+      refute has_element?(view, "##{prefix}-limits [data-role='upstream-limit-reset']")
+    end
+
+    refute html =~ AccountAvailabilityStore.metadata_key()
+    refute html =~ "credential_epoch"
+    refute html =~ "provider_payload"
   end
 
   test "shared dropdown action item renders button and link modes" do
@@ -4090,7 +4151,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                    "primary_window" => %{
                      "used_percent" => 3,
                      "limit_window_seconds" => 2_592_000,
-                     "reset_after_seconds" => 950_400
+                     "reset_after_seconds" => 950_400,
+                     "reset_at" => DateTime.to_unix(DateTime.add(now, 950_400, :second))
                    }
                  }
                },
@@ -4137,7 +4199,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                    "primary_window" => %{
                      "used_percent" => 12,
                      "limit_window_seconds" => 604_800,
-                     "reset_after_seconds" => 518_400
+                     "reset_after_seconds" => 518_400,
+                     "reset_at" => DateTime.to_unix(DateTime.add(now, 518_400, :second))
                    }
                  }
                },
@@ -5947,7 +6010,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert [_match, quota_contract] =
              Regex.run(
-               ~r/<section id="upstream-account-#{blocked_id}-quota-readiness-contract">(.*?)<\/section>/s,
+               ~r/<section[^>]+id="upstream-account-#{blocked_id}-quota-readiness-contract"[^>]*>(.*?)<\/section>/s,
                blocked_html
              )
 
@@ -8924,7 +8987,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
               "used_percent" => used_percent,
               "limit_window_seconds" => 604_800,
               "reset_after_seconds" => reset_after_seconds,
-              "reset_at" => DateTime.to_iso8601(reset_at)
+              "reset_at" => DateTime.to_unix(reset_at)
             }
           }
         }

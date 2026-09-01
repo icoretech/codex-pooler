@@ -16,7 +16,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
         "primary_window" => %{
           "used_percent" => 1,
           "limit_window_seconds" => 18_000,
-          "reset_after_seconds" => 3_600
+          "reset_after_seconds" => 3_600,
+          "reset_at" => DateTime.to_unix(DateTime.add(observed_at, 3_600, :second))
         }
       }
     }

@@ -1,9 +1,13 @@
 defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
-  use ExUnit.Case, async: true
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Admin.UpstreamRoutingReadiness
   alias CodexPooler.Quotas.Evidence
-  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.{AccountAvailabilityStore, AccountQuotaWindow}
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
 
   @as_of ~U[2026-05-30 12:00:00Z]
   @future_reset ~U[2026-05-30 12:15:00Z]
@@ -342,6 +346,100 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
                weekly_window: ^weekly
              } = projection = UpstreamQuotaReadiness.from_windows([weekly], @as_of)
 
+      assert_exact_keys(projection)
+    end
+  end
+
+  describe "from_snapshot/1" do
+    test "maps fresh provider availability without windows to warning readiness" do
+      pool = pool_fixture()
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          identity_metadata: %{
+            "credential_epoch" => 1,
+            AccountAvailabilityStore.metadata_key() =>
+              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+          }
+        })
+
+      snapshot = RoutingQuotaSnapshot.from_identity(identity, [], @as_of)
+
+      assert %{
+               state: "provider_available_no_windows",
+               label: "Provider available",
+               tone: :warning,
+               routing_ready_now?: true,
+               reason_codes: [],
+               primary_window: nil,
+               primary_30d_window: nil,
+               weekly_window: nil
+             } = projection = UpstreamQuotaReadiness.from_snapshot(snapshot)
+
+      assert_exact_keys(projection)
+
+      routing =
+        UpstreamRoutingReadiness.from_inputs(
+          identity,
+          %{status: "active", health_status: "active", eligibility_status: "eligible"},
+          projection
+        )
+
+      assert routing.state == "provider_available_no_windows"
+      assert routing.label == "Provider available"
+      assert routing.tone == :warning
+      assert routing.routing_ready_now?
+    end
+
+    test "keeps blocked unknown expired and credential-mismatched snapshots fail closed" do
+      for {state, observed_at, epoch, expected_state} <- [
+            {:blocked, @as_of, 1, "blocked"},
+            {:unknown, @as_of, 1, "missing_evidence"},
+            {:available, DateTime.add(@as_of, -(Evidence.freshness_ttl_seconds() + 1), :second),
+             1, "missing_evidence"},
+            {:available, @as_of, 2, "missing_evidence"}
+          ] do
+        pool = pool_fixture()
+
+        %{identity: identity} =
+          upstream_assignment_fixture(pool, %{
+            identity_metadata: %{
+              "credential_epoch" => 1,
+              AccountAvailabilityStore.metadata_key() =>
+                AccountAvailabilityStore.encode!(state, observed_at, epoch)
+            }
+          })
+
+        projection =
+          identity
+          |> RoutingQuotaSnapshot.from_identity([], @as_of)
+          |> UpstreamQuotaReadiness.from_snapshot()
+
+        assert projection.state == expected_state
+        refute projection.routing_ready_now?
+        assert_exact_keys(projection)
+      end
+    end
+
+    test "account-only readiness ignores unrelated model exhaustion without hiding it from snapshot" do
+      pool = pool_fixture()
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          identity_metadata: %{
+            "credential_epoch" => 1,
+            AccountAvailabilityStore.metadata_key() =>
+              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+          }
+        })
+
+      model_blocker = model_window(used_percent: Decimal.new("100"))
+      snapshot = RoutingQuotaSnapshot.from_identity(identity, [model_blocker], @as_of)
+      projection = UpstreamQuotaReadiness.from_snapshot(snapshot)
+
+      assert projection.state == "provider_available_no_windows"
+      assert projection.routing_ready_now?
+      assert snapshot.raw_windows == [model_blocker]
       assert_exact_keys(projection)
     end
   end

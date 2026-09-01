@@ -6,8 +6,9 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
   import Ecto.Query
 
   alias CodexPooler.Alerts.Evaluation.CircuitTerm
+  alias CodexPooler.Catalog.Model
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.{RoutingQuotaSnapshot, Windows}
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @active "active"
@@ -56,7 +57,9 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
           {assignments, projection_cache}
 
         :error ->
-          assignments = assigned_identities(pool_id, model, context.at)
+          {assignments, projection_cache} =
+            assigned_identities(pool_id, model, context.at, projection_cache)
+
           {assignments, Map.put(projection_cache, cache_key, assignments)}
       end
 
@@ -98,34 +101,40 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
     }
   end
 
-  defp assigned_identities(pool_id, model, timestamp) do
+  defp assigned_identities(pool_id, model, timestamp, projection_cache) do
     assignments = assignment_rows(pool_id)
 
-    windows_by_identity_id =
+    snapshots_by_identity_id =
       assignments
       |> Enum.map(& &1.upstream_identity_id)
-      |> windows_by_identity_id(timestamp)
+      |> RoutingQuotaSnapshot.load_by_identity_ids(timestamp)
 
-    Enum.map(assignments, fn row ->
-      windows = Map.get(windows_by_identity_id, row.upstream_identity_id, [])
-      quota_projection = quota_projection(windows, model, timestamp)
+    {scope, projection_cache} =
+      quota_scope_opts_from_cache(pool_id, model, projection_cache)
 
-      Map.merge(row, %{
-        model: model,
-        quota_windows: windows,
-        quota: quota_projection,
-        state: assignment_state(row, quota_projection),
-        enabled_assignment?: enabled_assignment?(row),
-        serves_model?: true,
-        circuit_blocked?: false,
-        blocked_lanes: [],
-        usable_assignment?:
-          usable_assignment?(row, quota_projection, %{
-            serves_model?: true,
-            circuit_blocked?: false
-          })
-      })
-    end)
+    assignments =
+      Enum.map(assignments, fn row ->
+        snapshot = Map.fetch!(snapshots_by_identity_id, row.upstream_identity_id)
+        quota_projection = quota_projection(snapshot, scope)
+
+        Map.merge(row, %{
+          model: model,
+          quota_windows: RoutingQuotaSnapshot.effective_windows(snapshot),
+          quota: quota_projection,
+          state: assignment_state(row, quota_projection),
+          enabled_assignment?: enabled_assignment?(row),
+          serves_model?: true,
+          circuit_blocked?: false,
+          blocked_lanes: [],
+          usable_assignment?:
+            usable_assignment?(row, quota_projection, %{
+              serves_model?: true,
+              circuit_blocked?: false
+            })
+        })
+      end)
+
+    {assignments, projection_cache}
   end
 
   defp maybe_apply_circuit_term(
@@ -199,32 +208,31 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
     )
   end
 
-  defp windows_by_identity_id([], _timestamp), do: %{}
-
-  # Alert thresholds must evaluate the effective window view at the
-  # evaluation timestamp: raw rows can still carry superseded 5h primaries or
-  # legacy weekly duplicates that routing and operator surfaces already
-  # reject, and alerts firing on those would contradict every other surface.
-  defp windows_by_identity_id(identity_ids, timestamp) do
-    Quota.Windows.list_quota_windows_by_identity_ids(identity_ids, timestamp)
+  defp quota_projection(snapshot, :invalid_concrete_model) do
+    %{
+      state: "missing_evidence",
+      routing_usable?: false,
+      window_count: length(RoutingQuotaSnapshot.effective_windows(snapshot)),
+      selector_windows: [],
+      reason_codes: ["missing_evidence"]
+    }
   end
 
-  defp quota_projection(windows, model, timestamp) do
-    opts = model_opts(model) ++ [at: timestamp]
-    selection = Quota.Windows.quota_window_selection_data_from_windows(windows, opts)
-    eligibility = Quota.Windows.routing_quota_eligibility_from_windows(windows, opts)
-    state = quota_state(windows, selection, eligibility, timestamp)
+  defp quota_projection(snapshot, scope_opts) when is_list(scope_opts) do
+    windows = RoutingQuotaSnapshot.effective_windows(snapshot)
+    opts = scope_opts ++ [at: snapshot.as_of]
+    selection = Windows.quota_window_selection_data_from_windows(windows, opts)
+    eligibility = Windows.routing_quota_eligibility_from_snapshot(snapshot, scope_opts)
+    state = quota_state(windows, selection, eligibility, snapshot.as_of)
 
     %{
       state: state,
       routing_usable?: eligibility.eligible?,
       window_count: length(windows),
       selector_windows: selection.routing_windows,
-      reason_codes: quota_reason_codes(state, selection, eligibility, timestamp)
+      reason_codes: quota_reason_codes(state, selection, eligibility, snapshot.as_of)
     }
   end
-
-  defp quota_state([], _selection, _eligibility, _timestamp), do: "missing_evidence"
 
   defp quota_state(
          _windows,
@@ -242,6 +250,16 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
        ),
        do: "weekly_only"
 
+  defp quota_state(
+         _windows,
+         _selection,
+         %{eligible?: true, routing_state: :windowless_provider_available},
+         _timestamp
+       ),
+       do: "usable"
+
+  defp quota_state([], _selection, _eligibility, _timestamp), do: "missing_evidence"
+
   defp quota_state(_windows, _selection, %{eligible?: true}, _timestamp), do: "usable"
 
   defp quota_state(_windows, selection, _eligibility, timestamp) do
@@ -254,13 +272,13 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
 
   defp exhausted_selection?(selection, timestamp) do
     selection.routing_windows
-    |> Enum.flat_map(&Quota.Windows.routing_window_reason_codes(&1, timestamp))
+    |> Enum.flat_map(&Windows.routing_window_reason_codes(&1, timestamp))
     |> Enum.member?("exhausted")
   end
 
   defp stale_selection?(selection, timestamp) do
     selection.routing_windows
-    |> Enum.flat_map(&Quota.Windows.routing_window_reason_codes(&1, timestamp))
+    |> Enum.flat_map(&Windows.routing_window_reason_codes(&1, timestamp))
     |> Enum.any?(&(&1 in ["expired", "not_fresh"]))
   end
 
@@ -278,7 +296,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
   defp quota_reason_codes(state, selection, _eligibility, timestamp) do
     reason_codes =
       selection.routing_windows
-      |> Enum.flat_map(&Quota.Windows.routing_window_reason_codes(&1, timestamp))
+      |> Enum.flat_map(&Windows.routing_window_reason_codes(&1, timestamp))
       |> Enum.uniq()
 
     if reason_codes == [], do: [state], else: [state | reason_codes]
@@ -295,6 +313,80 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
       quota.routing_usable? and term.serves_model? and not term.circuit_blocked?
   end
 
-  defp model_opts(nil), do: []
-  defp model_opts(model), do: [model: model]
+  defp quota_scope_opts_from_cache(_pool_id, nil, projection_cache),
+    do: {[], projection_cache}
+
+  defp quota_scope_opts_from_cache(pool_id, model, projection_cache) do
+    cache_key = {:models, pool_id}
+
+    {models, projection_cache} =
+      case Map.fetch(projection_cache, cache_key) do
+        {:ok, models} ->
+          {models, projection_cache}
+
+        :error ->
+          models =
+            Repo.all(
+              from catalog_model in Model,
+                where: catalog_model.pool_id == ^pool_id and catalog_model.status == "active",
+                order_by: [asc: fragment("lower(?)", catalog_model.exposed_model_id)],
+                select: %{
+                  exposed_model_id: catalog_model.exposed_model_id,
+                  upstream_model_id: catalog_model.upstream_model_id,
+                  metadata: catalog_model.metadata
+                }
+            )
+
+          {models, Map.put(projection_cache, cache_key, models)}
+      end
+
+    case normalize_concrete_alias(model) do
+      {:ok, normalized_model} ->
+        resolve_catalog_aliases(models, normalized_model, projection_cache)
+
+      :error ->
+        {:invalid_concrete_model, projection_cache}
+    end
+  end
+
+  defp resolve_catalog_aliases(models, normalized_model, projection_cache) do
+    case Enum.find(models, fn catalog_model ->
+           normalize_alias(catalog_model.exposed_model_id) == normalized_model
+         end) do
+      nil ->
+        {[exposed_model_id: normalized_model, upstream_model_id: normalized_model],
+         projection_cache}
+
+      %{exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id} ->
+        normalize_catalog_aliases(exposed_model_id, upstream_model_id, projection_cache)
+    end
+  end
+
+  defp normalize_catalog_aliases(exposed_model_id, upstream_model_id, projection_cache) do
+    with {:ok, exposed_model_id} <- normalize_concrete_alias(exposed_model_id),
+         {:ok, upstream_model_id} <- normalize_concrete_alias(upstream_model_id) do
+      {[exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id],
+       projection_cache}
+    else
+      _malformed_alias -> {:invalid_concrete_model, projection_cache}
+    end
+  end
+
+  defp normalize_concrete_alias(alias_value) do
+    case normalize_alias(alias_value) do
+      nil -> :error
+      alias_value -> {:ok, alias_value}
+    end
+  end
+
+  defp normalize_alias(alias_value) when is_binary(alias_value) do
+    alias_value
+    |> String.trim()
+    |> case do
+      "" -> nil
+      alias_value -> String.downcase(alias_value)
+    end
+  end
+
+  defp normalize_alias(_alias_value), do: nil
 end

@@ -180,6 +180,17 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
           recovery_action: nil
         })
 
+      Map.get(quota_readiness, :state) == "provider_available_no_windows" ->
+        projection(%{
+          routing_ready_now?: true,
+          state: "provider_available_no_windows",
+          label: "Provider available",
+          tone: :warning,
+          reason: "Provider availability allows routing without reported quota windows.",
+          reason_code: "provider_available_no_windows",
+          recovery_action: nil
+        })
+
       true ->
         projection(%{
           routing_ready_now?: true,

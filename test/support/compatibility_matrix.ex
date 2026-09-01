@@ -551,8 +551,14 @@ defmodule CodexPooler.CompatibilityMatrix do
       routes: [%{method: :post, path: "/backend-api/codex/responses"}],
       future_routes: [],
       fixture: :degraded_routing,
+      quota_evidence: %{
+        normal_authority: "fresh_reset_bearing_windows",
+        lower_priority_fallback: "provider_attested_windowless_availability",
+        operator_or_sku_gate: false,
+        synthetic_window_or_reset: false
+      },
       contract:
-        "degraded routing demotes failed bridge candidates and records sanitized routing metadata"
+        "degraded routing demotes failed bridge candidates and records sanitized routing metadata; fresh reset-bearing quota windows remain normal authority, while a fresh current-credential provider-attested availability observation with no account-window evidence is a distinct lower-priority routeable state; blocked, unknown, stale, credential-mismatched, malformed, or applicable model/additional-limit evidence fails closed with the existing 503 errors, without an operator or SKU gate and without fabricating a quota window or reset"
     },
     %{
       slug: :strict_schema_validation,
@@ -2123,7 +2129,31 @@ defmodule CodexPooler.CompatibilityMatrix do
     },
     compressed_request: %{encoding: "gzip", bytes: "synthetic compressed bytes"},
     bulkhead_overload: %{lane: "proxy_http", decision: "synthetic shed"},
-    degraded_routing: %{json: %{"model" => "gpt-fixture-text", "input" => "synthetic fallback"}},
+    degraded_routing: %{
+      json: %{"model" => "gpt-fixture-text", "input" => "synthetic fallback"},
+      windowless_provider_availability: %{
+        routing_state: "windowless_provider_available",
+        required_metadata: ["version", "state", "observed_at", "credential_epoch"],
+        requires_current_credential_epoch: true,
+        requires_fresh_observation: true,
+        requires_no_account_window_evidence: true,
+        precedence: "below_reset_bearing_windows",
+        fabricated_window_or_reset: false
+      },
+      fail_closed: %{
+        status: 503,
+        blocked_error_code: "quota_exhausted",
+        unavailable_error_code: "quota_evidence_unavailable",
+        states: [
+          "provider_blocked",
+          "provider_unknown",
+          "stale_provider_availability",
+          "credential_epoch_mismatch",
+          "malformed_provider_availability",
+          "applicable_model_or_additional_blocker"
+        ]
+      }
+    },
     strict_schema_rejection: %{
       json: %{
         "model" => "gpt-fixture-text",

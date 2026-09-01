@@ -23,12 +23,55 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   alias Ecto.Adapters.SQL.Sandbox
 
   describe "plan_route/1 leaf ordering" do
+    test "ring truncation keeps ordinary quota ahead of an earlier windowless candidate" do
+      setup = routing_setup(2)
+      snapshot_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      [windowless_assignment, ordinary_assignment] = setup.assignments
+      [windowless_identity, ordinary_identity] = setup.identities
+
+      windowless_identity = %{
+        windowless_identity
+        | metadata:
+            Map.put(
+              windowless_identity.metadata,
+              AccountAvailabilityStore.metadata_key(),
+              AccountAvailabilityStore.encode!(:available, snapshot_at, 1)
+            )
+      }
+
+      windowless_candidate = {windowless_assignment, windowless_identity}
+      ordinary_candidate = {ordinary_assignment, ordinary_identity}
+      candidates = [windowless_candidate, ordinary_candidate]
+
+      route_state =
+        RouteState.new(%{visible_model: setup.model, candidates: candidates})
+        |> put_test_quota_snapshots(
+          %{
+            windowless_identity.id => [],
+            ordinary_identity.id => [account_window_at(Decimal.new("20"), snapshot_at)]
+          },
+          snapshot_at
+        )
+
+      plan =
+        plan_for(setup, "deterministic_rotation", seed_rotating_to_index(0, 2),
+          candidates: candidates,
+          ring_size: 1,
+          route_state: route_state
+        )
+
+      assert plan.selected_assignment_id == ordinary_assignment.id
+      assert candidate_ids(plan.candidates) == [ordinary_assignment.id]
+    end
+
     test "bridge_ring keeps rendezvous ordering stable for the same seed and candidate set" do
       setup = routing_setup(3)
       seed = "bridge-ring-stable-seed"
@@ -783,7 +826,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
           visible_model: setup.model,
           candidates: setup.candidates
         })
-        |> RouteState.put_quota_window_snapshot(snapshots, snapshot_at)
+        |> put_test_quota_snapshots(snapshots, snapshot_at)
 
       snapshot_plan =
         plan_for(setup, "quota_first", "quota-snapshot-boundary", route_state: route_state)
@@ -791,7 +834,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert snapshot_plan.selected_assignment_id == first_assignment.id
 
       refreshed_route_state =
-        RouteState.put_quota_window_snapshot(route_state, snapshots, refreshed_at)
+        put_test_quota_snapshots(route_state, snapshots, refreshed_at)
 
       refreshed_plan =
         plan_for(setup, "quota_first", "quota-snapshot-boundary",
@@ -850,7 +893,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       route_state =
         RouteState.new(%{visible_model: setup.model, candidates: snapshot_candidates})
-        |> RouteState.put_quota_window_snapshot(
+        |> put_test_quota_snapshots(
           %{
             positive_identity.id => [account_window_at(Decimal.new("40"), snapshot_at)],
             exhausted_identity.id => [
@@ -951,7 +994,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
         route_state =
           RouteState.new(%{visible_model: setup.model, candidates: setup.candidates})
-          |> RouteState.put_quota_window_snapshot(
+          |> put_test_quota_snapshots(
             %{
               reported_identity.id => reported_windows,
               positive_identity.id => [account_window_at(Decimal.new("40"), snapshot_at)]
@@ -980,7 +1023,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       monthly_route_state =
         RouteState.new(%{visible_model: setup.model, candidates: setup.candidates})
-        |> RouteState.put_quota_window_snapshot(
+        |> put_test_quota_snapshots(
           %{
             reported_identity.id => [monthly_primary],
             positive_identity.id => [account_window_at(Decimal.new("40"), snapshot_at)]
@@ -1923,5 +1966,18 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   defp rendezvous_score(seed, assignment_id) do
     :crypto.hash(:sha256, [to_string(seed), ?:, assignment_id])
     |> :binary.decode_unsigned()
+  end
+
+  defp put_test_quota_snapshots(route_state, windows_by_identity_id, as_of) do
+    identities =
+      Map.new(route_state.candidates, fn {_assignment, identity} -> {identity.id, identity} end)
+
+    snapshots =
+      Map.new(windows_by_identity_id, fn {identity_id, windows} ->
+        {identity_id,
+         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+      end)
+
+    RouteState.put_quota_snapshots(route_state, snapshots)
   end
 end

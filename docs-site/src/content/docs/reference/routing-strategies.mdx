@@ -62,7 +62,7 @@ Hard eligibility checks remove upstream accounts from consideration before strat
     </tr>
     <tr>
       <td>Quota</td>
-      <td>Quota evidence must be usable for the account, model, and limit family. Exhausted, stale, resetless, wrong-model, wrong-account, or untrusted evidence can remove an account</td>
+      <td>Fresh reset-bearing windows are the normal authority for the account, model, and limit family. A narrow lower-priority fallback can use fresh provider-attested availability when no account windows exist; explicit blocked, unknown, stale, credential-mismatched, wrong-model, malformed, or untrusted evidence still removes the account</td>
     </tr>
     <tr>
       <td>Health</td>
@@ -76,6 +76,16 @@ Hard eligibility checks remove upstream accounts from consideration before strat
 </table>
 
 If every account fails eligibility, the request is rejected before upstream dispatch. Common user-facing outcomes include no eligible backend, no compatible backend, quota exhaustion, quota evidence unavailable, session assignment unavailable, or file assignment conflict.
+
+### Provider-attested availability without windows
+
+Fresh reset-bearing quota windows remain the normal routing authority. When the provider returns no account windows, Codex Pooler can use a distinct lower-priority availability observation only when the provider explicitly reports that requests are allowed and the limit is not reached, or explicitly reports usable or unlimited credits. The observation must be fresh, belong to the current credential generation, and have no retained account-window evidence or applicable model or additional-limit blocker.
+
+This fallback is fail closed. An explicit provider block, contradictory or unknown status, stale observation, credential-generation mismatch, malformed status, exhausted applicable model limit, or blocked additional limit keeps the account out of routing. A neutral credit report with neither available nor unlimited credits is not positive capacity by itself.
+
+Codex Pooler doesn't create a quota window, reset timestamp, duration, percentage, or remaining-capacity value for this state. It doesn't depend on an operator setting, plan badge, plan name, or SKU. Those fields can describe an account, but they don't grant routing.
+
+The availability flags belong to Codex Pooler's direct provider usage response. Current Codex client quota projections omit those raw flags, so a client-side quota snapshot is not evidence that the same no-window contract was observed.
 
 ## Strategy And Preference Choices
 

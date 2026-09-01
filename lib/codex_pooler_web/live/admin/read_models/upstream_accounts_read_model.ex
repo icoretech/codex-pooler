@@ -16,7 +16,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
   alias CodexPooler.Upstreams.Auth.TokenRefresh
   alias CodexPooler.Upstreams.OAuth, as: UpstreamOAuth
-  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -188,8 +188,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     token_burns = TokenBurnProjection.summaries(identities)
 
+    snapshot_at = DateTime.utc_now()
+
+    quota_snapshots =
+      identities
+      |> Enum.map(& &1.id)
+      |> RoutingQuotaSnapshot.load_by_identity_ids(snapshot_at)
+
     identities
-    |> Enum.map(&account_snapshot(&1, assignments, token_burns, datetime_preferences))
+    |> Enum.map(
+      &account_snapshot(
+        &1,
+        assignments,
+        token_burns,
+        datetime_preferences,
+        Map.fetch!(quota_snapshots, &1.id)
+      )
+    )
     |> Filter.apply(filters)
   end
 
@@ -277,9 +292,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   end
 
   defp active_assignment_snapshots(pools, pool_lookup) do
+    pool_order = pools |> Enum.with_index() |> Map.new(fn {pool, index} -> {pool.id, index} end)
+
     pools
-    |> Enum.flat_map(&UpstreamAssignments.list_pool_assignments/1)
+    |> Enum.map(& &1.id)
+    |> UpstreamAssignments.list_pool_assignments_for_pool_ids()
     |> Enum.reject(&(&1.status == "deleted"))
+    |> Enum.sort_by(&{Map.fetch!(pool_order, &1.pool_id), &1.created_at, &1.id})
     |> Enum.map(&assignment_snapshot(&1, pool_lookup))
     |> Enum.group_by(& &1.upstream_identity_id)
   end
@@ -353,13 +372,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     end
   end
 
-  defp account_snapshot(identity, assignments, token_burns, datetime_preferences) do
-    # one explicit snapshot instant for the effective window load so the
-    # readiness and card projections below reason about the same view
-    snapshot_at = DateTime.utc_now()
-    raw_quota_windows = QuotaWindows.list_evidence(identity)
-    quota_windows = QuotaWindows.effective_quota_windows(raw_quota_windows, snapshot_at)
-    quota_readiness = QuotaProjection.readiness(quota_windows, snapshot_at)
+  defp account_snapshot(
+         identity,
+         assignments,
+         token_burns,
+         datetime_preferences,
+         quota_snapshot
+       ) do
+    snapshot_at = quota_snapshot.as_of
+    raw_quota_windows = RoutingQuotaSnapshot.time_visible_raw_windows(quota_snapshot)
+    quota_windows = RoutingQuotaSnapshot.effective_windows(quota_snapshot)
+    quota_readiness = QuotaProjection.readiness(quota_snapshot, snapshot_at)
     token_burn = Map.fetch!(token_burns, identity.id)
 
     identity_assignments =

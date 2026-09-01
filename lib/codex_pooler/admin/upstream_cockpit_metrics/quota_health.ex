@@ -8,6 +8,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
   alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   @spec quota_health(
@@ -21,28 +22,65 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
     pool_ids = Common.visible_pool_ids(scope)
     visible_assignments = Common.filter_assignments_by_pool_ids(assignments, pool_ids)
 
-    windows = quota_windows(identity_or_id, visible_assignments, as_of)
+    snapshot = quota_snapshot(identity_or_id, visible_assignments, as_of)
 
-    from_windows(identity_or_id, visible_assignments, windows, as_of)
+    from_snapshot(identity_or_id, visible_assignments, snapshot, as_of)
+  end
+
+  @spec quota_health_from_readiness(
+          Scope.t(),
+          term(),
+          [UpstreamCockpitMetrics.assignment_summary()],
+          UpstreamQuotaReadiness.t(),
+          DateTime.t()
+        ) :: UpstreamCockpitMetrics.quota_health()
+  def quota_health_from_readiness(
+        %Scope{} = scope,
+        identity_or_status,
+        assignments,
+        readiness,
+        %DateTime{} = as_of
+      )
+      when is_list(assignments) and is_map(readiness) do
+    pool_ids = Common.visible_pool_ids(scope)
+    visible_assignments = Common.filter_assignments_by_pool_ids(assignments, pool_ids)
+    from_readiness(identity_or_status, visible_assignments, readiness, as_of)
   end
 
   @spec without_quota_data([UpstreamCockpitMetrics.assignment_summary()], DateTime.t()) ::
           UpstreamCockpitMetrics.quota_health()
   def without_quota_data(assignments, %DateTime{} = as_of) when is_list(assignments) do
-    from_windows(nil, assignments, [], as_of)
+    from_readiness(nil, assignments, UpstreamQuotaReadiness.from_windows([], as_of), as_of)
   end
 
-  defp quota_windows(_identity_or_id, [], _as_of), do: []
+  defp quota_snapshot(_identity_or_id, [], _as_of), do: nil
 
-  defp quota_windows(identity_or_id, _visible_assignments, as_of) do
+  defp quota_snapshot(identity_or_id, _visible_assignments, as_of) do
     identity_or_id
     |> Common.identity_id()
-    |> QuotaWindows.list_quota_windows(as_of)
+    |> then(&RoutingQuotaSnapshot.load_by_identity_ids([&1], as_of))
+    |> Map.get(Common.identity_id(identity_or_id))
   end
 
-  defp from_windows(identity_or_status, assignments, windows, as_of) do
-    readiness = UpstreamQuotaReadiness.from_windows(windows, as_of)
+  defp from_snapshot(identity_or_status, assignments, %RoutingQuotaSnapshot{} = snapshot, as_of) do
+    from_readiness(
+      identity_or_status,
+      assignments,
+      UpstreamQuotaReadiness.from_snapshot(snapshot),
+      as_of
+    )
+  end
 
+  defp from_snapshot(identity_or_status, assignments, nil, as_of) do
+    from_readiness(
+      identity_or_status,
+      assignments,
+      UpstreamQuotaReadiness.from_windows([], as_of),
+      as_of
+    )
+  end
+
+  defp from_readiness(identity_or_status, assignments, readiness, as_of) do
     items =
       assignments
       |> Enum.map(&quota_health_item(&1, readiness, identity_or_status, as_of))
@@ -152,6 +190,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
 
   defp quota_assignment_state(%{state: "ready"}), do: "fresh"
   defp quota_assignment_state(%{state: "weekly_only_probe"}), do: "weekly_only"
+  defp quota_assignment_state(%{state: "provider_available_no_windows"}), do: "fresh"
   defp quota_assignment_state(%{state: state}), do: state
 
   defp quota_measurements(%Quota.AccountQuotaWindow{} = window),

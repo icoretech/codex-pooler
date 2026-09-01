@@ -68,7 +68,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     <article
       id={"upstream-account-#{@account.identity.id}"}
       data-role="upstream-account-card"
+      data-routing-state={@routing_readiness.state}
       data-routing-tone={@routing_readiness.tone}
+      data-routing-ready-now={to_string(@routing_readiness.routing_ready_now?)}
       class={[
         "upstream-account-card min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors",
         token_burn_active?(@account) && "admin-token-burn-active"

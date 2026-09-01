@@ -50,16 +50,16 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Plan do
         candidate_exclusions: exclusions,
         refreshable_candidates: refreshable_candidates
       }) do
-    route_state = RouteState.refresh_quota_window_snapshots(route_state)
+    route_state = RouteState.refresh_quota_snapshots(route_state)
 
     case CandidateEligibility.filter_quota_eligible_candidates(filter_input, route_state) do
       {:ok, refreshed_candidates, decision} ->
         {:ok, refreshed_candidates, Map.put(decision, "refreshed_stale_quota", true), route_state}
 
-      {:refreshable_quota, _remaining_plan} ->
+      {:refreshable_quota, remaining_plan} ->
         CandidateEligibility.quota_unavailable_error(
           filter_input,
-          exclusions,
+          terminal_exclusions(exclusions, remaining_plan, refreshable_candidates),
           refreshable_candidates != []
         )
     end
@@ -74,10 +74,10 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Plan do
       {:ok, refreshed_candidates, decision} ->
         {:ok, refreshed_candidates, Map.put(decision, "refreshed_stale_quota", true)}
 
-      {:refreshable_quota, _remaining_plan} ->
+      {:refreshable_quota, remaining_plan} ->
         CandidateEligibility.quota_unavailable_error(
           filter_input,
-          exclusions,
+          terminal_exclusions(exclusions, remaining_plan, refreshable_candidates),
           refreshable_candidates != []
         )
     end
@@ -93,4 +93,9 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Plan do
   end
 
   defp prioritize_candidates(candidates, _request_options), do: candidates
+
+  defp terminal_exclusions(_original, remaining_plan, [_candidate | _candidates]),
+    do: remaining_plan.candidate_exclusions
+
+  defp terminal_exclusions(original, _remaining_plan, []), do: original
 end

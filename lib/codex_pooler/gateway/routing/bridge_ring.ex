@@ -25,12 +25,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   }
 
   alias CodexPooler.Gateway.Routing.BridgeRing.{Metadata, Status}
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.Quota, as: QuotaEligibility
   alias CodexPooler.Gateway.Routing.RoutePlanInput
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools.{Pool, RoutingSettings}
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -119,6 +121,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       |> apply_affinity(affinity)
       |> apply_codex_session_preference(request_options)
       |> apply_demotions(demotions)
+      |> apply_windowless_tier(model, route_state)
 
     ring_size = max(settings.bridge_ring_size || @default_ring_size, 1)
     candidates = Enum.take(ordered, ring_size)
@@ -581,6 +584,15 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     active ++ demoted
   end
 
+  defp apply_windowless_tier(candidates, %Model{} = model, %RouteState{} = route_state) do
+    {windowless, ordinary} =
+      Enum.split_with(candidates, &QuotaEligibility.windowless_candidate?(model, &1, route_state))
+
+    ordinary ++ windowless
+  end
+
+  defp apply_windowless_tier(candidates, %Model{}, nil), do: candidates
+
   defp upsert_affinity!(plan, assignment, identity, now) do
     metadata = %{"source" => "gateway_success"}
 
@@ -725,29 +737,27 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   end
 
   defp quota_capacity_score(
-         identity,
-         %Model{} = model,
-         %RouteState{quota_snapshot_at: %DateTime{} = snapshot_at} = route_state
-       ) do
-    route_state
-    |> RouteState.quota_windows_for_identity(identity)
-    |> QuotaWindows.quota_window_selection_data_from_windows(
-      Keyword.put(quota_scope_opts(model), :at, snapshot_at)
-    )
-    |> Map.get(:routing_windows, [])
-    |> quota_capacity_score_for_windows(snapshot_at)
-  end
-
-  defp quota_capacity_score(
          _identity,
          %Model{},
-         %RouteState{quota_window_snapshots: snapshots, quota_snapshot_at: nil}
+         %RouteState{quota_snapshots: snapshots}
        )
        when snapshots == %{},
        do: 0
 
-  defp quota_capacity_score(_identity, %Model{}, %RouteState{}) do
-    raise ArgumentError, "route state quota snapshot timestamp is missing"
+  defp quota_capacity_score(
+         identity,
+         %Model{} = model,
+         %RouteState{} = route_state
+       ) do
+    snapshot = RouteState.quota_snapshot_for_identity(route_state, identity)
+
+    snapshot
+    |> RoutingQuotaSnapshot.time_visible_raw_windows()
+    |> QuotaWindows.quota_window_selection_data_from_windows(
+      Keyword.put(quota_scope_opts(model), :at, snapshot.as_of)
+    )
+    |> Map.get(:routing_windows, [])
+    |> quota_capacity_score_for_windows(snapshot.as_of)
   end
 
   defp quota_capacity_score(identity, %Model{} = model, nil),
