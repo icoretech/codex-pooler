@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.13...codex-pooler-v0.6.14) (2026-09-02)
+
+
+### Bug Fixes
+
+* **deps:** update dependency apexcharts to v7.1.0 ([#329](https://github.com/icoretech/codex-pooler/issues/329)) ([dd19a65](https://github.com/icoretech/codex-pooler/commit/dd19a653c4da5f377ebfaaf2a3aa3be8e863dbce))
+* **deps:** update dependency astro to v7.2.10 ([#333](https://github.com/icoretech/codex-pooler/issues/333)) ([81ad7ac](https://github.com/icoretech/codex-pooler/commit/81ad7ac697cc3ddc60043f69196c6609a5561e96))
+* **deps:** update dependency daisyui to v5.7.23 ([#334](https://github.com/icoretech/codex-pooler/issues/334)) ([97899dd](https://github.com/icoretech/codex-pooler/commit/97899dd269e9dbaca46012fc7d9429fa53fadf1d))
+* **quotas:** route provider-confirmed windowless accounts ([6976f90](https://github.com/icoretech/codex-pooler/commit/6976f9029a0c4b723655ecd22a98d40e4ff057aa))
+
 ## [0.6.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.12...codex-pooler-v0.6.13) (2026-09-01)
 
 
