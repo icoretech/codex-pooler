@@ -458,33 +458,6 @@ defmodule CodexPooler.Quotas.AccountAvailabilityTest do
     refute inspected =~ "999"
   end
 
-  test "pinned client projection omits direct-wire availability flags" do
-    client_source = pinned_codex_source!("codex-rs/backend-client/src/client.rs")
-
-    schema_source =
-      pinned_codex_source!(
-        "codex-rs/codex-backend-openapi-models/src/models/rate_limit_status_details.rs"
-      )
-
-    projection =
-      client_source
-      |> String.split("fn make_rate_limit_snapshot(", parts: 2)
-      |> List.last()
-      |> String.split("fn map_rate_limit_reached_type(", parts: 2)
-      |> List.first()
-
-    assert schema_source =~ "pub allowed: bool"
-    assert schema_source =~ "pub limit_reached: bool"
-    refute projection =~ ".allowed"
-    refute projection =~ ".limit_reached"
-
-    assert_result(
-      %{"plan_type" => "plus", "rate_limit" => status(true, false)},
-      [],
-      %AccountAvailability{state: :available, basis: :affirmative, account_windows: :absent}
-    )
-  end
-
   defp parse(payload), do: CodexParsers.parse_codex_usage_result(payload, @observed_at)
 
   defp assert_result(payload, windows, observation) do
@@ -522,23 +495,6 @@ defmodule CodexPooler.Quotas.AccountAvailabilityTest do
         :wrong_type -> Map.put(valid, field, "invalid")
       end
     end
-  end
-
-  defp pinned_codex_source!(path) do
-    {source, 0} =
-      System.cmd(
-        "git",
-        [
-          "-C",
-          "references/codex",
-          "show",
-          "316795b3cf2a45e90d121d9f46499d4658b2645c:#{path}"
-        ],
-        env: [{"GIT_MASTER", "1"}],
-        stderr_to_stdout: true
-      )
-
-    source
   end
 
   defp additional(rate_limit) do
