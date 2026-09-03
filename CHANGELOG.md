@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.14...codex-pooler-v0.6.15) (2026-09-03)
+
+
+### Bug Fixes
+
+* **deps:** update dependency @astrojs/starlight to v0.41.11 ([#336](https://github.com/icoretech/codex-pooler/issues/336)) ([49d0c16](https://github.com/icoretech/codex-pooler/commit/49d0c1659d83ad01bf955f5f756c37b3acd8ee59))
+
 ## [0.6.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.13...codex-pooler-v0.6.14) (2026-09-02)
 
 
