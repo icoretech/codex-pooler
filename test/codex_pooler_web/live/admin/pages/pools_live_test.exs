@@ -3033,6 +3033,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
     view |> element("#pool-edit-dialog-tab-models") |> render_click()
+    _ = render_async(view)
 
     assert {:ok, committed} =
              Pools.update_model_serving_modes(
