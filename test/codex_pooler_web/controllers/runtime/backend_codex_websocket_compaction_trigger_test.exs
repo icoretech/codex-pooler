@@ -26,12 +26,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   @detection_timeout_ms 15_000
   @stale_native_content "stale-native-content-must-not-succeed"
   @remote_compaction_v2_fixture_path Path.expand(
-                                       "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_request.json",
+                                       "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_request.json",
                                        __DIR__
                                      )
   @external_resource @remote_compaction_v2_fixture_path
   @incremental_compaction_fixture_path Path.expand(
-                                         "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_incremental_request.json",
+                                         "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_incremental_request.json",
                                          __DIR__
                                        )
   @external_resource @incremental_compaction_fixture_path
@@ -438,13 +438,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
     scenarios =
       [
-        {"anchored_tool_output_and_trigger", anchored_tool_frame, :incremental},
+        {"anchored_tool_output_and_trigger", anchored_tool_frame, :incremental, 1},
         {"anchored_trigger_only",
          get_in(fixture, [
            "scenarios",
            "anchored_trigger_only",
            "projection_relevant_frame_subset"
-         ]), :incremental},
+         ]), :incremental, 2},
         {"anchored_custom_tool_output_and_future_suffix",
          anchored_tool_frame
          |> update_in(["input"], fn input ->
@@ -459,11 +459,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
              },
              trigger
            ]
-         end), :incremental}
+         end), :incremental, 3}
       ]
 
-    for {{scenario_name, source_frame, input_mode}, scenario_index} <-
-          Enum.with_index(scenarios, 1) do
+    for {scenario_name, source_frame, input_mode, scenario_index} <- scenarios do
       turn_id = "incremental-shared-turn"
       context_window_id = "00000000-0000-4000-8000-000000000501"
 
@@ -592,6 +591,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert compact_request.method == expected_method
         assert compact_request.path == "/backend-api/codex/responses"
         assert compact_request.json["input"] == source_frame["input"]
+
+        if scenario_name == "anchored_tool_output_and_trigger" do
+          assert compact_request.json["input"] |> List.first() |> Map.fetch!("output") == ""
+        end
+
         assert compact_request.json["store"] == false
         assert compact_request.json["stream"] == true
 
@@ -644,6 +648,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert compact_attempt.transport == expected_transport
         assert compact_attempt.status == "succeeded"
         refute compact_attempt.retryable
+        assert compact_attempt.response_metadata["fallback_used"] in [nil, false]
         assert settlement_count(compact_log.id) == 1
 
         assert [compact_turn] =
@@ -682,6 +687,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                    "reused" => true,
                    "reconnected" => false
                  }
+
+          assert is_integer(generation)
         end
 
         follow_up_payload =
@@ -708,6 +715,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                  FakeUpstream.requests(assignment_a_upstream)
 
         assert follow_up_request.method == "WEBSOCKET"
+
+        assert follow_up_request.websocket_connection_id ==
+                 compact_request.websocket_connection_id
+
         refute Map.has_key?(follow_up_request.json, "previous_response_id")
         assert FakeUpstream.websocket_connection_count(assignment_a_upstream) == 1
         assert FakeUpstream.count(assignment_b_upstream) == 0
@@ -725,6 +736,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
+  @tag :replay_race
   test "provider terminal rejection on pinned incremental compaction is safe and leaves the socket reusable" do
     fixture = incremental_compaction_fixture!()
 
@@ -1893,13 +1905,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
   defp malformed_compact_payloads(setup) do
     visible = %{"type" => "message", "role" => "user", "content" => "synthetic visible"}
-    hidden = %{"type" => "reasoning", "encrypted_content" => "synthetic hidden"}
     trigger = %{"type" => "compaction_trigger"}
 
     for input <- [
           [visible, trigger, visible],
-          [visible, trigger, trigger],
-          [hidden, trigger]
+          [visible, trigger, trigger]
         ] do
       Jason.encode!(%{
         "type" => "response.create",
@@ -2057,15 +2067,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     |> Enum.each(fn codex_session_id ->
       case WebsocketOwnerSession.lookup(codex_session_id) do
         {:ok, owner_pid} ->
+          monitor = Process.monitor(owner_pid)
+
           try do
-            GenServer.stop(owner_pid, :shutdown, 1_000)
+            GenServer.stop(owner_pid, :shutdown, @detection_timeout_ms)
           catch
-            :exit, _reason -> :ok
+            :exit, {:noproc, _details} -> :ok
           end
+
+          assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason},
+                         @detection_timeout_ms
 
         {:error, :owner_unavailable} ->
           :ok
       end
+
+      assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
     end)
 
     :ok

@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata}
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
@@ -16,6 +17,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, WebsocketOwnerContract}
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
+  alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
@@ -32,7 +34,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   require Logger
 
   @pre_cleanup_response_task_drain_ms 250
-  @post_cleanup_owner_response_task_drain_ms 1_000
+  @post_cleanup_owner_response_task_drain_ms 15_000
   @post_cleanup_response_task_drain_ms 5_000
   @firewall_close_detail {1008, "client IP is no longer allowed"}
   @api_key_close_detail {1008, "api key is no longer active"}
@@ -389,15 +391,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Map.get(:tasks, MapSet.new())
       |> await_response_tasks(@pre_cleanup_response_task_drain_ms)
 
-    cancel_abandoned_response_tasks(state, remaining_tasks)
-
     cleanup_websocket_session(reason, state)
+
+    cancel_abandoned_response_tasks(state, remaining_tasks)
 
     close_upstream_websocket_session(state)
 
     acknowledge_response_task_cleanup(state)
 
-    _remaining_tasks = remaining_response_tasks_after_cleanup(state, remaining_tasks)
+    remaining_tasks = remaining_response_tasks_after_cleanup(state, remaining_tasks)
+
+    cancel_response_tasks(remaining_tasks, :websocket_terminated)
+    remaining_tasks = await_response_tasks(remaining_tasks, @post_cleanup_response_task_drain_ms)
+
+    Enum.each(remaining_tasks, &Process.exit(&1, :kill))
+    remaining_tasks = await_response_tasks(remaining_tasks, @post_cleanup_response_task_drain_ms)
+
+    await_response_task_registry_cleanup(
+      state,
+      Map.get(state, :tasks, MapSet.new()),
+      remaining_tasks
+    )
 
     :ok
   end
@@ -1225,6 +1239,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     opts =
       state
       |> Adapter.response_options(true, nil)
+      |> RequestOptions.capture_api_key_runtime_epoch(Map.get(state, :auth))
       |> maybe_put_native_turn_metadata(payload)
 
     Websocket.prepare_websocket_response(
@@ -1797,25 +1812,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          state
        )
        when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 do
-    control_ref = make_ref()
-
-    case Adapter.preflight_reconnect(state, semantic_turn_key, control_ref) do
-      {:ok, :dispatch} ->
-        {:ok, start_or_queue_prepared_response(prepared, state)}
-
-      {:ok, :same_turn_replay} ->
-        log_reconnect_disposition(state, :same_turn_replay)
-        {:ok, state}
-
-      {:ok, :replacement_handoff, ^control_ref} ->
-        log_reconnect_disposition(state, :replacement_handoff)
-        {:ok, put_pending_owner_handoff(state, prepared, semantic_turn_key, control_ref)}
-
-      {:ok, :duplicate_replacement, existing_ref} ->
-        duplicate_pending_replacement(state, semantic_turn_key, existing_ref)
-
-      {:error, reason} ->
-        reject_owner_preflight(reason, state)
+    if WebsocketCodec.replay_eligible?(prepared) do
+      case Service.prepare_replay_intent(state.auth, prepared) do
+        {:ok, intent} -> dispatch_replay_intent(prepared, state, intent)
+        {:error, reason} -> reject_prepared_response(reason, state)
+      end
+    else
+      legacy_owner_preflight(prepared, state, semantic_turn_key)
     end
   end
 
@@ -1828,10 +1831,283 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp duplicate_pending_replacement(state, semantic_turn_key, existing_ref) do
-    case Map.get(state, :websocket_owner_pending_handoff) do
-      %{semantic_turn_key: ^semantic_turn_key, control_ref: ^existing_ref} -> {:ok, state}
-      _other -> reject_owner_preflight(:owner_busy, state)
+  defp dispatch_replay_intent(prepared, state, %{intent: intent} = replay_intent) do
+    control_ref = make_ref()
+    downstream = Map.take(state.websocket_owner_downstream, [:pid, :epoch, :correlation_id])
+
+    with {:ok, control} <-
+           RemoteReconnectControlV2.new(%{
+             version: 2,
+             action: :preflight,
+             intent: intent,
+             codex_session_id: state.codex_session.id,
+             downstream: downstream,
+             semantic_turn_digest: prepared.semantic_turn_key,
+             replay_claim_digest: prepared.replay_claim_digest,
+             provisional_token: nil,
+             replay_generation: nil,
+             owner_lease_token: state.websocket_owner_lease_token,
+             control_ref: control_ref,
+             authorization_binding: replay_intent.authorization_binding,
+             consume_binding: active_lifecycle_binding(replay_intent)
+           }),
+         result <- Adapter.reconnect_control_v2(state, control) do
+      apply_replay_preflight_result(result, prepared, state, replay_intent, control_ref)
+    else
+      _invalid -> reject_owner_preflight(:owner_busy, state)
+    end
+  end
+
+  defp active_lifecycle_binding(%{intent: :active_reattach, lifecycle: lifecycle}) do
+    %{
+      request_id: lifecycle.request_id,
+      codex_turn_id: lifecycle.codex_turn_id,
+      eligible_attempt_id: lifecycle.eligible_attempt_id,
+      replay_attempt_id: nil,
+      replay_generation: lifecycle.replay_generation,
+      provisional_binding_digest: nil,
+      owner_lease_digest: :crypto.hash(:sha256, "active-owner-lease")
+    }
+  end
+
+  defp active_lifecycle_binding(_intent), do: nil
+
+  defp apply_replay_preflight_result(
+         {:ok, :fresh_dispatch, _binding},
+         prepared,
+         state,
+         intent,
+         _ref
+       ) do
+    case WebsocketCodec.attach_replay_intent(
+           prepared,
+           intent.authorization_binding,
+           intent.lifecycle || %{replay_generation: 0}
+         ) do
+      {:ok, resealed} -> {:ok, start_or_queue_prepared_response(resealed, state)}
+      {:error, _reason} -> reject_owner_preflight(:owner_busy, state)
+    end
+  end
+
+  defp apply_replay_preflight_result(
+         {:ok, :same_turn_reattach, downstream},
+         prepared,
+         state,
+         _intent,
+         _ref
+       ) do
+    case WebsocketCodec.consume_prepared_frame(prepared) do
+      {:ok, nil} ->
+        log_reconnect_disposition(state, :same_turn_replay)
+
+        state =
+          state
+          |> Map.put(:websocket_owner_downstream, downstream)
+          |> Map.put(:websocket_owner_active_turn_reconnect?, true)
+
+        {:ok, state}
+
+      _invalid ->
+        reject_owner_preflight(:owner_busy, state)
+    end
+  end
+
+  defp apply_replay_preflight_result(
+         {:ok, :provisional, token, 1, owner_process_generation, downstream},
+         prepared,
+         state,
+         intent,
+         _ref
+       ) do
+    consume_suspended_replay(
+      prepared,
+      state,
+      intent,
+      token,
+      owner_process_generation,
+      downstream
+    )
+  end
+
+  defp apply_replay_preflight_result({:error, reason}, _prepared, state, _intent, _ref),
+    do: reject_prepared_response(public_replay_error(reason), state)
+
+  defp apply_replay_preflight_result(_result, _prepared, state, _intent, _ref),
+    do: reject_prepared_response(public_replay_error(:owner_busy), state)
+
+  defp consume_suspended_replay(
+         prepared,
+         state,
+         intent,
+         token,
+         owner_process_generation,
+         downstream
+       ) do
+    with {:ok, reserve} <-
+           provisional_control(
+             state,
+             prepared,
+             intent,
+             token,
+             downstream,
+             :provisional_reserve,
+             nil
+           ),
+         {:ok, :consume_reserved, reserve_timeout_ms, reserve_receipt, reserve_receipt_digest} <-
+           Adapter.reconnect_control_v2(state, reserve),
+         consume_input = %{
+           auth: state.auth,
+           entitlement_id: intent.lifecycle.entitlement_id,
+           request_id: intent.lifecycle.request_id,
+           codex_turn_id: intent.lifecycle.codex_turn_id,
+           eligible_attempt_id: intent.lifecycle.eligible_attempt_id,
+           replay_generation: 1,
+           provisional_token: token,
+           owner_lease_token: state.websocket_owner_lease_token,
+           reserve_timeout_ms: reserve_timeout_ms,
+           reserve_receipt: reserve_receipt,
+           reserve_receipt_digest: reserve_receipt_digest,
+           owner_forwarder_opts:
+             prepared.request_options.transport.websocket_owner.forwarder_opts,
+           downstream_epoch: downstream.epoch,
+           owner_process_generation: owner_process_generation
+         },
+         {:ok, consumed} <- CodexPooler.Accounting.consume_request_replay(consume_input),
+         binding <- replay_binding(prepared, consumed, downstream),
+         {:ok, commit} <-
+           provisional_control(
+             state,
+             prepared,
+             intent,
+             token,
+             downstream,
+             :provisional_commit,
+             consumed.consume_binding
+           ),
+         {:ok, :committed_not_started, consume_binding} <-
+           Adapter.reconnect_control_v2(state, commit),
+         true <- consume_binding == consumed.consume_binding,
+         request_options <-
+           RequestOptions.put_runtime_context(prepared.request_options,
+             replay_authorization_binding: intent.authorization_binding,
+             replay_lifecycle_binding: consumed.consume_binding,
+             replay_generation: 1,
+             native_replay_binding: binding,
+             native_replay_proof: nil,
+             replay_provisional_token: token
+           ),
+         {:ok, replay_prepared} <- WebsocketCodec.reseal_runtime_frame(prepared, request_options),
+         {:ok, replay_prepared} <-
+           WebsocketCodec.attach_native_replay_admission(replay_prepared, binding) do
+      {:ok, start_or_queue_prepared_response(replay_prepared, state)}
+    else
+      _failure ->
+        reconcile_provisional(state, prepared, token)
+        reject_owner_preflight(:owner_busy, state)
+    end
+  end
+
+  defp reconcile_provisional(state, prepared, token) do
+    with {:ok, query} <-
+           provisional_control(state, prepared, nil, token, nil, :provisional_query, nil) do
+      case Adapter.reconnect_control_v2(state, query) do
+        {:ok, status} when status in [:provisional, :consume_reserved] ->
+          cancel_provisional(state, prepared, nil, token)
+
+        {:ok, status} when status in [:committed_not_started, :started, :cancelled, :expired] ->
+          :ok
+
+        _uncertain ->
+          :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp provisional_control(state, prepared, _intent, token, downstream, action, consume_binding) do
+    RemoteReconnectControlV2.new(%{
+      version: 2,
+      action: action,
+      intent: :suspended_replay,
+      codex_session_id: state.codex_session.id,
+      downstream: if(action in [:provisional_reserve, :provisional_commit], do: downstream),
+      semantic_turn_digest: prepared.semantic_turn_key,
+      replay_claim_digest: prepared.replay_claim_digest,
+      provisional_token: token,
+      replay_generation: 1,
+      owner_lease_token: state.websocket_owner_lease_token,
+      control_ref: make_ref(),
+      authorization_binding: nil,
+      consume_binding: consume_binding
+    })
+  end
+
+  defp cancel_provisional(state, prepared, _intent, token) do
+    with {:ok, control} <-
+           provisional_control(state, prepared, nil, token, nil, :provisional_cancel, nil) do
+      _result = Adapter.reconnect_control_v2(state, control)
+    end
+
+    :ok
+  end
+
+  defp replay_binding(prepared, consumed, downstream) do
+    struct!(CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding, %{
+      request_id: consumed.request.id,
+      codex_turn_id: consumed.turn.id,
+      eligible_attempt_id: consumed.entitlement.eligible_attempt_id,
+      replay_attempt_id: consumed.attempt.id,
+      replay_generation: 1,
+      semantic_turn_digest: prepared.semantic_turn_key,
+      replay_claim_digest: prepared.replay_claim_digest,
+      provisional_binding_digest: consumed.entitlement.provisional_binding_digest,
+      owner_lease_digest: consumed.entitlement.owner_lease_digest,
+      downstream_epoch: downstream.epoch,
+      owner_process_generation: consumed.owner_process_generation
+    })
+  end
+
+  defp public_replay_error(_reason) do
+    %{
+      status: 409,
+      code: "duplicate_turn",
+      message: "duplicate Codex turn was already recorded for this session",
+      param: "request_id"
+    }
+  end
+
+  defp legacy_owner_preflight(prepared, state, semantic_turn_key) do
+    control_ref = make_ref()
+
+    case Adapter.preflight_reconnect(state, semantic_turn_key, control_ref) do
+      {:ok, :dispatch} ->
+        {:ok, start_or_queue_prepared_response(prepared, state)}
+
+      {:ok, :same_turn_replay} ->
+        log_reconnect_disposition(state, :same_turn_replay)
+        {:ok, state}
+
+      {:ok, :replacement_handoff, ^control_ref} ->
+        log_reconnect_disposition(state, :replacement_handoff)
+
+        {:ok,
+         Map.put(state, :websocket_owner_pending_handoff, %{
+           prepared: prepared,
+           semantic_turn_key: semantic_turn_key,
+           control_ref: control_ref,
+           owner_turn_id: Map.get(state, :websocket_owner_reconnect_turn_pid),
+           outcome_logged?: false
+         })}
+
+      {:ok, :duplicate_replacement, existing_ref} ->
+        case Map.get(state, :websocket_owner_pending_handoff) do
+          %{semantic_turn_key: ^semantic_turn_key, control_ref: ^existing_ref} -> {:ok, state}
+          _other -> reject_owner_preflight(:owner_busy, state)
+        end
+
+      {:error, reason} ->
+        reject_owner_preflight(reason, state)
     end
   end
 
@@ -1904,16 +2180,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:ok, payload} -> payload
       {:error, _unknown} -> reason
     end
-  end
-
-  defp put_pending_owner_handoff(state, prepared, semantic_turn_key, control_ref) do
-    Map.put(state, :websocket_owner_pending_handoff, %{
-      prepared: prepared,
-      semantic_turn_key: semantic_turn_key,
-      control_ref: control_ref,
-      owner_turn_id: Map.get(state, :websocket_owner_reconnect_turn_pid),
-      outcome_logged?: false
-    })
   end
 
   defp handle_owner_handoff_message(message, state) do
@@ -2139,19 +2405,23 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp put_prepared_public_context(%PreparedWebsocketFrame{} = prepared, state) do
-    stream_id = Map.get(state, :public_response_stream_id)
-    websocket_state = Map.get(state, :public_responses_websocket_state)
+    if prepared.variant == :public_response_create do
+      stream_id = Map.get(state, :public_response_stream_id)
+      websocket_state = Map.get(state, :public_responses_websocket_state)
 
-    request_options = %{
-      prepared.request_options
-      | extra:
-          Map.merge(prepared.request_options.extra, %{
-            socket_public_stream_id: stream_id,
-            socket_public_websocket_state: websocket_state
-          })
-    }
+      request_options = %{
+        prepared.request_options
+        | extra:
+            Map.merge(prepared.request_options.extra, %{
+              socket_public_stream_id: stream_id,
+              socket_public_websocket_state: websocket_state
+            })
+      }
 
-    %{prepared | request_options: request_options}
+      %{prepared | request_options: request_options}
+    else
+      prepared
+    end
   end
 
   defp activate_prepared_public_context(state, %PreparedWebsocketFrame{
@@ -2918,30 +3188,53 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          %PreparedWebsocketFrame{} = prepared,
          %RequestOptions{} = opts
        ) do
-    prepared_options = prepared.request_options
-    owner = opts.transport.websocket_owner
+    if is_nil(prepared.request_options.runtime.replay_authorization_binding) do
+      prepared_options = prepared.request_options
+      owner = opts.transport.websocket_owner
 
-    opts =
-      prepared_options
-      |> RequestOptions.put_continuity(
-        codex_session: opts.continuity.codex_session,
-        semantic_turn_key: prepared.semantic_turn_key,
-        turn_claim_key: prepared.turn_claim_key,
-        previous_response_id: prepared_options.continuity.previous_response_id,
-        accepted_turn_state: prepared_options.continuity.accepted_turn_state
-      )
-      |> RequestOptions.put_transport(
-        websocket_owner_forwarding_enabled?: owner.enabled?,
-        websocket_owner_session: owner.session,
-        websocket_owner_lease_token: owner.lease_token,
-        websocket_owner_downstream: owner.downstream,
-        websocket_owner_downstream_epoch: owner.downstream_epoch,
-        websocket_owner_proxy_instance_id: owner.proxy_instance_id,
-        websocket_owner_instance_id: owner.owner_instance_id,
-        websocket_owner_forwarder_opts: owner.forwarder_opts
-      )
+      opts =
+        prepared_options
+        |> RequestOptions.put_continuity(
+          codex_session: opts.continuity.codex_session,
+          semantic_turn_key: prepared.semantic_turn_key,
+          turn_claim_key: prepared.turn_claim_key,
+          previous_response_id: prepared_options.continuity.previous_response_id,
+          accepted_turn_state: prepared_options.continuity.accepted_turn_state
+        )
+        |> RequestOptions.put_transport(
+          websocket_owner_forwarding_enabled?: owner.enabled?,
+          websocket_owner_session: owner.session,
+          websocket_owner_lease_token: owner.lease_token,
+          websocket_owner_downstream: owner.downstream,
+          websocket_owner_downstream_epoch: owner.downstream_epoch,
+          websocket_owner_proxy_instance_id: owner.proxy_instance_id,
+          websocket_owner_instance_id: owner.owner_instance_id,
+          websocket_owner_forwarder_opts: owner.forwarder_opts
+        )
 
-    %{prepared | request_options: opts}
+      case WebsocketCodec.reseal_runtime_frame(prepared, opts) do
+        {:ok, resealed} -> resealed
+        {:error, _reason} -> prepared
+      end
+    else
+      owner = opts.transport.websocket_owner
+
+      request_options =
+        prepared.request_options
+        |> RequestOptions.put_continuity(codex_session: opts.continuity.codex_session)
+        |> RequestOptions.put_transport(
+          websocket_owner_forwarding_enabled?: owner.enabled?,
+          websocket_owner_session: owner.session,
+          websocket_owner_lease_token: owner.lease_token,
+          websocket_owner_downstream: owner.downstream,
+          websocket_owner_downstream_epoch: owner.downstream_epoch,
+          websocket_owner_proxy_instance_id: owner.proxy_instance_id,
+          websocket_owner_instance_id: owner.owner_instance_id,
+          websocket_owner_forwarder_opts: owner.forwarder_opts
+        )
+
+      %{prepared | request_options: request_options}
+    end
   end
 
   defp response_task_activity_kind({:owner_retarget_error, _reason}, _state),
@@ -3275,8 +3568,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       timeout = response_task_wait_timeout(deadline)
 
       receive do
-        {:codex_response_done, pid, _result} ->
-          do_await_response_tasks(remove_response_task(tasks, monitors, pid), monitors, deadline)
+        {:codex_response_done, _pid, _result} ->
+          do_await_response_tasks(tasks, monitors, deadline)
 
         {:DOWN, ref, :process, pid, _reason}
         when is_map_key(monitors, pid) and :erlang.map_get(pid, monitors) == ref ->
@@ -3304,6 +3597,42 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp demonitor_response_tasks(monitors) do
     Enum.each(monitors, fn {_pid, ref} -> Process.demonitor(ref, [:flush]) end)
+  end
+
+  defp await_response_task_registry_cleanup(state, owned_tasks, remaining_tasks) do
+    if MapSet.size(remaining_tasks) == 0 do
+      registry = response_task_activity_registry(state)
+      deadline = response_task_deadline(@post_cleanup_response_task_drain_ms)
+      do_await_response_task_registry_cleanup(owned_tasks, registry, deadline)
+    end
+
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp do_await_response_task_registry_cleanup(owned_tasks, registry, deadline) do
+    active =
+      Enum.flat_map(owned_tasks, fn pid ->
+        case ActivityRegistry.delivery_target(pid, name: registry) do
+          {:ok, token, _ack_pid, _status} -> [token]
+          :unknown -> []
+        end
+      end)
+
+    cond do
+      active == [] ->
+        :ok
+
+      response_task_wait_timeout(deadline) > 0 ->
+        receive do
+        after
+          1 -> do_await_response_task_registry_cleanup(owned_tasks, registry, deadline)
+        end
+
+      true ->
+        Enum.each(active, &ActivityRegistry.unregister(&1, :aborted, name: registry))
+    end
   end
 
   defp close_upstream_websocket_session(state) do

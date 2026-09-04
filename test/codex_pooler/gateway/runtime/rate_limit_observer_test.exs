@@ -2,9 +2,14 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
   use CodexPooler.DataCase, async: false
 
   import ExUnit.CaptureLog
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounting.{RequestReplay, RequestReplayEntitlement}
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
+  alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -215,6 +220,123 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
                RateLimitObserver.record_events(identity, "\n", state)
 
       wait_for_rate_limit_event_tasks()
+    end
+  end
+
+  describe "generation-authorized event persistence" do
+    @tag :replay_generation_race
+    test "a rate-limit event scheduled before arm cannot persist after generation cutover" do
+      fixture = replay_observation_fixture()
+      authority = observation_authority(fixture.request, fixture.attempt)
+      barrier_ref = make_ref()
+
+      Application.put_env(
+        :codex_pooler,
+        :rate_limit_persistence_test_barrier,
+        {self(), barrier_ref}
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:codex_pooler, :rate_limit_persistence_test_barrier)
+      end)
+
+      reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+      assert :ok =
+               Task.async(fn ->
+                 RateLimitObserver.record_complete_event(
+                   fixture.identity,
+                   codex_rate_limits_payload(67, reset_at),
+                   authority
+                 )
+               end)
+               |> then(fn observer_task ->
+                 assert_receive {:rate_limit_persistence_ready, task_pid, ^barrier_ref}
+                 assert task_pid == observer_task.pid
+                 assert {:ok, _armed} = RequestReplay.arm(replay_arm_input(fixture))
+                 task_monitor = Process.monitor(task_pid)
+                 send(task_pid, {:release_rate_limit_persistence, barrier_ref})
+                 assert :ok = Task.await(observer_task, 15_000)
+                 assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :normal}, 15_000
+                 :ok
+               end)
+
+      refute Enum.any?(
+               QuotaWindows.list_quota_windows(fixture.identity),
+               &(&1.source == "codex_rate_limit_event")
+             )
+    end
+
+    @tag :replay_generation_race
+    test "current generation one persists its event before terminal entitlement closure" do
+      fixture = replay_observation_fixture()
+      current = install_started_generation_one!(fixture)
+      barrier_ref = make_ref()
+
+      Application.put_env(
+        :codex_pooler,
+        :rate_limit_authority_test_barrier,
+        {self(), barrier_ref}
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:codex_pooler, :rate_limit_authority_test_barrier)
+      end)
+
+      event = codex_rate_limits_payload(68, DateTime.add(DateTime.utc_now(), 900, :second))
+
+      observer_task =
+        Task.async(fn ->
+          RateLimitObserver.record_complete_event(
+            fixture.identity,
+            event,
+            observation_authority(fixture.request, current.attempt)
+          )
+        end)
+
+      assert_receive {:rate_limit_authority_ready, observer_pid, ^barrier_ref}
+      assert observer_pid == observer_task.pid
+
+      parent = self()
+
+      finalization_task =
+        Task.async(fn ->
+          send(parent, {:rate_limit_terminal_finalization_started, self()})
+
+          CodexPooler.Accounting.finalize_success_with_disposition(
+            fixture.request,
+            current.attempt,
+            %{
+              status: "usage_known",
+              input_tokens: 3,
+              output_tokens: 2,
+              total_tokens: 5,
+              recorded_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+            }
+          )
+        end)
+
+      assert_receive {:rate_limit_terminal_finalization_started, finalization_pid}
+      assert finalization_pid == finalization_task.pid
+      assert Task.yield(finalization_task, 0) == nil
+
+      observer_monitor = Process.monitor(observer_pid)
+      send(observer_pid, {:release_rate_limit_authority, barrier_ref})
+      assert :ok = Task.await(observer_task, 15_000)
+      assert_receive {:DOWN, ^observer_monitor, :process, ^observer_pid, :normal}, 15_000
+
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Task.await(finalization_task, 15_000)
+
+      assert [window] =
+               fixture.identity
+               |> QuotaWindows.list_quota_windows()
+               |> Enum.filter(
+                 &(&1.source == "codex_rate_limit_event" and &1.window_kind == "primary")
+               )
+
+      assert Decimal.equal?(window.used_percent, Decimal.new("68.0"))
+      assert %DateTime{} = Repo.reload!(current.entitlement).closed_at
     end
   end
 
@@ -718,6 +840,145 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       {"x-codex-primary-window-minutes", ["300"]},
       {"x-codex-primary-reset-at", [DateTime.to_iso8601(reset_at)]}
     ]
+  end
+
+  defp replay_observation_fixture do
+    %{user: owner} = bootstrap_owner_fixture()
+    pool = pool_fixture(%{created_by_user_id: owner.id})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
+    auth = %{pool: pool, api_key: api_key}
+    %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool)
+
+    model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-rate-limit-generation-authority",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    assert {:ok, session} =
+             Websocket.start_codex_session(auth, %{accepted_turn_state: Ecto.UUID.generate()})
+
+    request =
+      request_fixture(auth, %{
+        model_id: model.id,
+        requested_model: model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil
+      })
+
+    semantic_digest = <<1::256>>
+    replay_claim_digest = <<2::256>>
+
+    request_options =
+      RequestOptions.for_websocket(%{})
+      |> RequestOptions.put_continuity(semantic_turn_key: semantic_digest)
+
+    assert {:ok, turn} = SessionContinuity.start_codex_turn(session, request, request_options)
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        status: "in_progress",
+        completed_at: nil,
+        upstream_status_code: nil,
+        usage_status: "usage_pending"
+      })
+      |> Ecto.Changeset.change(%{model_id: model.id})
+      |> Repo.update!()
+
+    reservation =
+      ledger_entry_fixture(request, %{
+        entry_kind: "reservation",
+        amount_status: "recorded",
+        usage_status: "usage_pending",
+        attempt_id: nil,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        model_id: model.id
+      })
+
+    reservation
+    |> Ecto.Changeset.change(%{source_event_id: "request:#{request.id}:reservation"})
+    |> Repo.update!()
+
+    %{
+      api_key: api_key,
+      assignment: assignment,
+      attempt: attempt,
+      identity: identity,
+      model: model,
+      pool: pool,
+      replay_claim_digest: replay_claim_digest,
+      request: request,
+      semantic_digest: semantic_digest,
+      session: Repo.reload!(session),
+      turn: turn
+    }
+  end
+
+  defp replay_arm_input(fixture) do
+    %{
+      api_key_id: fixture.api_key.id,
+      pool_id: fixture.pool.id,
+      codex_session_id: fixture.session.id,
+      request_id: fixture.request.id,
+      codex_turn_id: fixture.turn.id,
+      eligible_attempt_id: fixture.attempt.id,
+      api_key_runtime_epoch: fixture.api_key.runtime_revocation_epoch,
+      model_id: fixture.model.id,
+      model_identifier: fixture.model.exposed_model_id,
+      endpoint: fixture.request.endpoint,
+      semantic_turn_digest: fixture.semantic_digest,
+      replay_claim_digest: fixture.replay_claim_digest,
+      owner_instance_id: fixture.session.owner_instance_id,
+      owner_lease_token: fixture.session.owner_lease_token,
+      predecessor_epoch: 1,
+      failure_reason: :client_disconnected,
+      pre_visible_output: true
+    }
+  end
+
+  defp install_started_generation_one!(fixture) do
+    assert {:ok, armed} = RequestReplay.arm(replay_arm_input(fixture))
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    replay_attempt =
+      attempt_fixture(fixture.request, fixture.assignment, %{
+        attempt_number: 2,
+        status: "in_progress",
+        completed_at: nil,
+        upstream_status_code: nil,
+        usage_status: "usage_pending"
+      })
+      |> Ecto.Changeset.change(%{model_id: fixture.model.id, replay_generation: 1})
+      |> Repo.update!()
+
+    entitlement = Repo.get!(RequestReplayEntitlement, armed.entitlement_id)
+
+    entitlement =
+      entitlement
+      |> RequestReplayEntitlement.changeset(%{
+        status: "consumed",
+        replay_attempt_id: replay_attempt.id,
+        provisional_binding_digest: <<3::256>>,
+        consumed_at: now,
+        started_at: now,
+        last_liveness_at: now,
+        abandon_at: DateTime.add(now, 60, :second)
+      })
+      |> Repo.update!()
+
+    %{attempt: replay_attempt, entitlement: entitlement}
+  end
+
+  defp observation_authority(request, attempt) do
+    %{
+      request_id: request.id,
+      attempt_id: attempt.id,
+      replay_generation: attempt.replay_generation
+    }
   end
 
   defp wait_for_rate_limit_event_window(identity, window_kind, deadline \\ nil) do

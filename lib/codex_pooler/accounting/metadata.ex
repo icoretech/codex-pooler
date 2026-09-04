@@ -6,6 +6,7 @@ defmodule CodexPooler.Accounting.Metadata do
   alias CodexPooler.Accounting.{Request, RequestLogFacts}
   alias CodexPooler.Events
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
+  alias CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
@@ -324,6 +325,10 @@ defmodule CodexPooler.Accounting.Metadata do
   end
 
   defp deep_merge(_left, right), do: right
+
+  defp sanitize_value(value, key)
+       when key in [:native_replay_preparation, "native_replay_preparation"],
+       do: ReplayPreparation.sanitize(value)
 
   defp sanitize_value(value, key) when is_map(value) do
     normalized = normalize_key(key)

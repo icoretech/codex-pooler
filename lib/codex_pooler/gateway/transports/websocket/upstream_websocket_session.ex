@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
+  alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -21,12 +22,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Direct
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
+  alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState.Delivery
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
 
   @default_keepalive_interval_ms 25_000
   @dev_features_build_enabled Application.compile_env(
@@ -730,16 +733,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       assignment_advertised?: Map.get(request, :assignment_advertised?)
     }
 
-    connect_and_send_request(
-      state,
-      key,
-      request.url,
-      request.headers,
-      request.timeouts,
-      request,
-      receive_state,
-      connection_usage
+    WebsocketRequestCallbacks.begin_request(
+      request.request_id,
+      request.attempt_id
     )
+
+    try do
+      connect_and_send_request(
+        state,
+        key,
+        request.url,
+        request.headers,
+        request.timeouts,
+        request,
+        receive_state,
+        connection_usage
+      )
+    after
+      WebsocketRequestCallbacks.end_request()
+    end
   end
 
   defp connect_and_send_request(
@@ -896,10 +908,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   @type consumed_admission_phase ::
-          :compact | :final | {:first_full_history_compact, FirstCompactCollection.t()} | nil
+          :compact
+          | :final
+          | :native_replay
+          | {:first_full_history_compact, FirstCompactCollection.t()}
+          | nil
 
   @spec consume_request_capability(map(), Request.t()) ::
           {:ok, map(), consumed_admission_phase()} | {:error, map()}
+  defp consume_request_capability(
+         state,
+         %Request{
+           native_replay_binding: %NativeReplayAdmission.Binding{} = binding,
+           native_replay_proof: %RuntimeAdmissionProof{} = proof,
+           native_compaction_capability: nil,
+           first_compact_collection: nil,
+           forwarded_owner_send_handoff: nil
+         }
+       ) do
+    case NativeReplayAdmission.redeem(proof, binding) do
+      {:ok, _redeemed} -> {:ok, state, :native_replay}
+      {:error, _reason} -> {:error, clear_admission(state)}
+    end
+  end
+
   defp consume_request_capability(
          state,
          %Request{
@@ -990,6 +1022,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:error, _reason} -> clear_admission(state)
     end
   end
+
+  defp finalize_consumed_request(state, _result, :native_replay, _request), do: state
 
   defp finalize_consumed_request(
          state,

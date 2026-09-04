@@ -228,9 +228,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
       mapper: :codex_responses,
       upstream_identity_id: identity_id,
       observation: %{
-        request_id: Ecto.UUID.generate(),
+        request_id: nil,
         client_request_id: "client-request",
-        attempt_id: Ecto.UUID.generate(),
+        attempt_id: nil,
         mode: "full"
       },
       reset_probe: nil,

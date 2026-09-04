@@ -225,6 +225,481 @@ defmodule CodexPooler.DBInvariantsTest do
     end)
   end
 
+  @tag :replay_schema
+  test "database enforces replay digests, generations, tuples, and semantic turn uniqueness" do
+    fixture = replay_execution_fixture!("replay-shape")
+    attempt_id = create_attempt!(fixture)
+    turn_id = create_replay_turn!(fixture, <<1::256>>)
+
+    assert_db_constraint(:check_violation, "attempts_replay_generation_check", fn ->
+      Repo.query!("UPDATE attempts SET replay_generation = -1 WHERE id = $1", [attempt_id])
+    end)
+
+    assert_db_constraint(:check_violation, "codex_turns_semantic_turn_digest_shape_check", fn ->
+      Repo.query!("UPDATE codex_turns SET semantic_turn_digest = $1 WHERE id = $2", [
+        <<1>>,
+        turn_id
+      ])
+    end)
+
+    assert_db_constraint(:unique_violation, "codex_turns_active_semantic_turn_uq", fn ->
+      create_request!(fixture.pool_id, fixture.api_key_id, "corr-replay-semantic-duplicate")
+      |> then(fn request_id ->
+        create_replay_turn!(%{fixture | request_id: request_id}, <<1::256>>)
+      end)
+    end)
+
+    base = replay_entitlement_params(fixture, turn_id, attempt_id)
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_semantic_turn_digest_shape_check",
+      fn -> insert_replay_entitlement!(%{base | semantic_turn_digest: <<1>>}) end
+    )
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_replay_generation_check",
+      fn -> insert_replay_entitlement!(%{base | replay_generation: 0}) end
+    )
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_api_key_runtime_epoch_check",
+      fn -> insert_replay_entitlement!(%{base | api_key_runtime_epoch: -1}) end
+    )
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_lifecycle_tuple_check",
+      fn -> insert_replay_entitlement!(%{base | status: "consumed"}) end
+    )
+
+    entitlement_id = insert_replay_entitlement!(base)
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_snapshot_immutable_check",
+      fn ->
+        Repo.query!(
+          "UPDATE request_replay_entitlements SET owner_lease_key_version = 'v2' WHERE id = $1",
+          [entitlement_id]
+        )
+      end
+    )
+  end
+
+  @tag :replay_schema
+  test "database rejects cross-request replay turn and attempt ownership" do
+    fixture = replay_execution_fixture!("replay-cross-request")
+    eligible_attempt_id = create_attempt!(fixture)
+    turn_id = create_replay_turn!(fixture, <<2::256>>)
+    other_request_id = create_request!(fixture.pool_id, fixture.api_key_id, "corr-replay-other")
+    other_fixture = %{fixture | request_id: other_request_id}
+    other_attempt_id = create_attempt!(other_fixture)
+    other_turn_id = create_replay_turn!(other_fixture, <<3::256>>)
+    base = replay_entitlement_params(fixture, turn_id, eligible_attempt_id)
+
+    assert_db_constraint(
+      :foreign_key_violation,
+      "request_replay_entitlements_codex_turn_request_fkey",
+      fn -> insert_replay_entitlement!(%{base | codex_turn_id: other_turn_id}) end
+    )
+
+    assert_db_constraint(
+      :foreign_key_violation,
+      "request_replay_entitlements_eligible_attempt_request_fkey",
+      fn -> insert_replay_entitlement!(%{base | eligible_attempt_id: other_attempt_id}) end
+    )
+  end
+
+  @tag :replay_schema
+  test "database preserves legacy generation zero and advances replay wall clock within transactions" do
+    fixture = replay_execution_fixture!("replay-default-clock")
+    attempt_id = create_attempt!(fixture)
+
+    assert [[0]] =
+             Repo.query!("SELECT replay_generation FROM attempts WHERE id = $1", [attempt_id]).rows
+
+    assert {:ok, [first, second]} =
+             Repo.transaction(fn ->
+               [[first]] = Repo.query!("SELECT request_replay_db_now()").rows
+               [[second]] = Repo.query!("SELECT request_replay_db_now()").rows
+               [first, second]
+             end)
+
+    assert NaiveDateTime.compare(first, second) == :lt
+  end
+
+  @tag :replay_schema
+  test "database enforces every replay digest, epoch, text, and time shape" do
+    fixture = replay_execution_fixture!("replay-complete-shapes")
+    eligible_attempt_id = create_attempt!(fixture)
+    turn_id = create_replay_turn!(fixture, <<1::256>>)
+    base = replay_entitlement_params(fixture, turn_id, eligible_attempt_id)
+
+    for {field, constraint, extras} <- [
+          {:replay_claim_digest, "request_replay_entitlements_replay_claim_digest_shape_check",
+           %{}},
+          {:provisional_binding_digest,
+           "request_replay_entitlements_provisional_digest_shape_check",
+           consumed_tuple(%{replay_attempt_id: eligible_attempt_id})},
+          {:owner_lease_digest, "request_replay_entitlements_owner_lease_digest_shape_check", %{}}
+        ] do
+      assert_db_constraint(:check_violation, constraint, fn ->
+        base
+        |> Map.merge(extras)
+        |> Map.put(field, <<1>>)
+        |> insert_replay_entitlement!()
+      end)
+    end
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_predecessor_epoch_check",
+      fn -> insert_replay_entitlement!(%{base | predecessor_epoch: 0}) end
+    )
+
+    for {field, constraint} <- [
+          {:model_identifier, "request_replay_entitlements_model_identifier_present_check"},
+          {:owner_lease_key_version,
+           "request_replay_entitlements_lease_key_version_present_check"}
+        ] do
+      assert_db_constraint(:check_violation, constraint, fn ->
+        insert_replay_entitlement!(Map.put(base, field, "  \t"))
+      end)
+    end
+
+    assert_db_constraint(:check_violation, "request_replay_entitlements_expiry_check", fn ->
+      insert_replay_entitlement!(Map.put(base, :expires_offset_seconds, 0))
+    end)
+
+    assert_db_constraint(:check_violation, "request_replay_entitlements_status_check", fn ->
+      insert_replay_entitlement!(%{base | status: "unknown"})
+    end)
+  end
+
+  @tag :replay_schema
+  test "database accepts the complete replay lifecycle tuple matrix" do
+    for {suffix, attrs} <- replay_legal_tuple_matrix() do
+      fixture = replay_execution_fixture!("replay-legal-#{suffix}")
+      eligible_attempt_id = create_attempt!(fixture)
+      replay_attempt_id = create_attempt!(%{fixture | request_id: fixture.request_id}, 2)
+      turn_id = create_replay_turn!(fixture, <<1::256>>)
+
+      params =
+        fixture
+        |> replay_entitlement_params(turn_id, eligible_attempt_id)
+        |> Map.put(:replay_attempt_id, replay_attempt_id)
+        |> Map.merge(attrs)
+        |> materialize_replay_attempt(replay_attempt_id)
+
+      entitlement_id = insert_replay_entitlement!(params)
+      assert count_rows("request_replay_entitlements", entitlement_id) == 1
+    end
+  end
+
+  @tag :replay_schema
+  test "database rejects malformed replay lifecycle tuples and timestamp orderings" do
+    for {suffix, attrs} <- replay_illegal_tuple_matrix() do
+      fixture =
+        replay_execution_fixture!(
+          "replay-illegal-#{suffix}-#{System.unique_integer([:positive])}"
+        )
+
+      eligible_attempt_id = create_attempt!(fixture)
+      replay_attempt_id = create_attempt!(%{fixture | request_id: fixture.request_id}, 2)
+      turn_id = create_replay_turn!(fixture, <<1::256>>)
+
+      params =
+        fixture
+        |> replay_entitlement_params(turn_id, eligible_attempt_id)
+        |> Map.put(:replay_attempt_id, replay_attempt_id)
+        |> Map.merge(attrs)
+        |> materialize_replay_attempt(replay_attempt_id)
+
+      assert_db_constraint(
+        :check_violation,
+        "request_replay_entitlements_lifecycle_tuple_check",
+        fn -> insert_replay_entitlement!(params) end
+      )
+    end
+  end
+
+  @tag :replay_schema
+  test "database enforces semantic equality, request snapshots, and replay-attempt ownership" do
+    fixture = replay_execution_fixture!("replay-cross-snapshot")
+    eligible_attempt_id = create_attempt!(fixture)
+    replay_attempt_id = create_attempt!(fixture, 2)
+    turn_id = create_replay_turn!(fixture, <<1::256>>)
+    base = replay_entitlement_params(fixture, turn_id, eligible_attempt_id)
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_semantic_turn_match_check",
+      fn -> insert_replay_entitlement!(%{base | semantic_turn_digest: <<9::256>>}) end
+    )
+
+    for {field, value} <- [
+          {:model_identifier, "wrong-model"},
+          {:api_key_runtime_epoch, 1}
+        ] do
+      assert_db_constraint(
+        :check_violation,
+        "request_replay_entitlements_request_snapshot_match_check",
+        fn -> insert_replay_entitlement!(Map.put(base, field, value)) end
+      )
+    end
+
+    other_request_id =
+      create_request!(fixture.pool_id, fixture.api_key_id, "corr-replay-cross-attempt")
+
+    other_attempt_id = create_attempt!(%{fixture | request_id: other_request_id})
+
+    assert_db_constraint(
+      :foreign_key_violation,
+      "request_replay_entitlements_replay_attempt_request_fkey",
+      fn ->
+        base
+        |> Map.merge(%{
+          status: "consumed",
+          replay_attempt_id: other_attempt_id,
+          provisional_binding_digest: <<4::256>>,
+          consumed_offset_seconds: 1,
+          abandon_offset_seconds: 10
+        })
+        |> insert_replay_entitlement!()
+      end
+    )
+
+    entitlement_id =
+      base
+      |> Map.merge(%{
+        status: "consumed",
+        replay_attempt_id: replay_attempt_id,
+        provisional_binding_digest: <<4::256>>,
+        consumed_offset_seconds: 1,
+        abandon_offset_seconds: 10
+      })
+      |> insert_replay_entitlement!()
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_semantic_turn_immutable_check",
+      fn ->
+        Repo.query!("UPDATE codex_turns SET semantic_turn_digest = $1 WHERE id = $2", [
+          <<8::256>>,
+          turn_id
+        ])
+      end
+    )
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_request_snapshot_immutable_check",
+      fn ->
+        Repo.query!("UPDATE requests SET requested_model = 'changed' WHERE id = $1", [
+          fixture.request_id
+        ])
+      end
+    )
+
+    assert count_rows("request_replay_entitlements", entitlement_id) == 1
+  end
+
+  @tag :replay_schema
+  test "database makes every replay entitlement identity snapshot immutable" do
+    immutable_fields = [
+      :request_id,
+      :codex_turn_id,
+      :eligible_attempt_id,
+      :api_key_id,
+      :api_key_runtime_epoch,
+      :pool_id,
+      :model_id,
+      :model_identifier,
+      :semantic_turn_digest,
+      :replay_claim_digest,
+      :replay_generation,
+      :owner_lease_digest,
+      :owner_lease_key_version,
+      :predecessor_epoch,
+      :armed_at,
+      :expires_at
+    ]
+
+    for field <- immutable_fields do
+      fixture = replay_execution_fixture!("replay-immutable-#{field}")
+      eligible_attempt_id = create_attempt!(fixture)
+      turn_id = create_replay_turn!(fixture, <<1::256>>)
+
+      entitlement_id =
+        fixture
+        |> replay_entitlement_params(turn_id, eligible_attempt_id)
+        |> insert_replay_entitlement!()
+
+      assert_db_constraint(
+        :check_violation,
+        "request_replay_entitlements_snapshot_immutable_check",
+        fn -> mutate_entitlement_snapshot!(entitlement_id, field) end
+      )
+    end
+  end
+
+  @tag :replay_schema
+  test "database makes every replay request identity snapshot immutable" do
+    request_snapshot_fields = [
+      :pool_id,
+      :api_key_id,
+      :model_id,
+      :requested_model,
+      :reasoning_effort,
+      :requested_service_tier,
+      :actual_service_tier,
+      :service_tier,
+      :upstream_account_label,
+      :upstream_account_email,
+      :upstream_account_plan_label,
+      :upstream_account_plan_family
+    ]
+
+    for field <- request_snapshot_fields do
+      fixture = replay_execution_fixture!("replay-request-immutable-#{field}")
+      eligible_attempt_id = create_attempt!(fixture)
+      turn_id = create_replay_turn!(fixture, <<1::256>>)
+
+      fixture
+      |> replay_entitlement_params(turn_id, eligible_attempt_id)
+      |> insert_replay_entitlement!()
+
+      assert_db_constraint(
+        :check_violation,
+        "request_replay_entitlements_request_snapshot_immutable_check",
+        fn -> mutate_request_snapshot!(fixture.request_id, field) end
+      )
+    end
+  end
+
+  @tag :replay_schema
+  test "database forbids replay rearm and terminal transition after consumption" do
+    fixture = replay_execution_fixture!("replay-no-rearm")
+    eligible_attempt_id = create_attempt!(fixture)
+    replay_attempt_id = create_attempt!(fixture, 2)
+    turn_id = create_replay_turn!(fixture, <<1::256>>)
+
+    entitlement_id =
+      fixture
+      |> replay_entitlement_params(turn_id, eligible_attempt_id)
+      |> Map.merge(%{
+        status: "consumed",
+        replay_attempt_id: replay_attempt_id,
+        provisional_binding_digest: <<4::256>>,
+        consumed_offset_seconds: 1,
+        abandon_offset_seconds: 10
+      })
+      |> insert_replay_entitlement!()
+
+    for status <- ["armed", "expired", "revoked"] do
+      assert_db_constraint(
+        :check_violation,
+        "request_replay_entitlements_status_transition_check",
+        fn ->
+          Repo.query!(
+            """
+            UPDATE request_replay_entitlements
+            SET status = $1,
+                replay_attempt_id = NULL,
+                provisional_binding_digest = NULL,
+                consumed_at = NULL,
+                abandon_at = NULL,
+                terminal_at = CASE WHEN $1 IN ('expired', 'revoked') THEN request_replay_db_now() + interval '31 seconds' ELSE NULL END,
+                closed_at = CASE WHEN $1 IN ('expired', 'revoked') THEN request_replay_db_now() + interval '32 seconds' ELSE NULL END
+            WHERE id = $2
+            """,
+            [status, entitlement_id]
+          )
+        end
+      )
+    end
+
+    assert_db_constraint(
+      :check_violation,
+      "request_replay_entitlements_consumption_immutable_check",
+      fn ->
+        Repo.query!(
+          "UPDATE request_replay_entitlements SET consumed_at = consumed_at + interval '1 second', abandon_at = abandon_at + interval '1 second' WHERE id = $1",
+          [entitlement_id]
+        )
+      end
+    )
+
+    for {suffix, initial_status, target_status} <- [
+          {"expired-to-armed", "expired", "armed"},
+          {"revoked-to-armed", "revoked", "armed"}
+        ] do
+      terminal_fixture = replay_execution_fixture!("replay-terminal-#{suffix}")
+      terminal_attempt = create_attempt!(terminal_fixture)
+      terminal_turn = create_replay_turn!(terminal_fixture, <<1::256>>)
+
+      terminal_id =
+        terminal_fixture
+        |> replay_entitlement_params(terminal_turn, terminal_attempt)
+        |> Map.merge(%{
+          status: initial_status,
+          terminal_offset_seconds: if(initial_status == "expired", do: 30, else: 1),
+          closed_offset_seconds: 31
+        })
+        |> insert_replay_entitlement!()
+
+      assert_db_constraint(
+        :check_violation,
+        "request_replay_entitlements_status_transition_check",
+        fn ->
+          Repo.query!(
+            """
+            UPDATE request_replay_entitlements
+            SET status = $1,
+                terminal_at = CASE WHEN $1 IN ('expired', 'revoked') THEN terminal_at ELSE NULL END,
+                closed_at = CASE WHEN $1 IN ('expired', 'revoked') THEN closed_at ELSE NULL END
+            WHERE id = $2
+            """,
+            [target_status, terminal_id]
+          )
+        end
+      )
+    end
+
+    for {suffix, initial_status, target_status} <- [
+          {"expired-to-revoked", "expired", "revoked"},
+          {"revoked-to-expired", "revoked", "expired"}
+        ] do
+      terminal_fixture = replay_execution_fixture!("replay-terminal-#{suffix}")
+      terminal_attempt = create_attempt!(terminal_fixture)
+      terminal_turn = create_replay_turn!(terminal_fixture, <<1::256>>)
+
+      terminal_id =
+        terminal_fixture
+        |> replay_entitlement_params(terminal_turn, terminal_attempt)
+        |> Map.merge(%{
+          status: initial_status,
+          terminal_offset_seconds: 30,
+          closed_offset_seconds: 31
+        })
+        |> insert_replay_entitlement!()
+
+      assert_db_constraint(
+        :check_violation,
+        "request_replay_entitlements_status_transition_check",
+        fn ->
+          Repo.query!(
+            "UPDATE request_replay_entitlements SET status = $1 WHERE id = $2",
+            [target_status, terminal_id]
+          )
+        end
+      )
+    end
+  end
+
   test "soft deleting an upstream account preserves historical references" do
     fixture = create_execution_fixture!("soft-delete-preserve")
     attempt_id = create_attempt!(fixture)
@@ -740,7 +1215,7 @@ defmodule CodexPooler.DBInvariantsTest do
         ) VALUES ('gpt-example', $1, 'USD', 'token', 1, 2, now(), '{}'::jsonb)
         RETURNING id
         """,
-        ["2026-04-#{:erlang.phash2(suffix, 28) + 1}"]
+        ["test-#{suffix}"]
       ).rows
 
     id
@@ -766,7 +1241,7 @@ defmodule CodexPooler.DBInvariantsTest do
     Repo.query!("UPDATE requests SET model_id = $1 WHERE id = $2", [model_id, request_id])
   end
 
-  defp create_attempt!(fixture) do
+  defp create_attempt!(fixture, attempt_number \\ 1) do
     [[id]] =
       Repo.query!(
         """
@@ -774,11 +1249,12 @@ defmodule CodexPooler.DBInvariantsTest do
           request_id, attempt_number, pool_upstream_assignment_id, upstream_identity_id,
           pricing_snapshot_id, model_id, upstream_model_id, transport, status,
           retryable, usage_status, response_metadata
-        ) VALUES ($1, 1, $2, $3, $4, $5, 'gpt-example', 'http_json', 'succeeded', false, 'usage_known', '{}'::jsonb)
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'gpt-example', 'http_json', 'succeeded', false, 'usage_known', '{}'::jsonb)
         RETURNING id
         """,
         [
           fixture.request_id,
+          attempt_number,
           fixture.assignment_id,
           fixture.upstream_identity_id,
           fixture.pricing_snapshot_id,
@@ -801,6 +1277,273 @@ defmodule CodexPooler.DBInvariantsTest do
       ).rows
 
     id
+  end
+
+  defp create_replay_turn!(fixture, semantic_turn_digest) do
+    [[id]] =
+      Repo.query!(
+        """
+        INSERT INTO codex_turns (
+          codex_session_id, request_id, turn_sequence, transport_kind, semantic_turn_digest
+        ) VALUES (
+          $1, $2,
+          (SELECT COALESCE(MAX(turn_sequence), 0) + 1 FROM codex_turns WHERE codex_session_id = $1),
+          'websocket', $3
+        )
+        RETURNING id
+        """,
+        [fixture.codex_session_id, fixture.request_id, semantic_turn_digest]
+      ).rows
+
+    id
+  end
+
+  defp replay_execution_fixture!(suffix) do
+    fixture = create_execution_fixture!(suffix)
+    model_id = create_model!(fixture.pool_id, suffix)
+    set_request_model!(fixture.request_id, model_id)
+    %{fixture | model_id: model_id}
+  end
+
+  defp replay_entitlement_params(fixture, turn_id, eligible_attempt_id) do
+    %{
+      request_id: fixture.request_id,
+      codex_turn_id: turn_id,
+      eligible_attempt_id: eligible_attempt_id,
+      api_key_id: fixture.api_key_id,
+      api_key_runtime_epoch: 0,
+      pool_id: fixture.pool_id,
+      model_id: fixture.model_id,
+      model_identifier: "gpt-example",
+      semantic_turn_digest: <<1::256>>,
+      replay_claim_digest: <<2::256>>,
+      replay_generation: 1,
+      owner_lease_digest: <<3::256>>,
+      owner_lease_key_version: "v1",
+      predecessor_epoch: 1,
+      status: "armed",
+      expires_offset_seconds: 30
+    }
+  end
+
+  defp insert_replay_entitlement!(attrs) do
+    timestamp_fields = [
+      {:consumed_at, :consumed_offset_seconds},
+      {:started_at, :started_offset_seconds},
+      {:last_liveness_at, :last_liveness_offset_seconds},
+      {:abandon_at, :abandon_offset_seconds},
+      {:terminal_at, :terminal_offset_seconds},
+      {:closed_at, :closed_offset_seconds}
+    ]
+
+    timestamp_columns =
+      Enum.map_join(timestamp_fields, ", ", fn {column, _offset} -> to_string(column) end)
+
+    timestamp_values =
+      timestamp_fields
+      |> Enum.with_index(19)
+      |> Enum.map_join(", ", fn {{_column, _offset}, index} ->
+        "CASE WHEN $#{index}::integer IS NULL THEN NULL ELSE witness.now + ($#{index}::integer * interval '1 second') END"
+      end)
+
+    [[id]] =
+      Repo.query!(
+        """
+        WITH witness AS MATERIALIZED (SELECT request_replay_db_now() AS now)
+        INSERT INTO request_replay_entitlements (
+          request_id, codex_turn_id, eligible_attempt_id, replay_attempt_id, api_key_id,
+          api_key_runtime_epoch, pool_id, model_id, model_identifier,
+          semantic_turn_digest, replay_claim_digest, provisional_binding_digest, replay_generation,
+          owner_lease_digest, owner_lease_key_version, predecessor_epoch,
+          status, armed_at, expires_at, #{timestamp_columns}
+        ) SELECT
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+          $15, $16, $17, witness.now,
+          witness.now + ($18::integer * interval '1 second'),
+          #{timestamp_values}
+        FROM witness
+        RETURNING id
+        """,
+        [
+          attrs.request_id,
+          attrs.codex_turn_id,
+          attrs.eligible_attempt_id,
+          Map.get(attrs, :replay_attempt_id),
+          attrs.api_key_id,
+          attrs.api_key_runtime_epoch,
+          attrs.pool_id,
+          attrs.model_id,
+          attrs.model_identifier,
+          attrs.semantic_turn_digest,
+          attrs.replay_claim_digest,
+          Map.get(attrs, :provisional_binding_digest),
+          attrs.replay_generation,
+          attrs.owner_lease_digest,
+          attrs.owner_lease_key_version,
+          attrs.predecessor_epoch,
+          attrs.status,
+          attrs.expires_offset_seconds
+        ] ++ Enum.map(timestamp_fields, fn {_column, offset} -> Map.get(attrs, offset) end)
+      ).rows
+
+    id
+  end
+
+  defp replay_legal_tuple_matrix do
+    [
+      {"armed", %{replay_attempt_id: nil}},
+      {"consumed-open", consumed_tuple()},
+      {"consumed-open-started",
+       consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 3})},
+      {"consumed-closed", consumed_tuple(%{closed_offset_seconds: 11})},
+      {"consumed-closed-started",
+       consumed_tuple(%{
+         started_offset_seconds: 2,
+         last_liveness_offset_seconds: 3,
+         closed_offset_seconds: 11
+       })},
+      {"expired",
+       %{
+         status: "expired",
+         replay_attempt_id: nil,
+         terminal_offset_seconds: 30,
+         closed_offset_seconds: 31
+       }},
+      {"revoked",
+       %{
+         status: "revoked",
+         replay_attempt_id: nil,
+         terminal_offset_seconds: 1,
+         closed_offset_seconds: 2
+       }}
+    ]
+  end
+
+  defp replay_illegal_tuple_matrix do
+    [
+      {"armed-replay-attempt", %{replay_attempt_id: :use_replay_attempt}},
+      {"armed-provisional", %{provisional_binding_digest: <<4::256>>}},
+      {"consumed-missing-replay", consumed_tuple(%{replay_attempt_id: nil})},
+      {"consumed-missing-provisional", consumed_tuple(%{provisional_binding_digest: nil})},
+      {"consumed-missing-abandon", consumed_tuple(%{abandon_offset_seconds: nil})},
+      {"consumed-abandon-not-after", consumed_tuple(%{abandon_offset_seconds: 1})},
+      {"consumed-start-only", consumed_tuple(%{started_offset_seconds: 2})},
+      {"consumed-liveness-only", consumed_tuple(%{last_liveness_offset_seconds: 2})},
+      {"consumed-start-before",
+       consumed_tuple(%{started_offset_seconds: 0, last_liveness_offset_seconds: 2})},
+      {"consumed-liveness-before-start",
+       consumed_tuple(%{started_offset_seconds: 3, last_liveness_offset_seconds: 2})},
+      {"consumed-liveness-at-abandon",
+       consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 10})},
+      {"consumed-closed-too-early", consumed_tuple(%{closed_offset_seconds: 1})},
+      {"consumed-terminal", consumed_tuple(%{terminal_offset_seconds: 4})},
+      {"expired-too-early",
+       %{
+         status: "expired",
+         replay_attempt_id: nil,
+         terminal_offset_seconds: 29,
+         closed_offset_seconds: 31
+       }},
+      {"expired-consumed",
+       %{
+         status: "expired",
+         replay_attempt_id: :use_replay_attempt,
+         provisional_binding_digest: <<4::256>>,
+         consumed_offset_seconds: 1,
+         terminal_offset_seconds: 30,
+         closed_offset_seconds: 31
+       }},
+      {"revoked-missing-close",
+       %{status: "revoked", replay_attempt_id: nil, terminal_offset_seconds: 1}},
+      {"revoked-close-at-terminal",
+       %{
+         status: "revoked",
+         replay_attempt_id: nil,
+         terminal_offset_seconds: 1,
+         closed_offset_seconds: 1
+       }}
+    ]
+  end
+
+  defp consumed_tuple(overrides \\ %{}) do
+    Map.merge(
+      %{
+        status: "consumed",
+        replay_attempt_id: :use_replay_attempt,
+        provisional_binding_digest: <<4::256>>,
+        consumed_offset_seconds: 1,
+        abandon_offset_seconds: 10
+      },
+      overrides
+    )
+  end
+
+  defp materialize_replay_attempt(%{replay_attempt_id: :use_replay_attempt} = attrs, id),
+    do: %{attrs | replay_attempt_id: id}
+
+  defp materialize_replay_attempt(attrs, _id), do: attrs
+
+  defp mutate_entitlement_snapshot!(id, field) do
+    expression =
+      case field do
+        field
+        when field in [
+               :request_id,
+               :codex_turn_id,
+               :eligible_attempt_id,
+               :api_key_id,
+               :pool_id,
+               :model_id
+             ] ->
+          "gen_random_uuid()"
+
+        field when field in [:api_key_runtime_epoch, :replay_generation, :predecessor_epoch] ->
+          "#{field} + 1"
+
+        field when field in [:model_identifier, :owner_lease_key_version] ->
+          "#{field} || '-changed'"
+
+        field when field in [:semantic_turn_digest, :replay_claim_digest, :owner_lease_digest] ->
+          "digest(#{field}, 'sha256')"
+
+        field when field in [:armed_at, :expires_at] ->
+          "#{field} + interval '1 second'"
+      end
+
+    Repo.query!("UPDATE request_replay_entitlements SET #{field} = #{expression} WHERE id = $1", [
+      id
+    ])
+  end
+
+  defp mutate_request_snapshot!(id, field) do
+    expression =
+      case field do
+        field when field in [:pool_id, :api_key_id, :model_id] ->
+          "gen_random_uuid()"
+
+        :requested_model ->
+          "requested_model || '-changed'"
+
+        :reasoning_effort ->
+          "'high'"
+
+        field when field in [:requested_service_tier, :actual_service_tier, :service_tier] ->
+          "'priority'"
+
+        :upstream_account_label ->
+          "'changed-label'"
+
+        :upstream_account_email ->
+          "'changed@example.com'"
+
+        :upstream_account_plan_label ->
+          "'changed-plan'"
+
+        :upstream_account_plan_family ->
+          "'changed-family'"
+      end
+
+    Repo.query!("UPDATE requests SET #{field} = #{expression} WHERE id = $1", [id])
   end
 
   defp create_ledger_entry!(fixture, attempt_id, attrs) do
@@ -849,6 +1592,19 @@ defmodule CodexPooler.DBInvariantsTest do
       rescue
         error in Postgrex.Error ->
           assert error.postgres.code == code
+          reraise error, __STACKTRACE__
+      end
+    end
+  end
+
+  defp assert_db_constraint(code, constraint, fun) do
+    assert_raise Postgrex.Error, fn ->
+      try do
+        fun.()
+      rescue
+        error in Postgrex.Error ->
+          assert error.postgres.code == code
+          assert error.postgres.constraint == constraint
           reraise error, __STACKTRACE__
       end
     end

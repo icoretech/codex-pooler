@@ -96,6 +96,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
       end
     end
 
+    @tag :replay_race
     test "#{path} drains one admitted turn then drops queued and later frames after pause" do
       route_label = unquote(route_label)
       path = unquote(path)

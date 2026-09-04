@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   import Ecto.Query
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
@@ -23,6 +24,12 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   @type request_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()}
   @type attempt_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()} | nil
+  @type expired_owner_candidate :: %{
+          required(:session_id) => Ecto.UUID.t(),
+          required(:owner_instance_id) => String.t(),
+          required(:owner_lease_token) => Ecto.UUID.t(),
+          required(:owner_lease_expires_at) => DateTime.t()
+        }
 
   @spec cleanup_expired_runtime_state(DateTime.t()) :: {:ok, map()} | {:error, term()}
   def cleanup_expired_runtime_state(now \\ now()) do
@@ -121,9 +128,11 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   defp recover_expired_owner_runtime_state(%DateTime{} = now) do
     now = DateTime.truncate(now, :microsecond)
+    candidates = expired_owner_sessions_with_active_turns(now)
 
-    now
-    |> expired_owner_sessions_with_active_turns()
+    maybe_wait_after_expired_owner_candidates(candidates)
+
+    candidates
     |> Enum.reduce_while({:ok, 0}, &recover_expired_owner_session/2)
     |> case do
       {:ok, recovered_count} -> {:ok, %{expired_owner_sessions_recovered: recovered_count}}
@@ -131,14 +140,66 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     end
   end
 
-  defp recover_expired_owner_session(session_id, {:ok, recovered_count}) do
-    case Interruption.recover_owner_lifecycle_leftovers(
-           session_id,
-           :owner_unavailable,
-           RequestOptions.for_websocket(%{})
-         ) do
-      {:ok, _result} -> {:cont, {:ok, recovered_count + 1}}
+  if Mix.env() == :test do
+    defp maybe_wait_after_expired_owner_candidates(candidates) do
+      case Application.get_env(:codex_pooler, :runtime_cleanup_owner_candidate_test_barrier) do
+        {test_pid, barrier_ref} when is_pid(test_pid) and is_reference(barrier_ref) ->
+          send(
+            test_pid,
+            {:runtime_cleanup_owner_candidates_selected, self(), barrier_ref, candidates}
+          )
+
+          receive do
+            {:release_runtime_cleanup_owner_candidates, ^barrier_ref} -> :ok
+          end
+
+        _no_barrier ->
+          :ok
+      end
+    end
+  else
+    defp maybe_wait_after_expired_owner_candidates(_candidates), do: :ok
+  end
+
+  defp recover_expired_owner_session(candidate, {:ok, recovered_count}) do
+    case Repo.transaction(fn -> recover_expired_owner_session_locked(candidate) end) do
+      {:ok, :stale_owner} -> {:cont, {:ok, recovered_count}}
+      {:ok, :recovered} -> {:cont, {:ok, recovered_count + 1}}
       {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp recover_expired_owner_session_locked(candidate) do
+    owner_snapshot =
+      Map.take(candidate, [:owner_instance_id, :owner_lease_token, :owner_lease_expires_at])
+
+    case Accounting.close_request_replays_for_session(
+           candidate.session_id,
+           owner_snapshot,
+           :owner_shutdown
+         ) do
+      {:ok, :stale_owner} ->
+        :stale_owner
+
+      {:ok, _summary} ->
+        opts =
+          %{}
+          |> RequestOptions.for_websocket()
+          |> RequestOptions.put_transport(
+            websocket_owner_lease_token: candidate.owner_lease_token
+          )
+
+        case Interruption.recover_owner_lifecycle_leftovers(
+               candidate.session_id,
+               :owner_unavailable,
+               opts
+             ) do
+          {:ok, _result} -> :recovered
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      {:error, reason} ->
+        Repo.rollback(reason)
     end
   end
 
@@ -153,13 +214,19 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
         on:
           lease.codex_session_id == session.id and
             lease.status == ^BridgeOwnerLease.active_status() and
-            lease.expires_at <= ^now,
+            lease.expires_at <= ^now and lease.lease_token == session.owner_lease_token and
+            lease.owner_instance_id == session.owner_instance_id,
         join: turn in CodexTurn,
         on:
           turn.codex_session_id == session.id and
             turn.status == ^CodexTurn.in_progress_status(),
         distinct: session.id,
-        select: session.id
+        select: %{
+          session_id: session.id,
+          owner_instance_id: session.owner_instance_id,
+          owner_lease_token: session.owner_lease_token,
+          owner_lease_expires_at: session.owner_lease_expires_at
+        }
     )
   end
 

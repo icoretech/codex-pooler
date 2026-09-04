@@ -167,7 +167,7 @@ defmodule CodexPooler.Access do
   defdelegate revoke_api_key(scope, api_key), to: APIKeys
 
   @spec delete_api_key(Scope.t(), APIKey.t() | Ecto.UUID.t()) ::
-          {:ok, APIKey.t()} | {:error, Ecto.Changeset.t() | access_error()}
+          {:ok, APIKey.t()} | {:error, term()}
   defdelegate delete_api_key(scope, api_key), to: APIKeys
 
   @spec authenticate_api_key(term()) :: {:ok, auth_context()} | {:error, access_error()}

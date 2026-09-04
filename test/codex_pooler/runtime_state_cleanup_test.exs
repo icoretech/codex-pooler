@@ -6,6 +6,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
 
   alias CodexPooler.Gateway.Persistence.{
@@ -18,6 +19,9 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
 
   alias CodexPooler.Jobs
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL.Sandbox
+
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
 
   test "cleanup marks expired file metadata without touching active rows" do
     now = ~U[2026-05-03 02:30:00Z]
@@ -41,6 +45,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     assert Repo.get!(FileRecord, active_file.id).status == "pending_upload"
   end
 
+  @tag :replay_clock
   test "cleanup expires bridge aliases owner leases and idempotency keys deterministically" do
     now = ~U[2026-05-03 02:45:00Z]
     expired_at = DateTime.add(now, -1, :second)
@@ -76,6 +81,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     assert Repo.get!(IdempotencyKey, active_key.id).status == "in_progress"
   end
 
+  @tag :replay_lock_order
   test "cleanup interrupts in-progress turns before expiring owner leases" do
     now = ~U[2026-05-03 03:15:00Z]
     expired_at = DateTime.add(now, -1, :second)
@@ -150,6 +156,196 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
              "reservation",
              "settlement"
            ]
+  end
+
+  @tag :replay_cleanup
+  @tag :replay_lock_order
+  test "expired owner cleanup does not interrupt a replacement owner after candidate selection" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    expired_at = DateTime.add(now, -1, :second)
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    model = model_fixture(pool, %{exposed_model_id: "gpt-cleanup-takeover"})
+    session = session_fixture(pool, api_key, assignment, expired_at)
+    old_token = session.owner_lease_token
+    old_lease = lease_fixture(session, pool, api_key, assignment, expired_at, now)
+
+    old_lease
+    |> Ecto.Changeset.change(%{lease_token: old_token})
+    |> Repo.update!()
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        model_id: model.id,
+        requested_model: model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil,
+        request_metadata: %{"codex_session_id" => session.id}
+      })
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        status: "in_progress",
+        completed_at: nil,
+        usage_status: "usage_pending",
+        response_metadata: %{}
+      })
+
+    turn = turn_fixture(session, request, attempt, now)
+
+    request
+    |> ledger_entry_fixture(%{
+      attempt_id: attempt.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      entry_kind: "reservation",
+      amount_status: "recorded",
+      usage_status: "usage_pending",
+      transport: "websocket",
+      details: %{"source" => "test_reservation"}
+    })
+    |> Ecto.Changeset.change(%{source_event_id: "request:#{request.id}:reservation"})
+    |> Repo.update!()
+
+    barrier_ref = make_ref()
+    parent = self()
+
+    Application.put_env(
+      :codex_pooler,
+      :runtime_cleanup_owner_candidate_test_barrier,
+      {parent, barrier_ref}
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:codex_pooler, :runtime_cleanup_owner_candidate_test_barrier)
+    end)
+
+    cleanup_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        RuntimeCleanup.cleanup_expired_runtime_state(now)
+      end)
+
+    assert_receive {:runtime_cleanup_owner_candidates_selected, cleanup_pid, ^barrier_ref,
+                    [candidate]}
+
+    assert candidate.session_id == session.id
+    assert candidate.owner_instance_id == session.owner_instance_id
+    assert candidate.owner_lease_token == old_token
+    assert candidate.owner_lease_expires_at == session.owner_lease_expires_at
+
+    replacement_opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_continuity(
+        owner_instance_id: "node-b",
+        bridge_owner_lease_ttl_seconds: 120
+      )
+
+    assert {:ok, replacement} =
+             SessionContinuity.replace_unavailable_owner_lease(session, replacement_opts)
+
+    refute replacement.owner_lease_token == old_token
+    released_old_lease = Repo.reload!(old_lease)
+    assert released_old_lease.status == "released"
+
+    replacement_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        model_id: model.id,
+        requested_model: model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil,
+        request_metadata: %{"codex_session_id" => replacement.id}
+      })
+
+    replacement_attempt =
+      attempt_fixture(replacement_request, assignment, %{
+        status: "in_progress",
+        completed_at: nil,
+        usage_status: "usage_pending",
+        response_metadata: %{}
+      })
+
+    replacement_turn =
+      %CodexTurn{
+        codex_session_id: replacement.id,
+        request_id: replacement_request.id,
+        turn_sequence: 2,
+        transport_kind: replacement_request.transport,
+        final_attempt_id: replacement_attempt.id,
+        status: "in_progress",
+        started_at: now,
+        created_at: now,
+        updated_at: now
+      }
+      |> Repo.insert!()
+
+    replacement_request
+    |> ledger_entry_fixture(%{
+      attempt_id: replacement_attempt.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      entry_kind: "reservation",
+      amount_status: "recorded",
+      usage_status: "usage_pending",
+      transport: "websocket",
+      details: %{"source" => "test_reservation"}
+    })
+    |> Ecto.Changeset.change(%{
+      source_event_id: "request:#{replacement_request.id}:reservation"
+    })
+    |> Repo.update!()
+
+    assert {:ok, :stale_owner} =
+             CodexPooler.Accounting.close_request_replays_for_session(
+               candidate.session_id,
+               Map.take(candidate, [
+                 :owner_instance_id,
+                 :owner_lease_token,
+                 :owner_lease_expires_at
+               ]),
+               :owner_shutdown
+             )
+
+    send(cleanup_pid, {:release_runtime_cleanup_owner_candidates, barrier_ref})
+
+    assert {:ok, summary} = Task.await(cleanup_task, 15_000)
+    assert summary.expired_owner_sessions_recovered == 0
+
+    replacement_lease =
+      Repo.one!(
+        from lease in BridgeOwnerLease,
+          where: lease.codex_session_id == ^session.id and lease.status == "active"
+      )
+
+    assert Repo.reload!(replacement).status == "active"
+    assert Repo.reload!(old_lease) == released_old_lease
+    assert replacement_lease.lease_token == replacement.owner_lease_token
+    assert Repo.reload!(request).status == "in_progress"
+    assert Repo.reload!(attempt).status == "in_progress"
+    assert Repo.reload!(turn).status == "in_progress"
+    assert Repo.reload!(replacement_request).status == "in_progress"
+    assert Repo.reload!(replacement_attempt).status == "in_progress"
+    assert Repo.reload!(replacement_turn).status == "in_progress"
+
+    Application.delete_env(:codex_pooler, :runtime_cleanup_owner_candidate_test_barrier)
+
+    assert {:ok, repeated} = RuntimeCleanup.cleanup_expired_runtime_state(now)
+    assert repeated.expired_owner_sessions_recovered == 0
+    assert Repo.reload!(replacement).status == "active"
+    assert Repo.reload!(old_lease) == released_old_lease
+    assert Repo.reload!(request).status == "in_progress"
+    assert Repo.reload!(attempt).status == "in_progress"
+    assert Repo.reload!(turn).status == "in_progress"
+    assert Repo.reload!(replacement_request).status == "in_progress"
+    assert Repo.reload!(replacement_attempt).status == "in_progress"
+    assert Repo.reload!(replacement_turn).status == "in_progress"
   end
 
   test "jobs cleanup entrypoint combines file and gateway cleanup summaries" do
@@ -240,7 +436,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
       api_key_id: api_key.id,
       pool_upstream_assignment_id: assignment.id,
       owner_instance_id: "node-a",
-      lease_token: Ecto.UUID.generate(),
+      lease_token: session.owner_lease_token,
       status: "active",
       acquired_at: now,
       renewed_at: now,

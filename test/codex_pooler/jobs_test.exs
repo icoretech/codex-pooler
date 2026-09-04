@@ -19,6 +19,7 @@ defmodule CodexPooler.JobsTest do
     DailyRollupRebuildEnqueueWorker,
     DailyRollupRebuildWorker,
     PricingImportWorker,
+    RequestReplayCleanupWorker,
     RuntimeStateCleanupWorker,
     TokenRefreshEnqueueWorker,
     TokenRefreshWorker
@@ -40,6 +41,7 @@ defmodule CodexPooler.JobsTest do
   end
 
   describe "worker execution policy" do
+    @tag :replay_cleanup
     test "uses the shared schedule catalog for Oban cron entries" do
       assert Application.get_env(:codex_pooler, Oban)[:shutdown_grace_period] ==
                :timer.seconds(55)
@@ -51,7 +53,8 @@ defmodule CodexPooler.JobsTest do
                {"*/5 * * * *", AlertEvaluationEnqueueWorker},
                {"*/15 * * * *", TokenRefreshEnqueueWorker},
                {"17 0 * * *", DailyRollupRebuildEnqueueWorker},
-               {"*/15 * * * *", RuntimeStateCleanupWorker}
+               {"*/15 * * * *", RuntimeStateCleanupWorker},
+               {"* * * * *", RequestReplayCleanupWorker}
              ]
 
       worker_groups = Schedule.worker_groups()

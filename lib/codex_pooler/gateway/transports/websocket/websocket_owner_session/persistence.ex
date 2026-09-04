@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persistence do
   @moduledoc false
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Logger, as: OwnerLogger
@@ -44,16 +45,64 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persist
     end)
   end
 
-  @spec interrupt_codex_session(map(), atom()) :: :ok
+  @spec interrupt_codex_session(map(), atom()) :: :ok | {:error, term()}
   def interrupt_codex_session(state, reason) do
-    safe_persist_owner_exit(:interrupt_codex_session, state, reason, fn ->
-      if reason == :stale_owner or not uuid?(state.codex_session_id) do
-        :ok
-      else
-        opts = interrupt_options(reason, state.owner_lease_token)
-        state.persistence.interrupt_codex_session.(state.codex_session_id, opts)
+    if reason == :stale_owner or not uuid?(state.codex_session_id) do
+      :ok
+    else
+      with :ok <- close_request_replays(state, reason) do
+        persist_session_interruption(state, reason)
       end
-    end)
+    end
+  rescue
+    exception -> persist_interruption_failure(state, reason, exception)
+  catch
+    _kind, failure -> persist_interruption_failure(state, reason, failure)
+  end
+
+  defp replay_close_reason(_reason), do: :owner_shutdown
+
+  defp close_request_replays(state, reason) do
+    close =
+      Map.get(
+        state.persistence,
+        :close_request_replays,
+        &Accounting.close_request_replays_for_session/3
+      )
+
+    case close.(state.codex_session_id, state.owner_lease_token, replay_close_reason(reason)) do
+      {:ok, :stale_owner} ->
+        {:error, :stale_owner}
+
+      {:ok, _summary} ->
+        :ok
+
+      {:error, failure} ->
+        persist_interruption_failure(state, reason, {:request_replay_close_failed, failure})
+
+      _unexpected ->
+        persist_interruption_failure(state, reason, :request_replay_close_failed)
+    end
+  end
+
+  defp persist_session_interruption(state, reason) do
+    opts = interrupt_options(reason, state.owner_lease_token)
+
+    case state.persistence.interrupt_codex_session.(state.codex_session_id, opts) do
+      {:error, failure} -> persist_interruption_failure(state, reason, failure)
+      _result -> :ok
+    end
+  end
+
+  defp persist_interruption_failure(state, reason, failure) do
+    OwnerLogger.owner_exit_persistence_failure(
+      :interrupt_codex_session,
+      state,
+      reason,
+      failure
+    )
+
+    {:error, failure}
   end
 
   @spec recover_owner_lifecycle_leftovers(map(), atom()) :: :ok

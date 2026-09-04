@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Websocket do
 
   require Logger
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
@@ -768,7 +769,7 @@ defmodule CodexPooler.Gateway.Websocket do
           String.t() | nil,
           WebsocketOwnerSession.downstream() | nil,
           opts()
-        ) :: :ok | :detached_stale_downstream | {:error, WebsocketOwnerContract.owner_error()}
+        ) :: WebsocketOwnerContract.detach_result() | :detached_stale_downstream
   def detach_websocket_owner_downstream(
         %CodexSession{} = session,
         owner_lease_token,
@@ -875,6 +876,8 @@ defmodule CodexPooler.Gateway.Websocket do
     do: OwnerErrorDiagnostics.normalize(reason, :detach, owner_error_context(session, opts))
 
   defp owner_detach_result(:ok, _session, _opts), do: :ok
+  defp owner_detach_result(:reattachable, _session, _opts), do: :reattachable
+  defp owner_detach_result(:suspended, _session, _opts), do: :suspended
   defp owner_detach_result({:error, :stale_owner}, _session, _opts), do: :ok
 
   defp owner_detach_result({:error, reason}, _session, _opts)
@@ -950,12 +953,30 @@ defmodule CodexPooler.Gateway.Websocket do
   @spec recover_owner_lifecycle_leftovers(session_ref(), atom() | String.t(), opts()) ::
           {:ok, term()} | {:error, term()}
   def recover_owner_lifecycle_leftovers(session, owner_reason, opts \\ %{}) do
-    Interruption.recover_owner_lifecycle_leftovers(
-      session,
-      owner_reason,
-      websocket_request_options(opts)
-    )
+    request_options = websocket_request_options(opts)
+
+    with :ok <- close_owner_request_replays(session, request_options) do
+      Interruption.recover_owner_lifecycle_leftovers(session, owner_reason, request_options)
+    end
   end
+
+  defp close_owner_request_replays(
+         %CodexSession{id: session_id},
+         %RequestOptions{transport: %{websocket_owner: owner}}
+       )
+       when is_binary(owner.lease_token) do
+    case Accounting.close_request_replays_for_session(
+           session_id,
+           owner.lease_token,
+           :owner_shutdown
+         ) do
+      {:ok, :stale_owner} -> {:error, :stale_owner}
+      {:ok, _summary} -> :ok
+      {:error, reason} -> {:error, {:request_replay_close_failed, reason}}
+    end
+  end
+
+  defp close_owner_request_replays(_session, _request_options), do: :ok
 
   defp maybe_put_upstream_websocket_session(opts, upstream_websocket_session, true) do
     RequestOptions.put_transport(opts, upstream_websocket_session: upstream_websocket_session)
@@ -1016,6 +1037,10 @@ defmodule CodexPooler.Gateway.Websocket do
          transport: %{websocket_owner: %{reject_if_busy?: true}}
        }),
        do: [reject_if_busy: true]
+
+  defp owner_attach_opts(%RequestOptions{continuity: %{semantic_turn_key: semantic}})
+       when is_binary(semantic) and byte_size(semantic) == 32,
+       do: [replay_attach?: true]
 
   defp owner_attach_opts(_opts), do: []
 

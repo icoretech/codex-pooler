@@ -22,7 +22,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :first_compact_collection,
     :expected_connection_lifecycle,
     :forwarded_owner_send_handoff,
+    :native_replay_binding,
+    :native_replay_proof,
+    :provisional_token,
     :effective_serving_mode,
+    :request_id,
+    :attempt_id,
     assignment_advertised?: false,
     connection_bound_continuation?: false,
     websocket_delivery_mode: :relay,
@@ -62,7 +67,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.connection_lifecycle_state()
             | nil,
           forwarded_owner_send_handoff: ForwardedOwnerRequestHandoff.t() | nil,
+          native_replay_binding:
+            CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding.t() | nil,
+          native_replay_proof:
+            CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof.t() | nil,
+          provisional_token: <<_::256>> | nil,
           effective_serving_mode: effective_serving_mode(),
+          request_id: Ecto.UUID.t() | nil,
+          attempt_id: Ecto.UUID.t() | nil,
           assignment_advertised?: boolean(),
           connection_bound_continuation?: boolean(),
           websocket_delivery_mode: delivery_mode(),

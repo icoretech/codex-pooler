@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
+  alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
@@ -13,6 +14,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.Aliases, as: SessionAliases
+  alias CodexPooler.Gateway.Routing.BridgeRing
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.RouteFiltering
   alias CodexPooler.Gateway.Routing.SessionContinuity
@@ -21,7 +24,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.FileDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
+  alias CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
@@ -34,7 +39,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
+  alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
@@ -50,6 +57,19 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @type opts :: RequestOptions.t()
   @type gateway_error :: Contracts.gateway_error()
   @type gateway_result :: Contracts.gateway_result()
+  @type replay_intent :: :fresh | :active_reattach | :suspended_replay
+  @type authorization_binding :: %{
+          required(:api_key_id) => Ecto.UUID.t(),
+          required(:api_key_runtime_epoch) => non_neg_integer(),
+          required(:pool_id) => Ecto.UUID.t(),
+          required(:codex_session_id) => Ecto.UUID.t(),
+          required(:model_identifier) => String.t()
+        }
+  @type replay_intent_result :: %{
+          required(:intent) => replay_intent(),
+          required(:authorization_binding) => authorization_binding(),
+          required(:lifecycle) => map() | nil
+        }
   @typep validation_authority ::
            :validate
            | {:prepared_websocket, ValidationClaim.t() | term()}
@@ -289,6 +309,39 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          visible_model_data,
          validation
        ) do
+    replay_proof = runtime_admission_proof(validation)
+
+    if native_replay_execution?(request_options, replay_proof) do
+      execute_replay_visible_model(
+        auth,
+        endpoint,
+        payload,
+        request_options,
+        model,
+        replay_proof
+      )
+    else
+      execute_fresh_visible_model(
+        auth,
+        endpoint,
+        payload,
+        request_options,
+        model,
+        visible_model_data,
+        validation
+      )
+    end
+  end
+
+  defp execute_fresh_visible_model(
+         auth,
+         endpoint,
+         payload,
+         request_options,
+         model,
+         visible_model_data,
+         validation
+       ) do
     case PreDispatch.prepare(
            auth,
            endpoint,
@@ -335,6 +388,49 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         log_gateway_denial(
           denial_context(auth, model, reason, endpoint, payload, request_options)
         )
+    end
+  end
+
+  defp native_replay_execution?(
+         %RequestOptions{runtime: %{native_replay_binding: %NativeReplayAdmission.Binding{}}},
+         %RuntimeAdmissionProof{kind: :native_replay}
+       ),
+       do: true
+
+  defp native_replay_execution?(%RequestOptions{}, _proof), do: false
+
+  defp execute_replay_visible_model(
+         auth,
+         endpoint,
+         payload,
+         %RequestOptions{} = request_options,
+         %Model{} = model,
+         %RuntimeAdmissionProof{kind: :native_replay}
+       ) do
+    with lifecycle when is_map(lifecycle) <- request_options.runtime.replay_lifecycle_binding,
+         {:ok, replay} <- Accounting.request_replay_dispatch_lifecycle(lifecycle),
+         true <-
+           replay.request.model_id == model.id and replay.request.pool_id == auth.pool.id and
+             replay.request.api_key_id == auth.api_key.id and
+             replay.request.endpoint == endpoint,
+         identity when not is_nil(identity) <-
+           CodexPooler.Upstreams.get_upstream_identity(replay.attempt.upstream_identity_id),
+         %Accounting.Attempt{request_id: original_request_id} = original_attempt <-
+           Repo.get(Accounting.Attempt, replay.entitlement.eligible_attempt_id),
+         true <- original_request_id == replay.request.id,
+         {:ok, request_options, routing_settings} <-
+           ReplayPreparation.restore(request_options, original_attempt.response_metadata) do
+      dispatch_replay_candidate(
+        auth,
+        endpoint,
+        payload,
+        model,
+        request_options,
+        Map.put(replay, :routing_settings, routing_settings),
+        identity
+      )
+    else
+      _failure -> {:error, duplicate_turn_error()}
     end
   end
 
@@ -552,6 +648,191 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   def prepare_websocket_response(raw_payload, %RequestOptions{} = opts, push_frame),
     do: WebsocketCodec.prepare_frame(raw_payload, opts, push_frame)
 
+  @spec prepare_replay_intent(auth(), PreparedWebsocketFrame.t()) ::
+          {:ok, replay_intent_result()} | {:error, gateway_error() | term()}
+  def prepare_replay_intent(auth, %PreparedWebsocketFrame{} = prepared) do
+    with :ok <- validate_replay_prepared_frame(prepared),
+         {:ok, replay_context} <- replay_preflight_context(auth, prepared) do
+      prepare_replay_intent_transaction(replay_context)
+    end
+  end
+
+  def prepare_replay_intent(_auth, _prepared),
+    do: {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+
+  defp validate_replay_prepared_frame(%PreparedWebsocketFrame{} = prepared) do
+    case WebsocketCodec.validate_prepared_frame(prepared) do
+      :ok ->
+        :ok
+
+      {:error, :consumed} ->
+        {:error,
+         error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
+
+      {:error, :invalid} ->
+        {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+    end
+  end
+
+  defp replay_preflight_context(
+         %{api_key: %{id: api_key_id}, pool: %{id: pool_id}} = auth,
+         %PreparedWebsocketFrame{
+           variant: :native_response_create,
+           payload: payload,
+           semantic_turn_key: semantic_turn_digest,
+           replay_claim_digest: replay_claim_digest,
+           request_options:
+             %RequestOptions{
+               continuity: %{codex_session: %CodexSession{id: codex_session_id}},
+               runtime: %{api_key_runtime_epoch: api_key_runtime_epoch}
+             } = request_options
+         } = prepared
+       )
+       when is_binary(api_key_id) and is_binary(pool_id) and is_binary(codex_session_id) and
+              is_integer(api_key_runtime_epoch) and api_key_runtime_epoch >= 0 and
+              is_binary(semantic_turn_digest) and byte_size(semantic_turn_digest) == 32 and
+              is_binary(replay_claim_digest) and byte_size(replay_claim_digest) == 32 do
+    with {:ok, requested_model} <- requested_model(payload) do
+      {:ok,
+       %{
+         auth: auth,
+         session: request_options.continuity.codex_session,
+         api_key_runtime_epoch: api_key_runtime_epoch,
+         endpoint: prepared.endpoint,
+         request_options: request_options,
+         requested_model: requested_model,
+         semantic_turn_digest: semantic_turn_digest,
+         replay_claim_digest: replay_claim_digest
+       }}
+    end
+  end
+
+  defp replay_preflight_context(_auth, %PreparedWebsocketFrame{}),
+    do: {:error, duplicate_turn_error()}
+
+  defp prepare_replay_intent_transaction(context) do
+    Repo.transaction(fn ->
+      locked_session = PersistenceSessionContinuity.lock_codex_session_for_turn(context.session)
+
+      with :ok <- validate_replay_session_binding(locked_session, context.auth),
+           {:ok, authorization} <-
+             Access.authorize_api_key_runtime_turn(
+               context.auth.api_key.id,
+               context.api_key_runtime_epoch
+             ),
+           :ok <- validate_replay_api_key_pool(authorization.api_key, locked_session),
+           {:ok, pool} <- load_active_replay_pool(locked_session.pool_id),
+           {:ok, model} <- authorize_replay_model(authorization.api_key, pool, context) do
+        classify_replay_intent(locked_session, authorization, model, context)
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp classify_replay_intent(locked_session, authorization, model, context) do
+    authorization_binding = replay_authorization_binding(locked_session, authorization, model)
+
+    preflight = %{
+      codex_session_id: locked_session.id,
+      api_key_id: authorization_binding.api_key_id,
+      api_key_runtime_epoch: authorization_binding.api_key_runtime_epoch,
+      pool_id: authorization_binding.pool_id,
+      model_id: model.id,
+      model_identifier: authorization_binding.model_identifier,
+      semantic_turn_digest: context.semantic_turn_digest,
+      replay_claim_digest: context.replay_claim_digest
+    }
+
+    case Accounting.replay_preflight_snapshot(preflight) do
+      :none ->
+        replay_intent_result(:fresh, authorization_binding, nil)
+
+      {:active_generation_zero, lifecycle} ->
+        replay_intent_result(:active_reattach, authorization_binding, lifecycle)
+
+      {:armed_generation_one, lifecycle} ->
+        replay_intent_result(:suspended_replay, authorization_binding, lifecycle)
+
+      {:error, _reason} ->
+        Repo.rollback(duplicate_turn_error())
+    end
+  end
+
+  defp validate_replay_session_binding(
+         %CodexSession{pool_id: pool_id, api_key_id: api_key_id} = session,
+         %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}
+       ) do
+    if CodexSession.reconnectable?(session), do: :ok, else: {:error, duplicate_turn_error()}
+  end
+
+  defp validate_replay_session_binding(%CodexSession{}, _auth),
+    do: {:error, duplicate_turn_error()}
+
+  defp validate_replay_api_key_pool(
+         %{pool_id: pool_id},
+         %CodexSession{pool_id: pool_id}
+       ),
+       do: :ok
+
+  defp validate_replay_api_key_pool(_api_key, %CodexSession{}),
+    do: {:error, duplicate_turn_error()}
+
+  defp load_active_replay_pool(pool_id) do
+    case Repo.get(Pool, pool_id) do
+      %Pool{status: "active"} = pool -> {:ok, pool}
+      %Pool{} -> {:error, duplicate_turn_error()}
+      nil -> {:error, duplicate_turn_error()}
+    end
+  end
+
+  defp authorize_replay_model(api_key, pool, context) do
+    with {:ok, policy} <- Access.normalize_api_key_policy(api_key),
+         {:ok, effective_model} <-
+           effective_model_name(
+             policy,
+             context.requested_model,
+             context.endpoint,
+             context.request_options
+           ),
+         %Model{} = model <- Catalog.get_model_by_exposed_id(pool, effective_model),
+         true <- model.status == "active",
+         {:ok, _policy} <-
+           Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
+      {:ok, model}
+    else
+      nil ->
+        {:error, error(400, "invalid_model", "model is not available for this pool", "model")}
+
+      false ->
+        {:error, error(400, "invalid_model", "model is not available for this pool", "model")}
+
+      {:error, %{code: _code} = reason} ->
+        {:error, reason}
+
+      {:error, _reason} ->
+        {:error, error(403, "model_not_allowed", "api key is not allowed to use this model")}
+    end
+  end
+
+  defp replay_authorization_binding(session, authorization, model) do
+    %{
+      api_key_id: authorization.api_key.id,
+      api_key_runtime_epoch: authorization.runtime_revocation_epoch,
+      pool_id: session.pool_id,
+      codex_session_id: session.id,
+      model_identifier: model.exposed_model_id
+    }
+  end
+
+  defp replay_intent_result(intent, authorization_binding, lifecycle) do
+    %{intent: intent, authorization_binding: authorization_binding, lifecycle: lifecycle}
+  end
+
   @spec execute_prepared_websocket_response(
           auth(),
           PreparedWebsocketFrame.t(),
@@ -754,11 +1035,20 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp execute_prevalidated(auth, %PreparedWebsocketFrame{} = prepared, runtime_proof) do
+    request_options =
+      case runtime_proof do
+        %RuntimeAdmissionProof{kind: :native_replay} = proof ->
+          RequestOptions.put_runtime_context(prepared.request_options, native_replay_proof: proof)
+
+        _proof ->
+          prepared.request_options
+      end
+
     execute_with_validation(
       auth,
       prepared.endpoint,
       prepared.payload,
-      prepared.request_options,
+      request_options,
       {:prepared_websocket, prepared.provenance.validation, runtime_proof}
     )
   end
@@ -781,6 +1071,28 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          request_options,
          %RouteState{} = route_state
        ) do
+    dispatch_fresh_candidates(
+      auth,
+      endpoint,
+      payload,
+      model,
+      reserved,
+      candidates,
+      request_options,
+      route_state
+    )
+  end
+
+  defp dispatch_fresh_candidates(
+         auth,
+         endpoint,
+         payload,
+         model,
+         reserved,
+         candidates,
+         request_options,
+         route_state
+       ) do
     with {:ok, context} <-
            Context.new(%{
              auth: auth,
@@ -794,6 +1106,90 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            }) do
       CandidateDispatch.dispatch(context, &dispatch_decrypted_candidate/1)
     end
+  end
+
+  defp dispatch_replay_candidate(
+         auth,
+         endpoint,
+         payload,
+         model,
+         request_options,
+         replay,
+         identity
+       ) do
+    route_state =
+      RouteState.new(%{
+        visible_model: model,
+        candidates: [{replay.assignment, identity}],
+        routing_settings: replay.routing_settings
+      })
+
+    context = %SelectedCandidateContext{
+      auth: auth,
+      endpoint: endpoint,
+      payload: payload,
+      model: model,
+      reserved: %{
+        request: replay.request,
+        reservation: replay.reservation,
+        codex_turn: replay.codex_turn
+      },
+      request_options: request_options,
+      route_state: route_state,
+      route_plan:
+        replay_route_plan(
+          auth,
+          model,
+          {replay.assignment, identity},
+          request_options,
+          replay.request
+        ),
+      assignment: replay.assignment,
+      identity: identity,
+      index: 0,
+      retry_count: 0,
+      allow_retry?: false,
+      routing_attempt_metadata: %{},
+      route_class: request_options.transport.route_class,
+      attempt: replay.attempt,
+      started: System.monotonic_time(:millisecond)
+    }
+
+    CandidateDispatch.dispatch_selected(context, &dispatch_decrypted_candidate/1)
+  end
+
+  @spec replay_route_plan(
+          auth(),
+          Model.t(),
+          BridgeRing.candidate(),
+          RequestOptions.t(),
+          Accounting.Request.t()
+        ) :: BridgeRing.route_plan()
+  defp replay_route_plan(auth, model, {assignment, _identity} = candidate, options, request) do
+    routing_metadata = Map.get(request.request_metadata || %{}, "routing", %{})
+
+    %{
+      strategy: Map.get(routing_metadata, "strategy", "bridge_ring"),
+      bridge_ring_size: 1,
+      candidates: [candidate],
+      affinity: %{
+        enabled?: false,
+        kind: nil,
+        key_hash: nil,
+        seed: request.correlation_id,
+        row: nil,
+        status: "disabled",
+        fallback_reason: nil,
+        pool_id: auth.pool.id,
+        api_key_id: auth.api_key.id,
+        model_identifier: model.exposed_model_id
+      },
+      demotions: %{},
+      locality: %{},
+      model_serving_mode_snapshot: RequestOptions.model_serving_mode_snapshot(options),
+      request_metadata: routing_metadata,
+      selected_assignment_id: assignment.id
+    }
   end
 
   defp dispatch_decrypted_candidate(prepared_context) do
@@ -849,6 +1245,25 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       denial_context(auth, model, reason, endpoint, payload, request_options),
       turn_claim
     )
+  end
+
+  defp claim_explicit_websocket_turn(
+         _auth,
+         _model,
+         _payload,
+         _endpoint,
+         %RequestOptions{
+           runtime: %{native_replay_binding: %NativeReplayAdmission.Binding{} = binding}
+         },
+         %RouteState{},
+         %RuntimeAdmissionProof{} = proof
+       ) do
+    with {:ok, expected_digest} <- NativeReplayAdmission.binding_digest(binding),
+         true <- proof.kind == :native_replay and proof.binding_digest == expected_digest do
+      {:ok, nil, nil}
+    else
+      _invalid -> {:error, invalid_runtime_admission_error()}
+    end
   end
 
   defp claim_explicit_websocket_turn(
@@ -1007,6 +1422,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
              ),
            {:ok, reserved} <- SessionContinuity.start_turn(reserved, request_options),
            :ok <-
+             register_final_window_alias(
+               auth,
+               payload,
+               request_options,
+               authorized_correlation_id
+             ),
+           :ok <-
              RequestOptions.mark_native_compaction_accounting_started(
                request_options,
                System.system_time(:millisecond)
@@ -1028,6 +1450,27 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         reraise(error, __STACKTRACE__)
       end
   end
+
+  defp register_final_window_alias(auth, payload, request_options, authorized_correlation_id)
+       when is_binary(authorized_correlation_id) do
+    case ReplayPreparation.final_window_alias_hash(request_options, payload) do
+      {:ok, hash} ->
+        SessionAliases.register_session_header_hash(
+          request_options.continuity.codex_session,
+          auth,
+          hash,
+          DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        )
+
+      :none ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp register_final_window_alias(_auth, _payload, _request_options, _correlation), do: :ok
 
   defp lock_codex_session_before_reservation(
          %RequestOptions{continuity: %{codex_session: %CodexSession{} = session}} =

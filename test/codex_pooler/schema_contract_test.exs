@@ -20,17 +20,19 @@ defmodule CodexPooler.SchemaContractTest do
   }
 
   alias CodexPooler.Accounting.{
+    Attempt,
     DailyRollup,
     DailyRollupCoverage,
     HourlyModelUsageRollup,
     LedgerEntry,
-    RequestLogFact
+    RequestLogFact,
+    RequestReplayEntitlement
   }
 
   alias CodexPooler.Admin.PoolTrafficGate
   alias CodexPooler.Catalog.{Model, PricingSnapshot}
   alias CodexPooler.Files.FileRecord
-  alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, RoutingCircuitState}
+  alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexTurn, RoutingCircuitState}
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Pools.{OperatorPoolAssignment, RoutingSettings}
   alias CodexPooler.Repo
@@ -42,7 +44,7 @@ defmodule CodexPooler.SchemaContractTest do
     account_quota_windows admin_pool_traffic_gates alert_channels alert_delivery_attempts alert_incident_receipts alert_incident_targets alert_incidents
     alert_rule_channels alert_rules api_key_policy_bindings api_keys attempts audit_events bridge_owner_leases
     bridge_session_aliases codex_files codex_sessions codex_turns daily_rollup_coverages daily_rollups hourly_model_usage_rollups
-    encrypted_secrets gateway_idempotency_keys instance_settings invite_acceptances invites ledger_entries memberships
+    encrypted_secrets gateway_idempotency_keys instance_settings invite_acceptances invites ledger_entries memberships request_replay_entitlements
     models operator_pool_assignments platform_bootstrap_state pricing_snapshots recovery_codes request_log_facts requests routing_circuit_states
     sessions sync_runs pools pool_routing_settings pool_upstream_assignments totp_settings
     upstream_identities upstream_oauth_flows users
@@ -70,17 +72,18 @@ defmodule CodexPooler.SchemaContractTest do
     DailyRollupCoverage,
     HourlyModelUsageRollup,
     LedgerEntry,
+    RequestReplayEntitlement,
     RequestLogFact,
     CodexPooler.Audit.AuditEvent,
     Model,
     PricingSnapshot,
     CodexPooler.Catalog.SyncRun,
     CodexPooler.Files.FileRecord,
-    CodexPooler.Accounting.Attempt,
+    Attempt,
     CodexPooler.Gateway.Persistence.BridgeOwnerLease,
     CodexPooler.Gateway.Persistence.BridgeSessionAlias,
     CodexPooler.Gateway.Persistence.CodexSession,
-    CodexPooler.Gateway.Persistence.CodexTurn,
+    CodexTurn,
     CodexPooler.Gateway.Persistence.IdempotencyKey,
     Settings,
     CodexPooler.Accounting.Request,
@@ -1176,6 +1179,332 @@ defmodule CodexPooler.SchemaContractTest do
     refute removed_column in schema_field_names
   end
 
+  @tag :replay_schema
+  test "replay entitlement schema exposes only immutable metadata and strict lifecycle types" do
+    columns = table_columns("request_replay_entitlements")
+
+    assert Map.take(columns, [
+             "request_id",
+             "codex_turn_id",
+             "eligible_attempt_id",
+             "replay_attempt_id",
+             "api_key_runtime_epoch",
+             "model_identifier",
+             "semantic_turn_digest",
+             "replay_claim_digest",
+             "provisional_binding_digest",
+             "replay_generation",
+             "owner_lease_digest",
+             "owner_lease_key_version",
+             "predecessor_epoch",
+             "status",
+             "armed_at",
+             "expires_at",
+             "consumed_at",
+             "started_at",
+             "last_liveness_at",
+             "abandon_at",
+             "terminal_at",
+             "closed_at",
+             "cleanup_checked_at"
+           ]) == %{
+             "request_id" => {"uuid", "NO"},
+             "codex_turn_id" => {"uuid", "NO"},
+             "eligible_attempt_id" => {"uuid", "NO"},
+             "replay_attempt_id" => {"uuid", "YES"},
+             "api_key_runtime_epoch" => {"bigint", "NO"},
+             "model_identifier" => {"text", "NO"},
+             "semantic_turn_digest" => {"bytea", "NO"},
+             "replay_claim_digest" => {"bytea", "NO"},
+             "provisional_binding_digest" => {"bytea", "YES"},
+             "replay_generation" => {"integer", "NO"},
+             "owner_lease_digest" => {"bytea", "NO"},
+             "owner_lease_key_version" => {"text", "NO"},
+             "predecessor_epoch" => {"bigint", "NO"},
+             "status" => {"text", "NO"},
+             "armed_at" => {"timestamp with time zone", "NO"},
+             "expires_at" => {"timestamp with time zone", "NO"},
+             "consumed_at" => {"timestamp with time zone", "YES"},
+             "started_at" => {"timestamp with time zone", "YES"},
+             "last_liveness_at" => {"timestamp with time zone", "YES"},
+             "abandon_at" => {"timestamp with time zone", "YES"},
+             "terminal_at" => {"timestamp with time zone", "YES"},
+             "closed_at" => {"timestamp with time zone", "YES"},
+             "cleanup_checked_at" => {"timestamp with time zone", "YES"}
+           }
+
+    assert RequestReplayEntitlement.statuses() == ~w(armed consumed expired revoked)
+    assert RequestReplayEntitlement.__schema__(:type, :semantic_turn_digest) == :binary
+    assert RequestReplayEntitlement.__schema__(:type, :armed_at) == :utc_datetime_usec
+    assert RequestReplayEntitlement.__schema__(:type, :cleanup_checked_at) == :utc_datetime_usec
+    assert Attempt.__schema__(:type, :replay_generation) == :integer
+
+    assert CodexTurn.__schema__(
+             :type,
+             :semantic_turn_digest
+           ) == :binary
+
+    constraints = constraint_definitions()
+    assert constraints["codex_turns_semantic_turn_digest_shape_check"] =~ "octet_length"
+    assert constraints["attempts_replay_generation_check"] =~ "replay_generation >= 0"
+    assert constraints["request_replay_entitlements_lifecycle_tuple_check"] =~ "consumed"
+
+    for {name, expected_action} <- replay_foreign_key_actions() do
+      assert fk_action(name) == expected_action
+    end
+
+    indexes = index_definitions()
+    assert indexes["codex_turns_id_request_id_uq"] =~ "UNIQUE INDEX"
+    assert indexes["codex_turns_active_semantic_turn_uq"] =~ "status = 'in_progress'"
+    assert indexes["request_replay_entitlements_request_id_uq"] =~ "UNIQUE INDEX"
+
+    assert indexes["request_replay_entitlements_cleanup_due_idx"] =~
+             "cleanup_checked_at NULLS FIRST"
+
+    assert indexes["request_replay_entitlements_cleanup_due_idx"] =~ "expires_at, abandon_at, id"
+    assert indexes["request_replay_entitlements_cleanup_due_idx"] =~ "WHERE (closed_at IS NULL)"
+
+    assert [["0"]] = column_default("attempts", "replay_generation")
+    assert [["1"]] = column_default("request_replay_entitlements", "replay_generation")
+
+    assert [["request_replay_db_now", "v"]] =
+             Repo.query!("""
+             SELECT proname, provolatile::text
+             FROM pg_proc
+             WHERE pronamespace = 'public'::regnamespace
+               AND proname = 'request_replay_db_now'
+             """).rows
+
+    assert replay_function_contracts() == %{
+             "enforce_request_replay_entitlement_update" =>
+               {"v", "u", ["search_path=pg_catalog"]},
+             "enforce_request_replay_request_storage" => {"v", "u", ["search_path=pg_catalog"]},
+             "enforce_request_replay_turn_snapshot" => {"v", "u", ["search_path=pg_catalog"]},
+             "request_replay_db_now" => {"v", "s", ["search_path=pg_catalog"]}
+           }
+
+    assert replay_trigger_names() == [
+             "request_replay_codex_turns_snapshot_guard",
+             "request_replay_entitlements_insert_guard",
+             "request_replay_entitlements_update_guard",
+             "request_replay_requests_storage_guard"
+           ]
+  end
+
+  @tag :replay_schema
+  test "replay entitlement changeset rejects malformed tuples before persistence" do
+    now = ~U[2026-09-02 00:00:00.000000Z]
+
+    attrs = %{
+      request_id: Ecto.UUID.generate(),
+      codex_turn_id: Ecto.UUID.generate(),
+      eligible_attempt_id: Ecto.UUID.generate(),
+      api_key_id: Ecto.UUID.generate(),
+      api_key_runtime_epoch: 0,
+      pool_id: Ecto.UUID.generate(),
+      model_id: Ecto.UUID.generate(),
+      model_identifier: "gpt-example",
+      semantic_turn_digest: <<1::256>>,
+      replay_claim_digest: <<2::256>>,
+      replay_generation: 1,
+      owner_lease_digest: <<3::256>>,
+      owner_lease_key_version: "v1",
+      predecessor_epoch: 1,
+      status: "armed",
+      armed_at: now,
+      expires_at: DateTime.add(now, 30, :second)
+    }
+
+    assert RequestReplayEntitlement.changeset(%RequestReplayEntitlement{}, attrs).valid?
+
+    malformed =
+      RequestReplayEntitlement.changeset(%RequestReplayEntitlement{}, %{
+        attrs
+        | semantic_turn_digest: <<1>>,
+          replay_generation: 0,
+          status: "consumed"
+      })
+
+    refute malformed.valid?
+    assert "must be exactly 32 bytes" in errors_on(malformed).semantic_turn_digest
+    assert "must be equal to 1" in errors_on(malformed).replay_generation
+    assert "has an invalid replay lifecycle tuple" in errors_on(malformed).status
+
+    for {field, value, expected_error} <- [
+          {:model_identifier, " \t\n", "can't be blank"},
+          {:owner_lease_key_version, " \t\n", "can't be blank"},
+          {:replay_claim_digest, <<1>>, "must be exactly 32 bytes"},
+          {:owner_lease_digest, <<1>>, "must be exactly 32 bytes"},
+          {:predecessor_epoch, 0, "must be greater than or equal to 1"}
+        ] do
+      invalid =
+        RequestReplayEntitlement.changeset(
+          %RequestReplayEntitlement{},
+          Map.put(attrs, field, value)
+        )
+
+      refute invalid.valid?
+      assert expected_error in Map.fetch!(errors_on(invalid), field)
+    end
+
+    consumed =
+      Map.merge(attrs, %{
+        status: "consumed",
+        replay_attempt_id: Ecto.UUID.generate(),
+        provisional_binding_digest: <<4::256>>,
+        consumed_at: DateTime.add(now, 1, :second),
+        abandon_at: DateTime.add(now, 10, :second)
+      })
+
+    assert RequestReplayEntitlement.changeset(%RequestReplayEntitlement{}, consumed).valid?
+
+    invalid_started = Map.put(consumed, :started_at, DateTime.add(now, 2, :second))
+    refute RequestReplayEntitlement.changeset(%RequestReplayEntitlement{}, invalid_started).valid?
+  end
+
+  @tag :replay_schema
+  test "replay HMAC contracts use configured shared crypto and fail closed" do
+    previous = Application.get_env(:codex_pooler, CodexPooler.Upstreams, [])
+
+    on_exit(fn -> Application.put_env(:codex_pooler, CodexPooler.Upstreams, previous) end)
+
+    key = :binary.copy(<<7>>, 32)
+
+    Application.put_env(
+      :codex_pooler,
+      CodexPooler.Upstreams,
+      Keyword.merge(previous, upstream_secret_key: key, upstream_secret_key_version: "v-test")
+    )
+
+    owner_lease_uuid = "01234567-89ab-4cde-8fab-0123456789ab"
+    raw_token = :binary.copy(<<9>>, 32)
+
+    expected_owner =
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        key,
+        :erlang.term_to_binary(
+          {"codex_pooler.owner_lease_digest", 1, "v-test", owner_lease_uuid},
+          [:deterministic]
+        )
+      )
+
+    assert Base.encode16(expected_owner, case: :lower) ==
+             "87cbfe70696722f98f8d6302e5e7191c0f224ece33c651bf8e7d2f97bcf9600b"
+
+    expected_provisional =
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        key,
+        :erlang.term_to_binary(
+          {"codex_pooler.replay_provisional_binding", 1, "v-test", raw_token},
+          [:deterministic]
+        )
+      )
+
+    assert Base.encode16(expected_provisional, case: :lower) ==
+             "9003e48808b3400d5037c3e100183901d4f44728e4795b158e0cecaf0c753549"
+
+    assert {:ok, ^expected_owner} = RequestReplayEntitlement.owner_lease_digest(owner_lease_uuid)
+
+    assert RequestReplayEntitlement.verify_owner_lease_digest(
+             owner_lease_uuid,
+             "v-test",
+             expected_owner
+           )
+
+    assert {:ok, ^expected_provisional} =
+             RequestReplayEntitlement.provisional_binding_digest(raw_token)
+
+    assert RequestReplayEntitlement.verify_provisional_binding(
+             raw_token,
+             "v-test",
+             expected_provisional
+           )
+
+    refute RequestReplayEntitlement.verify_owner_lease_digest(
+             owner_lease_uuid,
+             "v-other",
+             expected_owner
+           )
+
+    refute RequestReplayEntitlement.verify_provisional_binding(
+             raw_token,
+             "v-other",
+             expected_provisional
+           )
+
+    assert {:error, :invalid_owner_lease_uuid} =
+             RequestReplayEntitlement.owner_lease_digest(String.upcase(owner_lease_uuid))
+
+    assert {:error, :invalid_provisional_token} =
+             RequestReplayEntitlement.provisional_binding_digest(<<1>>)
+
+    Application.put_env(
+      :codex_pooler,
+      CodexPooler.Upstreams,
+      Keyword.merge(previous,
+        upstream_secret_key: "invalid",
+        upstream_secret_key_version: "v-test"
+      )
+    )
+
+    assert {:error, %{code: :app_secret_key_invalid}} =
+             RequestReplayEntitlement.owner_lease_digest(owner_lease_uuid)
+
+    refute RequestReplayEntitlement.verify_owner_lease_digest(
+             owner_lease_uuid,
+             "v-test",
+             expected_owner
+           )
+  end
+
+  @tag :replay_migration
+  test "replay migration preserves derived claim identities while reversing its storage objects" do
+    on_exit(&ensure_replay_migration_up!/0)
+
+    prior_objects = replay_prior_object_snapshot()
+
+    run_replay_migration!(:down)
+    assert_replay_objects_down!()
+    assert replay_prior_object_snapshot() == prior_objects
+
+    legacy = legacy_attempt_fixture!()
+
+    legacy_claims =
+      Enum.map(["codex-turn:", "codex-request:"], &legacy_prefixed_request_fixture!/1)
+
+    refute Map.has_key?(table_columns("attempts"), "replay_generation")
+
+    run_replay_migration!(:up)
+    assert_replay_objects_up!()
+    assert replay_prior_object_snapshot() == prior_objects
+
+    assert [[0]] =
+             Repo.query!("SELECT replay_generation FROM attempts WHERE id = $1", [legacy.id]).rows
+
+    assert Repo.query!(legacy.select_sql, [legacy.id]).rows == legacy.before_rows
+
+    assert_claim_identities_preserved!(legacy_claims)
+
+    run_replay_migration!(:down)
+    assert_replay_objects_down!()
+    assert replay_prior_object_snapshot() == prior_objects
+
+    assert_claim_identities_preserved!(legacy_claims)
+
+    second_legacy_claims =
+      Enum.map(["codex-turn:", "codex-request:"], &legacy_prefixed_request_fixture!/1)
+
+    run_replay_migration!(:up)
+    assert_replay_objects_up!()
+    assert replay_prior_object_snapshot() == prior_objects
+
+    assert_claim_identities_preserved!(legacy_claims ++ second_legacy_claims)
+  end
+
   test "codex files expose bridge metadata columns without upload table dependency" do
     columns = table_columns("codex_files")
 
@@ -1336,6 +1665,250 @@ defmodule CodexPooler.SchemaContractTest do
     |> Map.new(fn [name, definition] -> {name, definition} end)
   end
 
+  defp index_definitions do
+    Repo.query!("""
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+    """).rows
+    |> Map.new(fn [name, definition] -> {name, definition} end)
+  end
+
+  defp replay_foreign_key_actions do
+    [
+      {"request_replay_entitlements_request_id_fkey", {"c", "a"}},
+      {"request_replay_entitlements_api_key_id_fkey", {"c", "a"}},
+      {"request_replay_entitlements_codex_turn_request_fkey", {"a", "a"}},
+      {"request_replay_entitlements_eligible_attempt_request_fkey", {"a", "a"}},
+      {"request_replay_entitlements_replay_attempt_request_fkey", {"a", "a"}},
+      {"request_replay_entitlements_pool_id_fkey", {"a", "a"}},
+      {"request_replay_entitlements_model_id_fkey", {"a", "a"}}
+    ]
+  end
+
+  defp replay_function_contracts do
+    Repo.query!(
+      """
+      SELECT proname, provolatile::text, proparallel::text, proconfig
+      FROM pg_proc
+      WHERE pronamespace = 'public'::regnamespace
+        AND proname = ANY($1::text[])
+      ORDER BY proname
+      """,
+      [
+        [
+          "request_replay_db_now",
+          "enforce_request_replay_entitlement_update",
+          "enforce_request_replay_request_storage",
+          "enforce_request_replay_turn_snapshot"
+        ]
+      ]
+    ).rows
+    |> Map.new(fn [name, volatility, parallel, config] ->
+      {name, {volatility, parallel, config}}
+    end)
+  end
+
+  defp replay_trigger_names do
+    Repo.query!(
+      """
+      SELECT tgname
+      FROM pg_trigger
+      WHERE NOT tgisinternal
+        AND tgname = ANY($1::text[])
+      ORDER BY tgname
+      """,
+      [
+        [
+          "request_replay_entitlements_update_guard",
+          "request_replay_entitlements_insert_guard",
+          "request_replay_requests_storage_guard",
+          "request_replay_codex_turns_snapshot_guard"
+        ]
+      ]
+    ).rows
+    |> Enum.map(&List.first/1)
+  end
+
+  defp replay_new_object_snapshot do
+    %{
+      columns: %{
+        "attempts.replay_generation" => Map.get(table_columns("attempts"), "replay_generation"),
+        "codex_turns.semantic_turn_digest" =>
+          Map.get(table_columns("codex_turns"), "semantic_turn_digest")
+      },
+      table?: "request_replay_entitlements" in public_tables(),
+      functions: replay_function_contracts(),
+      triggers: replay_trigger_names(),
+      constraints:
+        constraint_definitions()
+        |> Map.take(replay_constraint_names()),
+      indexes:
+        index_definitions()
+        |> Map.take(replay_index_names())
+    }
+  end
+
+  defp replay_constraint_names do
+    ~w(
+      attempts_replay_generation_check
+      codex_turns_semantic_turn_digest_shape_check
+      request_replay_entitlements_status_check
+      request_replay_entitlements_model_identifier_present_check
+      request_replay_entitlements_lease_key_version_present_check
+      request_replay_entitlements_semantic_turn_digest_shape_check
+      request_replay_entitlements_replay_claim_digest_shape_check
+      request_replay_entitlements_provisional_digest_shape_check
+      request_replay_entitlements_owner_lease_digest_shape_check
+      request_replay_entitlements_api_key_runtime_epoch_check
+      request_replay_entitlements_replay_generation_check
+      request_replay_entitlements_predecessor_epoch_check
+      request_replay_entitlements_expiry_check
+      request_replay_entitlements_lifecycle_tuple_check
+      request_replay_entitlements_request_id_fkey
+      request_replay_entitlements_codex_turn_request_fkey
+      request_replay_entitlements_eligible_attempt_request_fkey
+      request_replay_entitlements_replay_attempt_request_fkey
+      request_replay_entitlements_api_key_id_fkey
+      request_replay_entitlements_pool_id_fkey
+      request_replay_entitlements_model_id_fkey
+    )
+  end
+
+  defp replay_index_names do
+    ~w(
+      codex_turns_id_request_id_uq
+      codex_turns_active_semantic_turn_uq
+      request_replay_entitlements_pkey
+      request_replay_entitlements_request_id_uq
+      request_replay_entitlements_cleanup_due_idx
+    )
+  end
+
+  defp replay_prior_object_snapshot do
+    constraint_definitions()
+    |> Map.take(~w(
+      attempts_status_check
+      attempts_transport_check
+      attempts_request_id_fkey
+      codex_turns_status_check
+      codex_turns_transport_kind_check
+      codex_turns_request_id_fkey
+    ))
+    |> Map.put(
+      :indexes,
+      index_definitions()
+      |> Map.take(~w(
+        attempts_id_request_id_uq
+        attempts_request_number_uq
+        codex_turns_request_id_uq
+        codex_turns_session_sequence_uq
+      ))
+    )
+  end
+
+  defp assert_replay_objects_down! do
+    snapshot = replay_new_object_snapshot()
+    refute snapshot.table?
+
+    assert snapshot.columns == %{
+             "attempts.replay_generation" => nil,
+             "codex_turns.semantic_turn_digest" => nil
+           }
+
+    assert snapshot.functions == %{}
+    assert snapshot.triggers == []
+    assert snapshot.constraints == %{}
+    assert snapshot.indexes == %{}
+  end
+
+  defp assert_replay_objects_up! do
+    snapshot = replay_new_object_snapshot()
+    assert snapshot.table?
+
+    assert snapshot.columns == %{
+             "attempts.replay_generation" => {"integer", "NO"},
+             "codex_turns.semantic_turn_digest" => {"bytea", "YES"}
+           }
+
+    assert map_size(snapshot.functions) == 4
+    assert length(snapshot.triggers) == 4
+    assert Map.keys(snapshot.constraints) |> Enum.sort() == Enum.sort(replay_constraint_names())
+    assert Map.keys(snapshot.indexes) |> Enum.sort() == Enum.sort(replay_index_names())
+  end
+
+  defp legacy_attempt_fixture! do
+    %{pool: pool, api_key: api_key} = api_key_fixture()
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress", completed_at: nil})
+
+    [[id]] =
+      Repo.query!(
+        """
+        INSERT INTO attempts (
+          request_id, attempt_number, pool_upstream_assignment_id, upstream_identity_id,
+          upstream_model_id, transport, status, retryable, usage_status, response_metadata
+        ) VALUES ($1, 1, $2, $3, 'gpt-example', 'http_json', 'succeeded', false, 'usage_known', '{}'::jsonb)
+        RETURNING id
+        """,
+        [
+          Ecto.UUID.dump!(request.id),
+          Ecto.UUID.dump!(assignment.id),
+          Ecto.UUID.dump!(identity.id)
+        ]
+      ).rows
+
+    select_sql = """
+    SELECT request_id, attempt_number, pool_upstream_assignment_id, upstream_identity_id,
+           upstream_model_id, transport, status, retryable, usage_status, response_metadata
+    FROM attempts WHERE id = $1
+    """
+
+    %{id: id, select_sql: select_sql, before_rows: Repo.query!(select_sql, [id]).rows}
+  end
+
+  defp legacy_prefixed_request_fixture!(prefix) do
+    %{pool: pool, api_key: api_key} = api_key_fixture()
+    correlation_id = prefix <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    [[id]] =
+      Repo.query!(
+        """
+        INSERT INTO requests (
+          pool_id, api_key_id, requested_model, endpoint, transport, status,
+          usage_status, correlation_id, request_metadata
+        ) VALUES ($1, $2, 'gpt-example', '/backend-api/codex/responses', 'websocket',
+          'accepted', 'usage_pending', $3, '{}'::jsonb)
+        RETURNING id
+        """,
+        [Ecto.UUID.dump!(pool.id), Ecto.UUID.dump!(api_key.id), correlation_id]
+      ).rows
+
+    %{id: id, correlation_id: correlation_id}
+  end
+
+  defp assert_claim_identities_preserved!(claims) do
+    Enum.each(claims, fn %{id: id, correlation_id: correlation_id} ->
+      assert [[^correlation_id]] =
+               Repo.query!("SELECT correlation_id FROM requests WHERE id = $1", [id]).rows
+    end)
+  end
+
+  defp column_default(table_name, column_name) do
+    Repo.query!(
+      """
+      SELECT column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = $1
+        AND column_name = $2
+      """,
+      [table_name, column_name]
+    ).rows
+  end
+
   defp public_tables do
     Repo.query!("""
     SELECT tablename
@@ -1427,6 +2000,34 @@ defmodule CodexPooler.SchemaContractTest do
   defp ensure_pool_daily_coverage_migration_up! do
     unless Map.has_key?(table_columns("daily_rollup_coverages"), "mutation_version") do
       run_pool_daily_coverage_migration!(:up)
+    end
+  end
+
+  defp run_replay_migration!(direction) do
+    module = CodexPooler.Repo.Migrations.AddRequestReplayEntitlements
+
+    unless Code.ensure_loaded?(module) do
+      Code.require_file(
+        "../../priv/repo/migrations/20260902024410_add_request_replay_entitlements.exs",
+        __DIR__
+      )
+    end
+
+    Runner.run(
+      Repo,
+      Repo.config(),
+      20_260_902_024_410,
+      module,
+      :forward,
+      direction,
+      direction,
+      log: false
+    )
+  end
+
+  defp ensure_replay_migration_up! do
+    unless "request_replay_entitlements" in public_tables() do
+      run_replay_migration!(:up)
     end
   end
 

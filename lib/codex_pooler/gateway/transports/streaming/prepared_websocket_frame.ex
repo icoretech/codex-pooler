@@ -47,6 +47,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
     :request_options,
     :semantic_turn_key,
     :turn_claim_key,
+    :replay_claim_digest,
+    :native_replay_binding,
     :result_adapter,
     :provenance
   ]
@@ -58,6 +60,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
           request_options: RequestOptions.t(),
           semantic_turn_key: <<_::256>> | nil,
           turn_claim_key: String.t() | nil,
+          replay_claim_digest: <<_::256>> | nil,
+          native_replay_binding:
+            CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding.t() | nil,
           result_adapter: (gateway_call_result() -> gateway_call_result()) | nil,
           provenance:
             %{

@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.{ModelMetadata, RouteLifecycle, RoutingSelection}
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
+  alias CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
 
@@ -299,7 +300,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
            pricing_snapshot: Map.get(context.reserved, :pricing_snapshot),
            upstream_identity: context.identity,
            response_metadata:
-             Map.merge(context.request_options.routing.routing_attempt_metadata || %{}, %{
+             (context.request_options.routing.routing_attempt_metadata || %{})
+             |> Map.merge(ReplayPreparation.attempt_metadata(context))
+             |> Map.merge(%{
                "pool_upstream_assignment_id" => context.assignment.id,
                "upstream_identity_id" => context.identity.id
              })

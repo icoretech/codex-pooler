@@ -122,9 +122,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                Map.get(finalization, :websocket_frame_headers, %{}),
                Map.get(finalization, :upstream_websocket_connection)
              ),
-             started: started
+             started: started,
+             before_finalize: fn ->
+               SideEffects.observe_websocket_response(context, finalization)
+               SideEffects.before_finalize_success(context, request_options)
+             end
            )
          ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} = result ->
         Streaming.emit_stream_finalization(
           usage,
@@ -198,10 +205,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
           Map.get(finalization, :websocket_frame_headers, %{}),
           Map.get(finalization, :upstream_websocket_connection)
         ),
-        started: finalization.started
+        started: finalization.started,
+        before_finalize: fn -> SideEffects.observe_websocket_response(context, finalization) end
       )
 
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
         {:error, maybe_mark_public_compaction_error(error, request_options)}
@@ -478,6 +489,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       Map.get(finalization, :upstream_error_code) ||
         StreamProtocol.terminal_error_code(body, terminal)
 
+    health_code =
+      if Streaming.health_neutral_terminal_failure?(upstream_code, headers) do
+        upstream_code
+      else
+        StreamProtocol.terminal_error_code(body, terminal)
+      end
+
     code = StreamProtocol.client_visible_error_code(upstream_code)
     websocket_frame_headers = Map.get(finalization, :websocket_frame_headers, %{})
     metadata_headers = headers ++ Map.to_list(websocket_frame_headers)
@@ -494,13 +512,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         Map.get(finalization, :transport_failure)
       )
 
-    case Streaming.record_terminal_health_failure(upstream_code, metadata_headers, context) do
-      :ok ->
-        settle_terminal_failure(context, finalization, body, code, attempt_metadata)
-
-      {:error, _gateway_error} = error ->
-        error
-    end
+    settle_terminal_failure(
+      context,
+      finalization,
+      body,
+      code,
+      attempt_metadata,
+      health_code,
+      metadata_headers
+    )
   end
 
   defp terminal_failure_metadata(
@@ -550,7 +570,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   defp continuation_guard_metadata(_upstream_code, _transport_failure), do: %{}
 
-  defp settle_terminal_failure(context, finalization, body, code, attempt_metadata) do
+  defp settle_terminal_failure(
+         context,
+         finalization,
+         body,
+         code,
+         attempt_metadata,
+         upstream_code,
+         metadata_headers
+       ) do
     %{reserved: reserved, attempt: attempt} = context
     transports = resolved_transports(context)
 
@@ -566,7 +594,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              attempt_metadata,
              started: finalization.started
            )
+           |> Map.put(
+             :before_finalize,
+             fn ->
+               SideEffects.observe_websocket_response(context, finalization)
+
+               Streaming.record_terminal_health_failure(
+                 upstream_code,
+                 metadata_headers,
+                 context
+               )
+             end
+           )
          ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
         terminal_failure_result(finalization, code)
@@ -647,9 +690,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                Map.get(finalization, :websocket_frame_headers, %{}),
                Map.get(finalization, :upstream_websocket_connection)
              ),
-             started: started
+             started: started,
+             before_finalize: fn ->
+               SideEffects.observe_websocket_response(context, finalization)
+             end
            )
          ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "interrupted", transports)
         {:error, error(499, code, Metadata.upstream_failure_message(endpoint))}
@@ -692,9 +741,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                Map.get(finalization, :websocket_frame_headers, %{}),
                Map.get(finalization, :upstream_websocket_connection)
              ),
-             started: started
+             started: started,
+             before_finalize: fn ->
+               SideEffects.observe_websocket_response(context, finalization)
+             end
            )
          ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
 
@@ -726,9 +781,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       |> maybe_put_transport_failure_metadata(finalization)
       |> Metadata.maybe_put_upstream_error_param(finalization)
 
-    with :ok <- Streaming.record_health_failure(code, code, context) do
-      finalize_failed_after_health(context, finalization, code, metadata)
-    end
+    finalize_failed_after_health(context, finalization, code, metadata)
   end
 
   defp maybe_put_transport_failure_metadata(metadata, %{transport_failure: transport_failure})
@@ -741,7 +794,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   defp finalize_failed_after_health(
          %SelectedCandidateContext{allow_retry?: true, reserved: reserved, attempt: attempt} =
            context,
-         %{body: "", reason: reason, started: started},
+         %{body: "", reason: reason, started: started} = finalization,
          code,
          metadata
        ) do
@@ -757,8 +810,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              last_error_code: code,
              error_message: Metadata.safe_reason(reason),
              latency_ms: elapsed_ms(started),
-             attempt_metadata: metadata
+             attempt_metadata: metadata,
+             before_finalize: fn ->
+               SideEffects.observe_websocket_response(context, finalization)
+             end
            }) do
+        {:stale_generation, finalized} -> {:ok, finalized}
         {:ok, _attempt} -> {:retry, code}
         {:error, gateway_error} -> {:error, gateway_error}
       end
@@ -782,7 +839,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              metadata,
              started: started
            )
+           |> maybe_put_before_finalize(fn ->
+             SideEffects.observe_websocket_response(context, finalization)
+             Streaming.record_health_failure(code, code, context)
+           end)
          ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
         {:error, failed_error_response(endpoint, code, reason)}
@@ -801,6 +865,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         transports.upstream_transport
       )
     end
+  end
+
+  defp maybe_put_before_finalize(attrs, callback) when is_function(callback, 0) do
+    if Map.get(attrs, :before_finalize),
+      do: attrs,
+      else: Map.put(attrs, :before_finalize, callback)
   end
 
   defp emit_settlement_failure(

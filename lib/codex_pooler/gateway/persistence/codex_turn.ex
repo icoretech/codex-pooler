@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Persistence.CodexTurn do
     field :transport_kind, :string
     field :status, :string
     field :error_code, :string
+    field :semantic_turn_digest, :binary
     field :first_visible_output_at, :utc_datetime_usec
     field :final_attempt_id, :binary_id
     field :started_at, :utc_datetime_usec

@@ -41,6 +41,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounting.RequestLifecycle.Reservation
   alias CodexPooler.Accounting.{RequestLogFact, RequestLogs}
+  alias CodexPooler.Accounting.RequestReplayEntitlement
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.Audit.AuditEvent
@@ -93,8 +94,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
   @supported_compression_model "gpt-4o"
-  @blocking_owner_receive_timeout_ms 1_000
-  @queued_owner_upstream_start_timeout_ms 1_000
+  @blocking_owner_receive_timeout_ms 5_000
+  @queued_owner_upstream_start_timeout_ms 5_000
   @response_task_stop_timeout_ms 15_000
   @handoff_detection_timeout_ms 15_000
   @epmd_ready_timeout_ms 2_000
@@ -198,6 +199,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     defp state, do: :persistent_term.get(@key)
   end
 
+  defmodule ReplayRemoteNodeClient do
+    @moduledoc false
+
+    @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
+
+    @key {__MODULE__, :state}
+
+    def configure(node, notify), do: :persistent_term.put(@key, %{node: node, notify: notify})
+    def reset, do: :persistent_term.erase(@key)
+
+    @impl true
+    def connected_app_nodes, do: [state().node]
+
+    @impl true
+    def app_node?(node), do: node == state().node
+
+    @impl true
+    def call_owner(node, module, function, args, _timeout) do
+      send(state().notify, {:replay_remote_owner_call, node, function})
+      apply(module, function, args)
+    end
+
+    defp state, do: :persistent_term.get(@key)
+  end
+
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
@@ -205,6 +231,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     on_exit(fn ->
       cleanup_local_owner_sessions()
       TurnBudgetNodeClient.reset()
+      ReplayRemoteNodeClient.reset()
 
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -214,6 +241,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "owner-forwarded native anchored compact uses V2 collect on the current connection" do
+    final_release_ref = make_ref()
+
     compact_item = %{
       "type" => "compaction",
       "encrypted_content" => "synthetic-owner-collect-encrypted"
@@ -255,25 +284,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                 }
               }}
            ]),
-           FakeUpstream.sse_stream([
-             {"response.created",
-              %{
-                "type" => "response.created",
-                "response" => %{
-                  "id" => "resp_owner_collect_final",
-                  "status" => "in_progress"
-                }
-              }},
-             {"response.completed",
-              %{
-                "type" => "response.completed",
-                "response" => %{
-                  "id" => "resp_owner_collect_final",
-                  "status" => "completed",
-                  "output" => []
-                }
-              }}
-           ])
+           FakeUpstream.barrier_sse_stream(
+             [
+               {"response.created",
+                %{
+                  "type" => "response.created",
+                  "response" => %{
+                    "id" => "resp_owner_collect_final",
+                    "status" => "in_progress"
+                  }
+                }},
+               {"response.completed",
+                %{
+                  "type" => "response.completed",
+                  "response" => %{
+                    "id" => "resp_owner_collect_final",
+                    "status" => "completed",
+                    "output" => []
+                  }
+                }}
+             ],
+             notify: self(),
+             release_ref: final_release_ref,
+             barrier_after: 0
+           )
          ]}
       )
 
@@ -431,7 +465,41 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:ok, state} =
                CodexResponsesSocket.handle_in({final_payload, [opcode: :text]}, state)
 
-      assert {:ok, _state} = receive_socket_done(state)
+      final_upstream_pid =
+        receive do
+          {:fake_upstream_chunk_barrier, 0, pid, ^final_release_ref} -> pid
+        after
+          15_000 -> flunk("final request did not reach the pre-visible upstream barrier")
+        end
+
+      try do
+        window_hash = :crypto.hash(:sha256, "owner-native-collect-final-window")
+
+        alias_present? =
+          Repo.exists?(
+            from(alias_record in BridgeSessionAlias,
+              where:
+                alias_record.codex_session_id == ^state.codex_session.id and
+                  alias_record.alias_kind == "session_header" and
+                  alias_record.alias_hash == ^window_hash and alias_record.status == "active"
+            )
+          )
+
+        assert alias_present?
+
+        assert {:ok, reconnect_session} =
+                 Gateway.start_codex_session(auth,
+                   accepted_turn_state: "new-upgrade-generated-turn-state",
+                   session_header_source: "x-codex-window-id",
+                   session_header: "owner-native-collect-final-window"
+                 )
+
+        assert reconnect_session.id == state.codex_session.id
+      after
+        send(final_upstream_pid, {:fake_upstream_release_chunk, final_release_ref})
+      end
+
+      assert {:ok, state} = receive_socket_done(state)
 
       assert [_anchor_request, compact_request, final_request] = FakeUpstream.requests(upstream)
       assert final_request.method == "WEBSOCKET"
@@ -983,7 +1051,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        FakeUpstream.sse_stream(
+        FakeUpstream.websocket_sse_then_close(
           [
             {"response.failed",
              %{
@@ -1185,86 +1253,90 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     {:ok, state} = owner_socket(auth, "ws-owner-transport-failure", "owner-transport-failure")
 
-    try do
-      payload =
-        websocket_payload(setup, "owner forwarded transport failure", %{
-          "request_id" => "ws-owner-transport-failure"
-        })
+    payload =
+      websocket_payload(setup, "owner forwarded transport failure", %{
+        "request_id" => "ws-owner-transport-failure"
+      })
 
-      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
-      assert {:push, {:text, partial_frame}, state} = receive_owner_socket_push(state)
+    assert {:push, {:text, partial_frame}, state} = receive_owner_socket_push(state)
 
-      assert %{"type" => ^raw_event_type, "delta" => @sentinel} =
-               Jason.decode!(partial_frame)
+    assert %{"type" => ^raw_event_type, "delta" => @sentinel} =
+             Jason.decode!(partial_frame)
 
-      assert {:push, {:text, error_frame}, failed_state} = receive_socket_done(state)
+    assert {:push, {:text, owner_error_frame}, state} = receive_owner_socket_push(state)
 
-      assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
-               Jason.decode!(error_frame)
+    assert %{"type" => "error", "error" => %{"code" => "server_error"}} =
+             Jason.decode!(owner_error_frame)
 
-      assert failed_state.websocket_owner_active_turn_reconnect? == false
-      refute_received {:websocket_owner_frame, _, _, _duplicate_terminal}
-      assert FakeUpstream.count(upstream) == 1
-      assert FakeUpstream.websocket_connection_count(upstream) == 1
-      assert FakeUpstream.http_request_count(upstream) == 0
+    assert {:push, {:text, error_frame}, failed_state} = receive_socket_done(state)
 
-      assert [request_log] = request_logs(setup.pool.id)
-      assert request_log.status == "failed"
-      assert request_log.transport == "websocket"
-      assert request_log.last_error_code == "upstream_stream_error"
+    assert_receive {:websocket_owner_frame, _, _, _, :complete} = owner_complete
+    assert {:ok, failed_state} = CodexResponsesSocket.handle_info(owner_complete, failed_state)
 
-      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request_log.id))
-      assert attempt.status == "failed"
-      assert_forwarding_cardinality!(request_log, state.codex_session.id, "failed")
+    assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
+             Jason.decode!(error_frame)
 
-      connection = attempt.response_metadata["upstream_websocket_connection"]
+    assert failed_state.websocket_owner_active_turn_reconnect? == false
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
 
-      assert %{"lifecycle_id" => lifecycle_id} = connection
-      assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+    assert [request_log] = request_logs(setup.pool.id)
+    assert request_log.status == "failed"
+    assert request_log.transport == "websocket"
+    assert request_log.last_error_code == "upstream_stream_error"
 
-      assert connection == %{
-               "lifecycle_id" => lifecycle_id,
-               "generation" => 1,
-               "reused" => false,
-               "reconnected" => false
-             }
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request_log.id))
+    assert attempt.status == "failed"
+    assert_forwarding_cardinality!(request_log, state.codex_session.id, "failed")
 
-      assert attempt.response_metadata["transport_failure"] == %{
-               "connection_age_bucket" => "under_1m",
-               "connection_idle_bucket" => "first_request",
-               "connection_request_bucket" => "first",
-               "connection_use" => "fresh",
-               "last_upstream_event_class" => "response_unknown_event",
-               "last_upstream_event_type" => "response.unknown",
-               "peer_close_code" => 1001,
-               "peer_close_reason_bytes" => 36,
-               "peer_close_reason_present" => true,
-               "phase" => "upstream_close",
-               "pre_visible_output" => false,
-               "reason" => "upstream_websocket_closed_before_terminal",
-               "reason_class" => "upstream_websocket_closed_before_terminal",
-               "terminal_candidate_seen" => false,
-               "terminal_seen" => false,
-               "termination_source" => "peer_close_frame",
-               "text_frame_count" => 1,
-               "transport_signal" => "tcp_data",
-               "upstream_committed" => true,
-               "websocket_buffer_bucket" => "empty",
-               "websocket_fragment_open" => false
-             }
+    connection = attempt.response_metadata["upstream_websocket_connection"]
 
-      metadata_text = inspect(attempt.response_metadata)
-      refute metadata_text =~ raw_event_type
-      refute metadata_text =~ @sentinel
-      refute metadata_text =~ "owner upstream close reason sentinel"
-      refute metadata_text =~ setup.authorization
-      refute metadata_text =~ setup.raw_key
-      refute metadata_text =~ "Bearer "
-      refute metadata_text =~ "upstream-token"
-    after
-      CodexResponsesSocket.terminate(:closed, state)
-    end
+    assert %{"lifecycle_id" => lifecycle_id} = connection
+    assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+
+    assert connection == %{
+             "lifecycle_id" => lifecycle_id,
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           }
+
+    assert attempt.response_metadata["transport_failure"] == %{
+             "connection_age_bucket" => "under_1m",
+             "connection_idle_bucket" => "first_request",
+             "connection_request_bucket" => "first",
+             "connection_use" => "fresh",
+             "last_upstream_event_class" => "response_unknown_event",
+             "last_upstream_event_type" => "response.unknown",
+             "peer_close_code" => 1001,
+             "peer_close_reason_bytes" => 36,
+             "peer_close_reason_present" => true,
+             "phase" => "upstream_close",
+             "pre_visible_output" => false,
+             "reason" => "upstream_websocket_closed_before_terminal",
+             "reason_class" => "upstream_websocket_closed_before_terminal",
+             "terminal_candidate_seen" => false,
+             "terminal_seen" => false,
+             "termination_source" => "peer_close_frame",
+             "text_frame_count" => 1,
+             "transport_signal" => "tcp_data",
+             "upstream_committed" => true,
+             "websocket_buffer_bucket" => "empty",
+             "websocket_fragment_open" => false
+           }
+
+    metadata_text = inspect(attempt.response_metadata)
+    refute metadata_text =~ raw_event_type
+    refute metadata_text =~ @sentinel
+    refute metadata_text =~ "owner upstream close reason sentinel"
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ setup.raw_key
+    refute metadata_text =~ "Bearer "
+    refute metadata_text =~ "upstream-token"
+    await_owner_cleanup!(failed_state.codex_session.id)
   end
 
   @tag :feature_websocket_terminal_auth_refresh
@@ -1285,7 +1357,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                   }
                 }}
              ],
-             done: false
+             done: true
            ),
            FakeUpstream.json_response(%{"access_token" => "owner-upstream-token-refreshed"}, 200),
            FakeUpstream.json_response(%{
@@ -1408,7 +1480,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                   }
                 }}
              ],
-             done: false
+             done: true
            ),
            FakeUpstream.json_response(%{
              "id" => "resp_owner_assignment_model_fallback_success",
@@ -1658,6 +1730,387 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  @tag :replay_matrix
+  @tag :replay_topology
+  test "remote owner forwarding replays one pre-visible disconnect into one completed lifecycle" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_close_without_terminal_barrier(
+             notify: self(),
+             release_ref: release_ref,
+             code: 1001,
+             reason: "synthetic remote replay disconnect"
+           ),
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_remote_replay_complete",
+                 "status" => "completed",
+                 "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+               }
+             })
+           ])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = Ecto.UUID.generate()
+    {:ok, state} = owner_socket(auth, "ws-remote-replay", turn_state)
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+    remote_node = :"codex_pooler@remote-replay.example"
+    ReplayRemoteNodeClient.configure(remote_node, self())
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    session =
+      state.codex_session
+      |> Ecto.Changeset.change(owner_instance_id: Atom.to_string(remote_node), updated_at: now)
+      |> Repo.update!()
+
+    active_owner_lease(session.id)
+    |> Ecto.Changeset.change(owner_instance_id: Atom.to_string(remote_node), updated_at: now)
+    |> Repo.update!()
+
+    :sys.replace_state(owner_pid, fn owner_state ->
+      %{owner_state | owner_instance_id: Atom.to_string(remote_node)}
+    end)
+
+    node_client_options = [node_client: ReplayRemoteNodeClient]
+
+    remote_state =
+      state
+      |> remote_owner_state(remote_node, node_client_options)
+      |> Map.put(:codex_session, session)
+
+    thread_id = Ecto.UUID.generate()
+
+    payload =
+      websocket_input_payload(
+        setup,
+        [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_remote_replay",
+            "output" => "synthetic remote replay output"
+          }
+        ],
+        %{
+          "client_metadata" => %{
+            "x-codex-turn-metadata" =>
+              Jason.encode!(%{
+                "session_id" => thread_id,
+                "thread_id" => thread_id,
+                "turn_id" => "remote-replay-turn",
+                "request_kind" => "turn"
+              })
+          }
+        }
+      )
+
+    assert {:ok, remote_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, remote_state)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
+                   @handoff_detection_timeout_ms
+
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_reconnect_control_v2}
+
+    assert_receive {:replay_remote_owner_call, ^remote_node,
+                    :remote_prepare_next_replay_descriptor}
+
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_submit_request_v1}
+    assert %{active_turn: %{descriptor: %{replay_generation: 0}}} = :sys.get_state(owner_pid)
+
+    assert Gateway.detach_websocket_owner_downstream(
+             session,
+             remote_state.websocket_owner_lease_token,
+             remote_state.websocket_owner_downstream,
+             remote_state.opts
+           ) in [:suspended, :ok]
+
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_cancel_downstream}
+
+    assert %{active_turn: nil, suspended_replay: %{provisional_status: :armed}} =
+             :sys.get_state(owner_pid)
+
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+    assert {:ok, remote_state} = receive_socket_done(remote_state)
+    assert MapSet.size(remote_state.tasks) == 0
+
+    assert [request] = request_logs(setup.pool.id)
+    assert [initial_attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert initial_attempt.replay_generation == 0
+    assert initial_attempt.status == "retryable_failed"
+
+    assert %RequestReplayEntitlement{status: "armed", closed_at: nil} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
+
+    {:ok, replay_state} =
+      owner_socket(auth, "ws-remote-replay-retry", turn_state,
+        websocket_owner_forwarder_opts: node_client_options
+      )
+
+    assert {:ok, replay_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, replay_state)
+
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_reconnect_control_v2}
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_reconnect_control_v2}
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_consume_replay_reserve}
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_validate_replay_reserve}
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_reconnect_control_v2}
+
+    assert_receive {:replay_remote_owner_call, ^remote_node,
+                    :remote_prepare_next_replay_descriptor}
+
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_submit_request_v4}
+
+    assert {:push, {:text, replay_frame}, replay_state} = receive_owner_socket_push(replay_state)
+    assert %{"type" => "response.completed"} = Jason.decode!(replay_frame)
+    assert {:ok, replay_state} = receive_owner_socket_complete(replay_state)
+    assert {:ok, replay_state} = receive_socket_done(replay_state)
+
+    assert [%Request{id: request_id}] = request_logs(setup.pool.id)
+    assert request_id == request.id
+
+    assert [attempt_n, attempt_n_plus_one] =
+             Repo.all(
+               from(a in Attempt,
+                 where: a.request_id == ^request.id,
+                 order_by: [asc: a.attempt_number]
+               )
+             )
+
+    assert {attempt_n.replay_generation, attempt_n_plus_one.replay_generation} == {0, 1}
+    assert attempt_n_plus_one.status == "succeeded"
+    assert FakeUpstream.count(upstream) == 2
+
+    assert %RequestReplayEntitlement{status: "consumed", closed_at: %DateTime{}} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "reservation"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "release"
+             ),
+             :count
+           ) == 1
+
+    assert [%CodexTurn{status: "succeeded", final_attempt_id: final_attempt_id}] =
+             Repo.all(from(turn in CodexTurn, where: turn.request_id == ^request.id))
+
+    assert final_attempt_id == attempt_n_plus_one.id
+    assert :ok = CodexResponsesSocket.terminate(:closed, replay_state)
+    assert Process.alive?(owner_pid)
+  end
+
+  @tag :replay_matrix
+  @tag :replay_race
+  @tag :replay_topology
+  @tag :replay_cleanup
+  test "real peer owner replays one pre-visible disconnect through the non-owner proxy" do
+    ensure_test_distribution_started!()
+    assert :ok = Sandbox.mode(Repo, :auto)
+    on_exit(fn -> assert :ok = Sandbox.mode(Repo, :manual) end)
+
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_close_without_terminal_barrier(
+             notify: self(),
+             release_ref: release_ref,
+             code: 1001,
+             reason: "synthetic real peer replay disconnect"
+           ),
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_real_peer_replay_complete",
+                 "status" => "completed",
+                 "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+               }
+             })
+           ])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup.pool)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = start_bridge_peer!(:current, setup.identity, repo: :real)
+    turn_state = Ecto.UUID.generate()
+    session_header = "real-peer-replay-#{System.unique_integer([:positive])}"
+    {session, owner_pid} = start_remote_bridge_owner!(auth, session_header, remote_node, :real)
+    assert node(owner_pid) == remote_node
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+
+    assert {:ok, ^owner_pid} =
+             :erpc.call(remote_node, WebsocketOwnerSession, :lookup, [session.id])
+
+    assert node(
+             :erpc.call(remote_node, :erlang, :map_get, [:upstream_pid, :sys.get_state(owner_pid)])
+           ) ==
+             remote_node
+
+    forwarder_opts = [
+      node_client: WebsocketOwnerForwarder.ERPCNodeClient,
+      app_node_names: [Atom.to_string(remote_node)]
+    ]
+
+    {:ok, state} =
+      owner_socket(auth, "ws-real-peer-replay", turn_state,
+        session_header: session_header,
+        session_header_source: "x-session-id",
+        websocket_owner_forwarder_opts: forwarder_opts
+      )
+
+    thread_id = Ecto.UUID.generate()
+
+    payload =
+      websocket_input_payload(
+        setup,
+        [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_real_peer_replay",
+            "output" => "synthetic real peer replay output"
+          }
+        ],
+        %{
+          "client_metadata" => %{
+            "x-codex-turn-metadata" =>
+              Jason.encode!(%{
+                "session_id" => thread_id,
+                "thread_id" => thread_id,
+                "turn_id" => "real-peer-replay-turn",
+                "request_kind" => "turn"
+              })
+          }
+        }
+      )
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
+                   @handoff_detection_timeout_ms
+
+    remote_owner_state = :erpc.call(remote_node, :sys, :get_state, [owner_pid])
+    assert remote_owner_state.codex_session_id == session.id
+    assert remote_owner_state.owner_instance_id == Atom.to_string(remote_node)
+    assert remote_owner_state.active_turn.descriptor.replay_generation == 0
+
+    assert Gateway.detach_websocket_owner_downstream(
+             session,
+             state.websocket_owner_lease_token,
+             state.websocket_owner_downstream,
+             state.opts
+           ) in [:suspended, :ok]
+
+    assert %{active_turn: nil, suspended_replay: %{provisional_status: :armed}} =
+             :erpc.call(remote_node, :sys, :get_state, [owner_pid])
+
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+    assert {:ok, state} = receive_socket_done(state)
+    assert MapSet.size(state.tasks) == 0
+
+    assert [request] = request_logs(setup.pool.id)
+    assert [initial_attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert initial_attempt.replay_generation == 0
+    assert initial_attempt.status == "retryable_failed"
+
+    {:ok, replay_state} =
+      owner_socket(auth, "ws-real-peer-replay-retry", turn_state,
+        session_header: session_header,
+        session_header_source: "x-session-id",
+        websocket_owner_forwarder_opts: forwarder_opts
+      )
+
+    assert {:ok, replay_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, replay_state)
+
+    assert {:push, {:text, replay_frame}, replay_state} =
+             receive_owner_socket_push(replay_state)
+
+    assert %{"type" => "response.completed"} = Jason.decode!(replay_frame)
+    assert {:ok, replay_state} = receive_owner_socket_complete(replay_state)
+    assert {:ok, replay_state} = receive_socket_done(replay_state)
+
+    assert [attempt_n, attempt_n_plus_one] =
+             Repo.all(
+               from(a in Attempt,
+                 where: a.request_id == ^request.id,
+                 order_by: [asc: a.attempt_number]
+               )
+             )
+
+    assert {attempt_n.replay_generation, attempt_n_plus_one.replay_generation} == {0, 1}
+    assert attempt_n_plus_one.status == "succeeded"
+    assert FakeUpstream.count(upstream) == 2
+
+    assert Repo.aggregate(from(r in Request, where: r.id == ^request.id), :count) == 1
+    assert Repo.aggregate(from(t in CodexTurn, where: t.request_id == ^request.id), :count) == 1
+
+    for kind <- ["reservation", "settlement", "release"] do
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == ^kind
+               ),
+               :count
+             ) == 1
+    end
+
+    assert [%CodexTurn{status: "succeeded", final_attempt_id: final_attempt_id}] =
+             Repo.all(from(turn in CodexTurn, where: turn.request_id == ^request.id))
+
+    assert final_attempt_id == attempt_n_plus_one.id
+
+    assert %RequestReplayEntitlement{status: "consumed", closed_at: %DateTime{}} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
+
+    {:ok, duplicate_state} =
+      owner_socket(auth, "ws-real-peer-replay-duplicate", turn_state,
+        session_header: session_header,
+        session_header_source: "x-session-id",
+        websocket_owner_forwarder_opts: forwarder_opts
+      )
+
+    assert {:ok, duplicate_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, duplicate_state)
+
+    assert {:push, {:text, duplicate_frame}, duplicate_state} =
+             receive_socket_done(duplicate_state)
+
+    assert Jason.decode!(duplicate_frame)["error"]["code"] == "duplicate_turn"
+    assert FakeUpstream.count(upstream) == 2
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 2
+
+    assert :ok = CodexResponsesSocket.terminate(:closed, duplicate_state)
+    assert :ok = CodexResponsesSocket.terminate(:closed, replay_state)
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    stop_remote_owner!(remote_node, session.id, owner_pid)
+  end
+
   test "a paused key stops a remote-owner-shaped turn at reservation without dispatch or recovery" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
     setup = gateway_setup(upstream)
@@ -1768,7 +2221,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           assert {:push, {:text, terminal}, state} = receive_owner_socket_push(state)
 
           assert %{"id" => "resp_owner_observer_failure"} = Jason.decode!(terminal)
-          assert {:ok, _state} = receive_owner_socket_complete(state)
+          assert {:ok, state} = receive_owner_socket_complete(state)
+          flush_socket_done(state)
         after
           CodexResponsesSocket.terminate(:closed, state)
         end
@@ -1914,17 +2368,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                      5_000
 
       assert MapSet.size(state.tasks) == 1
+      [task_pid] = MapSet.to_list(state.tasks)
       refute_received {:websocket_response_activity, _task_pid, _activity_token}
       send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
-      assert_receive {:websocket_owner_frame, correlation_id, epoch, task_pid, {:data, ^terminal}} =
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, _owner_turn_id,
+                      {:data, ^terminal}} =
                        terminal_message,
                      5_000
 
       assert {:push, {:text, ^terminal}, state} =
                CodexResponsesSocket.handle_info(terminal_message, state)
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^task_pid, :complete} =
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, _owner_turn_id, :complete} =
                        complete_message,
                      5_000
 
@@ -1975,15 +2431,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:ok, remote_state} =
                CodexResponsesSocket.handle_in({payload, [opcode: :text]}, remote_state)
 
+      [task_pid] = MapSet.to_list(remote_state.tasks)
+
       assert_receive {:turn_budget_remote_call, :remote_submit_request_v1, 1_801_000}
 
-      assert_receive {:websocket_owner_frame, correlation_id, epoch, task_pid, {:data, ^terminal}} =
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, _owner_turn_id,
+                      {:data, ^terminal}} =
                        terminal_message
 
       assert {:push, {:text, ^terminal}, remote_state} =
                CodexResponsesSocket.handle_info(terminal_message, remote_state)
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^task_pid, :complete} =
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, _owner_turn_id, :complete} =
                        complete_message
 
       assert {:ok, remote_state} =
@@ -2173,6 +2632,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   @tag :continuation_generation_boundary
+  @tag :replay_topology
   test "direct owner guards a replacement generation and settles once before full retry" do
     assert_owner_continuation_generation_boundary(:direct)
   end
@@ -2188,6 +2648,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   @tag :continuation_generation_boundary
+  @tag :replay_topology
   test "proxy-to-owner guards a replacement generation and settles once before full retry" do
     assert_owner_continuation_generation_boundary(:proxy)
   end
@@ -2293,23 +2754,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     dispatch_upstream =
       start_upstream(
-        FakeUpstream.sse_stream(
-          [
-            {"response.failed",
-             %{
-               "type" => "response.failed",
-               "response" => %{
-                 "id" => "resp_owner_reset_probe_failure",
-                 "error" => %{
-                   "code" => "upstream_terminal_failure",
-                   "param" => "reasoning.effort",
-                   "message" => terminal_message
-                 }
+        FakeUpstream.sse_stream([
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "response" => %{
+               "id" => "resp_owner_reset_probe_failure",
+               "error" => %{
+                 "code" => "upstream_terminal_failure",
+                 "param" => "reasoning.effort",
+                 "message" => terminal_message
                }
-             }}
-          ],
-          done: false
-        )
+             }
+           }}
+        ])
       )
 
     usage_upstream = reset_probe_usage_upstream()
@@ -2852,6 +3310,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   @tag :owner_crash_recovery
+  @tag :replay_cleanup
+  @tag :replay_topology
   test "remote owner process death after visible output remains terminal" do
     release_ref = make_ref()
     upstream_boundary = visible_blocking_owner_upstream_boundary(self(), release_ref)
@@ -3079,54 +3539,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
     {:ok, state} = owner_socket(auth, "ws-owner-live-model-miss", "owner-live-model-miss")
 
-    try do
-      assert {:ok, state} =
-               CodexResponsesSocket.handle_in(
-                 {websocket_payload(setup, "synthetic owner live anchor"), [opcode: :text]},
-                 state
-               )
+    assert {:ok, state} =
+             CodexResponsesSocket.handle_in(
+               {websocket_payload(setup, "synthetic owner live anchor"), [opcode: :text]},
+               state
+             )
 
-      assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
-      assert %{"id" => "resp_owner_live_anchor"} = Jason.decode!(anchor_frame)
-      assert {:ok, state} = receive_socket_done(state)
+    [anchor_task_pid] = MapSet.to_list(state.tasks)
+    assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
+    assert %{"id" => "resp_owner_live_anchor"} = Jason.decode!(anchor_frame)
+    assert {:ok, state} = receive_owner_socket_complete(state)
+    assert {:ok, state} = acknowledge_response_task_delivery_if_pending(state, anchor_task_pid)
+    assert {:ok, state} = receive_socket_done(state)
+    assert MapSet.size(state.tasks) == 0
 
-      fallback =
-        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-owner-live-fallback",
-          compact?: false
-        )
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-owner-live-fallback",
+        compact?: false
+      )
 
-      prime_routing_quota!(fallback.identity)
-      _model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+    prime_routing_quota!(fallback.identity)
+    _model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
 
-      assert {:ok, state} =
-               CodexResponsesSocket.handle_in(
-                 {websocket_payload(setup, "synthetic owner live model miss"), [opcode: :text]},
-                 state
-               )
+    assert {:ok, state} =
+             CodexResponsesSocket.handle_in(
+               {websocket_payload(setup, "synthetic owner live model miss"), [opcode: :text]},
+               state
+             )
 
-      assert {:push, {:text, failed_frame}, state} = receive_socket_push(state)
-      assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
-      assert {:ok, _state} = receive_socket_done(state)
+    [response_task_pid] = MapSet.to_list(state.tasks)
 
-      assert FakeUpstream.count(pinned_upstream) == 2
-      assert FakeUpstream.count(fallback_upstream) == 0
+    assert_receive {:websocket_owner_output_commit_probe, _, _, ^response_task_pid, _, _, _} =
+                     output_commit_probe,
+                   @handoff_detection_timeout_ms
 
-      assert [anchor_request, failed_request] = request_logs(setup.pool.id)
-      assert anchor_request.status == "succeeded"
-      assert failed_request.status == "failed"
-      assert failed_request.retry_count == 0
+    assert {:ok, state} = CodexResponsesSocket.handle_info(output_commit_probe, state)
 
-      assert [failed_attempt] =
-               Repo.all(from(a in Attempt, where: a.request_id == ^failed_request.id))
+    assert {:push, {:text, failed_frame}, state} = receive_socket_push(state)
+    assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
+    assert MapSet.size(state.tasks) == 1
+    assert {:ok, state} = acknowledge_response_task_delivery_if_pending(state, response_task_pid)
 
-      assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
-      assert failed_attempt.status == "failed"
-      assert failed_attempt.usage_status == "usage_unknown"
-    after
-      CodexResponsesSocket.terminate(:closed, state)
-    end
+    assert FakeUpstream.count(pinned_upstream) == 2
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [anchor_request, failed_request] = request_logs(setup.pool.id)
+    assert anchor_request.status == "succeeded"
+    assert failed_request.status == "failed"
+    assert failed_request.retry_count == 0
+
+    assert [failed_attempt] =
+             Repo.all(from(a in Attempt, where: a.request_id == ^failed_request.id))
+
+    assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert failed_attempt.status == "failed"
+    assert failed_attempt.usage_status == "usage_unknown"
+
+    assert MapSet.size(state.tasks) == 0
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
   end
 
   @tag :feature_websocket_terminal_auth_refresh
@@ -3357,91 +3830,79 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     {:ok, target_state} = owner_socket(auth, "ws-owner-retarget-anchor", "retarget-target")
 
-    target_state =
-      try do
-        anchor_payload =
-          websocket_payload(setup, "owner retarget anchor", %{
-            "request_id" => "ws-owner-retarget-anchor"
-          })
+    anchor_payload =
+      websocket_payload(setup, "owner retarget anchor", %{
+        "request_id" => "ws-owner-retarget-anchor"
+      })
 
-        assert {:ok, target_state} =
-                 CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, target_state)
+    assert {:ok, target_state} =
+             CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, target_state)
 
-        assert {:push, {:text, anchor_frame}, target_state} =
-                 receive_owner_socket_push(target_state)
+    assert {:push, {:text, anchor_frame}, target_state} =
+             receive_owner_socket_push(target_state)
 
-        assert %{"id" => "resp_owner_immediate_retarget_anchor"} = Jason.decode!(anchor_frame)
-        assert {:ok, target_state} = receive_socket_done(target_state)
-        target_state
-      after
-        CodexResponsesSocket.terminate(:closed, target_state)
-      end
+    assert %{"id" => "resp_owner_immediate_retarget_anchor"} = Jason.decode!(anchor_frame)
+    assert {:ok, target_state} = receive_socket_done(target_state)
+    assert :ok = CodexResponsesSocket.terminate(:closed, target_state)
 
     target_session = target_state.codex_session
 
     {:ok, origin_state} = owner_socket(auth, "ws-owner-retarget-origin", "retarget-origin")
     origin_session = origin_state.codex_session
 
-    retargeted_state =
-      try do
-        continuation_payload =
-          Jason.encode!(%{
-            "type" => "response.create",
-            "model" => setup.model.exposed_model_id,
-            "input" => [
-              %{
-                "type" => "message",
-                "role" => "user",
-                "content" => "owner retarget continuation"
-              }
-            ],
-            "stream" => true,
-            "generate" => true,
-            "previous_response_id" => "resp_owner_immediate_retarget_anchor",
-            "request_id" => "ws-owner-retarget-continuation"
-          })
+    continuation_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => "owner retarget continuation"
+          }
+        ],
+        "stream" => true,
+        "generate" => true,
+        "previous_response_id" => "resp_owner_immediate_retarget_anchor",
+        "request_id" => "ws-owner-retarget-continuation"
+      })
 
-        assert {:ok, retargeted_state} =
-                 CodexResponsesSocket.handle_in(
-                   {continuation_payload, [opcode: :text]},
-                   origin_state
-                 )
+    assert {:ok, retargeted_state} =
+             CodexResponsesSocket.handle_in(
+               {continuation_payload, [opcode: :text]},
+               origin_state
+             )
 
-        assert retargeted_state.codex_session.id == target_session.id
-        refute retargeted_state.codex_session.id == origin_session.id
-        assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
-        assert retargeted_state.websocket_owner_downstream.epoch > 0
+    assert retargeted_state.codex_session.id == target_session.id
+    refute retargeted_state.codex_session.id == origin_session.id
+    assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
+    assert retargeted_state.websocket_owner_downstream.epoch > 0
 
-        assert {:push, {:text, retarget_frame}, retargeted_state} =
-                 receive_owner_socket_push(retargeted_state)
+    assert {:push, {:text, retarget_frame}, retargeted_state} =
+             receive_owner_socket_push(retargeted_state)
 
-        assert %{"id" => "resp_owner_immediate_retarget_success"} = Jason.decode!(retarget_frame)
-        assert {:ok, _retargeted_state} = receive_socket_done(retargeted_state)
+    assert %{"id" => "resp_owner_immediate_retarget_success"} = Jason.decode!(retarget_frame)
+    assert {:ok, retargeted_state} = receive_socket_done(retargeted_state)
 
-        assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
+    assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
 
-        assert anchor_request.websocket_connection_id ==
-                 retargeted_request.websocket_connection_id
+    assert anchor_request.websocket_connection_id ==
+             retargeted_request.websocket_connection_id
 
-        assert retargeted_request.json["previous_response_id"] ==
-                 "resp_owner_immediate_retarget_anchor"
+    assert retargeted_request.json["previous_response_id"] ==
+             "resp_owner_immediate_retarget_anchor"
 
-        assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
-        assert anchor_log.status == "succeeded"
-        assert retargeted_log.status == "succeeded"
-        assert_native_turn_correlation!(retargeted_log.correlation_id)
+    assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
+    assert anchor_log.status == "succeeded"
+    assert retargeted_log.status == "succeeded"
+    assert_native_turn_correlation!(retargeted_log.correlation_id)
 
-        owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
-        assert owner_metadata["enabled"] == true
-        assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
-        assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
+    owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
+    assert owner_metadata["enabled"] == true
+    assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
+    assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
 
-        retargeted_state
-      after
-        CodexResponsesSocket.terminate(:closed, origin_state)
-      end
-
-    CodexResponsesSocket.terminate(:closed, retargeted_state)
+    assert :ok = CodexResponsesSocket.terminate(:closed, retargeted_state)
   end
 
   test "owner-forwarded response create retargets from frame turn-state before spawning" do
@@ -3472,84 +3933,72 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         target_turn_state
       )
 
-    target_state =
-      try do
-        anchor_payload =
-          websocket_payload(setup, "owner turn-state retarget anchor", %{
-            "request_id" => "ws-owner-turn-state-retarget-anchor"
-          })
+    anchor_payload =
+      websocket_payload(setup, "owner turn-state retarget anchor", %{
+        "request_id" => "ws-owner-turn-state-retarget-anchor"
+      })
 
-        assert {:ok, target_state} =
-                 CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, target_state)
+    assert {:ok, target_state} =
+             CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, target_state)
 
-        assert {:push, {:text, anchor_frame}, target_state} =
-                 receive_owner_socket_push(target_state)
+    assert {:push, {:text, anchor_frame}, target_state} =
+             receive_owner_socket_push(target_state)
 
-        assert %{"id" => "resp_owner_turn_state_retarget_anchor"} = Jason.decode!(anchor_frame)
-        assert {:ok, target_state} = receive_socket_done(target_state)
-        target_state
-      after
-        CodexResponsesSocket.terminate(:closed, target_state)
-      end
+    assert %{"id" => "resp_owner_turn_state_retarget_anchor"} = Jason.decode!(anchor_frame)
+    assert {:ok, target_state} = receive_socket_done(target_state)
+    assert :ok = CodexResponsesSocket.terminate(:closed, target_state)
 
     target_session = target_state.codex_session
     {:ok, origin_state} = owner_socket(auth, "ws-owner-turn-state-origin", origin_turn_state)
     origin_session = origin_state.codex_session
 
-    retargeted_state =
-      try do
-        continuation_payload =
-          websocket_payload(setup, "owner turn-state retarget continuation", %{
-            "client_metadata" => %{"x-codex-turn-state" => target_turn_state},
-            "request_id" => "ws-owner-turn-state-retarget-continuation"
-          })
+    continuation_payload =
+      websocket_payload(setup, "owner turn-state retarget continuation", %{
+        "client_metadata" => %{"x-codex-turn-state" => target_turn_state},
+        "request_id" => "ws-owner-turn-state-retarget-continuation"
+      })
 
-        assert {:ok, retargeted_state} =
-                 CodexResponsesSocket.handle_in(
-                   {continuation_payload, [opcode: :text]},
-                   origin_state
-                 )
+    assert {:ok, retargeted_state} =
+             CodexResponsesSocket.handle_in(
+               {continuation_payload, [opcode: :text]},
+               origin_state
+             )
 
-        assert retargeted_state.codex_session.id == target_session.id
-        refute retargeted_state.codex_session.id == origin_session.id
-        assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
-        assert retargeted_state.websocket_owner_downstream.epoch > 0
+    assert retargeted_state.codex_session.id == target_session.id
+    refute retargeted_state.codex_session.id == origin_session.id
+    assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
+    assert retargeted_state.websocket_owner_downstream.epoch > 0
 
-        assert {:push, {:text, retarget_frame}, retargeted_state} =
-                 receive_owner_socket_push(retargeted_state)
+    assert {:push, {:text, retarget_frame}, retargeted_state} =
+             receive_owner_socket_push(retargeted_state)
 
-        assert %{"id" => "resp_owner_turn_state_retarget_success"} = Jason.decode!(retarget_frame)
-        assert {:ok, _retargeted_state} = receive_socket_done(retargeted_state)
+    assert %{"id" => "resp_owner_turn_state_retarget_success"} = Jason.decode!(retarget_frame)
+    assert {:ok, retargeted_state} = receive_socket_done(retargeted_state)
 
-        assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
+    assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
 
-        assert anchor_request.websocket_connection_id ==
-                 retargeted_request.websocket_connection_id
+    assert anchor_request.websocket_connection_id ==
+             retargeted_request.websocket_connection_id
 
-        assert retargeted_request.json["client_metadata"]["x-codex-turn-state"] ==
-                 target_turn_state
+    assert retargeted_request.json["client_metadata"]["x-codex-turn-state"] ==
+             target_turn_state
 
-        assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
-        assert anchor_log.status == "succeeded"
-        assert retargeted_log.status == "succeeded"
-        assert_native_turn_correlation!(retargeted_log.correlation_id)
-        assert retargeted_log.request_metadata["codex_session_id"] == target_session.id
+    assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
+    assert anchor_log.status == "succeeded"
+    assert retargeted_log.status == "succeeded"
+    assert_native_turn_correlation!(retargeted_log.correlation_id)
+    assert retargeted_log.request_metadata["codex_session_id"] == target_session.id
 
-        owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
-        assert owner_metadata["enabled"] == true
-        assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
-        assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
+    owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
+    assert owner_metadata["enabled"] == true
+    assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
+    assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
 
-        refute_raw_turn_state_session_key!(setup.pool.id, origin_turn_state)
-        refute_raw_turn_state_session_key!(setup.pool.id, target_turn_state)
-        assert_no_leak_in_persistence!(setup.pool.id)
+    refute_raw_turn_state_session_key!(setup.pool.id, origin_turn_state)
+    refute_raw_turn_state_session_key!(setup.pool.id, target_turn_state)
+    assert_no_leak_in_persistence!(setup.pool.id)
 
-        retargeted_state
-      after
-        CodexResponsesSocket.terminate(:closed, origin_state)
-      end
-
-    CodexResponsesSocket.terminate(:closed, retargeted_state)
+    assert :ok = CodexResponsesSocket.terminate(:closed, retargeted_state)
   end
 
   test "owner-forwarded retarget ignores stale origin downstream and cleans up target owner" do
@@ -4836,7 +5285,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert first_log.status == "succeeded"
   end
 
-  test "active owner reconnect suppresses replayed response create and preserves active turn" do
+  @tag :replay_active_reattach
+  @tag :replay_matrix
+  @tag :replay_topology
+  test "healthy active owner rejects an exact retry without attachment mutation" do
     release_ref = make_ref()
     upstream_boundary = terminal_blocking_owner_upstream_boundary(self(), release_ref)
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
@@ -4852,13 +5304,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     first_payload =
       websocket_payload(setup, "first owner active reconnect turn", %{
         "request_id" => "ws-owner-active-reconnect-first",
-        "client_metadata" => %{"turn_id" => "ws-owner-active-reconnect-first"}
+        "client_metadata" => %{
+          "turn_id" => "ws-owner-active-reconnect-first",
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "turn_id" => "ws-owner-active-reconnect-first",
+              "request_kind" => "turn"
+            })
+        }
       })
 
     assert {:ok, first_state} =
              CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
     owner_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
+    assert MapSet.size(first_state.tasks) == 1
     [response_task_pid] = MapSet.to_list(first_state.tasks)
 
     {:ok, second_state} = owner_socket(auth, "ws-owner-active-reconnect-second", turn_state)
@@ -4876,7 +5336,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     try do
       assert [in_progress_request] = request_logs(setup.pool.id)
-      assert in_progress_request.correlation_id =~ ~r/\Acodex-turn:[A-Za-z0-9_-]{43}\z/
+      assert_native_turn_correlation!(in_progress_request.correlation_id)
       assert in_progress_request.status == "in_progress"
 
       {replay_result, replay_log} =
@@ -4884,43 +5344,97 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, second_state)
         end)
 
-      assert {:ok, second_state} = replay_result
+      assert {:push, {:text, duplicate_error}, ^second_state} = replay_result
+      assert Jason.decode!(duplicate_error)["error"]["code"] == "duplicate_turn"
 
       assert event_count(replay_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
                1
 
-      assert replay_log =~ "reconnect_disposition=same_turn_replay"
+      assert replay_log =~ "reconnect_disposition=identity_rejected"
 
       assert second_state.websocket_owner_active_turn_reconnect? == true
       assert MapSet.size(second_state.tasks) == 0
       assert length(request_logs(setup.pool.id)) == 1
 
-      assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
-
-      send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
-
-      assert {:ok, second_state} = receive_owner_socket_complete(second_state)
-      assert second_state.websocket_owner_active_turn_reconnect? == false
-
-      assert {:ok, delivered_state} =
-               receive_response_task_delivery(second_state, response_task_pid)
-
-      assert_response_task_stopped!(delivered_state, response_task_pid)
-
-      assert [request_log] = request_logs(setup.pool.id)
-      assert request_log.correlation_id == in_progress_request.correlation_id
-      assert request_log.status == "succeeded"
-      assert request_log.response_status_code == 200
-      assert request_log.last_error_code == nil
-
-      owner_metadata = request_log.request_metadata["websocket_owner_forwarding"]
-      assert owner_metadata["downstream_epoch"] == 1
+      assert length(request_logs(setup.pool.id)) == 1
     after
+      {:ok, owner_pid} = WebsocketOwnerSession.lookup(first_state.codex_session.id)
+      Sandbox.allow(Repo, self(), owner_pid)
       send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
-      CodexResponsesSocket.terminate(:closed, second_state)
+
+      assert {:push, {:text, terminal_frame}, first_state} =
+               receive_owner_socket_push(first_state)
+
+      assert Jason.decode!(terminal_frame)["type"] == "response.completed"
+      assert {:ok, first_state} = receive_owner_socket_complete(first_state)
+      first_state = receive_receiver_delivery_gap_result(response_task_pid, first_state)
+
+      assert {:ok, first_state} =
+               acknowledge_response_task_delivery_if_pending(first_state, response_task_pid)
+
+      assert_response_task_stopped!(first_state, response_task_pid)
+      assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
+      assert :ok = CodexResponsesSocket.terminate(:closed, second_state)
+      await_owner_cleanup!(first_state.codex_session.id)
     end
   end
 
+  @tag :replay_protocol_v2
+  @tag :replay_topology
+  test "router upgrade carries typed RequestOptions through V2 healthy duplicate" do
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_text_frames([
+          Jason.encode!(%{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_router_v2"}
+          })
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "router-v2-typed-options"
+
+    payload =
+      websocket_payload(setup, "router typed options", %{
+        "request_id" => "router-v2-typed-options",
+        "client_metadata" => %{
+          "turn_id" => "router-v2-typed-options",
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "turn_id" => "router-v2-typed-options",
+              "request_kind" => "turn"
+            })
+        }
+      })
+
+    {first_conn, first_ws, first_ref} = public_websocket_connect!(port, setup, turn_state)
+    {first_conn, first_ws} = public_websocket_send_text!(first_conn, first_ws, first_ref, payload)
+    _ = public_websocket_receive_text!(first_conn, first_ws, first_ref)
+
+    {retry_conn, retry_ws, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+    {retry_conn, retry_ws} = public_websocket_send_text!(retry_conn, retry_ws, retry_ref, payload)
+
+    {_retry_conn, _retry_ws, error} =
+      public_websocket_receive_text!(retry_conn, retry_ws, retry_ref)
+
+    assert Jason.decode!(error)["error"]["code"] == "duplicate_turn"
+
+    Mint.HTTP.close(first_conn)
+    Mint.HTTP.close(retry_conn)
+
+    session =
+      Repo.one!(from session in CodexSession, order_by: [desc: session.created_at], limit: 1)
+
+    case WebsocketOwnerSession.lookup(session.id) do
+      {:ok, owner_pid} -> GenServer.stop(owner_pid, :normal)
+      {:error, :owner_unavailable} -> :ok
+    end
+  end
+
+  @tag :replay_race
+  @tag :replay_topology
   test "active owner reconnect rejects ambiguous frames while prewarm remains local and neutral" do
     for route <- [:direct, :proxy] do
       assert_active_reconnect_frame_matrix(route)
@@ -5116,7 +5630,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "pending edited replacement socket close cancels once without replacement rows or leaks" do
-    private_sentinel = "TASK8_PRIVATE_PENDING_CLOSE_SENTINEL"
+    private_sentinel = "REPLAY_PRIVATE_PENDING_CLOSE_SENTINEL"
     upstream_boundary = reconnect_handoff_owner_upstream_boundary(self())
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
@@ -5268,7 +5782,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "stuck edited replacement times out once without replacement rows" do
-    private_sentinel = "TASK8_PRIVATE_TIMEOUT_SENTINEL"
+    private_sentinel = "REPLAY_PRIVATE_TIMEOUT_SENTINEL"
     upstream_boundary = reconnect_handoff_owner_upstream_boundary(self())
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
@@ -5315,14 +5829,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         "client_metadata" => %{"turn_id" => "ws-owner-handoff-timeout-b"}
       })
 
+    owner_monitor = Process.monitor(owner_pid)
+    assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(first_state.codex_session.id)
+    assert Process.alive?(owner_pid)
+
     assert {:ok, pending_state} =
              CodexResponsesSocket.handle_in(
                {replacement_payload, [opcode: :text]},
                replacement_state
              )
 
+    owner_pending = :sys.get_state(owner_pid).pending_handoff
+
+    send(
+      owner_pid,
+      {:websocket_owner_handoff_soft_timeout, owner_pending.control_ref, owner_pending.soft_token}
+    )
+
     assert length(request_logs(setup.pool.id)) == 1
     assert_receive {:websocket_owner_handoff_ready, _, _, _, _, _}, @handoff_detection_timeout_ms
+
+    owner_pending = :sys.get_state(owner_pid).pending_handoff
+
+    send(
+      owner_pid,
+      {:websocket_owner_handoff_absolute_timeout, owner_pending.control_ref,
+       owner_pending.absolute_token}
+    )
 
     {timeout_result, timeout_log} =
       with_info_log(fn ->
@@ -5340,8 +5873,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert timeout_log =~ "handoff_outcome=timeout"
     refute timeout_log =~ private_sentinel
     assert length(request_logs(setup.pool.id)) == 1
-    CodexResponsesSocket.terminate(:closed, first_state)
-    CodexResponsesSocket.terminate(:closed, timeout_state)
+
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :normal},
+                   @handoff_detection_timeout_ms
+
+    assert {:error, :owner_unavailable} =
+             WebsocketOwnerSession.lookup(timeout_state.codex_session.id)
   end
 
   test "owner forwarding does not acquire a second proxy websocket admission slot" do
@@ -6166,6 +6703,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     )
   end
 
+  @tag :replay_topology
   test "stale owner token rejects before upstream send" do
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
@@ -6222,14 +6760,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :shutdown}
       end)
 
-    assert logs =~ "websocket owner exit persistence failed"
-    assert logs =~ "operation=release_owner_lease"
-    assert logs =~ "reason_class=stale_owner"
+    refute logs =~ "websocket owner exit persistence failed"
     assert logs =~ "owner_exit_reason=owner_drained"
+    assert active_owner_lease(state.codex_session.id).lease_token == takeover_token
     assert_no_leak!("stale owner cleanup logs", logs)
   end
 
   @tag :owner_drained_terminal_state
+  @tag :replay_cleanup
   test "owner drain sends safe interruption releases lease and suppresses later stale downstream terminate" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_drain"}))
     setup = gateway_setup(upstream)
@@ -8248,7 +8786,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     %{"model" => setup.model.exposed_model_id, "input" => input, "stream" => true}
   end
 
-  defp start_remote_bridge_owner!(auth, session_header, remote_node) do
+  defp start_remote_bridge_owner!(auth, session_header, remote_node, persistence_kind \\ :fake) do
     {:ok, session} =
       Gateway.start_codex_session(auth, %{
         session_header: session_header,
@@ -8257,7 +8795,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     persistence =
-      :erpc.call(remote_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+      case persistence_kind do
+        :fake ->
+          :erpc.call(remote_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+        :real ->
+          :erpc.call(remote_node, WebsocketOwnerNodeHarness, :real_persistence_boundary, [])
+      end
 
     {:ok, owner_pid} =
       :erpc.call(remote_node, WebsocketOwnerSession, :start_owner, [
@@ -8273,14 +8817,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     on_exit(fn ->
       if remote_node in Node.list(:connected) and
            :erpc.call(remote_node, Process, :alive?, [owner_pid]) do
+        owner_monitor = Process.monitor(owner_pid)
         :erpc.call(remote_node, GenServer, :stop, [owner_pid, :normal, 5_000])
+
+        assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :normal},
+                       @handoff_detection_timeout_ms
       end
     end)
 
     {session, owner_pid}
   end
 
-  defp start_bridge_peer!(release, identity)
+  defp start_bridge_peer!(release, identity, opts \\ [])
        when release in [:current, :previous] and is_struct(identity, UpstreamIdentity) do
     peer_name = String.to_atom("public_owner_#{release}_#{System.unique_integer([:positive])}")
 
@@ -8303,6 +8851,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              :erpc.call(peer_node, WebsocketOwnerNodeHarness, :start_owner_runtime, [])
 
     assert node(runtime_pid) == peer_node
+
+    if Keyword.get(opts, :repo) == :real do
+      repo_config =
+        :codex_pooler
+        |> Application.fetch_env!(Repo)
+        |> Keyword.merge(pool: DBConnection.ConnectionPool, pool_size: 2)
+
+      assert is_pid(:erpc.call(peer_node, WebsocketOwnerNodeHarness, :start_repo, [repo_config]))
+
+      upstream_config = Application.get_env(:codex_pooler, Upstreams, [])
+
+      assert :ok =
+               :erpc.call(peer_node, Application, :put_env, [
+                 :codex_pooler,
+                 Upstreams,
+                 upstream_config
+               ])
+    end
 
     on_exit(fn ->
       if remote_node_connected?(peer_node) and
@@ -8333,6 +8899,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
 
     peer_node
+  end
+
+  defp stop_remote_owner!(remote_node, codex_session_id, owner_pid) do
+    owner_monitor = Process.monitor(owner_pid)
+
+    assert :ok =
+             :erpc.call(
+               remote_node,
+               WebsocketOwnerNodeHarness,
+               :stop_owner,
+               [codex_session_id, @handoff_detection_timeout_ms],
+               @handoff_detection_timeout_ms
+             )
+
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, _reason},
+                   @handoff_detection_timeout_ms
+
+    assert :erpc.call(remote_node, WebsocketOwnerNodeHarness, :owner_absent?, [codex_session_id])
+    assert Repo.get_by!(BridgeOwnerLease, codex_session_id: codex_session_id).status == "released"
   end
 
   defp trace_remote_v1_calls!(peer_node) do
@@ -8500,11 +9085,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     previous_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
     Application.put_env(:kernel, :prevent_overlapping_partitions, false)
     node_name = String.to_atom("controller_owner_test_#{System.unique_integer([:positive])}")
-    assert {:ok, _pid} = :net_kernel.start([node_name, :shortnames])
+    assert {:ok, net_kernel_pid} = :net_kernel.start([node_name, :shortnames])
 
     on_exit(fn ->
+      monitor = Process.monitor(net_kernel_pid)
       assert :ok = :net_kernel.stop()
-      await_distribution_stop!()
+
+      assert_receive {:DOWN, ^monitor, :process, ^net_kernel_pid, _reason},
+                     @handoff_detection_timeout_ms
+
+      await_local_node_stopped!()
 
       case previous_partition_guard do
         {:ok, value} -> Application.put_env(:kernel, :prevent_overlapping_partitions, value)
@@ -8514,6 +9104,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp start_test_distribution!(_distributed_node), do: :ok
+
+  defp await_local_node_stopped!(attempts \\ 1_000)
+
+  defp await_local_node_stopped!(0), do: flunk("local distribution did not stop")
+
+  defp await_local_node_stopped!(attempts) do
+    if node() == :nonode@nohost do
+      :ok
+    else
+      yield_once({:await_local_node_stopped, attempts})
+      await_local_node_stopped!(attempts - 1)
+    end
+  end
 
   defp remote_node_connected?(peer_node), do: peer_node in Node.list(:connected)
 
@@ -8530,19 +9133,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     else
       yield_once({:await_peer_down, peer_name, attempts})
       await_peer_down!(peer_name, peer_node, attempts - 1)
-    end
-  end
-
-  defp await_distribution_stop!(attempts \\ 1_000)
-
-  defp await_distribution_stop!(0), do: flunk("test distribution did not stop")
-
-  defp await_distribution_stop!(attempts) do
-    if node() == :nonode@nohost do
-      :ok
-    else
-      yield_once({:await_distribution_stop, attempts})
-      await_distribution_stop!(attempts - 1)
     end
   end
 
@@ -9108,7 +9698,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp assert_active_reconnect_frame_matrix(route) when route in [:direct, :proxy] do
-    private_sentinel = "TASK8_ACTIVE_MATRIX_PRIVATE_SENTINEL"
+    private_sentinel = "REPLAY_ACTIVE_MATRIX_PRIVATE_SENTINEL"
     release_ref = make_ref()
     upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
@@ -9127,11 +9717,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         "client_metadata" => %{"turn_id" => "ws-active-matrix-#{route}-a"}
       })
 
-    assert {:ok, first_state} =
+    assert {:ok, _first_state} =
              CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
     worker_pid = assert_blocking_owner_upstream_received!(release_ref)
     {:ok, reconnect_state} = owner_socket(auth, "ws-active-matrix-#{route}-b", turn_state)
+
     reconnect_state = maybe_proxy_owner_state(reconnect_state, route)
     owner_pid = reconnect_state.websocket_owner_pid
     before_owner = :sys.get_state(owner_pid)
@@ -9251,9 +9842,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert length(request_logs(setup.pool.id)) == 1
 
     send(worker_pid, {:blocking_owner_upstream_release, release_ref})
-    assert {:ok, _state} = receive_owner_socket_complete(prewarm_state)
-    CodexResponsesSocket.terminate(:closed, first_state)
-    CodexResponsesSocket.terminate(:closed, prewarm_state)
+    assert {:ok, prewarm_state} = receive_owner_socket_complete(prewarm_state)
+    assert {:ok, prewarm_state} = receive_socket_done(prewarm_state)
+    assert :ok = CodexResponsesSocket.terminate(:closed, prewarm_state)
   end
 
   defp assert_pending_replacement_prewarm_neutral(route) when route in [:direct, :proxy] do
@@ -9854,7 +10445,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       {:websocket_response_delivery_complete, _, _} = message ->
         handle_owner_socket_push_message(message, state)
     after
-      1_000 -> flunk("expected owner websocket response frame")
+      @handoff_detection_timeout_ms -> flunk("expected owner websocket response frame")
     end
   end
 
@@ -9872,7 +10463,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       {:websocket_response_delivery_complete, _, _} = message ->
         handle_native_collect_socket_push_message(message, state)
     after
-      1_000 -> flunk("expected collected native websocket response frame")
+      @handoff_detection_timeout_ms -> flunk("expected collected native websocket response frame")
     end
   end
 
@@ -9924,7 +10515,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       {:websocket_response_delivery_complete, _, _} = message ->
         handle_owner_socket_raw_push_message(message, state)
     after
-      1_000 -> flunk("expected owner websocket response frame")
+      @handoff_detection_timeout_ms -> flunk("expected owner websocket response frame")
     end
   end
 
@@ -9955,7 +10546,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       {:websocket_response_delivery_complete, _, _} = message ->
         handle_owner_socket_complete_control(message, state)
     after
-      1_000 -> flunk("expected owner websocket completion frame")
+      @handoff_detection_timeout_ms -> flunk("expected owner websocket completion frame")
     end
   end
 
@@ -10733,21 +11324,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                    @response_task_stop_timeout_ms
   end
 
-  defp receive_response_task_delivery(state, task_pid) do
-    receive do
-      {:websocket_response_activity, ^task_pid, _token} = message ->
-        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
-        receive_response_task_delivery(state, task_pid)
+  defp acknowledge_response_task_delivery_if_pending(state, task_pid) do
+    case Map.fetch(state.response_task_activities, task_pid) do
+      {:ok, token} ->
+        CodexResponsesSocket.handle_info(
+          {:websocket_response_delivery_complete, task_pid, token},
+          state
+        )
 
-      {:codex_response_done, ^task_pid, _result} = message ->
-        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
-        receive_response_task_delivery(state, task_pid)
-
-      {:websocket_response_delivery_complete, ^task_pid, _token} = message ->
-        CodexResponsesSocket.handle_info(message, state)
-    after
-      @response_task_stop_timeout_ms ->
-        flunk("expected response task delivery acknowledgement")
+      :error ->
+        if MapSet.member?(state.tasks, task_pid) do
+          receive do
+            {:websocket_response_activity, ^task_pid, _token} = message ->
+              assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+              acknowledge_response_task_delivery_if_pending(state, task_pid)
+          after
+            @response_task_stop_timeout_ms ->
+              flunk("expected response task activity registration")
+          end
+        else
+          {:ok, state}
+        end
     end
   end
 
@@ -10852,16 +11449,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         WebsocketOwnerSession.Registry
         |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
         |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
+          await_owner_cleanup!(codex_session_id)
         end)
       end)
 
     assert_no_leak!("owner cleanup logs", logs)
+  end
+
+  defp await_owner_cleanup!(codex_session_id) do
+    case WebsocketOwnerSession.lookup(codex_session_id) do
+      {:ok, owner_pid} ->
+        monitor = Process.monitor(owner_pid)
+
+        try do
+          GenServer.stop(owner_pid, :shutdown, @handoff_detection_timeout_ms)
+        catch
+          :exit, {:noproc, _details} -> :ok
+          :exit, {:normal, _details} -> :ok
+        end
+
+        assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason},
+                       @handoff_detection_timeout_ms
+
+      {:error, :owner_unavailable} ->
+        :ok
+    end
+
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
   end
 end

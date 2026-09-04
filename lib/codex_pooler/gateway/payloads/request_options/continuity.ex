@@ -29,6 +29,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     :semantic_turn_key,
     :turn_claim_key,
     :request_claim_key,
+    :replay_claim_digest,
     :authenticated_owner_attach,
     upstream_previous_response_id?: false
   ]
@@ -49,6 +50,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
           semantic_turn_key: <<_::256>> | nil,
           turn_claim_key: String.t() | nil,
           request_claim_key: String.t() | nil,
+          replay_claim_digest: <<_::256>> | nil,
           authenticated_owner_attach: boolean(),
           upstream_previous_response_id?: boolean()
         }
@@ -74,6 +76,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       semantic_turn_key: semantic_turn_key(Map.get(opts, :semantic_turn_key)),
       turn_claim_key: turn_claim_key(Map.get(opts, :turn_claim_key)),
       request_claim_key: request_claim_key(Map.get(opts, :request_claim_key)),
+      replay_claim_digest: digest(Map.get(opts, :replay_claim_digest)),
       authenticated_owner_attach: Map.get(opts, :authenticated_owner_attach, false) == true,
       upstream_previous_response_id?: false
     }
@@ -96,6 +99,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     |> Normalization.normalize_optional_update(:semantic_turn_key, &semantic_turn_key/1)
     |> Normalization.normalize_optional_update(:turn_claim_key, &turn_claim_key/1)
     |> Normalization.normalize_optional_update(:request_claim_key, &request_claim_key/1)
+    |> Normalization.normalize_optional_update(:replay_claim_digest, &digest/1)
     |> Normalization.normalize_optional_update(:upstream_previous_response_id?, &(&1 == true))
     |> then(&struct!(continuity, &1))
   end
@@ -142,4 +146,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
   end
 
   defp request_claim_key(_value), do: nil
+
+  defp digest(value) when is_binary(value) and byte_size(value) == 32, do: value
+  defp digest(_value), do: nil
 end

@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   import ExUnit.CaptureLog
   import Ecto.Query
 
-  alias CodexPooler.Accounting.Attempt
+  alias CodexPooler.Accounting.{Attempt, RequestReplay}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.{NativeCodexTurnMetadata, RequestOptions}
@@ -29,6 +29,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.CodexClientIdentity
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @receive_timeout_ms 25
@@ -1577,6 +1578,216 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
            }
   end
 
+  @tag :replay_generation_race
+  test "direct websocket visible result cannot mark a stale generation zero turn after arm", %{
+    auth: auth
+  } do
+    model = model_fixture(auth.pool, %{exposed_model_id: "gpt-replay-visible-cas"})
+    %{assignment: assignment, identity: identity} = upstream_assignment_fixture(auth.pool)
+
+    assert {:ok, session} =
+             Gateway.start_codex_session(auth, %{accepted_turn_state: Ecto.UUID.generate()})
+
+    request =
+      request_fixture(auth, %{
+        model_id: model.id,
+        requested_model: model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil
+      })
+
+    options =
+      RequestOptions.for_websocket(%{})
+      |> RequestOptions.put_continuity(semantic_turn_key: <<1::256>>)
+
+    assert {:ok, turn} = Gateway.start_codex_turn(session, request, options)
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        status: "in_progress",
+        completed_at: nil,
+        upstream_status_code: nil,
+        usage_status: "usage_pending"
+      })
+
+    attempt = attempt |> Ecto.Changeset.change(%{model_id: model.id}) |> Repo.update!()
+    session = Repo.reload!(session)
+
+    reservation =
+      ledger_entry_fixture(request, %{
+        entry_kind: "reservation",
+        amount_status: "recorded",
+        usage_status: "usage_pending",
+        attempt_id: nil,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        model_id: model.id
+      })
+
+    reservation
+    |> Ecto.Changeset.change(%{source_event_id: "request:#{request.id}:reservation"})
+    |> Repo.update!()
+
+    assert {:ok, _armed} =
+             RequestReplay.arm(%{
+               api_key_id: auth.api_key.id,
+               pool_id: auth.pool.id,
+               codex_session_id: session.id,
+               request_id: request.id,
+               codex_turn_id: turn.id,
+               eligible_attempt_id: attempt.id,
+               api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+               model_id: model.id,
+               model_identifier: model.exposed_model_id,
+               endpoint: request.endpoint,
+               semantic_turn_digest: <<1::256>>,
+               replay_claim_digest: <<2::256>>,
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token,
+               predecessor_epoch: 1,
+               failure_reason: :client_disconnected,
+               pre_visible_output: true
+             })
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.websocket_text_frames([
+          Jason.encode!(%{"type" => "response.completed", "response" => %{"id" => "resp_stale"}})
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    dispatch_request = %{
+      websocket_dispatch_request(upstream, websocket_request_options())
+      | identity: identity,
+        accounting_request: request,
+        accounting_attempt: attempt
+    }
+
+    assert {:ok, _result} = UpstreamDispatch.websocket_request(dispatch_request)
+    assert Repo.reload!(turn).first_visible_output_at == nil
+  end
+
+  @tag :replay_generation_race
+  test "direct websocket stale rate-limit frame cannot mutate quota or reach its writer", %{
+    auth: auth
+  } do
+    model = model_fixture(auth.pool, %{exposed_model_id: "gpt-replay-rate-limit-frame"})
+    %{assignment: assignment, identity: identity} = upstream_assignment_fixture(auth.pool)
+
+    model
+    |> Ecto.Changeset.change(%{metadata: %{"source_assignment_ids" => [assignment.id]}})
+    |> Repo.update!()
+
+    assert {:ok, session} =
+             Gateway.start_codex_session(auth, %{accepted_turn_state: Ecto.UUID.generate()})
+
+    request =
+      request_fixture(auth, %{
+        model_id: model.id,
+        requested_model: model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil
+      })
+
+    options =
+      RequestOptions.for_websocket(%{})
+      |> RequestOptions.put_continuity(semantic_turn_key: <<1::256>>)
+
+    assert {:ok, turn} = Gateway.start_codex_turn(session, request, options)
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        status: "in_progress",
+        completed_at: nil,
+        upstream_status_code: nil,
+        usage_status: "usage_pending"
+      })
+      |> Ecto.Changeset.change(%{model_id: model.id})
+      |> Repo.update!()
+
+    reservation =
+      ledger_entry_fixture(request, %{
+        entry_kind: "reservation",
+        amount_status: "recorded",
+        usage_status: "usage_pending",
+        attempt_id: nil,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        model_id: model.id
+      })
+
+    reservation
+    |> Ecto.Changeset.change(%{source_event_id: "request:#{request.id}:reservation"})
+    |> Repo.update!()
+
+    session = Repo.reload!(session)
+
+    assert {:ok, _armed} =
+             RequestReplay.arm(%{
+               api_key_id: auth.api_key.id,
+               pool_id: auth.pool.id,
+               codex_session_id: session.id,
+               request_id: request.id,
+               codex_turn_id: turn.id,
+               eligible_attempt_id: attempt.id,
+               api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+               model_id: model.id,
+               model_identifier: model.exposed_model_id,
+               endpoint: request.endpoint,
+               semantic_turn_digest: <<1::256>>,
+               replay_claim_digest: <<2::256>>,
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token,
+               predecessor_epoch: 1,
+               failure_reason: :client_disconnected,
+               pre_visible_output: true
+             })
+
+    rate_limit_event = websocket_rate_limit_event("96")
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.websocket_text_frames([
+          rate_limit_event,
+          Jason.encode!(%{
+            "type" => "response.completed",
+            "response" => %{"id" => "resp_stale_rate_limit_frame"}
+          })
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    parent = self()
+
+    request_options =
+      websocket_request_options()
+      |> RequestOptions.put_transport(
+        websocket_writer: fn frame -> send(parent, {:frame, frame}) end
+      )
+
+    dispatch_request = %{
+      websocket_dispatch_request(upstream, request_options)
+      | identity: identity,
+        accounting_request: request,
+        accounting_attempt: attempt,
+        writer: fn frame -> send(parent, {:frame, frame}) end
+    }
+
+    observations_before = QuotaWindows.list_quota_windows(identity)
+    assert {:ok, _result} = UpstreamDispatch.websocket_request(dispatch_request)
+    refute_received {:frame, ^rate_limit_event}
+    assert QuotaWindows.list_quota_windows(identity) == observations_before
+    assert Repo.reload!(turn).first_visible_output_at == nil
+  end
+
   test "one-shot websocket request preserves its structured response identity" do
     response_id = "one-shot-response-identity"
     {:ok, success_upstream} = FakeUpstream.start_link(websocket_success(response_id))
@@ -1974,6 +2185,21 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         "response" => %{"id" => id}
       })
     ])
+  end
+
+  defp websocket_rate_limit_event(used_percent) do
+    reset_at = DateTime.utc_now() |> DateTime.add(900, :second) |> DateTime.truncate(:second)
+
+    Jason.encode!(%{
+      "type" => "codex.rate_limits",
+      "rate_limits" => %{
+        "primary" => %{
+          "used_percent" => used_percent,
+          "window_minutes" => 300,
+          "reset_at" => DateTime.to_unix(reset_at)
+        }
+      }
+    })
   end
 
   defp websocket_owner_request_options(session, lease_token, downstream, forwarder_opts) do

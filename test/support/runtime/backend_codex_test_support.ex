@@ -16,7 +16,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     statics: CodexPoolerWeb.static_paths()
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestReplayEntitlement}
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files.FileRecord
@@ -422,6 +422,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     Repo.delete_all(
       from(rollup in CodexPooler.Accounting.DailyRollup, where: rollup.pool_id == ^pool_id)
+    )
+
+    Repo.delete_all(
+      from(entitlement in RequestReplayEntitlement, where: entitlement.request_id in ^request_ids)
     )
 
     Repo.delete_all(from(turn in CodexTurn, where: turn.request_id in ^request_ids))

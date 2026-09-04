@@ -123,6 +123,56 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     |> RequestOptions.put_continuity(response_id: response_id)
   end
 
+  @spec register_session_header_hash(CodexSession.t(), map(), <<_::256>>, DateTime.t()) ::
+          :ok | {:error, :session_alias_conflict}
+  def register_session_header_hash(
+        %CodexSession{pool_id: pool_id, api_key_id: api_key_id} = session,
+        %{pool: %{id: pool_id}, api_key: %{id: api_key_id}},
+        hash,
+        now
+      )
+      when is_binary(hash) and byte_size(hash) == 32 do
+    expires_at = DateTime.add(now, expired_alias_ttl_seconds(), :second)
+
+    row = %{
+      id: Ecto.UUID.generate(),
+      codex_session_id: session.id,
+      pool_id: pool_id,
+      api_key_id: api_key_id,
+      alias_kind: "session_header",
+      alias_hash: hash,
+      alias_preview: alias_preview(hash),
+      status: @alias_active,
+      expires_at: expires_at,
+      last_seen_at: now,
+      metadata: %{"source" => "native_final_window"},
+      created_at: now,
+      updated_at: now
+    }
+
+    Repo.insert_all(BridgeSessionAlias, [row],
+      on_conflict:
+        from(alias_record in BridgeSessionAlias,
+          where: alias_record.codex_session_id == ^session.id,
+          update: [set: [expires_at: ^expires_at, last_seen_at: ^now, updated_at: ^now]]
+        ),
+      conflict_target: @session_alias_conflict_target
+    )
+
+    if Repo.exists?(
+         from alias_record in BridgeSessionAlias,
+           where:
+             alias_record.pool_id == ^pool_id and alias_record.api_key_id == ^api_key_id and
+               alias_record.alias_kind == "session_header" and alias_record.alias_hash == ^hash and
+               alias_record.status == ^@alias_active and
+               alias_record.codex_session_id == ^session.id
+       ) do
+      :ok
+    else
+      {:error, :session_alias_conflict}
+    end
+  end
+
   defp maybe_require_active_owner_lease(query, "previous_response_id", _now), do: query
 
   defp maybe_require_active_owner_lease(query, _alias_kind, now) do

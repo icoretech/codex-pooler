@@ -8,13 +8,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
 
   @remote_compaction_v2_fixture_path Path.expand(
-                                       "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_request.json",
+                                       "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_request.json",
                                        __DIR__
                                      )
   @external_resource @remote_compaction_v2_fixture_path
 
   @remote_compaction_v2_incremental_fixture_path Path.expand(
-                                                   "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_incremental_request.json",
+                                                   "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_incremental_request.json",
                                                    __DIR__
                                                  )
   @external_resource @remote_compaction_v2_incremental_fixture_path
@@ -926,6 +926,40 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       end
     end
 
+    test "accepts the exact native zero-byte incremental shape while public remains strict" do
+      payload = remote_compaction_v2_incremental_subset!("anchored_tool_output_and_trigger")
+
+      assert [
+               %{
+                 "type" => "function_call_output",
+                 "call_id" => "call_fixture_incremental",
+                 "output" => ""
+               },
+               %{"type" => "compaction_trigger"}
+             ] = payload["input"]
+
+      assert {:ok, native} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert native.payload["input"] == payload["input"]
+
+      public_payload =
+        payload
+        |> Map.delete("previous_response_id")
+        |> Map.put("model", "gpt-fixture")
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               WebsocketCodec.coerce_request(
+                 public_payload,
+                 public_responses_options(public_payload),
+                 fn _frame -> :ok end
+               )
+    end
+
     test "keeps source-derived full-history compaction unanchored" do
       payload = remote_compaction_v2_incremental_subset!("full_history_without_anchor")
 
@@ -1022,10 +1056,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         [
           %{"type" => "message", "content" => "visible native input"},
           %{"type" => "compaction_trigger"},
-          %{"type" => "compaction_trigger"}
-        ],
-        [
-          %{"type" => "reasoning", "encrypted_content" => "hidden-only"},
           %{"type" => "compaction_trigger"}
         ]
       ]

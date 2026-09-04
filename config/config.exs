@@ -106,6 +106,16 @@ jobs_schedule = [
     workers: [CodexPooler.Jobs.RuntimeStateCleanupWorker],
     scheduled_worker: CodexPooler.Jobs.RuntimeStateCleanupWorker,
     cadence: %{label: "Every 15 min", cron: "*/15 * * * *"}
+  },
+  %{
+    key: :request_replay_cleanup,
+    id: "request-replay-cleanup",
+    title: "Request replay cleanup",
+    description: "Expired replay cleanup",
+    icon: "hero-sparkles",
+    workers: [CodexPooler.Jobs.RequestReplayCleanupWorker],
+    scheduled_worker: CodexPooler.Jobs.RequestReplayCleanupWorker,
+    cadence: %{label: "Every minute", cron: "* * * * *"}
   }
 ]
 

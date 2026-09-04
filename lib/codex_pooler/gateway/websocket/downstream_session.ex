@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   alias CodexPooler.Gateway.Transports.Websocket.{
     RolloutDrain,
     WebsocketOwnerContract,
+    WebsocketOwnerForwarder,
     WebsocketOwnerSession
   }
 
@@ -283,6 +284,30 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     )
   end
 
+  @spec reconnect_control_v2(
+          socket_state(),
+          CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2.t()
+        ) :: term()
+  def reconnect_control_v2(state, control) do
+    WebsocketOwnerForwarder.reconnect_control_v2(
+      Map.get(state, :codex_session),
+      Map.get(state, :websocket_owner_lease_token),
+      control,
+      forwarder_opts(Map.get(state, :opts))
+    )
+  end
+
+  defp forwarder_opts(%RequestOptions{transport: %{websocket_owner: owner}}),
+    do: owner.forwarder_opts
+
+  defp forwarder_opts(opts) when is_map(opts),
+    do: Map.get(opts, :websocket_owner_forwarder_opts, [])
+
+  defp forwarder_opts(opts) when is_list(opts),
+    do: Keyword.get(opts, :websocket_owner_forwarder_opts, [])
+
+  defp forwarder_opts(_opts), do: []
+
   @spec cancel_reconnect(socket_state(), <<_::256>>, reference()) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
   def cancel_reconnect(state, semantic_turn_key, control_ref)
@@ -403,11 +428,13 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   defp record_owner_drained_cleanup(state) do
     _owner_drain_result = drain_owner_session(state)
-    _recovery_result = recover_leftovers({:error, :owner_drained}, state)
+    recovery_result = recover_leftovers({:error, :owner_drained}, state)
 
-    "owner_drained"
-    |> release_lease(state)
-    |> log_monitor_lease_release(state, :owner_drained)
+    if match?({:ok, _result}, recovery_result) do
+      "owner_drained"
+      |> release_lease(state)
+      |> log_monitor_lease_release(state, :owner_drained)
+    end
   end
 
   defp drain_owner_session(%{websocket_owner_pid: owner_pid}) when is_pid(owner_pid) do
@@ -451,14 +478,18 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   defp effective_monitor_down_reason(_state, reason), do: monitor_down_reason(reason)
 
   defp handle_owner_exit(owner_reason, state, raw_reason) do
-    {:error, owner_reason}
-    |> recover_leftovers(state)
-    |> log_monitor_recovery(state, raw_reason)
+    recovery_result =
+      {:error, owner_reason}
+      |> recover_leftovers(state)
 
-    owner_reason
-    |> Atom.to_string()
-    |> release_lease(state)
-    |> log_monitor_lease_release(state, raw_reason)
+    log_monitor_recovery(recovery_result, state, raw_reason)
+
+    if match?({:ok, _recovered}, recovery_result) do
+      owner_reason
+      |> Atom.to_string()
+      |> release_lease(state)
+      |> log_monitor_lease_release(state, raw_reason)
+    end
 
     {:ok, state}
   end
@@ -495,7 +526,12 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   defp after_detach(result, state) do
     recovery_result = recover_leftovers(result, state)
-    _interrupt_result = interrupt_downstream_turn(result, state)
+
+    _interrupt_result =
+      if result in [:reattachable, :suspended],
+        do: :ok,
+        else: interrupt_downstream_turn(result, state)
+
     log_detach_failure(result, state, recovery_result)
   end
 
@@ -527,6 +563,9 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     opts
     |> RequestOptions.put_runtime_context(interrupt_reason: interrupt_reason)
     |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
+    |> RequestOptions.put_transport(
+      websocket_owner_lease_token: opts.transport.websocket_owner.lease_token
+    )
   end
 
   defp put_lifecycle_recovery_opts(state, interrupt_reason) do
@@ -535,6 +574,9 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     |> RequestOptions.for_websocket()
     |> RequestOptions.put_runtime_context(interrupt_reason: interrupt_reason)
     |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
+    |> RequestOptions.put_transport(
+      websocket_owner_lease_token: Map.get(state, :websocket_owner_lease_token)
+    )
   end
 
   defp lifecycle_interrupt_reason(reason)
@@ -603,6 +645,8 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   end
 
   defp log_detach_failure(:ok, _state, _recovery_result), do: :ok
+  defp log_detach_failure(:reattachable, _state, _recovery_result), do: :ok
+  defp log_detach_failure(:suspended, _state, _recovery_result), do: :ok
   defp log_detach_failure(:detached_stale_downstream, _state, _recovery_result), do: :ok
 
   defp log_detach_failure({:error, reason}, state, {:ok, recovery}) do

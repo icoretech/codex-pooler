@@ -118,9 +118,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
             reservation.amount_status == "recorded",
         left_join: release in LedgerEntry,
         on: release.request_id == request.id and release.entry_kind == "release",
+        left_join: replay in CodexPooler.Accounting.RequestReplayEntitlement,
+        on: replay.request_id == request.id,
         where:
           request.status in ^@request_statuses and request.admitted_at <= ^cutoff and
-            is_nil(release.id),
+            is_nil(release.id) and is_nil(replay.id),
         order_by: [asc: request.admitted_at, asc: request.id],
         limit: ^limit,
         select: request

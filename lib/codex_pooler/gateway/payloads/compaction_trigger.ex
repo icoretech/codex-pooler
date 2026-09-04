@@ -195,7 +195,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     |> validate_compact_payload()
   end
 
-  defp prepare_input_bridge(%{"input" => input} = payload, require_visible?: _require_visible?) do
+  defp prepare_input_bridge(%{"input" => input} = payload, require_visible?: require_visible?) do
     trigger_indexes = trigger_indexes(input)
 
     cond do
@@ -208,7 +208,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
       length(input) < 2 ->
         {:error, invalid_trigger_error()}
 
-      not visible_input_before_trigger?(input) ->
+      require_visible? and not visible_input_before_trigger?(input) ->
         {:error, invalid_trigger_error()}
 
       true ->

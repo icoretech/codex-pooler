@@ -1,6 +1,8 @@
 defmodule CodexPooler.Access.APIKeys do
   @moduledoc false
 
+  import Ecto.Query
+
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Access.DashboardSessions
   alias CodexPooler.Access.DashboardSessions.Lifecycle, as: DashboardSessionLifecycle
@@ -20,7 +22,9 @@ defmodule CodexPooler.Access.APIKeys do
     RuntimeAuthorization
   }
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Authorization, as: PoolAuthorization
   alias CodexPooler.Pools.Pool
@@ -420,7 +424,7 @@ defmodule CodexPooler.Access.APIKeys do
     do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
 
   @spec delete_api_key(Scope.t(), APIKey.t() | Ecto.UUID.t()) ::
-          {:ok, APIKey.t()} | {:error, Ecto.Changeset.t() | access_error()}
+          {:ok, APIKey.t()} | {:error, term()}
   def delete_api_key(%Scope{} = scope, %APIKey{} = api_key) do
     with {:ok, _decision} <-
            PoolAuthorization.require_capability(
@@ -428,10 +432,14 @@ defmodule CodexPooler.Access.APIKeys do
              PoolAuthorization.capability(:pool_api_key_manage),
              pool_id: api_key.pool_id
            ) do
-      mutation = fn -> Repo.delete(api_key) end
+      delete_api_key_serialized(api_key)
+      |> tap(fn
+        {:ok, deleted_api_key} ->
+          DashboardSessions.broadcast_invalidation(deleted_api_key, "api_key_deleted")
 
-      api_key
-      |> DashboardSessionLifecycle.run("api_key_deleted", mutation)
+        {:error, _reason} ->
+          :ok
+      end)
       |> Notifications.notify_api_key_change("api_key_deleted")
       |> AuditLog.audit_api_key_change(scope, "api_key.delete")
     end
@@ -445,6 +453,175 @@ defmodule CodexPooler.Access.APIKeys do
 
   def delete_api_key(_scope, _api_key),
     do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
+
+  defp delete_api_key_serialized(%APIKey{} = api_key) do
+    delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), 3)
+  end
+
+  defp delete_api_key_serialized(api_key, session_ids, attempts_left) do
+    maybe_wait_after_api_key_delete_snapshot(api_key.id, session_ids, attempts_left)
+
+    result = Repo.transact(fn -> delete_api_key_with_locked_sessions(api_key, session_ids) end)
+
+    case normalize_api_key_delete_result(result) do
+      {:error, %{code: :api_key_delete_conflict}} when attempts_left > 1 ->
+        delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), attempts_left - 1)
+
+      normalized ->
+        normalized
+    end
+  rescue
+    exception in Postgrex.Error ->
+      if api_key_delete_retryable_postgres_error?(exception) do
+        retry_api_key_delete_after_conflict(api_key, attempts_left)
+      else
+        reraise exception, __STACKTRACE__
+      end
+
+    exception in Ecto.ConstraintError ->
+      if exception.type == :foreign_key do
+        retry_api_key_delete_after_conflict(api_key, attempts_left)
+      else
+        reraise exception, __STACKTRACE__
+      end
+  end
+
+  defp delete_api_key_with_locked_sessions(api_key, session_ids) do
+    lock_api_key_sessions(session_ids)
+
+    with %APIKey{} = locked_api_key <- lock_api_key(api_key.id),
+         :ok <- require_current_api_key_sessions(locked_api_key.id, session_ids),
+         :ok <- close_api_key_replays(locked_api_key.id) do
+      DashboardSessionLifecycle.run_in_transaction(
+        locked_api_key,
+        "api_key_deleted",
+        fn -> Repo.delete(locked_api_key) end
+      )
+    else
+      nil -> {:error, Errors.access_error(:api_key_not_found, "api key was not found")}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp retry_api_key_delete_after_conflict(api_key, attempts_left) when attempts_left > 1,
+    do: delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), attempts_left - 1)
+
+  defp retry_api_key_delete_after_conflict(_api_key, _attempts_left),
+    do: api_key_delete_conflict()
+
+  defp api_key_delete_retryable_postgres_error?(%Postgrex.Error{
+         postgres: %{code: code}
+       })
+       when code in [:deadlock_detected, :serialization_failure, :foreign_key_violation],
+       do: true
+
+  defp api_key_delete_retryable_postgres_error?(%Postgrex.Error{}), do: false
+
+  defp session_ids_for_api_key(api_key_id) do
+    Repo.all(
+      from session in CodexSession,
+        where: session.api_key_id == ^api_key_id,
+        order_by: [asc: session.id],
+        select: session.id
+    )
+  end
+
+  if Mix.env() == :test do
+    defp maybe_wait_after_api_key_delete_snapshot(_api_key_id, session_ids, attempts_left) do
+      case Application.get_env(:codex_pooler, :api_key_delete_test_barrier) do
+        %{
+          test_pid: test_pid,
+          ref: ref,
+          block_attempts_left: blocked_attempts
+        }
+        when is_pid(test_pid) and is_reference(ref) and is_list(blocked_attempts) ->
+          send(
+            test_pid,
+            {:api_key_delete_session_snapshot, ref, self(), attempts_left, session_ids}
+          )
+
+          if attempts_left in blocked_attempts do
+            receive do
+              {:release_api_key_delete_snapshot, ^ref} -> :ok
+            end
+          end
+
+        _no_barrier ->
+          :ok
+      end
+
+      :ok
+    end
+  else
+    defp maybe_wait_after_api_key_delete_snapshot(_api_key_id, _session_ids, _attempts_left),
+      do: :ok
+  end
+
+  defp lock_api_key_sessions([]), do: :ok
+
+  defp lock_api_key_sessions(session_ids) do
+    Repo.all(
+      from session in CodexSession,
+        where: session.id in ^session_ids,
+        order_by: [asc: session.id],
+        lock: "FOR UPDATE"
+    )
+
+    :ok
+  end
+
+  defp lock_api_key(api_key_id) do
+    Repo.one(from api_key in APIKey, where: api_key.id == ^api_key_id, lock: "FOR UPDATE")
+  end
+
+  defp require_current_api_key_sessions(api_key_id, expected_session_ids) do
+    if session_ids_for_api_key(api_key_id) == expected_session_ids do
+      :ok
+    else
+      api_key_delete_conflict()
+    end
+  end
+
+  defp close_api_key_replays(api_key_id) do
+    case api_key_delete_replay_close_override() do
+      close when is_function(close, 1) ->
+        close.(api_key_id)
+
+      nil ->
+        api_key_id
+        |> Accounting.request_replay_ids_for_api_key()
+        |> Enum.reduce_while(:ok, &close_deleted_request_replay/2)
+    end
+  end
+
+  defp close_deleted_request_replay(request_id, :ok) do
+    case Accounting.close_request_replay(request_id, :deleted) do
+      {:ok, _result} -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp api_key_delete_replay_close_override do
+    if Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) and Mix.env() == :test do
+      Application.get_env(:codex_pooler, :api_key_delete_replay_close_test_override)
+    end
+  end
+
+  defp normalize_api_key_delete_result({:ok, %APIKey{} = api_key}), do: {:ok, api_key}
+  defp normalize_api_key_delete_result({:error, %{code: _code} = error}), do: {:error, error}
+
+  defp normalize_api_key_delete_result({:error, %Ecto.Changeset{} = changeset}),
+    do: {:error, changeset}
+
+  defp normalize_api_key_delete_result({:error, reason}), do: {:error, reason}
+
+  defp api_key_delete_conflict do
+    {:error,
+     Errors.access_error(
+       :api_key_delete_conflict,
+       "api key deletion conflicts with active runtime work"
+     )}
+  end
 
   @spec authenticate_api_key(term()) :: {:ok, auth_context()} | {:error, access_error()}
   defdelegate authenticate_api_key(raw_key), to: Authentication

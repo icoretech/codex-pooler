@@ -135,12 +135,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
         Finalization.finalize_first_event_stream_failure(body, failure, response_context)
       end,
       write_chunk: fn state, data ->
-        {:ok, rate_limit} =
-          RateLimitObserver.record_events(
-            response_context.context.identity,
-            data,
-            rate_limit_state(state)
-          )
+        {:ok, rate_limit} = RateLimitObserver.collect_events(data, rate_limit_state(state))
 
         with {:ok, state} <- collect_sse_data(state, data) do
           {:ok, %{state | rate_limit: rate_limit}}
@@ -479,8 +474,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
      }}
   end
 
-  defp rate_limit_state(%{rate_limit: %{buffer: buffer}}) when is_binary(buffer),
-    do: %{buffer: buffer}
+  defp rate_limit_state(%{rate_limit: %{buffer: buffer} = state}) when is_binary(buffer),
+    do: state
 
   defp rate_limit_state(_state), do: RateLimitObserver.event_state()
 end

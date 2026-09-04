@@ -2023,6 +2023,279 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert cleanup.client_socket_count == 0
   end
 
+  @tag :fragmented_upgrade_boundary
+  test "Mint rejects upgrade headers without a status line before response completion" do
+    peer = start_raw_websocket_peer(upgrade_mode: :missing_status)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:error, %{body: "", reason: %Mint.HTTPError{reason: :invalid_status_line}}} =
+             UpstreamWebsocketSession.request(session, websocket_request(peer.url))
+
+    assert_disconnected_lifecycle(session, initial_lifecycle)
+
+    cleanup = stop_raw_websocket_peer(peer)
+    assert cleanup.alive_tasks == []
+    assert cleanup.client_socket_count == 0
+  end
+
+  @tag :fragmented_upgrade_boundary
+  test "Mint emits a split upgrade status before the terminal headers and done batch" do
+    peer = start_raw_websocket_peer(upgrade_mode: :split_status)
+    uri = URI.parse(peer.url)
+
+    {:ok, conn} =
+      Mint.HTTP.connect(:http, uri.host, uri.port, protocols: [:http1], mode: :passive)
+
+    on_exit(fn -> Mint.HTTP.close(conn) end)
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, uri.path, [])
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
+                   @detection_timeout_ms
+
+    assert {:ok, conn, [{:status, ^ref, 101}]} =
+             Mint.WebSocket.recv(conn, 0, @detection_timeout_ms)
+
+    send(peer_pid, :release_raw_upstream_websocket_upgrade)
+
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
+    {conn, responses} = receive_mint_upgrade_until_done(conn, ref, deadline, [])
+    assert [{:headers, ^ref, headers}, {:done, ^ref}] = responses
+    assert {"upgrade", "websocket"} in headers
+
+    {:ok, _conn} = Mint.HTTP.close(conn)
+    cleanup = stop_raw_websocket_peer(peer)
+    assert cleanup.alive_tasks == []
+    assert cleanup.client_socket_count == 0
+  end
+
+  test "an intact raw HTTP websocket upgrade establishes generation one" do
+    peer = start_raw_websocket_peer(upgrade_mode: :valid)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:ok, result} =
+             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+
+    assert_connection_metadata(result, %{initial_lifecycle | generation: 1}, false, false)
+    assert_receive {:upstream_websocket_frame, _frame}, @detection_timeout_ms
+
+    cleanup = stop_raw_websocket_peer(peer)
+    assert cleanup.alive_tasks == []
+    assert cleanup.client_socket_count == 0
+  end
+
+  @tag :fragmented_upgrade_boundary
+  test "retains a status 101 emitted in a Mint batch before the terminal headers batch" do
+    peer = start_raw_websocket_peer(upgrade_mode: :split_status)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    initial_lifecycle = lifecycle_state(session)
+    owner = self()
+
+    request_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, owner))
+      end)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
+                   @detection_timeout_ms
+
+    assert_stack_eventually_in(session, ConnectionUpgrade, :await_upgrade, 5)
+    send(peer_pid, :release_raw_upstream_websocket_upgrade)
+
+    assert {:ok, result} = Task.await(request_task, @detection_timeout_ms)
+    assert_connection_metadata(result, %{initial_lifecycle | generation: 1}, false, false)
+    assert_receive {:upstream_websocket_frame, _frame}, @detection_timeout_ms
+
+    cleanup = stop_raw_websocket_peer(peer)
+    assert cleanup.alive_tasks == []
+    assert cleanup.client_socket_count == 0
+  end
+
+  test "retains status across a partial header line before final upgrade headers" do
+    peer = start_raw_websocket_peer(upgrade_mode: :split_partial_headers)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    owner = self()
+
+    task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, owner))
+      end)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :partial_headers, peer_pid},
+                   @detection_timeout_ms
+
+    send(peer_pid, :release_raw_upstream_websocket_upgrade)
+    assert {:ok, _result} = Task.await(task, @detection_timeout_ms)
+    assert_receive {:upstream_websocket_frame, _frame}, @detection_timeout_ms
+  end
+
+  @tag :fragmented_upgrade_boundary
+  test "uses the completed final block when informational and final responses share one Mint batch" do
+    peer =
+      start_raw_websocket_peer(
+        upgrade_mode: :informational_then_valid,
+        upgrade_headers: [{"x-final-upgrade", "present"}]
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, _result} =
+             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+
+    state = :sys.get_state(session)
+    assert {"x-final-upgrade", "present"} in state.headers
+    refute Enum.any?(state.headers, fn {name, _value} -> name == "x-informational-sentinel" end)
+  end
+
+  test "retains a fragmented non-101 status for the terminal upgrade failure" do
+    peer = start_raw_websocket_peer(upgrade_mode: :split_forbidden)
+    owner = self()
+
+    result_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request_once(raw_websocket_request(peer.url, owner))
+      end)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :forbidden_status, peer_pid},
+                   @detection_timeout_ms
+
+    send(peer_pid, :release_raw_upstream_websocket_upgrade)
+
+    assert {:error, %{body: "", reason: {:websocket_upgrade_failed, 403, headers}}} =
+             Task.await(result_task, @detection_timeout_ms)
+
+    assert {"content-length", "0"} in headers
+    refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
+  end
+
+  test "caller death after the first upgrade fragment closes without sending payload" do
+    peer = start_raw_websocket_peer(upgrade_mode: :split_status)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    owner = self()
+
+    task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, owner))
+      end)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
+                   @detection_timeout_ms
+
+    assert Task.shutdown(task, :brutal_kill) == nil
+    send(peer_pid, :release_raw_upstream_websocket_upgrade)
+    assert :closed = wait_for_raw_websocket_connection_closed(1, 500)
+    refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
+  end
+
+  test "queued terminal upgrade data wins at an expired monotonic deadline" do
+    peer = start_raw_websocket_peer(upgrade_mode: :split_status)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | timeouts: %{connect_timeout_ms: 80, receive_timeout_ms: 1_000}
+    }
+
+    owner = self()
+    request = %{request | writer: fn text -> send(owner, {:upstream_websocket_frame, text}) end}
+
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
+                   @detection_timeout_ms
+
+    :erlang.suspend_process(session)
+
+    try do
+      send(peer_pid, :release_raw_upstream_websocket_upgrade)
+
+      assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :terminal_queued},
+                     @detection_timeout_ms
+
+      await_test_timer(120)
+    after
+      :erlang.resume_process(session)
+    end
+
+    assert {:ok, _result} = Task.await(task, @detection_timeout_ms)
+    assert_receive {:upstream_websocket_frame, _frame}, @detection_timeout_ms
+  end
+
+  test "queued nonterminal upgrade data folds once and then respects the expired deadline" do
+    peer = start_raw_websocket_peer(upgrade_mode: :split_nonterminal_headers)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | timeouts: %{connect_timeout_ms: 80, receive_timeout_ms: 1_000}
+    }
+
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
+                   @detection_timeout_ms
+
+    :erlang.suspend_process(session)
+
+    try do
+      send(peer_pid, :release_raw_upstream_websocket_upgrade)
+
+      assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :nonterminal_queued},
+                     @detection_timeout_ms
+
+      await_test_timer(120)
+    after
+      :erlang.resume_process(session)
+    end
+
+    assert {:error, %{reason: :upstream_websocket_upgrade_timeout}} =
+             Task.await(task, @detection_timeout_ms)
+
+    refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
+  end
+
+  test "nonterminal trickle fragments cannot extend the websocket upgrade deadline" do
+    peer = start_raw_websocket_peer(upgrade_mode: :trickle_nonterminal)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | timeouts: %{connect_timeout_ms: 120, receive_timeout_ms: 1_000}
+    }
+
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :trickle_status, peer_pid},
+                   @detection_timeout_ms
+
+    :erlang.suspend_process(session)
+
+    try do
+      release_raw_websocket_trickle(peer_pid, 10)
+      await_test_timer(160)
+    after
+      :erlang.resume_process(session)
+    end
+
+    assert {:error, %{reason: :upstream_websocket_upgrade_timeout}} =
+             Task.await(task, @detection_timeout_ms)
+
+    refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
+  end
+
   test "does not advance generation when Mint rejects websocket creation after status 101" do
     peer = start_raw_websocket_peer(upgrade_mode: :invalid_accept)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -4031,28 +4304,190 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end
   end
 
-  defp send_raw_websocket_upgrade(state, socket, key, mode, _connection_id, _owner)
-       when mode in [:valid, :invalid_accept] do
-    accept =
-      if mode == :valid do
-        :sha
-        |> :crypto.hash(key <> "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
-        |> Base.encode64()
-      else
-        "invalid-websocket-accept"
-      end
+  defp send_raw_websocket_upgrade(state, socket, key, :missing_status, _connection_id, _owner) do
+    send_raw_websocket_upgrade_headers(state, socket, key)
+  end
 
-    upgrade_headers =
-      if mode == :valid do
-        state
-        |> Agent.get(& &1.upgrade_headers)
-        |> Enum.map(fn {name, value} -> [name, ": ", value, "\r\n"] end)
-      else
-        []
-      end
+  defp send_raw_websocket_upgrade(state, socket, key, :split_status, connection_id, owner) do
+    :ok = :gen_tcp.send(socket, "HTTP/1.1 101 Switching Protocols\r\n")
+    send(owner, {:raw_upstream_websocket_upgrade_fragment, connection_id, :status, self()})
+
+    receive do
+      :release_raw_upstream_websocket_upgrade ->
+        result = send_raw_websocket_upgrade_headers(state, socket, key)
+        send(owner, {:raw_upstream_websocket_upgrade_fragment, connection_id, :terminal_queued})
+        result
+    after
+      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+    end
+  end
+
+  defp send_raw_websocket_upgrade(
+         _state,
+         socket,
+         key,
+         :split_partial_headers,
+         connection_id,
+         owner
+       ) do
+    :ok = :gen_tcp.send(socket, ["HTTP/1.1 101 Switching Protocols\r\n", "upgrade: web"])
+
+    send(
+      owner,
+      {:raw_upstream_websocket_upgrade_fragment, connection_id, :partial_headers, self()}
+    )
+
+    receive do
+      :release_raw_upstream_websocket_upgrade ->
+        accept = websocket_accept(key)
+
+        :gen_tcp.send(socket, [
+          "socket\r\nconnection: Upgrade\r\nsec-websocket-accept: ",
+          accept,
+          "\r\n\r\n"
+        ])
+    after
+      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+    end
+  end
+
+  defp send_raw_websocket_upgrade(
+         state,
+         socket,
+         key,
+         :informational_then_valid,
+         _connection_id,
+         _owner
+       ) do
+    final_headers = raw_websocket_upgrade_headers(state, key, websocket_accept(key))
 
     :gen_tcp.send(socket, [
+      "HTTP/1.1 103 Early Hints\r\nx-informational-sentinel: excluded\r\n\r\n",
       "HTTP/1.1 101 Switching Protocols\r\n",
+      final_headers
+    ])
+  end
+
+  defp send_raw_websocket_upgrade(_state, socket, _key, :split_forbidden, connection_id, owner) do
+    :ok = :gen_tcp.send(socket, "HTTP/1.1 403 Forbidden\r\n")
+
+    send(
+      owner,
+      {:raw_upstream_websocket_upgrade_fragment, connection_id, :forbidden_status, self()}
+    )
+
+    receive do
+      :release_raw_upstream_websocket_upgrade ->
+        :gen_tcp.send(socket, "content-length: 0\r\n\r\n")
+    after
+      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+    end
+  end
+
+  defp send_raw_websocket_upgrade(
+         _state,
+         socket,
+         _key,
+         :split_nonterminal_headers,
+         connection_id,
+         owner
+       ) do
+    :ok = :gen_tcp.send(socket, "HTTP/1.1 101 Switching Protocols\r\n")
+    send(owner, {:raw_upstream_websocket_upgrade_fragment, connection_id, :status, self()})
+
+    receive do
+      :release_raw_upstream_websocket_upgrade ->
+        result = :gen_tcp.send(socket, "upgrade: web")
+
+        send(
+          owner,
+          {:raw_upstream_websocket_upgrade_fragment, connection_id, :nonterminal_queued}
+        )
+
+        result
+    after
+      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+    end
+  end
+
+  defp send_raw_websocket_upgrade(
+         _state,
+         socket,
+         _key,
+         :trickle_nonterminal,
+         connection_id,
+         owner
+       ) do
+    :ok = :gen_tcp.send(socket, "HTTP/1.1 101 Switching Protocols\r\n")
+
+    send(
+      owner,
+      {:raw_upstream_websocket_upgrade_fragment, connection_id, :trickle_status, self()}
+    )
+
+    send_raw_websocket_trickle(socket, owner, connection_id, [
+      "x",
+      "-",
+      "t",
+      "r",
+      "i",
+      "c",
+      "k",
+      "l",
+      "e",
+      ":"
+    ])
+  end
+
+  defp send_raw_websocket_upgrade(state, socket, key, mode, _connection_id, _owner)
+       when mode in [:valid, :invalid_accept] do
+    accept = if mode == :valid, do: websocket_accept(key), else: "invalid-websocket-accept"
+
+    :ok = :gen_tcp.send(socket, "HTTP/1.1 101 Switching Protocols\r\n")
+    send_raw_websocket_upgrade_headers(state, socket, key, accept)
+  end
+
+  defp send_raw_websocket_trickle(_socket, _owner, _connection_id, []), do: :ok
+
+  defp send_raw_websocket_trickle(socket, owner, connection_id, [fragment | rest]) do
+    receive do
+      :release_raw_upstream_websocket_trickle -> :ok
+    end
+
+    case :gen_tcp.send(socket, fragment) do
+      :ok ->
+        send(owner, {:raw_upstream_websocket_upgrade_fragment, connection_id, :trickle, self()})
+        send_raw_websocket_trickle(socket, owner, connection_id, rest)
+
+      {:error, :closed} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp send_raw_websocket_upgrade_headers(state, socket, key) do
+    send_raw_websocket_upgrade_headers(state, socket, key, websocket_accept(key))
+  end
+
+  defp websocket_accept(key) do
+    :sha
+    |> :crypto.hash(key <> "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+    |> Base.encode64()
+  end
+
+  defp send_raw_websocket_upgrade_headers(state, socket, _key, accept) do
+    :gen_tcp.send(socket, raw_websocket_upgrade_headers(state, nil, accept))
+  end
+
+  defp raw_websocket_upgrade_headers(state, _key, accept) do
+    upgrade_headers =
+      state
+      |> Agent.get(& &1.upgrade_headers)
+      |> Enum.map(fn {name, value} -> [name, ": ", value, "\r\n"] end)
+
+    [
       "upgrade: websocket\r\n",
       "connection: Upgrade\r\n",
       "sec-websocket-accept: ",
@@ -4060,7 +4495,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       "\r\n",
       upgrade_headers,
       "\r\n"
-    ])
+    ]
   end
 
   defp raw_websocket_peer_read_headers(socket, acc \\ "") do
@@ -4295,6 +4730,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     after
       timeout_ms -> :timeout
     end
+  end
+
+  defp receive_mint_upgrade_until_done(conn, ref, deadline, accumulated) do
+    timeout_ms = max(deadline - System.monotonic_time(:millisecond), 0)
+    assert {:ok, conn, responses} = Mint.WebSocket.recv(conn, 0, timeout_ms)
+    accumulated = accumulated ++ responses
+
+    if Enum.any?(responses, &match?({:done, ^ref}, &1)) do
+      {conn, accumulated}
+    else
+      receive_mint_upgrade_until_done(conn, ref, deadline, accumulated)
+    end
+  end
+
+  defp await_test_timer(timeout_ms) do
+    timer_ref = make_ref()
+    Process.send_after(self(), {:test_timer_elapsed, timer_ref}, timeout_ms)
+
+    receive do
+      {:test_timer_elapsed, ^timer_ref} -> :ok
+    end
+  end
+
+  defp release_raw_websocket_trickle(_peer_pid, 0), do: :ok
+
+  defp release_raw_websocket_trickle(peer_pid, remaining) do
+    send(peer_pid, :release_raw_upstream_websocket_trickle)
+
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :trickle, ^peer_pid},
+                   @detection_timeout_ms
+
+    release_raw_websocket_trickle(peer_pid, remaining - 1)
   end
 
   defp stop_raw_websocket_peer(%{state: state}) do

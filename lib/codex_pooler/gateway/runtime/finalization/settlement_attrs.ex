@@ -8,12 +8,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs do
 
   @spec success(SelectedCandidateContext.t(), pos_integer(), map(), opts()) :: attrs()
   def success(%SelectedCandidateContext{} = context, status, attempt_metadata, opts) do
-    %{
+    attrs = %{
       response_status_code: status,
       retry_count: context.retry_count || context.index,
       latency_ms: latency(context, opts),
       attempt_metadata: attempt_metadata
     }
+
+    put_before_finalize(attrs, Keyword.get(opts, :before_finalize))
   end
 
   @spec failure(
@@ -33,7 +35,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs do
         attempt_metadata,
         opts
       ) do
-    %{
+    attrs = %{
       response_status_code: status,
       retry_count: context.retry_count || context.index,
       last_error_code: code,
@@ -42,6 +44,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs do
       usage: Keyword.get(opts, :usage, %{status: "usage_unknown", source: code}),
       attempt_metadata: attempt_metadata
     }
+
+    put_before_finalize(attrs, Keyword.get(opts, :before_finalize))
   end
 
   @spec partial_stream_failure(
@@ -60,7 +64,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs do
         attempt_metadata,
         opts \\ []
       ) do
-    %{
+    attrs = %{
       response_status_code: status,
       retry_count: context.retry_count || context.index,
       latency_ms: latency(context, opts),
@@ -68,6 +72,23 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs do
       error_message: message,
       attempt_metadata: attempt_metadata
     }
+
+    put_before_finalize(attrs, Keyword.get(opts, :before_finalize))
+  end
+
+  @spec chain_before_finalize((-> term()), (-> term())) :: (-> term())
+  def chain_before_finalize(first, second)
+      when is_function(first, 0) and is_function(second, 0) do
+    fn ->
+      with :ok <- normalize_before_finalize(first.()) do
+        normalize_before_finalize(second.())
+      end
+    end
+  end
+
+  @spec chain_before_finalize(map(), (-> term())) :: map()
+  def chain_before_finalize(attrs, callback) when is_map(attrs) and is_function(callback, 0) do
+    Map.update(attrs, :before_finalize, callback, &chain_before_finalize(&1, callback))
   end
 
   @spec latency(SelectedCandidateContext.t(), opts()) :: non_neg_integer()
@@ -80,4 +101,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs do
   end
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)
+
+  defp put_before_finalize(attrs, callback) when is_function(callback, 0),
+    do: Map.put(attrs, :before_finalize, callback)
+
+  defp put_before_finalize(attrs, _callback), do: attrs
+
+  defp normalize_before_finalize(:ok), do: :ok
+  defp normalize_before_finalize({:ok, _value}), do: :ok
+  defp normalize_before_finalize({:error, _reason} = error), do: error
 end

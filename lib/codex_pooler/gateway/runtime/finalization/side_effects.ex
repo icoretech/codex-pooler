@@ -27,22 +27,106 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
         request_options,
         callbacks
       ) do
-    RoutingRouteLifecycle.log_optional_result(
-      "route_lifecycle_success",
-      route_lifecycle_metadata(context),
-      DispatchLifecycle.success(context)
-    )
+    if stale_replay_generation?(context) do
+      :ok
+    else
+      callbacks.register_continuity.(
+        with_assignment(request_options, context.assignment),
+        payload,
+        body
+      )
+    end
+  end
 
-    callbacks.register_continuity.(
-      with_assignment(request_options, context.assignment),
-      payload,
-      body
-    )
+  @spec before_finalize_success(SelectedCandidateContext.t(), RequestOptions.t() | map()) :: :ok
+  def before_finalize_success(%SelectedCandidateContext{} = context, request_options) do
+    maybe_enqueue_gateway_reconciliation(context.reserved.request.pool_id, context.assignment)
+
+    unless replay_dispatch?(context) do
+      RoutingRouteLifecycle.log_optional_result(
+        "route_lifecycle_success",
+        route_lifecycle_metadata(context),
+        DispatchLifecycle.success(context)
+      )
+    end
 
     maybe_confirm_reset_probe(context, request_options)
 
     :ok
   end
+
+  @spec observe_http_response(SelectedCandidateContext.t(), Req.Response.t(), binary()) :: :ok
+  def observe_http_response(%SelectedCandidateContext{identity: identity}, response, body) do
+    RateLimitObserver.record_headers(identity, response)
+    RateLimitObserver.record_error(identity, body)
+    :ok
+  end
+
+  @spec observe_stream_response(
+          SelectedCandidateContext.t(),
+          Req.Response.t(),
+          binary(),
+          map() | nil
+        ) :: :ok
+  def observe_stream_response(
+        %SelectedCandidateContext{identity: identity},
+        response,
+        body,
+        state
+      ) do
+    RateLimitObserver.record_headers(identity, response)
+
+    rate_limit_state =
+      if is_map(state) do
+        Map.get(state, :rate_limit, state)
+      else
+        {:ok, collected} = RateLimitObserver.collect_events(body, RateLimitObserver.event_state())
+        collected
+      end
+
+    RateLimitObserver.commit_events(identity, rate_limit_state)
+
+    :ok
+  end
+
+  @spec observe_websocket_response(SelectedCandidateContext.t(), map()) :: :ok
+  def observe_websocket_response(%SelectedCandidateContext{identity: identity}, response) do
+    RateLimitObserver.record_websocket_upgrade_headers(
+      identity,
+      websocket_upgrade_headers(response)
+    )
+
+    RateLimitObserver.record_websocket_frame_headers(
+      identity,
+      Map.get(response, :websocket_frame_headers, %{})
+    )
+
+    :ok
+  end
+
+  defp websocket_upgrade_headers(%{reason: {:websocket_upgrade_failed, status, headers}})
+       when is_integer(status) and is_list(headers),
+       do: headers
+
+  defp websocket_upgrade_headers(response), do: Map.get(response, :headers, [])
+
+  defp stale_replay_generation?(%SelectedCandidateContext{
+         attempt: %{replay_generation: 0},
+         request_options: %{runtime: %{replay_generation: generation}}
+       })
+       when is_integer(generation) and generation > 0,
+       do: true
+
+  defp stale_replay_generation?(%SelectedCandidateContext{}), do: false
+
+  defp replay_dispatch?(%SelectedCandidateContext{
+         attempt: %{replay_generation: generation},
+         request_options: %{runtime: %{replay_generation: generation}}
+       })
+       when generation > 0,
+       do: true
+
+  defp replay_dispatch?(%SelectedCandidateContext{}), do: false
 
   defp maybe_confirm_reset_probe(
          %SelectedCandidateContext{} = context,

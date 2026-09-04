@@ -16,11 +16,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   alias CodexPooler.Repo
 
   @codex_remote_compaction_fixture_path Path.expand(
-                                          "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_request.json",
+                                          "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_request.json",
                                           __DIR__
                                         )
   @codex_incremental_compaction_fixture_path Path.expand(
-                                               "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_incremental_request.json",
+                                               "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_incremental_request.json",
                                                __DIR__
                                              )
   @external_resource @codex_incremental_compaction_fixture_path
@@ -396,6 +396,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       source_frame =
         get_in(fixture, ["scenarios", scenario_name, "projection_relevant_frame_subset"])
+
+      if scenario_name == "anchored_tool_output_and_trigger" do
+        assert get_in(source_frame, ["input", Access.at(0), "output"]) == ""
+      end
 
       payload =
         source_frame
@@ -2253,18 +2257,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     invalid_inputs = [
       [compaction_trigger() | visible_input("non-terminal trigger fixture")],
-      [
-        %{"type" => "reasoning", "encrypted_content" => "hidden-only-trigger-fixture"},
-        compaction_trigger()
-      ],
-      [
-        %{
-          "type" => "message",
-          "role" => "user",
-          "content" => [%{"type" => "input_audio", "audio_url" => " \t\r\n"}]
-        },
-        compaction_trigger()
-      ],
       visible_input("duplicate trigger fixture") ++ [compaction_trigger(), compaction_trigger()]
     ]
 
@@ -2283,7 +2275,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert error["code"] == "invalid_request"
       assert error["param"] == "input"
       refute inspect(error) =~ "duplicate trigger fixture"
-      refute inspect(error) =~ "hidden-only-trigger-fixture"
       refute inspect(error) =~ "non-terminal trigger fixture"
     end
 

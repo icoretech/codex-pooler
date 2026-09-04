@@ -109,6 +109,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
     )
   end
 
+  @spec dispatch_selected(SelectedCandidateContext.t(), dispatch_candidate()) ::
+          dispatch_candidate_result()
+  def dispatch_selected(%SelectedCandidateContext{} = context, dispatch_fun)
+      when is_function(dispatch_fun, 1) do
+    decrypt_and_dispatch_candidate(context, dispatch_fun, Operations.defaults())
+  end
+
   defp decrypt_and_dispatch_candidate(
          %SelectedCandidateContext{} = context,
          dispatch_fun,

@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, Request, RequestReplay, RequestReplayEntitlement}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -23,6 +23,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     SelectedCandidateContext
   }
 
+  alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.Streaming
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
@@ -32,7 +33,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
+  alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias Ecto.Adapters.SQL.Sandbox
 
   @endpoint_path "/backend-api/codex/responses"
@@ -226,7 +229,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert {:ok, reserved} =
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @public_responses_endpoint,
-               transport: "http_sse",
+               transport: "websocket",
                correlation_id: "public-responses-success-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
@@ -390,6 +393,485 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
       refute_received {:stream_outcome, _metadata}
     end)
+  end
+
+  @tag :replay_generation_race
+  test "stale generation stream success runs no continuity or stream side effects" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: "stale-stream-side-effects-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    arm_replay_generation_cutover!(setup, auth, request_options, reserved.request, attempt)
+
+    response_context = %ResponseContext{
+      context:
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        ),
+      response: sse_response()
+    }
+
+    parent = self()
+
+    callbacks = %{
+      register_continuity: fn _, _, _ -> send(parent, :stale_continuity_side_effect) end,
+      stream_result: fn _, _ -> send(parent, :stale_stream_result_side_effect) end
+    }
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, %{stale_generation?: true}} =
+               Streaming.finalize_success(
+                 backend_response_success_sse("resp_stale_generation"),
+                 response_context,
+                 callbacks
+               )
+
+      refute_received :stale_continuity_side_effect
+      refute_received :stale_stream_result_side_effect
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert Repo.reload!(reserved.request).status == "in_progress"
+
+    assert Repo.get_by!(CodexPooler.Gateway.Persistence.CodexTurn,
+             request_id: reserved.request.id
+           ).status == "in_progress"
+  end
+
+  @tag :replay_generation_race
+  test "stale generation stream failure runs no route or stream side effects" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: "stale-stream-failure-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    arm_replay_generation_cutover!(setup, auth, request_options, reserved.request, attempt)
+
+    response_context = %ResponseContext{
+      context:
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        ),
+      response: sse_response()
+    }
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, %{stale_generation?: true}} =
+               Streaming.finalize_failure("", {:chunk, :closed}, response_context)
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert Repo.all(
+             from demotion in BridgeDemotion,
+               where: demotion.last_request_id == ^reserved.request.id
+           ) ==
+             []
+  end
+
+  @tag :replay_generation_race
+  test "stale generation retryable HTTP status runs no route or retry side effects" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: "stale-http-retry-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    arm_replay_generation_cutover!(setup, auth, request_options, reserved.request, attempt)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    observations_before = replay_quota_observations(setup.identity)
+
+    response =
+      %Req.Response{
+        status: 503,
+        headers: replay_rate_limit_headers("91"),
+        body: Jason.encode!(replay_rate_limit_error("92"))
+      }
+
+    assert {:ok, %{stale_generation?: true}} =
+             Finalization.handle_http_response(
+               response,
+               context,
+               finalization_callbacks()
+             )
+
+    assert replay_quota_observations(setup.identity) == observations_before
+
+    assert Repo.all(
+             from demotion in BridgeDemotion,
+               where: demotion.last_request_id == ^reserved.request.id
+           ) == []
+
+    assert Repo.all(from circuit in RoutingCircuitState, where: circuit.pool_id == ^setup.pool.id) ==
+             []
+  end
+
+  @tag :replay_generation_race
+  test "stale generation retryable first event runs no route or stream side effects" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: "stale-first-event-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    arm_replay_generation_cutover!(setup, auth, request_options, reserved.request, attempt)
+
+    response_context = %ResponseContext{
+      context:
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        ),
+      response: sse_response()
+    }
+
+    observations_before = replay_quota_observations(setup.identity)
+
+    capture_stream_outcome_telemetry(fn ->
+      body = replay_rate_limit_sse("93") <> retryable_first_event_sse()
+
+      assert {:stale_generation, %{stale_generation?: true}} =
+               Streaming.record_retryable_first_event_failure(
+                 body,
+                 %{code: "server_error", upstream_code: nil, event_type: "response.failed"},
+                 response_context
+               )
+
+      refute_received {:stream_outcome, _metadata}
+
+      parent = self()
+
+      handler =
+        StreamLifecycle.first_event_retry_handler(
+          response_context,
+          fn _context ->
+            send(parent, :stale_first_event_retry_dispatch)
+            {:ok, %{status: 200}}
+          end,
+          reset_state: & &1,
+          stream_candidate: fn result, state ->
+            send(parent, {:stale_first_event_stream_candidate, result})
+            {:ok, state}
+          end
+        )
+
+      state = %{visible_output_marked?: false}
+
+      assert {:ok, ^state} =
+               handler.(state, "", %{
+                 code: "server_error",
+                 upstream_code: nil,
+                 event_type: "response.failed"
+               })
+
+      refute_received :stale_first_event_retry_dispatch
+      refute_received {:stale_first_event_stream_candidate, _result}
+    end)
+
+    assert replay_quota_observations(setup.identity) == observations_before
+
+    assert Repo.all(
+             from demotion in BridgeDemotion,
+               where: demotion.last_request_id == ^reserved.request.id
+           ) == []
+
+    assert Repo.all(from circuit in RoutingCircuitState, where: circuit.pool_id == ^setup.pool.id) ==
+             []
+  end
+
+  @tag :replay_generation_race
+  test "current generation one HTTP observations persist after authority" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_payload = payload(setup)
+    request_options = request_options(auth, request_payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, request_payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: "current-gen1-http-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    current_attempt =
+      install_started_generation_one!(setup, auth, request_options, reserved, attempt)
+
+    delete_replay_quota_observations(setup.identity)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: current_attempt
+      )
+      |> Map.put(:payload, Map.put(request_payload, "stream", false))
+
+    assert {:ok, _result} =
+             Finalization.handle_http_response(
+               %Req.Response{
+                 status: 200,
+                 headers: replay_rate_limit_headers("41"),
+                 body: Jason.encode!(%{"id" => "resp_current_observer"})
+               },
+               context,
+               finalization_callbacks()
+             )
+
+    assert Enum.any?(replay_quota_observations(setup.identity), fn window ->
+             window.source == "codex_response_headers"
+           end)
+  end
+
+  @tag :replay_generation_race
+  test "stale streamed rate-limit events are collected without persistence or delivery" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_payload = payload(setup)
+
+    request_options =
+      request_options(auth, request_payload, setup)
+      |> RequestOptions.put_transport(
+        websocket_writer: fn _frame -> send(self(), :stale_frame) end
+      )
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, request_payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: "stale-stream-event-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    arm_replay_generation_cutover!(setup, auth, request_options, reserved.request, attempt)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    observations_before = replay_quota_observations(setup.identity)
+
+    ref = make_ref()
+    response = async_sse_response(ref, replay_rate_limit_headers("94"))
+
+    assert %{websocket_stream: stream} =
+             StreamDispatch.streaming_result(response, context, %{
+               finalization_callbacks: finalization_callbacks()
+             })
+
+    send(self(), {ref, {:data, replay_rate_limit_sse("95")}})
+    send(self(), {ref, {:data, backend_response_success_sse("resp_stale_stream_event")}})
+    send(self(), {ref, :done})
+
+    assert :ok = stream.()
+    refute_received :stale_frame
+    assert replay_quota_observations(setup.identity) == observations_before
+  end
+
+  @tag :replay_generation_race
+  test "current generation one streamed rate-limit events persist only after terminal authority" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_payload = payload(setup)
+
+    request_options =
+      request_options(auth, request_payload, setup)
+      |> RequestOptions.put_transport(websocket_writer: fn _frame -> :ok end)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, request_payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: "current-stream-event-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    attempt = install_started_generation_one!(setup, auth, request_options, reserved, attempt)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    delete_replay_quota_observations(setup.identity)
+    current_identity = Repo.reload!(setup.identity)
+    context = %{context | identity: current_identity}
+
+    ref = make_ref()
+    response = async_sse_response(ref, replay_rate_limit_headers("44"))
+
+    assert %{websocket_stream: stream} =
+             StreamDispatch.streaming_result(response, context, %{
+               finalization_callbacks: finalization_callbacks()
+             })
+
+    send(self(), {ref, {:data, replay_rate_limit_sse("45")}})
+    send(self(), {ref, {:data, backend_response_success_sse("resp_current_stream_event")}})
+    send(self(), {ref, :done})
+
+    assert :ok = stream.()
+
+    assert Enum.any?(replay_quota_observations(setup.identity), fn window ->
+             window.source in ["codex_response_headers", "codex_rate_limit_event"]
+           end)
+  end
+
+  @tag :replay_generation_race
+  test "stale 401 and misalignment responses run no route effect before authority" do
+    for {status, body} <- [
+          {401, Jason.encode!(%{"error" => %{"code" => "invalid_api_key"}})},
+          {403,
+           Jason.encode!(%{
+             "error" => %{
+               "code" => MisalignmentPolicyViolation.code(),
+               "message" => "synthetic policy rejection"
+             }
+           })}
+        ] do
+      {setup, _first_upstream, _second_upstream} =
+        stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      request_payload = payload(setup)
+      request_options = request_options(auth, request_payload, setup)
+
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, request_payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "websocket",
+                 correlation_id:
+                   "stale-http-route-#{status}-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+      arm_replay_generation_cutover!(setup, auth, request_options, reserved.request, attempt)
+
+      circuit = half_open_replay_circuit!(setup, request_options)
+
+      context =
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt,
+          routing_circuit_state: circuit,
+          routing_circuit_admission: :probe
+        )
+
+      assert {:ok, %{stale_generation?: true}} =
+               Finalization.handle_http_response(
+                 %Req.Response{status: status, headers: [], body: body},
+                 context,
+                 finalization_callbacks()
+               )
+
+      assert Repo.all(
+               from demotion in BridgeDemotion,
+                 where: demotion.last_request_id == ^reserved.request.id
+             ) == []
+
+      assert Repo.reload!(circuit).metadata["probe_in_flight_count"] == 1
+    end
+  end
+
+  @tag :replay_generation_race
+  test "stale invalid JSON and invalid compaction finalization return typed no-ops" do
+    for scenario <- [:invalid_json, :invalid_compaction] do
+      {setup, _first_upstream, _second_upstream} =
+        stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      request_payload = payload(setup)
+      request_options = request_options(auth, request_payload, setup)
+
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, request_payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "websocket",
+                 correlation_id: "stale-#{scenario}-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+      arm_replay_generation_cutover!(setup, auth, request_options, reserved.request, attempt)
+
+      context =
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        )
+
+      {response, context} = stale_invalid_response(scenario, context)
+
+      assert {:ok, %{stale_generation?: true}} =
+               Finalization.handle_http_response(response, context, finalization_callbacks())
+
+      assert Repo.reload!(reserved.request).status == "in_progress"
+      assert Repo.reload!(attempt).status == "retryable_failed"
+    end
   end
 
   test "HTTP stream ordinary terminal failures emit exactly one failed outcome" do
@@ -2010,6 +2492,106 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     }
   end
 
+  defp arm_replay_generation_cutover!(setup, auth, request_options, request, attempt) do
+    assert {:ok, session} = Websocket.start_codex_session(auth, request_options)
+
+    request_options =
+      RequestOptions.put_continuity(request_options, semantic_turn_key: <<1::256>>)
+
+    assert {:ok, turn} = Websocket.start_codex_turn(session, request, request_options)
+    session = Repo.reload!(session)
+
+    reservation =
+      Repo.one!(
+        from entry in CodexPooler.Accounting.LedgerEntry,
+          where: entry.request_id == ^request.id and entry.entry_kind == "reservation"
+      )
+
+    assert reservation.request_id == request.id
+
+    assert {:ok, _armed} =
+             RequestReplay.arm(%{
+               api_key_id: auth.api_key.id,
+               pool_id: auth.pool.id,
+               codex_session_id: session.id,
+               request_id: request.id,
+               codex_turn_id: turn.id,
+               eligible_attempt_id: attempt.id,
+               api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+               model_id: setup.model.id,
+               model_identifier: setup.model.exposed_model_id,
+               endpoint: request.endpoint,
+               semantic_turn_digest: <<1::256>>,
+               replay_claim_digest: <<2::256>>,
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token,
+               predecessor_epoch: 1,
+               failure_reason: :client_disconnected,
+               pre_visible_output: true
+             })
+  end
+
+  defp install_started_generation_one!(setup, auth, request_options, reserved, attempt) do
+    assert {:ok, session} = Websocket.start_codex_session(auth, request_options)
+
+    request_options =
+      RequestOptions.put_continuity(request_options, semantic_turn_key: <<1::256>>)
+
+    assert {:ok, turn} = Websocket.start_codex_turn(session, reserved.request, request_options)
+    session = Repo.reload!(session)
+
+    assert {:ok, armed} =
+             RequestReplay.arm(%{
+               api_key_id: auth.api_key.id,
+               pool_id: auth.pool.id,
+               codex_session_id: session.id,
+               request_id: reserved.request.id,
+               codex_turn_id: turn.id,
+               eligible_attempt_id: attempt.id,
+               api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+               model_id: setup.model.id,
+               model_identifier: setup.model.exposed_model_id,
+               endpoint: reserved.request.endpoint,
+               semantic_turn_digest: <<1::256>>,
+               replay_claim_digest: <<2::256>>,
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token,
+               predecessor_epoch: 1,
+               failure_reason: :client_disconnected,
+               pre_visible_output: true
+             })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    replay_attempt =
+      CodexPooler.PoolerFixtures.attempt_fixture(reserved.request, setup.assignment, %{
+        attempt_number: attempt.attempt_number + 1,
+        status: "in_progress",
+        completed_at: nil,
+        upstream_status_code: nil,
+        usage_status: "usage_pending"
+      })
+      |> Ecto.Changeset.change(%{model_id: setup.model.id, replay_generation: 1})
+      |> Repo.update!()
+
+    entitlement =
+      Repo.get!(RequestReplayEntitlement, armed.entitlement_id)
+
+    entitlement
+    |> RequestReplayEntitlement.changeset(%{
+      status: "consumed",
+      replay_attempt_id: replay_attempt.id,
+      provisional_binding_digest: <<3::256>>,
+      consumed_at: now,
+      started_at: now,
+      last_liveness_at: now,
+      abandon_at: DateTime.add(now, 60, :second)
+    })
+    |> Repo.update!()
+
+    replay_attempt
+  end
+
   defp payload(setup) do
     %{
       "model" => setup.model.exposed_model_id,
@@ -2045,6 +2627,144 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     ~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"#{response_id}","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}}\n\n) <>
       "data: [DONE]\n\n"
   end
+
+  defp replay_rate_limit_headers(used_percent) do
+    reset_at = DateTime.utc_now() |> DateTime.add(900, :second) |> DateTime.truncate(:second)
+
+    [
+      {"x-codex-primary-used-percent", [used_percent]},
+      {"x-codex-primary-window-minutes", ["300"]},
+      {"x-codex-primary-reset-at", [DateTime.to_iso8601(reset_at)]}
+    ]
+  end
+
+  defp replay_rate_limit_error(used_percent) do
+    %{
+      "error" => %{
+        "code" => "rate_limit_exceeded",
+        "limit_id" => "codex",
+        "window_kind" => "primary",
+        "window_minutes" => "300",
+        "used_percent" => used_percent,
+        "reset_after_seconds" => "900"
+      }
+    }
+  end
+
+  defp replay_rate_limit_sse(used_percent) do
+    reset_at = DateTime.utc_now() |> DateTime.add(900, :second) |> DateTime.truncate(:second)
+
+    event = %{
+      "type" => "codex.rate_limits",
+      "rate_limits" => %{
+        "primary" => %{
+          "used_percent" => used_percent,
+          "window_minutes" => 300,
+          "reset_at" => DateTime.to_unix(reset_at)
+        }
+      }
+    }
+
+    "event: codex.rate_limits\ndata: #{Jason.encode!(event)}\n\n"
+  end
+
+  defp stale_invalid_response(:invalid_json, context) do
+    {%Req.Response{status: 200, headers: [{"content-type", ["application/json"]}], body: "{"},
+     Map.put(context, :payload, Map.put(context.payload, "stream", false))}
+  end
+
+  defp stale_invalid_response(:invalid_compaction, context) do
+    request_options =
+      context.request_options
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+      |> RequestOptions.put_payload_context(
+        compaction_trigger_bridge?: true,
+        compaction_result_mode: :native_websocket
+      )
+
+    request_options = %{
+      request_options
+      | payload_context: %{request_options.payload_context | compaction_input_mode: :incremental}
+    }
+
+    {%Req.Response{
+       status: 200,
+       headers: [{"content-type", ["application/json"]}],
+       body: Jason.encode!(%{"status" => "completed", "output" => []})
+     },
+     %{
+       context
+       | request_options: request_options,
+         payload: Map.put(context.payload, "stream", false)
+     }}
+  end
+
+  defp retryable_first_event_sse do
+    ~s(event: response.failed\ndata: {"type":"response.failed","error":{"code":"server_error"}}\n\n)
+  end
+
+  defp replay_quota_observations(identity) do
+    identity
+    |> QuotaWindows.list_quota_windows()
+    |> Enum.filter(
+      &(&1.source in [
+          "codex_response_headers",
+          "codex_rate_limit_event",
+          "codex_rate_limit_error"
+        ])
+    )
+  end
+
+  defp delete_replay_quota_observations(identity) do
+    sources = ["codex_response_headers", "codex_rate_limit_event", "codex_rate_limit_error"]
+
+    Repo.delete_all(
+      from window in CodexPooler.Upstreams.Quota.AccountQuotaWindow,
+        where: window.upstream_identity_id == ^identity.id and window.source in ^sources
+    )
+
+    :ok
+  end
+
+  defp half_open_replay_circuit!(setup, request_options) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %RoutingCircuitState{
+      pool_id: setup.pool.id,
+      pool_upstream_assignment_id: setup.assignment.id,
+      upstream_identity_id: setup.identity.id,
+      model_identifier: setup.model.exposed_model_id,
+      route_class: request_options.transport.route_class,
+      status: "half_open",
+      reason_code: "upstream_5xx",
+      failure_count: 3,
+      success_count: 0,
+      opened_at: DateTime.add(now, -120, :second),
+      half_opened_at: now,
+      metadata: %{"probe_in_flight_count" => 1},
+      created_at: DateTime.add(now, -120, :second),
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp async_sse_response(ref, headers) do
+    %Req.Response{
+      status: 200,
+      headers: [{"content-type", ["text/event-stream"]} | headers],
+      body: %Req.Response.Async{
+        pid: self(),
+        ref: ref,
+        stream_fun: &parse_async_message/2,
+        cancel_fun: fn _ref -> :ok end
+      }
+    }
+  end
+
+  defp parse_async_message(ref, {ref, {:data, data}}), do: {:ok, data: data}
+  defp parse_async_message(ref, {ref, :done}), do: {:ok, [:done]}
+  defp parse_async_message(ref, {ref, {:error, reason}}), do: {:error, reason}
+  defp parse_async_message(_ref, _message), do: :unknown
 
   defp misalignment_terminal_sse(message) do
     error = %{

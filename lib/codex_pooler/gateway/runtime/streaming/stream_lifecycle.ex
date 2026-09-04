@@ -166,14 +166,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
     # blocks that were already written downstream, and replaying it would
     # duplicate them — or emit a truncated retained-body suffix as malformed
     # SSE. Finalization still receives the full retained body for accounting.
-    case write_final_event.(state, Map.get(failure, :withheld_body, body)) do
-      {:ok, state} ->
-        case Finalization.finalize_first_event_stream_failure(body, failure, response_context) do
-          {:ok, _finalized} -> {:ok, state}
-          {:error, _gateway_error} = error -> error
-        end
+    case Finalization.finalize_first_event_stream_failure(body, failure, response_context) do
+      {:ok, %{stale_generation?: true}} ->
+        {:ok, state}
 
-      {:error, _reason} = error ->
+      {:ok, _finalized} ->
+        write_final_event.(state, Map.get(failure, :withheld_body, body))
+
+      {:error, _gateway_error} = error ->
         error
     end
   end
@@ -191,6 +191,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
     |> CandidateDispatch.dispatch_from(next_index, dispatch_candidate)
     |> stream_candidate.(reset_state.(state))
   end
+
+  defp continue_after_retryable_first_event_record(
+         {:stale_generation, _recorded_failure},
+         _context,
+         _next_index,
+         _dispatch_candidate,
+         _stream_candidate,
+         _reset_state,
+         state
+       ),
+       do: {:ok, state}
 
   defp continue_after_retryable_first_event_record(
          {:error, _gateway_error} = error,

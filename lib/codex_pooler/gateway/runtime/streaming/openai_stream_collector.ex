@@ -57,22 +57,30 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
     response_context = %ResponseContext{context: context, response: response}
 
     case StreamRelay.run(state, response, %{
-           finalize_success: fn body ->
+           finalize_success: fn body, state ->
              Finalization.finalize_stream_success(
                body,
                response_context,
-               finalization_callbacks
+               finalization_callbacks,
+               state
              )
            end,
-           finalize_failure: fn body, reason ->
-             Finalization.finalize_stream_failure(body, reason, response_context)
+           finalize_failure: fn body, reason, state ->
+             Finalization.finalize_stream_failure(body, reason, response_context, state)
            end,
            first_event_retry: first_event_retry_handler(response_context),
            write_chunk: fn state, data ->
              {:ok, rate_limit_state} =
-               RateLimitObserver.record_events(context.identity, data, rate_limit_state(state))
+               RateLimitObserver.collect_events(data, rate_limit_state(state))
 
-             state = maybe_mark_visible_stream_output(state, context.reserved.request, data)
+             state =
+               maybe_mark_visible_stream_output(
+                 state,
+                 context.reserved.request,
+                 context.attempt,
+                 data
+               )
+
              {:ok, %{state | chunks: [data | state.chunks], rate_limit: rate_limit_state}}
            end,
            write_keepalive: fn state -> {:ok, state} end,
@@ -102,20 +110,27 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
     end
   end
 
-  defp maybe_mark_visible_stream_output(%{visible_output_marked?: true} = state, _request, _data),
-    do: state
+  defp maybe_mark_visible_stream_output(
+         %{visible_output_marked?: true} = state,
+         _request,
+         _attempt,
+         _data
+       ),
+       do: state
 
-  defp maybe_mark_visible_stream_output(state, request, data) do
+  defp maybe_mark_visible_stream_output(state, request, attempt, data) do
     if StreamProtocol.stream_data_visible?(data) do
-      SessionContinuity.mark_codex_turn_visible(request)
-      Map.put(state, :visible_output_marked?, true)
+      case SessionContinuity.mark_codex_turn_visible(request, attempt) do
+        :ok -> Map.put(state, :visible_output_marked?, true)
+        {:error, :stale_generation} -> state
+      end
     else
       state
     end
   end
 
-  defp rate_limit_state(%{rate_limit: %{buffer: buffer}}) when is_binary(buffer),
-    do: %{buffer: buffer}
+  defp rate_limit_state(%{rate_limit: %{buffer: buffer} = state}) when is_binary(buffer),
+    do: state
 
   defp rate_limit_state(_state), do: RateLimitObserver.event_state()
 

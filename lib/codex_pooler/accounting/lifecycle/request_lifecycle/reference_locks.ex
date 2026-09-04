@@ -14,7 +14,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
   @type identity_id :: Ecto.UUID.t() | nil
   @type assignment_id :: Ecto.UUID.t() | nil
 
-  @spec lock_and_validate!(identity_id(), assignment_id()) :: :ok | no_return()
+  @type locked_references :: %{
+          required(:identity) => UpstreamIdentity.t() | nil,
+          required(:assignment) => PoolUpstreamAssignment.t() | nil
+        }
+
+  @spec lock_and_validate!(identity_id(), assignment_id()) :: locked_references() | no_return()
   def lock_and_validate!(upstream_identity_id, pool_upstream_assignment_id) do
     unless Repo.in_transaction?() do
       raise ArgumentError, "upstream reference locks require an active transaction"
@@ -41,7 +46,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
     end)
   end
 
-  defp lock_pair!(nil, nil), do: :ok
+  defp lock_pair!(nil, nil), do: %{identity: nil, assignment: nil}
 
   defp lock_pair!(nil, _pool_upstream_assignment_id) do
     rollback!(:upstream_identity_not_found, "upstream identity was not found")
@@ -62,7 +67,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
     assignment = lock_assignment!(pool_upstream_assignment_id)
 
     if assignment.upstream_identity_id == identity.id do
-      :ok
+      %{identity: identity, assignment: assignment}
     else
       rollback!(
         :upstream_reference_mismatch,

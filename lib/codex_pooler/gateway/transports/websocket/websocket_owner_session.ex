@@ -3,20 +3,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   use GenServer
 
+  alias CodexPooler.Accounting.RequestReplayEntitlement
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
+  alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedOwnerRequestHandoff
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedSendWitnessV1
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
+  alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
 
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.{
+    Callbacks,
     DownstreamState,
     Logger,
     Persistence
@@ -53,14 +58,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :owner_instance_id,
     :downstream,
     :downstream_monitor,
+    :downstream_epoch,
+    :process_generation,
     :next_turn_descriptor,
     :upstream_pid,
-    :upstream_sender,
-    :upstream_closer,
-    :upstream_invalidator,
-    :downstream_sender,
+    :callbacks,
     :active_turn,
+    :terminal_winner_detach,
     :pending_handoff,
+    :suspended_replay,
     :persistence,
     :request_id,
     :draining?,
@@ -76,7 +82,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :native_compaction_trace_sensitivity,
     :native_compaction_admission,
     :native_compaction_admission_downstream,
-    :forwarded_send_witness
+    :forwarded_send_witness,
+    provisional_issuances: []
   ]
 
   @type downstream :: %{
@@ -189,6 +196,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   @spec owner_status(GenServer.server()) :: {:ok, owner_status()}
   def owner_status(owner), do: GenServer.call(owner, :owner_status, owner_call_timeout())
 
+  @spec touch_replay_liveness(GenServer.server(), map(), timeout()) ::
+          :ok | {:error, :owner_unavailable}
+  def touch_replay_liveness(owner, reference, timeout \\ owner_call_timeout()),
+    do: GenServer.call(owner, {:touch_replay_liveness, reference}, timeout)
+
   @spec lookup(binary(), keyword()) :: {:ok, pid()} | {:error, :owner_unavailable}
   def lookup(codex_session_id, metadata \\ []) when is_binary(codex_session_id) do
     case Registry.lookup(@registry, codex_session_id) do
@@ -237,7 +249,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def restore_downstream(_owner, _downstream), do: {:error, :stale_downstream}
 
   @spec detach_downstream(GenServer.server(), map()) ::
-          :ok | {:error, WebsocketOwnerContract.owner_error()}
+          WebsocketOwnerContract.detach_result()
   def detach_downstream(owner, %{pid: pid, epoch: epoch, correlation_id: correlation_id})
       when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
     GenServer.call(owner, {:detach_downstream, pid, epoch, correlation_id}, owner_call_timeout())
@@ -292,6 +304,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def cancel_reconnect(_owner, _downstream, _control_ref), do: {:error, :stale_downstream}
+
+  @spec reconnect_control_v2(GenServer.server(), RemoteReconnectControlV2.t()) :: term()
+  def reconnect_control_v2(owner, %RemoteReconnectControlV2{} = control),
+    do: GenServer.call(owner, {:reconnect_control_v2, control}, owner_call_timeout())
+
+  def reconnect_control_v2(_owner, _control), do: {:error, :owner_unavailable}
+
+  @spec begin_suspend(GenServer.server(), map()) :: :ok | {:error, atom()}
+  def begin_suspend(owner, descriptor) when is_map(descriptor),
+    do: GenServer.call(owner, {:begin_suspend, descriptor}, owner_call_timeout())
+
+  @spec record_active_downstream_loss(GenServer.server(), downstream()) ::
+          :reattachable | {:error, atom()}
+  def record_active_downstream_loss(owner, downstream) when is_map(downstream),
+    do: GenServer.call(owner, {:record_active_downstream_loss, downstream}, owner_call_timeout())
+
+  @spec prepare_next_replay_descriptor(GenServer.server(), downstream(), map()) ::
+          :ok | {:error, atom()}
+  def prepare_next_replay_descriptor(owner, downstream, descriptor)
+      when is_map(downstream) and is_map(descriptor),
+      do:
+        GenServer.call(
+          owner,
+          {:prepare_next_replay_descriptor, downstream, descriptor},
+          owner_call_timeout()
+        )
 
   @type admission_result ::
           {:ok,
@@ -791,6 +829,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     GenServer.call(owner, {:push_downstream, payload}, owner_call_timeout())
   end
 
+  @doc false
+  @spec consume_reserve_receipt(GenServer.server(), map()) ::
+          {:ok, reference()} | {:error, :invalid}
+  def consume_reserve_receipt(owner, proof) when is_map(proof),
+    do: GenServer.call(owner, {:consume_reserve_receipt, proof}, owner_call_timeout())
+
+  @doc false
+  @spec validate_consumed_reserve_receipt(GenServer.server(), map(), reference()) ::
+          :ok | {:error, :invalid}
+  def validate_consumed_reserve_receipt(owner, proof, consume_fence)
+      when is_map(proof) and is_reference(consume_fence),
+      do:
+        GenServer.call(
+          owner,
+          {:validate_consumed_reserve_receipt, proof, consume_fence},
+          owner_call_timeout()
+        )
+
+  @doc false
+  @spec release_consumed_reserve_receipt(GenServer.server(), map(), reference()) ::
+          :ok | {:error, :invalid}
+  def release_consumed_reserve_receipt(owner, proof, consume_fence)
+      when is_map(proof) and is_reference(consume_fence),
+      do:
+        GenServer.call(
+          owner,
+          {:release_consumed_reserve_receipt, proof, consume_fence},
+          owner_call_timeout()
+        )
+
   @impl GenServer
   def init(opts) do
     sensitivity = NativeCompactionTrace.configure_process_sensitivity(:owner_session)
@@ -803,6 +871,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     request_id = Keyword.get(opts, :request_id)
     idle_shutdown_ms = Keyword.get(opts, :idle_shutdown_ms, 300_000)
     owner_renewal_ms = Keyword.get(opts, :owner_renewal_ms, owner_renewal_ms())
+
+    monotonic_now_ms =
+      Keyword.get(opts, :monotonic_now_ms, fn -> System.monotonic_time(:millisecond) end)
 
     handoff_soft_timeout_ms =
       Keyword.get(opts, :handoff_soft_timeout_ms, @handoff_soft_timeout_ms)
@@ -823,10 +894,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          owner_lease_token: owner_lease_token,
          owner_instance_id: owner_instance_id,
          upstream_pid: upstream_pid,
-         upstream_sender: upstream.send,
-         upstream_closer: upstream.close,
-         upstream_invalidator: Map.get(upstream, :invalidate, &invalidate_owner_upstream/1),
-         downstream_sender: Keyword.get(opts, :downstream_sender, &send_downstream_message/2),
+         callbacks: %Callbacks{
+           upstream_sender: upstream.send,
+           upstream_closer: upstream.close,
+           upstream_invalidator: Map.get(upstream, :invalidate, &invalidate_owner_upstream/1),
+           downstream_sender: Keyword.get(opts, :downstream_sender, &send_downstream_message/2),
+           monotonic_now_ms: monotonic_now_ms,
+           replay_suspender:
+             Keyword.get(opts, :replay_suspender, &CodexPooler.Accounting.arm_request_replay/1),
+           replay_status_reader:
+             Keyword.get(
+               opts,
+               :replay_status_reader,
+               &CodexPooler.Accounting.replay_provisional_token_status/1
+             )
+         },
          persistence: persistence,
          request_id: request_id,
          idle_shutdown_ms: idle_shutdown_ms,
@@ -839,7 +921,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          retire_after_active_turn?: false,
          native_compaction_admission: nil,
          native_compaction_admission_downstream: nil,
-         forwarded_send_witness: nil
+         forwarded_send_witness: nil,
+         downstream_epoch: 0,
+         process_generation: System.unique_integer([:positive, :monotonic]),
+         suspended_replay: nil
        }
        |> schedule_owner_renewal()}
     end
@@ -901,6 +986,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       }}, state}
   end
 
+  def handle_call({:touch_replay_liveness, reference}, _from, state) do
+    case state.suspended_replay do
+      %{provisional_status: :started, consume_binding: ^reference} ->
+        case CodexPooler.Accounting.touch_request_replay_liveness(reference) do
+          {:ok, _entitlement} -> {:reply, :ok, state}
+          {:error, _reason} -> {:reply, {:error, :owner_unavailable}, state}
+        end
+
+      _state ->
+        {:reply, {:error, :owner_unavailable}, state}
+    end
+  end
+
   def handle_call(:drain, _from, state) do
     state = state |> clear_native_compaction_admission() |> fail_pending_handoff(:owner_drained)
 
@@ -943,6 +1041,84 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   def handle_call({:cancel_reconnect, downstream, control_ref}, _from, state) do
     {:reply, :ok, cancel_pending_handoff_by_ref(state, downstream, control_ref)}
+  end
+
+  def handle_call({:reconnect_control_v2, control}, _from, state) do
+    case apply_reconnect_control_v2(state, control) do
+      {:ok, result, next_state} -> {:reply, flatten_v2_result(result), next_state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:consume_reserve_receipt, proof}, _from, state) do
+    with :ok <- validate_reserve_receipt_proof(proof),
+         true <- proof.owner_lease_token == state.owner_lease_token,
+         true <- proof.owner_process_generation == state.process_generation,
+         %{
+           provisional_status: :consume_reserved,
+           reserve_receipt_digest: digest,
+           reserve_receipt_used?: false,
+           owner_process_generation: generation,
+           downstream: %{epoch: epoch},
+           lifecycle: lifecycle
+         } = replay <- state.suspended_replay,
+         true <- generation == proof.owner_process_generation,
+         true <- epoch == proof.downstream_epoch,
+         true <- reserve_lifecycle_matches?(lifecycle, proof),
+         true <- secure_digest_match?(digest, proof.reserve_receipt_digest) do
+      consume_fence = make_ref()
+      consume_monitor = Process.monitor(proof.consumer_pid)
+
+      replay = %{
+        replay
+        | reserve_receipt_used?: true,
+          consume_fence: consume_fence,
+          consume_pid: proof.consumer_pid,
+          consume_monitor: consume_monitor
+      }
+
+      {:reply, {:ok, consume_fence}, %{state | suspended_replay: replay}}
+    else
+      _invalid -> {:reply, {:error, :invalid}, state}
+    end
+  end
+
+  def handle_call({:release_consumed_reserve_receipt, proof, consume_fence}, _from, state) do
+    case validate_consumed_reserve_receipt_now(state, proof, consume_fence) do
+      :ok ->
+        {:reply, :ok, clear_consume_reservation(state)}
+
+      {:error, :invalid} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:validate_consumed_reserve_receipt, proof, consume_fence}, _from, state) do
+    {:reply, validate_consumed_reserve_receipt_now(state, proof, consume_fence), state}
+  end
+
+  def handle_call({:begin_suspend, descriptor}, _from, state) do
+    case cas_active_status(state, descriptor, :suspending) do
+      {:ok, next_state} -> {:reply, :ok, next_state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:record_active_downstream_loss, downstream}, _from, state) do
+    case mark_active_downstream_lost(state, downstream) do
+      {:ok, next_state} -> {:reply, :reattachable, next_state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:prepare_next_replay_descriptor, downstream, descriptor}, _from, state) do
+    if DownstreamState.downstream_status(state.downstream, downstream) == :active and
+         valid_next_replay_descriptor?(descriptor) do
+      next = Map.put(descriptor, :downstream, Map.take(downstream, @restore_downstream_keys))
+      {:reply, :ok, %{state | next_turn_descriptor: next}}
+    else
+      {:reply, {:error, :owner_busy}, state}
+    end
   end
 
   def handle_call({:admission_control_v1, control}, _from, %{draining?: true} = state) do
@@ -988,10 +1164,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   # session: reject the attach atomically so the caller falls back to plain HTTP
   # instead of redirecting the running turn's frames.
   def handle_call({:attach_downstream, pid, correlation_id, opts}, _from, state) do
-    if Keyword.get(opts, :reject_if_busy, false) and owner_occupied?(state) do
-      {:reply, {:error, :owner_busy}, state}
-    else
-      attach_downstream_now(state, pid, correlation_id)
+    cond do
+      Keyword.get(opts, :reject_if_busy, false) and owner_occupied?(state) and
+          not suspended_replay_attachable?(state.suspended_replay) ->
+        {:reply, {:error, :owner_busy}, state}
+
+      replay_active?(state, state.downstream) ->
+        epoch = DownstreamState.next_downstream_epoch(state.downstream_epoch)
+
+        candidate = %{
+          pid: pid,
+          epoch: epoch,
+          correlation_id: correlation_id,
+          active_turn_reconnect?: true
+        }
+
+        {:reply, {:ok, candidate}, state}
+
+      suspended_replay_attachable?(state.suspended_replay) ->
+        epoch = DownstreamState.next_downstream_epoch(state.downstream_epoch)
+
+        candidate = %{
+          pid: pid,
+          epoch: epoch,
+          correlation_id: correlation_id,
+          active_turn_reconnect?: true
+        }
+
+        {:reply, {:ok, candidate}, state}
+
+      true ->
+        attach_downstream_now(state, pid, correlation_id)
     end
   end
 
@@ -1014,7 +1217,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
-  def handle_call({:detach_downstream, pid, epoch, correlation_id}, _from, state) do
+  def handle_call({:detach_downstream, pid, epoch, correlation_id}, from, state) do
     case DownstreamState.downstream_status(state.downstream, %{
            pid: pid,
            epoch: epoch,
@@ -1023,24 +1226,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       :active ->
         requested_downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
 
-        state =
-          state
-          |> cancel_pending_handoff(requested_downstream, :socket_closed)
-          |> DownstreamState.demonitor_downstream()
-          |> DownstreamState.schedule_idle_shutdown()
-          |> DownstreamState.cancel_active_turn_downstream(%{
-            pid: pid,
-            epoch: epoch,
-            correlation_id: correlation_id
-          })
-          |> Map.put(:downstream, nil)
+        if replay_active?(state, requested_downstream) do
+          detach_replay_downstream(state, requested_downstream, from)
+        else
+          state =
+            state
+            |> cancel_pending_handoff(requested_downstream, :socket_closed)
+            |> DownstreamState.demonitor_downstream()
+            |> DownstreamState.schedule_idle_shutdown()
+            |> DownstreamState.cancel_active_turn_downstream(requested_downstream)
+            |> Map.put(:downstream, nil)
+            |> reconcile_disconnected_provisional()
 
-        state =
-          state
-          |> clear_native_compaction_admission()
-          |> maybe_settle_cancelled_without_pending_handoff(:client_disconnected)
+          state =
+            state
+            |> clear_native_compaction_admission()
+            |> maybe_settle_cancelled_without_pending_handoff(:client_disconnected)
 
-        reply_or_retire(state, :ok)
+          reply_or_retire(state, :ok)
+        end
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -1166,6 +1370,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         collect?: collect_request?(upstream_payload),
         submission_observed?: submission_notification?,
         descriptor: descriptor,
+        visible_output?: false,
+        upstream_pid: state.upstream_pid,
         admission_phase: admission_phase,
         task_settled?: false,
         submitter_exited?: false,
@@ -1176,6 +1382,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     else
       {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
       {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp prepare_owner_admission_submission(
+         state,
+         _downstream,
+         %UpstreamWebsocketSession.Request{
+           native_replay_binding: %NativeReplayAdmission.Binding{} = binding,
+           native_replay_proof: %RuntimeAdmissionProof{
+             kind: :native_replay
+           },
+           provisional_token: token,
+           native_compaction_capability: nil,
+           first_compact_collection: nil,
+           expected_connection_lifecycle: nil,
+           forwarded_owner_send_handoff: nil
+         } = request
+       )
+       when is_binary(token) and byte_size(token) == 32 do
+    with %{
+           provisional_status: :committed_not_started,
+           consume_binding: consume,
+           provisional_token: expected_token,
+           owner_process_generation: generation
+         }
+         when generation == binding.owner_process_generation <- state.suspended_replay,
+         true <- secure_digest_match?(expected_token, token),
+         true <- consume == NativeReplayAdmission.consume_binding(binding) do
+      mark_owner_replay_started(state, request, consume)
+    else
+      _invalid -> {:error, :owner_unavailable, state}
     end
   end
 
@@ -1264,6 +1501,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp prepare_owner_admission_submission(state, _downstream, upstream_payload),
     do: {:ok, upstream_payload, state, nil}
+
+  defp mark_owner_replay_started(state, request, consume) do
+    case CodexPooler.Accounting.mark_request_replay_started(consume) do
+      {:ok, _entitlement} ->
+        suspended = %{state.suspended_replay | provisional_status: :started}
+        next_state = %{state | suspended_replay: suspended}
+        {:ok, request, next_state, :native_replay}
+
+      {:error, _reason} ->
+        _result = CodexPooler.Accounting.compensate_request_replay_no_send(consume)
+        {:error, :owner_unavailable, state}
+    end
+  end
 
   defp accept_or_consume_upstream_submission(
          %{pending_handoff: %{status: :ready} = pending} = state,
@@ -1616,13 +1866,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{downstream_monitor: ref} = state) do
-    state =
-      state
-      |> clear_native_compaction_admission()
-      |> cancel_pending_handoff(state.downstream, :socket_closed)
-      |> Map.put(:downstream, nil)
-      |> Map.put(:downstream_monitor, nil)
-      |> DownstreamState.maybe_schedule_idle_shutdown()
+    state = state |> handle_monitored_downstream_loss() |> reconcile_disconnected_provisional()
 
     state =
       case state.active_turn do
@@ -1639,6 +1883,74 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     continue_or_retire(state)
   end
 
+  def handle_info(
+        {:DOWN, ref, :process, consumer_pid, _reason},
+        %{
+          suspended_replay: %{
+            provisional_status: :consume_reserved,
+            reserve_receipt_used?: true,
+            consume_pid: consumer_pid,
+            consume_monitor: ref
+          }
+        } = state
+      ) do
+    state = clear_consume_reservation(state, demonitor?: false)
+    suspended = state.suspended_replay
+
+    case reconcile_provisional(state, suspended) do
+      {:ok, :terminal, _reconciled} ->
+        {:noreply, clear_terminal_reconciliation(state)}
+
+      {:ok, status, reconciled} when status in [:committed_not_started, :started] ->
+        {:noreply, maybe_cancel_replay_reconciliation(state, status, reconciled)}
+
+      {:ok, :consume_reserved, reconciled} ->
+        {:noreply, retire_replay_state(%{state | suspended_replay: reconciled})}
+
+      {:ok, status, reconciled} ->
+        {:noreply, maybe_cancel_replay_reconciliation(state, status, reconciled)}
+
+      {:error, _reason} ->
+        {:noreply, schedule_replay_reconciliation(%{state | suspended_replay: suspended})}
+    end
+  end
+
+  def handle_info(
+        {:websocket_owner_replay_reconcile, token},
+        %{
+          suspended_replay: %{
+            provisional_status: :consume_reserved,
+            reconciliation_token: token
+          }
+        } = state
+      ) do
+    state = cancel_replay_reconciliation(state)
+    suspended = state.suspended_replay
+
+    case reconcile_provisional(state, suspended) do
+      {:ok, :terminal, _reconciled} ->
+        {:noreply, clear_terminal_reconciliation(state)}
+
+      {:ok, :consume_reserved, reconciled} ->
+        next_state =
+          if Map.get(reconciled, :reserve_receipt_used?, false) do
+            schedule_replay_reconciliation(%{state | suspended_replay: reconciled})
+          else
+            retire_replay_state(%{state | suspended_replay: reconciled})
+          end
+
+        {:noreply, next_state}
+
+      {:ok, status, reconciled} ->
+        {:noreply, maybe_cancel_replay_reconciliation(state, status, reconciled)}
+
+      {:error, _reason} ->
+        {:noreply, schedule_replay_reconciliation(%{state | suspended_replay: suspended})}
+    end
+  end
+
+  def handle_info({:websocket_owner_replay_reconcile, _token}, state), do: {:noreply, state}
+
   def handle_info(:idle_shutdown, %{downstream: nil, active_turn: nil} = state) do
     {:stop, :normal,
      %{state | idle_shutdown_ref: nil, draining?: true, owner_exit_cause: :idle_expiry}}
@@ -1653,6 +1965,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
     case Persistence.renew_owner_lease(state) do
       {:ok, state} ->
+        state = touch_active_replay_liveness(state)
         {:noreply, schedule_owner_renewal(state)}
 
       {:error, reason} when reason in [:stale_owner, :owner_unavailable] ->
@@ -1708,9 +2021,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     owner_exit_reason = owner_exit_reason(reason, state)
     owner_exit_cause = owner_exit_cause(reason, state)
     Logger.owner_terminated(reason, owner_exit_reason, owner_exit_cause, state)
-    _result = Persistence.release_owner_lease(state, owner_exit_reason, owner_exit_cause)
-    _result = Persistence.interrupt_codex_session(state, owner_exit_reason)
-    close_upstream(state.upstream_closer, state.upstream_pid)
+
+    case Persistence.interrupt_codex_session(state, owner_exit_reason) do
+      :ok -> Persistence.release_owner_lease(state, owner_exit_reason, owner_exit_cause)
+      {:error, _reason} -> :ok
+    end
+
+    close_upstream(state.callbacks.upstream_closer, state.upstream_pid)
     :ok
   end
 
@@ -1747,7 +2064,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       owner: self(),
       ref: ref,
       upstream_pid: state.upstream_pid,
-      upstream_sender: state.upstream_sender,
+      upstream_sender: state.callbacks.upstream_sender,
       collect?: collect_request?(upstream_payload),
       forward_error_body?: forward_error_body?(upstream_payload)
     }
@@ -1773,23 +2090,122 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:noreply, state}
 
       {:forward, terminal?} ->
-        case send_downstream(
-               state,
-               DownstreamState.active_turn_downstream(state),
-               {:data, payload}
-             ) do
-          :ok ->
-            state
-            |> maybe_complete_terminal_delivery(terminal?)
-            |> continue_or_retire()
-
-          {:error, reason} ->
-            state
-            |> fail_terminal_delivery(terminal?, reason)
-            |> continue_or_retire()
+        case authorize_visible_delivery(state, payload) do
+          {:ok, state} -> relay_authorized_frame(state, payload, terminal?)
+          {:error, state} -> {:noreply, state}
         end
     end
   end
+
+  defp relay_authorized_frame(state, payload, terminal?) do
+    case deliver_authorized_frame(state, payload) do
+      :ok ->
+        state
+        |> maybe_complete_terminal_delivery(terminal?)
+        |> continue_or_retire()
+
+      {:error, reason} ->
+        state
+        |> fail_terminal_delivery(terminal?, reason)
+        |> continue_or_retire()
+
+      :stale_generation ->
+        {:noreply, state}
+    end
+  end
+
+  defp deliver_authorized_frame(
+         %{active_turn: %{visible_output?: true}} = state,
+         payload
+       ) do
+    send_downstream(state, DownstreamState.active_turn_downstream(state), {:data, payload})
+  end
+
+  defp deliver_authorized_frame(
+         %{active_turn: %{descriptor: %{request_id: request_id, attempt_id: attempt_id}}} = state,
+         payload
+       )
+       when is_binary(request_id) and is_binary(attempt_id) do
+    if StreamProtocol.internal_control_event?(payload) do
+      deliver_internal_frame(state, request_id, attempt_id, payload)
+    else
+      send_downstream(
+        state,
+        DownstreamState.active_turn_downstream(state),
+        {:data, payload}
+      )
+    end
+  end
+
+  defp deliver_authorized_frame(state, payload) do
+    send_downstream(state, DownstreamState.active_turn_downstream(state), {:data, payload})
+  end
+
+  defp deliver_internal_frame(state, request_id, attempt_id, payload) do
+    descriptor = state.active_turn.descriptor
+
+    request = %CodexPooler.Accounting.Request{id: request_id}
+
+    attempt = %CodexPooler.Accounting.Attempt{
+      id: attempt_id,
+      request_id: request_id,
+      replay_generation: descriptor.replay_generation
+    }
+
+    case CodexPooler.Accounting.with_current_replay_generation(request, attempt, fn ->
+           send_downstream(
+             state,
+             DownstreamState.active_turn_downstream(state),
+             {:data, payload}
+           )
+         end) do
+      {:ok, result} -> result
+      {:error, _reason} -> :stale_generation
+    end
+  rescue
+    Ecto.NoResultsError -> :stale_generation
+  end
+
+  defp authorize_visible_delivery(
+         %{active_turn: %{visible_output?: true}} = state,
+         _payload
+       ),
+       do: {:ok, state}
+
+  defp authorize_visible_delivery(
+         %{
+           active_turn: %{
+             descriptor: %{request_id: request_id, attempt_id: attempt_id} = descriptor
+           }
+         } = state,
+         payload
+       )
+       when is_binary(request_id) and is_binary(attempt_id) do
+    if Map.has_key?(descriptor, :replay_claim_digest) and
+         StreamProtocol.downstream_visible_event?(payload) do
+      attempt = %{
+        id: attempt_id,
+        request_id: request_id,
+        replay_generation: descriptor.replay_generation
+      }
+
+      case SessionContinuity.authorize_codex_turn_visibility(request_id, attempt) do
+        {:ok, :committed} ->
+          state = put_in(state.active_turn.descriptor.visible_output?, true)
+          {:ok, %{state | active_turn: %{state.active_turn | visible_output?: true}}}
+
+        {:ok, _not_committed} ->
+          {:ok, state}
+
+        _failure ->
+          {:error, state}
+      end
+    else
+      {:ok, state}
+    end
+  end
+
+  defp authorize_visible_delivery(state, _payload), do: {:ok, state}
 
   defp send_upstream(
          %{
@@ -1836,7 +2252,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     message = {:websocket_owner_frame, correlation_id, epoch, owner_turn_id, payload}
 
     if WebsocketOwnerContract.downstream_message?(message) do
-      state.downstream_sender.(pid, message)
+      state.callbacks.downstream_sender.(pid, message)
     else
       {:error, :invalid_downstream_message}
     end
@@ -1853,7 +2269,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     message = {:websocket_owner_frame, correlation_id, epoch, payload}
 
     if WebsocketOwnerContract.downstream_message?(message) do
-      state.downstream_sender.(pid, message)
+      state.callbacks.downstream_sender.(pid, message)
     else
       {:error, :invalid_downstream_message}
     end
@@ -1889,12 +2305,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     DownstreamState.active_turn?(state) or not is_nil(state.downstream)
   end
 
+  defp suspended_replay_attachable?(%{provisional_status: status}),
+    do: status in [:armed, :provisional, :consume_reserved, :committed_not_started]
+
+  defp suspended_replay_attachable?(_suspended), do: false
+
   defp attach_downstream_now(state, pid, correlation_id) do
     state = settle_probe_before_reconnect(state)
+    epoch = DownstreamState.next_downstream_epoch(state.downstream_epoch)
 
     downstream = %{
       pid: pid,
-      epoch: DownstreamState.next_downstream_epoch(state.downstream),
+      epoch: epoch,
       correlation_id: correlation_id
     }
 
@@ -1915,23 +2337,46 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     downstream =
       Map.put(downstream, :active_turn_reconnect?, DownstreamState.active_turn?(state))
 
-    state = DownstreamState.put_active_turn_downstream(state, downstream)
+    state =
+      case state.active_turn do
+        %{descriptor: %{downstream_status: :lost}} -> state
+        _other -> DownstreamState.put_active_turn_downstream(state, downstream)
+      end
 
-    {:reply, {:ok, downstream}, %{state | downstream: downstream, downstream_monitor: monitor}}
+    {:reply, {:ok, downstream},
+     %{
+       state
+       | downstream: downstream,
+         downstream_monitor: monitor,
+         downstream_epoch: downstream.epoch
+     }}
   end
 
   defp finish_active_turn(state, result) do
     downstream = DownstreamState.active_turn_downstream(state)
     clear_active_turn_resources(state.active_turn)
+    state = clear_terminal_replay_state(state, result)
 
-    if state.active_turn.collect? do
-      state
-      |> Map.put(:active_turn, nil)
-      |> DownstreamState.maybe_schedule_idle_shutdown()
-    else
-      finish_relay_active_turn(state, downstream, result)
-    end
+    state =
+      if state.active_turn.collect? do
+        state
+        |> Map.put(:active_turn, nil)
+        |> DownstreamState.maybe_schedule_idle_shutdown()
+      else
+        finish_relay_active_turn(state, downstream, result)
+      end
+
+    complete_terminal_winner_detach(state)
   end
+
+  defp clear_terminal_replay_state(
+         %{active_turn: %{descriptor: %{replay_generation: 1}}} = state,
+         _result
+       ) do
+    clear_replay_state(state)
+  end
+
+  defp clear_terminal_replay_state(state, _result), do: state
 
   defp settle_owner_admission_transport(
          %{active_turn: %{admission_phase: :compact}} = state,
@@ -2137,7 +2582,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
     state = put_in(state.active_turn.output_commit_probe, output_commit_probe)
 
-    case state.downstream_sender.(downstream.pid, probe) do
+    case state.callbacks.downstream_sender.(downstream.pid, probe) do
       :ok -> state
       {:error, _reason} -> settle_active_turn_without_downstream_delivery(state, result)
     end
@@ -2244,7 +2689,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:websocket_owner_handoff_ready, pending.correlation_id, pending.epoch,
        pending.owner_turn_id, pending.pid, pending.control_ref}
 
-    _result = state.downstream_sender.(pending.pid, message)
+    _result = state.callbacks.downstream_sender.(pending.pid, message)
     %{state | active_turn: nil, pending_handoff: pending}
   end
 
@@ -2299,7 +2744,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:websocket_owner_handoff_failed, pending.correlation_id, pending.epoch,
        pending.owner_turn_id, pending.pid, pending.control_ref, reason}
 
-    _result = state.downstream_sender.(pending.pid, message)
+    _result = state.callbacks.downstream_sender.(pending.pid, message)
     clear_pending_handoff(state)
   end
 
@@ -2362,15 +2807,62 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     %{state | next_turn_descriptor: next_turn_descriptor}
   end
 
+  defp valid_next_replay_descriptor?(descriptor) do
+    Map.keys(descriptor) |> Enum.sort() ==
+      Enum.sort([
+        :semantic_turn_key,
+        :replay_claim_digest,
+        :authorization_snapshot,
+        :request_id,
+        :codex_turn_id,
+        :model_id,
+        :endpoint,
+        :attempt_id,
+        :replay_generation
+      ]) and
+      valid_replay_descriptor_identity?(descriptor) and
+      valid_replay_descriptor_context?(descriptor)
+  end
+
+  defp valid_replay_descriptor_identity?(descriptor) do
+    is_binary(descriptor.semantic_turn_key) and byte_size(descriptor.semantic_turn_key) == 32 and
+      is_binary(descriptor.replay_claim_digest) and
+      byte_size(descriptor.replay_claim_digest) == 32 and
+      is_map(descriptor.authorization_snapshot)
+  end
+
+  defp valid_replay_descriptor_context?(descriptor) do
+    is_binary(descriptor.request_id) and
+      (is_nil(descriptor.codex_turn_id) or is_binary(descriptor.codex_turn_id)) and
+      is_binary(descriptor.model_id) and is_binary(descriptor.endpoint) and
+      is_binary(descriptor.attempt_id) and descriptor.replay_generation in [0, 1]
+  end
+
   defp take_next_turn_descriptor(
-         %{next_turn_descriptor: %{downstream: expected, semantic_turn_key: semantic_turn_key}} =
+         %{
+           next_turn_descriptor:
+             %{downstream: expected, semantic_turn_key: semantic_turn_key} = next
+         } =
            state,
          downstream,
          upstream_payload
        ) do
     if expected == Map.take(downstream, @restore_downstream_keys) do
-      {%{kind: :native, semantic_turn_key: semantic_turn_key},
-       %{state | next_turn_descriptor: nil}}
+      {%{
+         kind: :native,
+         semantic_turn_key: semantic_turn_key,
+         semantic_turn_digest: semantic_turn_key,
+         replay_claim_digest: Map.get(next, :replay_claim_digest),
+         authorization_snapshot: Map.get(next, :authorization_snapshot),
+         request_id: Map.get(next, :request_id),
+         codex_turn_id: Map.get(next, :codex_turn_id),
+         model_id: Map.get(next, :model_id),
+         endpoint: Map.get(next, :endpoint),
+         attempt_id: Map.get(next, :attempt_id),
+         replay_generation: Map.get(next, :replay_generation, 0),
+         visible_output?: false,
+         downstream_status: :attached
+       }, %{state | next_turn_descriptor: nil}}
     else
       {upstream_turn_descriptor(state, upstream_payload), state}
     end
@@ -2395,6 +2887,861 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp pending_submission_descriptor(state, _pending, _downstream, upstream_payload),
     do: upstream_turn_descriptor(state, upstream_payload)
+
+  defp apply_reconnect_control_v2(state, %RemoteReconnectControlV2{} = control) do
+    with :ok <- RemoteReconnectControlV2.validate(control),
+         true <- control.codex_session_id == state.codex_session_id,
+         true <- control.owner_lease_token == state.owner_lease_token do
+      apply_valid_reconnect_control_v2(state, control)
+    else
+      _invalid -> {:error, :stale_owner}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{active_turn: nil, suspended_replay: nil} = state,
+         %RemoteReconnectControlV2{action: :preflight, intent: :fresh} = control
+       ),
+       do: {:ok, {:fresh_dispatch, control.downstream}, state}
+
+  defp apply_valid_reconnect_control_v2(
+         %{active_turn: %{descriptor: descriptor} = active_turn} = state,
+         %RemoteReconnectControlV2{action: :preflight, intent: :active_reattach} = control
+       ) do
+    with true <- control.downstream.epoch == state.downstream_epoch + 1,
+         true <- replay_descriptor_match?(descriptor, control),
+         true <- descriptor.downstream_status == :lost,
+         false <- descriptor.visible_output?,
+         true <- Process.alive?(active_turn.task_pid),
+         true <-
+           active_turn.upstream_pid == state.upstream_pid and Process.alive?(state.upstream_pid),
+         false <- active_turn.terminal_forwarded?,
+         nil <- active_turn.pending_result,
+         {:ok, state} <- cas_active_status(state, descriptor, :reattaching) do
+      epoch = DownstreamState.next_downstream_epoch(state.downstream_epoch)
+
+      downstream =
+        control.downstream
+        |> Map.put(:epoch, epoch)
+        |> Map.put(:active_turn_reconnect?, true)
+
+      monitor = Process.monitor(downstream.pid)
+      descriptor = %{state.active_turn.descriptor | downstream_status: :attached}
+
+      active_turn = %{
+        state.active_turn
+        | downstream: Map.put(downstream, :owner_turn_id, active_turn.task_pid),
+          descriptor: descriptor
+      }
+
+      {:ok, {:same_turn_reattach, downstream},
+       %{
+         state
+         | active_turn: active_turn,
+           downstream: downstream,
+           downstream_monitor: monitor,
+           downstream_epoch: epoch
+       }}
+    else
+      _failure -> {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{suspended_replay: %{provisional_status: :armed} = armed} = state,
+         %RemoteReconnectControlV2{action: :preflight, intent: :suspended_replay} = control
+       ) do
+    if state.handoff_absolute_timeout_ms in 1_000..60_000 do
+      issued_at_ms = state.callbacks.monotonic_now_ms.()
+      state = prune_provisional_issuances(state, issued_at_ms)
+
+      if length(state.provisional_issuances) < 6 and suspended_preflight_match?(armed, control) and
+           control.downstream.epoch == state.downstream_epoch + 1 do
+        token = :crypto.strong_rand_bytes(32)
+        deadline = issued_at_ms + state.handoff_absolute_timeout_ms
+
+        downstream = %{
+          control.downstream
+          | epoch: DownstreamState.next_downstream_epoch(state.downstream_epoch)
+        }
+
+        suspended =
+          armed
+          |> Map.put(:downstream, downstream)
+          |> Map.put(:provisional_token, token)
+          |> Map.put(:provisional_status, :provisional)
+          |> Map.put(:deadline_ms, deadline)
+          |> Map.put(:consume_binding, nil)
+          |> Map.put(:reconciliation_timer_ref, nil)
+          |> Map.put(:reconciliation_token, nil)
+
+        next_state =
+          state
+          |> Map.update!(:provisional_issuances, &[issued_at_ms | &1])
+          |> Map.put(:suspended_replay, suspended)
+          |> attach_provisional_downstream(downstream)
+
+        {:ok, {:provisional, token, 1, state.process_generation, downstream}, next_state}
+      else
+        {:error, :owner_busy}
+      end
+    else
+      {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{suspended_replay: %{provisional_status: :provisional} = suspended} = state,
+         %RemoteReconnectControlV2{action: :preflight, intent: :suspended_replay} = control
+       ) do
+    if suspended_preflight_match?(suspended, control) and
+         control.downstream.epoch == state.downstream_epoch + 1 do
+      downstream = %{
+        control.downstream
+        | epoch: DownstreamState.next_downstream_epoch(state.downstream_epoch)
+      }
+
+      {:ok,
+       {:provisional, suspended.provisional_token, 1, suspended.owner_process_generation,
+        downstream},
+       state
+       |> put_in([Access.key(:suspended_replay), Access.key(:downstream)], downstream)
+       |> attach_provisional_downstream(downstream)}
+    else
+      {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{suspended_replay: %{provisional_status: :committed_not_started} = suspended} = state,
+         %RemoteReconnectControlV2{action: :preflight, intent: :suspended_replay} = control
+       ) do
+    if suspended_preflight_match?(suspended, control) and
+         control.downstream.epoch == state.downstream_epoch + 1 do
+      downstream = %{
+        control.downstream
+        | epoch: DownstreamState.next_downstream_epoch(state.downstream_epoch)
+      }
+
+      {:ok,
+       {:provisional, suspended.provisional_token, 1, suspended.owner_process_generation,
+        downstream},
+       state
+       |> put_in([Access.key(:suspended_replay), Access.key(:downstream)], downstream)
+       |> attach_provisional_downstream(downstream)}
+    else
+      {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{suspended_replay: suspended} = state,
+         %RemoteReconnectControlV2{action: :provisional_reserve} = control
+       )
+       when is_map(suspended) do
+    reserve_now_ms = state.callbacks.monotonic_now_ms.()
+
+    cond do
+      not provisional_match?(suspended, control) ->
+        {:error, :owner_busy}
+
+      suspended.provisional_status == :consume_reserved ->
+        {:ok,
+         {:consume_reserved, suspended.reserve_timeout_ms, suspended.reserve_receipt,
+          suspended.reserve_receipt_digest}, state}
+
+      suspended.provisional_status == :provisional and
+          reserve_now_ms < suspended.deadline_ms ->
+        reserve_timeout_ms = suspended.deadline_ms - reserve_now_ms
+
+        if reserve_timeout_ms in 1..60_000 do
+          reserve_receipt = :crypto.strong_rand_bytes(32)
+
+          {:ok, reserve_receipt_digest} =
+            RequestReplayEntitlement.reserve_receipt_digest(
+              suspended.provisional_token,
+              reserve_receipt,
+              reserve_timeout_ms
+            )
+
+          suspended =
+            suspended
+            |> Map.put(:provisional_status, :consume_reserved)
+            |> Map.put(:consume_binding, token_reference(suspended))
+            |> Map.put(:reserve_timeout_ms, reserve_timeout_ms)
+            |> Map.put(:reserve_receipt, reserve_receipt)
+            |> Map.put(:reserve_receipt_digest, reserve_receipt_digest)
+            |> Map.put(:reserve_receipt_used?, false)
+            |> Map.put(:consume_fence, nil)
+            |> Map.put(:consume_pid, nil)
+            |> Map.put(:consume_monitor, nil)
+
+          next_state = schedule_replay_reconciliation(%{state | suspended_replay: suspended})
+
+          {:ok, {:consume_reserved, reserve_timeout_ms, reserve_receipt, reserve_receipt_digest},
+           next_state}
+        else
+          {:error, :owner_busy}
+        end
+
+      true ->
+        {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{suspended_replay: suspended} = state,
+         %RemoteReconnectControlV2{action: :provisional_commit} = control
+       )
+       when is_map(suspended) do
+    with true <- provisional_match?(suspended, control),
+         true <-
+           suspended.provisional_status in [:consume_reserved, :committed_not_started, :started],
+         reference = control.consume_binding,
+         {:consumed, binding, phase, _abandon_at}
+         when phase in [:committed_not_started, :started] <-
+           CodexPooler.Accounting.replay_provisional_binding_status(reference),
+         true <- binding == reference do
+      suspended = %{suspended | provisional_status: phase, consume_binding: binding}
+
+      next_state =
+        state
+        |> Map.put(:suspended_replay, suspended)
+        |> clear_consume_reservation()
+        |> cancel_replay_reconciliation()
+
+      {:ok, {phase, binding}, next_state}
+    else
+      _not_consumed -> {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{suspended_replay: suspended} = state,
+         %RemoteReconnectControlV2{action: :provisional_query} = control
+       )
+       when is_map(suspended) do
+    if provisional_match?(suspended, control) do
+      case reconcile_provisional(state, suspended) do
+        {:ok, :terminal, _reconciled} ->
+          {:ok, :cancelled, clear_terminal_reconciliation(state)}
+
+        {:ok, status, reconciled} ->
+          next_state = maybe_cancel_replay_reconciliation(state, status, reconciled)
+          {:ok, status, next_state}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(
+         %{suspended_replay: suspended} = state,
+         %RemoteReconnectControlV2{action: :provisional_cancel} = control
+       )
+       when is_map(suspended) do
+    if provisional_match?(suspended, control) do
+      suspended = Map.put(suspended, :consume_binding, token_reference(suspended))
+
+      case reconcile_provisional(state, suspended) do
+        {:ok, :terminal, _reconciled} ->
+          {:ok, :cancelled, clear_terminal_reconciliation(state)}
+
+        {:ok, status, reconciled} when status in [:committed_not_started, :started] ->
+          {:ok, status, maybe_cancel_replay_reconciliation(state, status, reconciled)}
+
+        {:ok, status, reconciled} when status in [:provisional, :consume_reserved] ->
+          cancel_uncommitted_provisional(state, reconciled)
+
+        {:ok, status, reconciled} when status in [:cancelled, :expired] ->
+          {:ok, status, maybe_cancel_replay_reconciliation(state, status, reconciled)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:error, :owner_busy}
+    end
+  end
+
+  defp apply_valid_reconnect_control_v2(_state, _control), do: {:error, :owner_unavailable}
+
+  defp cancel_uncommitted_provisional(state, reconciled) do
+    if Map.get(reconciled, :reserve_receipt_used?, false) do
+      next_state = schedule_replay_reconciliation(%{state | suspended_replay: reconciled})
+      {:ok, :consume_reserved, next_state}
+    else
+      cancelled = %{reconciled | provisional_status: :cancelled, downstream: nil}
+      next_state = maybe_cancel_replay_reconciliation(state, :cancelled, cancelled)
+      {:ok, :cancelled, next_state}
+    end
+  end
+
+  defp reconcile_provisional(state, suspended) do
+    case provisional_db_status(state, suspended) do
+      {:consumed, binding, phase, _abandon_at}
+      when phase in [:committed_not_started, :started] ->
+        {:ok, phase, %{suspended | provisional_status: phase, consume_binding: binding}}
+
+      :terminal ->
+        {:ok, :terminal, suspended}
+
+      status when status in [:armed, :absent] ->
+        cond do
+          suspended.provisional_status == :consume_reserved ->
+            {:ok, :consume_reserved, suspended}
+
+          suspended.provisional_status == :provisional and
+              state.callbacks.monotonic_now_ms.() >= suspended.deadline_ms ->
+            {:ok, :expired, %{suspended | provisional_status: :expired, downstream: nil}}
+
+          true ->
+            {:ok, suspended.provisional_status, suspended}
+        end
+
+      {:error, _reason} ->
+        {:error, :owner_busy}
+    end
+  end
+
+  defp provisional_db_status(
+         %{callbacks: %{replay_status_reader: reader}},
+         %{consume_binding: %{provisional_token: _token} = reference}
+       ),
+       do: reader.(reference)
+
+  defp provisional_db_status(_state, %{consume_binding: binding}) when is_map(binding),
+    do: CodexPooler.Accounting.replay_provisional_binding_status(binding)
+
+  defp provisional_db_status(_state, _suspended), do: :armed
+
+  defp schedule_replay_reconciliation(state) do
+    state = cancel_replay_reconciliation(state)
+    token = make_ref()
+
+    timer_ref =
+      Process.send_after(
+        self(),
+        {:websocket_owner_replay_reconcile, token},
+        state.suspended_replay.reserve_timeout_ms
+      )
+
+    suspended =
+      state.suspended_replay
+      |> Map.put(:reconciliation_timer_ref, timer_ref)
+      |> Map.put(:reconciliation_token, token)
+
+    %{state | suspended_replay: suspended}
+  end
+
+  defp cancel_replay_reconciliation(%{suspended_replay: suspended} = state)
+       when is_map(suspended) do
+    case Map.get(suspended, :reconciliation_timer_ref) do
+      timer_ref when is_reference(timer_ref) -> Process.cancel_timer(timer_ref)
+      _no_timer -> :ok
+    end
+
+    %{state | suspended_replay: clear_replay_reconciliation(suspended)}
+  end
+
+  defp cancel_replay_reconciliation(state), do: state
+
+  defp clear_replay_reconciliation(suspended) do
+    suspended
+    |> Map.put(:reconciliation_timer_ref, nil)
+    |> Map.put(:reconciliation_token, nil)
+  end
+
+  defp maybe_cancel_replay_reconciliation(state, status, reconciled)
+       when status in [:committed_not_started, :started] do
+    state
+    |> Map.put(:suspended_replay, reconciled)
+    |> clear_consume_reservation()
+    |> cancel_replay_reconciliation()
+  end
+
+  defp maybe_cancel_replay_reconciliation(state, status, reconciled)
+       when status in [:cancelled, :expired] do
+    retire_replay_state(%{state | suspended_replay: reconciled})
+  end
+
+  defp maybe_cancel_replay_reconciliation(state, _status, reconciled),
+    do: %{state | suspended_replay: reconciled}
+
+  defp clear_terminal_reconciliation(state) do
+    retire_replay_state(state)
+  end
+
+  defp retire_replay_state(state) do
+    state
+    |> clear_replay_state()
+    |> DownstreamState.demonitor_downstream()
+    |> Map.put(:downstream, nil)
+    |> DownstreamState.schedule_idle_shutdown()
+  end
+
+  defp clear_replay_state(state) do
+    state
+    |> clear_native_compaction_admission()
+    |> clear_consume_reservation()
+    |> cancel_replay_reconciliation()
+    |> Map.put(:suspended_replay, nil)
+  end
+
+  defp reconcile_disconnected_provisional(
+         %{suspended_replay: %{provisional_status: status} = suspended} = state
+       )
+       when status in [:provisional, :consume_reserved] do
+    suspended =
+      suspended
+      |> Map.put(:consume_binding, token_reference(suspended))
+      |> Map.put(:downstream, nil)
+
+    case reconcile_provisional(state, suspended) do
+      {:ok, :terminal, _reconciled} ->
+        clear_terminal_reconciliation(state)
+
+      {:ok, status, reconciled} when status in [:committed_not_started, :started] ->
+        maybe_cancel_replay_reconciliation(state, status, reconciled)
+
+      {:ok, status, reconciled} when status in [:consume_reserved, :provisional] ->
+        if Map.get(reconciled, :reserve_receipt_used?, false) do
+          schedule_replay_reconciliation(%{state | suspended_replay: reconciled})
+        else
+          cancel_replay_reconciliation(%{
+            state
+            | suspended_replay: %{reconciled | provisional_status: :cancelled}
+          })
+        end
+
+      {:ok, status, reconciled} ->
+        maybe_cancel_replay_reconciliation(state, status, reconciled)
+
+      {:error, _reason} ->
+        %{state | suspended_replay: suspended}
+    end
+  end
+
+  defp reconcile_disconnected_provisional(state), do: state
+
+  defp token_reference(%{lifecycle: lifecycle} = suspended) do
+    %{
+      request_id: lifecycle.request_id,
+      codex_turn_id: lifecycle.codex_turn_id,
+      eligible_attempt_id: lifecycle.eligible_attempt_id,
+      replay_generation: 1,
+      owner_lease_digest: lifecycle.owner_lease_digest,
+      provisional_token: suspended.provisional_token
+    }
+  end
+
+  defp flatten_v2_result({:fresh_dispatch, downstream}), do: {:ok, :fresh_dispatch, downstream}
+
+  defp flatten_v2_result({:same_turn_reattach, downstream}),
+    do: {:ok, :same_turn_reattach, downstream}
+
+  defp flatten_v2_result({:provisional, token, 1, generation, downstream}),
+    do: {:ok, :provisional, token, 1, generation, downstream}
+
+  defp flatten_v2_result({:consume_reserved, timeout, receipt, digest}),
+    do: {:ok, :consume_reserved, timeout, receipt, digest}
+
+  defp flatten_v2_result({phase, binding}) when phase in [:committed_not_started, :started],
+    do: {:ok, phase, binding}
+
+  defp flatten_v2_result(status), do: {:ok, status}
+
+  defp cas_active_status(%{active_turn: %{descriptor: current}} = state, expected, target)
+       when target in [:reattaching, :suspending] do
+    allowed_statuses = if target == :suspending, do: [:attached, :lost], else: [:lost]
+
+    if current == expected and current.downstream_status in allowed_statuses do
+      {:ok, put_in(state.active_turn.descriptor.downstream_status, target)}
+    else
+      {:error, :owner_busy}
+    end
+  end
+
+  defp cas_active_status(_state, _expected, _target), do: {:error, :owner_busy}
+
+  defp mark_active_downstream_lost(
+         %{active_turn: %{descriptor: %{downstream_status: :attached}} = active_turn} = state,
+         downstream
+       ) do
+    if DownstreamState.downstream_status(state.downstream, downstream) == :active and
+         active_turn.downstream.pid == downstream.pid and
+         active_turn.downstream.epoch == downstream.epoch and
+         active_turn.downstream.correlation_id == downstream.correlation_id do
+      state =
+        state
+        |> DownstreamState.demonitor_downstream()
+        |> put_in([Access.key(:active_turn), Access.key(:downstream)], nil)
+        |> put_in(
+          [Access.key(:active_turn), Access.key(:descriptor), Access.key(:downstream_status)],
+          :lost
+        )
+        |> Map.put(:downstream, nil)
+
+      {:ok, state}
+    else
+      {:error, :stale_downstream}
+    end
+  end
+
+  defp mark_active_downstream_lost(_state, _downstream), do: {:error, :owner_busy}
+
+  defp replay_descriptor_match?(descriptor, control),
+    do:
+      descriptor.authorization_snapshot == control.authorization_binding and
+        secure_digest_match?(descriptor.semantic_turn_digest, control.semantic_turn_digest) and
+        secure_digest_match?(descriptor.replay_claim_digest, control.replay_claim_digest) and
+        lifecycle_control_match?(descriptor, control.consume_binding)
+
+  defp lifecycle_control_match?(descriptor, %{
+         request_id: request_id,
+         codex_turn_id: turn_id,
+         eligible_attempt_id: attempt_id,
+         replay_generation: generation
+       }) do
+    descriptor.request_id == request_id and descriptor.codex_turn_id == turn_id and
+      descriptor.attempt_id == attempt_id and descriptor.replay_generation == generation
+  end
+
+  defp lifecycle_control_match?(_descriptor, _binding), do: false
+
+  defp provisional_match?(suspended, control),
+    do:
+      secure_digest_match?(suspended.provisional_token, control.provisional_token) and
+        secure_digest_match?(suspended.semantic_turn_digest, control.semantic_turn_digest) and
+        secure_digest_match?(suspended.replay_claim_digest, control.replay_claim_digest) and
+        provisional_downstream_match?(suspended, control)
+
+  defp provisional_downstream_match?(suspended, %{downstream: nil}),
+    do: is_map(suspended)
+
+  defp provisional_downstream_match?(%{downstream: downstream}, %{downstream: downstream}),
+    do: true
+
+  defp provisional_downstream_match?(_suspended, _control), do: false
+
+  defp validate_reserve_receipt_proof(proof) do
+    required = [
+      :request_id,
+      :codex_turn_id,
+      :eligible_attempt_id,
+      :entitlement_id,
+      :owner_lease_token,
+      :owner_process_generation,
+      :downstream_epoch,
+      :reserve_receipt_digest,
+      :consumer_pid
+    ]
+
+    if Map.keys(proof) |> Enum.sort() == Enum.sort(required) and
+         Enum.all?(
+           [
+             :request_id,
+             :codex_turn_id,
+             :eligible_attempt_id,
+             :entitlement_id,
+             :owner_lease_token
+           ],
+           &uuid?(proof[&1])
+         ) and is_pid(proof.consumer_pid) and proof.owner_process_generation > 0 and
+         proof.downstream_epoch > 0 and
+         is_binary(proof.reserve_receipt_digest) and byte_size(proof.reserve_receipt_digest) == 32 do
+      :ok
+    else
+      {:error, :invalid}
+    end
+  end
+
+  defp validate_consumed_reserve_receipt_now(state, proof, consume_fence) do
+    with :ok <- validate_reserve_receipt_proof(proof),
+         true <- proof.owner_lease_token == state.owner_lease_token,
+         true <- proof.owner_process_generation == state.process_generation,
+         %{
+           provisional_status: :consume_reserved,
+           reserve_receipt_digest: digest,
+           reserve_receipt_used?: true,
+           consume_fence: ^consume_fence,
+           consume_pid: consumer_pid,
+           owner_process_generation: generation,
+           downstream: %{epoch: epoch},
+           lifecycle: lifecycle
+         } <- state.suspended_replay,
+         true <- generation == proof.owner_process_generation,
+         true <- consumer_pid == proof.consumer_pid,
+         true <- epoch == proof.downstream_epoch,
+         true <- reserve_lifecycle_matches?(lifecycle, proof),
+         true <- secure_digest_match?(digest, proof.reserve_receipt_digest) do
+      :ok
+    else
+      _invalid -> {:error, :invalid}
+    end
+  end
+
+  defp reserve_lifecycle_matches?(lifecycle, proof) do
+    lifecycle.request_id == proof.request_id and
+      lifecycle.codex_turn_id == proof.codex_turn_id and
+      lifecycle.eligible_attempt_id == proof.eligible_attempt_id and
+      lifecycle.entitlement_id == proof.entitlement_id
+  end
+
+  defp clear_consume_reservation(state, opts \\ []) do
+    case state.suspended_replay do
+      suspended when is_map(suspended) ->
+        demonitor_consume_reservation(suspended, Keyword.get(opts, :demonitor?, true))
+
+        suspended =
+          suspended
+          |> Map.put(:reserve_receipt_used?, false)
+          |> Map.put(:consume_fence, nil)
+          |> Map.put(:consume_pid, nil)
+          |> Map.put(:consume_monitor, nil)
+
+        %{state | suspended_replay: suspended}
+
+      _no_replay ->
+        state
+    end
+  end
+
+  defp demonitor_consume_reservation(%{consume_monitor: monitor}, demonitor?)
+       when is_reference(monitor) and demonitor? not in [false, nil] do
+    Process.demonitor(monitor, [:flush])
+  end
+
+  defp demonitor_consume_reservation(_suspended, _demonitor?), do: :ok
+
+  defp suspended_preflight_match?(suspended, control),
+    do:
+      suspended.authorization_snapshot == control.authorization_binding and
+        secure_digest_match?(suspended.semantic_turn_digest, control.semantic_turn_digest) and
+        secure_digest_match?(suspended.replay_claim_digest, control.replay_claim_digest)
+
+  defp attach_provisional_downstream(state, downstream) do
+    state =
+      state |> DownstreamState.demonitor_downstream() |> DownstreamState.cancel_idle_shutdown()
+
+    monitor = Process.monitor(downstream.pid)
+    downstream = Map.put(downstream, :active_turn_reconnect?, true)
+
+    %{
+      state
+      | downstream: downstream,
+        downstream_monitor: monitor,
+        downstream_epoch: downstream.epoch
+    }
+  end
+
+  defp replay_active?(
+         %{
+           active_turn: %{
+             descriptor: %{
+               downstream_status: :attached,
+               replay_claim_digest: digest,
+               authorization_snapshot: authorization,
+               visible_output?: false
+             }
+           }
+         },
+         downstream
+       )
+       when is_binary(digest) and byte_size(digest) == 32 and is_map(authorization) and
+              is_map(downstream),
+       do: DownstreamState.downstream_status(downstream, downstream) == :active
+
+  defp replay_active?(_state, _downstream), do: false
+
+  defp suspend_or_detach_downstream(state) do
+    if replay_active?(state, state.downstream) do
+      case suspend_replay_downstream(state) do
+        {:suspended, suspended} ->
+          suspended
+
+        {:terminal_won, terminal} ->
+          settle_terminal_winner(terminal)
+
+        {:failed, failed} ->
+          terminate_predecessor_task(failed.active_turn)
+          reply_active_turn(failed, {:error, :client_disconnected})
+
+          failed
+          |> DownstreamState.cancel_active_turn_downstream(state.downstream, :client_disconnected)
+          |> Map.put(:downstream, nil)
+          |> finish_active_turn({:error, :client_disconnected})
+      end
+    else
+      state
+      |> clear_native_compaction_admission()
+      |> cancel_pending_handoff(state.downstream, :socket_closed)
+      |> Map.put(:downstream, nil)
+      |> Map.put(:downstream_monitor, nil)
+      |> DownstreamState.maybe_schedule_idle_shutdown()
+    end
+  end
+
+  defp handle_monitored_downstream_loss(state) do
+    if replay_active?(state, state.downstream) do
+      case mark_active_downstream_lost(state, state.downstream) do
+        {:ok, lost} -> lost
+        {:error, _reason} -> suspend_or_detach_downstream(state)
+      end
+    else
+      suspend_or_detach_downstream(state)
+    end
+  end
+
+  defp suspend_replay_downstream(%{active_turn: %{descriptor: descriptor}} = state) do
+    if state.active_turn.terminal_forwarded? or not is_nil(state.active_turn.pending_result) do
+      {:terminal_won, state}
+    else
+      case cas_active_status(state, descriptor, :suspending) do
+        {:ok, suspending} -> arm_suspended_replay(suspending, descriptor)
+        _failure -> {:failed, state}
+      end
+    end
+  end
+
+  defp arm_suspended_replay(suspending, descriptor) do
+    case suspending.callbacks.replay_suspender.(suspend_input(suspending, descriptor)) do
+      {:ok, lifecycle} ->
+        reply_active_turn(suspending, {:error, :client_disconnected})
+        terminate_predecessor_task(suspending.active_turn)
+        clear_active_turn_resources(suspending.active_turn)
+
+        suspended = %{
+          semantic_turn_digest: descriptor.semantic_turn_digest,
+          replay_claim_digest: descriptor.replay_claim_digest,
+          authorization_snapshot: descriptor.authorization_snapshot,
+          replay_generation: 1,
+          downstream: nil,
+          predecessor_epoch: suspending.downstream.epoch,
+          owner_process_generation: suspending.process_generation,
+          provisional_token: nil,
+          provisional_status: :armed,
+          deadline_ms: nil,
+          consume_binding: nil,
+          reserve_timeout_ms: nil,
+          reserve_receipt: nil,
+          reserve_receipt_digest: nil,
+          reserve_receipt_used?: false,
+          consume_fence: nil,
+          consume_pid: nil,
+          consume_monitor: nil,
+          reconciliation_timer_ref: nil,
+          reconciliation_token: nil,
+          lifecycle: lifecycle
+        }
+
+        {:suspended,
+         %{
+           suspending
+           | active_turn: nil,
+             suspended_replay: suspended,
+             downstream: nil,
+             downstream_monitor: nil
+         }}
+
+      {:error, :terminal_won} ->
+        {:terminal_won, restore_suspending_descriptor(suspending, descriptor)}
+
+      {:error, _reason} ->
+        {:failed, restore_suspending_descriptor(suspending, descriptor)}
+    end
+  end
+
+  defp detach_replay_downstream(state, requested_downstream, from) do
+    case suspend_replay_downstream(state) do
+      {:suspended, %{suspended_replay: %{provisional_status: :armed}} = suspended} ->
+        suspended = DownstreamState.demonitor_downstream(suspended)
+        {:reply, :suspended, suspended}
+
+      {:terminal_won, terminal} ->
+        terminal =
+          terminal
+          |> Map.put(:terminal_winner_detach, %{
+            reply_to: from,
+            downstream: requested_downstream
+          })
+          |> settle_terminal_winner()
+
+        {:noreply, terminal}
+
+      {:failed, failed} ->
+        terminate_predecessor_task(failed.active_turn)
+        reply_active_turn(failed, {:error, :client_disconnected})
+
+        failed =
+          failed
+          |> DownstreamState.demonitor_downstream()
+          |> DownstreamState.cancel_active_turn_downstream(
+            requested_downstream,
+            :client_disconnected
+          )
+          |> Map.put(:downstream, nil)
+          |> finish_active_turn({:error, :client_disconnected})
+
+        reply_or_retire(failed, :ok)
+    end
+  end
+
+  defp restore_suspending_descriptor(state, descriptor),
+    do: put_in(state.active_turn.descriptor, descriptor)
+
+  defp settle_terminal_winner(%{active_turn: %{pending_result: result}} = state)
+       when not is_nil(result),
+       do: settle_active_turn(state, result)
+
+  defp settle_terminal_winner(state), do: state
+
+  defp complete_terminal_winner_detach(
+         %{terminal_winner_detach: %{reply_to: reply_to, downstream: downstream}} = state
+       ) do
+    GenServer.reply(reply_to, :ok)
+
+    state
+    |> DownstreamState.demonitor_downstream()
+    |> Map.put(:terminal_winner_detach, nil)
+    |> Map.put(:downstream, nil)
+    |> DownstreamState.cancel_active_turn_downstream(downstream)
+    |> DownstreamState.schedule_idle_shutdown()
+  end
+
+  defp complete_terminal_winner_detach(state), do: state
+
+  defp suspend_input(state, descriptor) do
+    authorization = descriptor.authorization_snapshot
+
+    %{
+      api_key_id: authorization.api_key_id,
+      pool_id: authorization.pool_id,
+      codex_session_id: state.codex_session_id,
+      request_id: descriptor.request_id,
+      codex_turn_id: descriptor.codex_turn_id,
+      eligible_attempt_id: descriptor.attempt_id,
+      api_key_runtime_epoch: authorization.api_key_runtime_epoch,
+      model_id: descriptor.model_id,
+      model_identifier: authorization.model_identifier,
+      endpoint: descriptor.endpoint,
+      semantic_turn_digest: descriptor.semantic_turn_digest,
+      replay_claim_digest: descriptor.replay_claim_digest,
+      owner_instance_id: state.owner_instance_id,
+      owner_lease_token: state.owner_lease_token,
+      predecessor_epoch: state.downstream.epoch,
+      failure_reason: :client_disconnected,
+      pre_visible_output: true
+    }
+  end
+
+  defp prune_provisional_issuances(state, now_ms) do
+    cutoff = now_ms - 30_000
+    %{state | provisional_issuances: Enum.filter(state.provisional_issuances, &(&1 >= cutoff))}
+  end
 
   defp native_message_mapper?(mapper) do
     mapper == (&StreamProtocol.canonicalize_native_codex_responses_json_message/1) or
@@ -2493,7 +3840,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp cancel_output_commit_probe_timer(_active_turn), do: :ok
 
   defp invalidate_upstream(state) do
-    state.upstream_invalidator.(state.upstream_pid)
+    state.callbacks.upstream_invalidator.(state.upstream_pid)
   catch
     :exit, _reason -> {:error, :upstream_websocket_not_connected}
   end
@@ -2589,6 +3936,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp owner_renewal_ms do
     OperationalSettings.current().bridge_owner_lease_renewal_seconds * 1_000
   end
+
+  defp touch_active_replay_liveness(%{suspended_replay: %{consume_binding: binding}} = state)
+       when is_map(binding) do
+    _result = CodexPooler.Accounting.touch_request_replay_liveness(binding)
+    state
+  end
+
+  defp touch_active_replay_liveness(state), do: state
 
   defp jittered_owner_renewal_delay(timeout) when is_integer(timeout) and timeout > 0 do
     minimum = max(timeout - div(timeout, 5), 1)

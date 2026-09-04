@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
   @moduledoc false
 
   import ExUnit.Assertions
+  import ExUnit.CaptureLog, only: [with_log: 1]
 
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.AccountingLifecycle
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Context
@@ -140,8 +141,15 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
   defp execute(:owner_crash, context, _accounting) do
     fixture = start_accounted_owner(context, :owner_crash)
     owner_monitor = Process.monitor(fixture.owner)
-    Process.exit(fixture.upstream_pid, :shutdown)
-    assert_down(owner_monitor, fixture.owner)
+
+    {_result, logs} =
+      with_log(fn ->
+        Process.exit(fixture.upstream_pid, :shutdown)
+        assert_down(owner_monitor, fixture.owner)
+      end)
+
+    assert logs =~ "terminating"
+    assert logs =~ "** (stop) :owner_crashed"
     observe_retired(fixture)
   end
 
@@ -197,8 +205,15 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
       )
 
     owner_monitor = Process.monitor(fixture.owner)
-    send(fixture.owner, :renew_owner_lease)
-    assert_down(owner_monitor, fixture.owner)
+
+    {_result, logs} =
+      with_log(fn ->
+        send(fixture.owner, :renew_owner_lease)
+        assert_down(owner_monitor, fixture.owner)
+      end)
+
+    assert logs =~ "websocket owner renewal stale"
+    assert logs =~ "reason=stale_owner"
     observe_retired(fixture)
   end
 

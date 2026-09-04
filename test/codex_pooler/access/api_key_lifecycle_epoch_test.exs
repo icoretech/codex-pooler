@@ -5,11 +5,126 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Events
+  alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
   import CodexPooler.AccountsFixtures
+
+  @tag :replay_api_key_delete
+  @tag :replay_lock_order
+  test "API key deletion refreshes a post-snapshot session drift before deleting" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    scope = Scope.for_user(owner, ["instance_owner"])
+    pool = create_pool!(scope, "delete-drift")
+    api_key = create_api_key!(scope, pool, "delete drift")
+    auth = %{pool: pool, api_key: api_key}
+    barrier = make_ref()
+    parent = self()
+
+    Application.put_env(:codex_pooler, :api_key_delete_test_barrier, %{
+      test_pid: parent,
+      ref: barrier,
+      block_attempts_left: [3]
+    })
+
+    on_exit(fn -> Application.delete_env(:codex_pooler, :api_key_delete_test_barrier) end)
+
+    delete_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        Access.delete_api_key(scope, api_key)
+      end)
+
+    assert_receive {:api_key_delete_session_snapshot, ^barrier, delete_pid, 3, []}
+
+    assert {:ok, session} =
+             Websocket.start_codex_session(auth, %{
+               accepted_turn_state: Ecto.UUID.generate()
+             })
+
+    send(delete_pid, {:release_api_key_delete_snapshot, barrier})
+
+    assert_receive {:api_key_delete_session_snapshot, ^barrier, ^delete_pid, 2, session_ids}
+    assert session_ids == [session.id]
+    assert {:ok, deleted} = Task.await(delete_task, 15_000)
+    assert deleted.id == api_key.id
+    assert Repo.get(APIKey, api_key.id) == nil
+    assert Repo.get(CodexPooler.Gateway.Persistence.CodexSession, session.id) == nil
+  end
+
+  @tag :replay_api_key_delete
+  @tag :replay_lock_order
+  test "API key deletion returns deterministic conflict after bounded session drift retries" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    scope = Scope.for_user(owner, ["instance_owner"])
+    pool = create_pool!(scope, "delete-bounded-drift")
+    api_key = create_api_key!(scope, pool, "delete bounded drift")
+    auth = %{pool: pool, api_key: api_key}
+    barrier = make_ref()
+    parent = self()
+
+    Application.put_env(:codex_pooler, :api_key_delete_test_barrier, %{
+      test_pid: parent,
+      ref: barrier,
+      block_attempts_left: [3, 2, 1]
+    })
+
+    on_exit(fn -> Application.delete_env(:codex_pooler, :api_key_delete_test_barrier) end)
+
+    delete_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        Access.delete_api_key(scope, api_key)
+      end)
+
+    inserted_session_ids =
+      for attempts_left <- [3, 2, 1] do
+        assert_receive {:api_key_delete_session_snapshot, ^barrier, delete_pid, ^attempts_left,
+                        _session_ids}
+
+        assert {:ok, session} =
+                 Websocket.start_codex_session(auth, %{
+                   accepted_turn_state: Ecto.UUID.generate()
+                 })
+
+        send(delete_pid, {:release_api_key_delete_snapshot, barrier})
+        session.id
+      end
+
+    assert {:error, %{code: :api_key_delete_conflict}} = Task.await(delete_task, 15_000)
+    assert Repo.get!(APIKey, api_key.id).id == api_key.id
+
+    assert Repo.all(
+             from session in CodexPooler.Gateway.Persistence.CodexSession,
+               where: session.id in ^inserted_session_ids,
+               order_by: [asc: session.id],
+               select: session.id
+           ) == Enum.sort(inserted_session_ids)
+  end
+
+  @tag :replay_api_key_delete
+  test "API key deletion propagates a non-retryable replay close error unchanged" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    scope = Scope.for_user(owner, ["instance_owner"])
+    pool = create_pool!(scope, "delete-replay-error")
+    api_key = create_api_key!(scope, pool, "delete replay error")
+    error = {:request_replay_close_failed, :synthetic_non_retryable}
+
+    Application.put_env(
+      :codex_pooler,
+      :api_key_delete_replay_close_test_override,
+      fn _api_key_id -> {:error, error} end
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:codex_pooler, :api_key_delete_replay_close_test_override)
+    end)
+
+    assert {:error, ^error} = Access.delete_api_key(scope, api_key)
+    assert Repo.get!(APIKey, api_key.id).id == api_key.id
+  end
 
   describe "disabling lifecycle epochs" do
     test "all disabling entry points advance the persisted epoch and emit one sanitized event" do

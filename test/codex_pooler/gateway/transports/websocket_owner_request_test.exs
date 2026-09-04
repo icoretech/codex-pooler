@@ -3,10 +3,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
+  alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV4
 
   @allowed_keys MapSet.new([
                   :__struct__,
@@ -240,6 +242,29 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
              |> WebsocketOwnerRequestV3.new()
   end
 
+  @tag :replay_protocol_v2
+  test "V4 is a closed redacted replay-only data plane envelope" do
+    attrs =
+      valid_attrs()
+      |> Map.merge(%{
+        version: 4,
+        websocket_delivery_mode: :relay,
+        effective_serving_mode: :full,
+        native_replay_binding: replay_binding(),
+        native_replay_proof: replay_proof(),
+        provisional_token: <<9::256>>
+      })
+
+    assert {:ok, request} = WebsocketOwnerRequestV4.new(attrs)
+    assert inspect(request) == "#WebsocketOwnerRequestV4<version: 4, replay: redacted>"
+    refute inspect(request) =~ Base.encode16(attrs.provisional_token)
+
+    assert {:error, {:unknown_fields, [:owner_admission_capability]}} =
+             attrs
+             |> Map.put(:owner_admission_capability, capability())
+             |> WebsocketOwnerRequestV4.new()
+  end
+
   defp valid_attrs do
     upstream_identity_id = Ecto.UUID.generate()
 
@@ -305,6 +330,32 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
       NativeCompactionAdmission.reserve(pending, :compact, binding, make_ref(), 0)
 
     capability
+  end
+
+  defp replay_binding do
+    %CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding{
+      request_id: Ecto.UUID.generate(),
+      codex_turn_id: Ecto.UUID.generate(),
+      eligible_attempt_id: Ecto.UUID.generate(),
+      replay_attempt_id: Ecto.UUID.generate(),
+      replay_generation: 1,
+      semantic_turn_digest: <<1::256>>,
+      replay_claim_digest: <<2::256>>,
+      provisional_binding_digest: <<3::256>>,
+      owner_lease_digest: <<4::256>>,
+      downstream_epoch: 2,
+      owner_process_generation: 1
+    }
+  end
+
+  defp replay_proof do
+    RuntimeAdmissionProof.new(
+      self(),
+      make_ref(),
+      make_ref(),
+      <<7::256>>,
+      :native_replay
+    )
   end
 
   defp contains_function?(value) when is_function(value), do: true

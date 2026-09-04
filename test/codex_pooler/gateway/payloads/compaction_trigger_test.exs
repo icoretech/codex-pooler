@@ -4,16 +4,74 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
 
   @fixture_path Path.expand(
-                  "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_request.json",
+                  "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_request.json",
                   __DIR__
                 )
   @external_resource @fixture_path
 
   @incremental_fixture_path Path.expand(
-                              "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_incremental_request.json",
+                              "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_incremental_request.json",
                               __DIR__
                             )
   @external_resource @incremental_fixture_path
+
+  describe "prepare_bridge/2" do
+    test "accepts a final native trigger after a zero-byte function output" do
+      payload = zero_byte_compaction_payload()
+
+      assert {:ok, projected} =
+               CompactionTrigger.prepare_bridge("/backend-api/codex/responses", payload)
+
+      assert projected["input"] == payload["input"]
+      assert projected["store"] == false
+      refute Map.has_key?(projected, "stream")
+    end
+
+    test "keeps public visible-input strictness for a zero-byte function output" do
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               CompactionTrigger.prepare_bridge("/v1/responses", zero_byte_compaction_payload())
+    end
+
+    test "keeps public singleton trigger rejection" do
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               CompactionTrigger.prepare_bridge("/v1/responses", %{
+                 "input" => [%{"type" => "compaction_trigger"}]
+               })
+    end
+
+    test "preserves native singleton and nonempty controls while rejecting malformed triggers" do
+      trigger = %{"type" => "compaction_trigger"}
+
+      assert {:ok, _projected} =
+               CompactionTrigger.prepare_bridge("/backend-api/codex/responses", %{
+                 "input" => [trigger],
+                 "stream" => true
+               })
+
+      nonempty = put_in(zero_byte_compaction_payload(), ["input", Access.at(0), "output"], "ok")
+
+      assert {:ok, _projected} =
+               CompactionTrigger.prepare_bridge("/backend-api/codex/responses", nonempty)
+
+      for input <- [
+            [
+              trigger,
+              %{"type" => "function_call_output", "call_id" => "call_fixture", "output" => ""}
+            ],
+            [
+              %{"type" => "function_call_output", "call_id" => "call_fixture", "output" => ""},
+              trigger,
+              trigger
+            ]
+          ] do
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 CompactionTrigger.prepare_bridge("/backend-api/codex/responses", %{
+                   "input" => input,
+                   "stream" => true
+                 })
+      end
+    end
+  end
 
   describe "Responses compact projection" do
     @tag :compaction_state_baseline
@@ -106,9 +164,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
       fixture = load_incremental_fixture!()
 
       assert fixture["fixture_source"] == %{
-               "tag" => "rust-v0.152.0",
-               "annotated_tag_object" => "7f6bee13af649d0da23ac0c2bf5c83f571fcd611",
-               "peeled_commit" => "316795b3cf2a45e90d121d9f46499d4658b2645c",
+               "tag" => "rust-v0.153.3",
+               "annotated_tag_object" => "29d1e7f316229cd65c7e4a70476050c14962cf10",
+               "peeled_commit" => "b1a547b1f73ce86205d9222ac19cff334b3b7a2e",
                "source_paths" => [
                  "codex-rs/codex-api/src/common.rs",
                  "codex-rs/core/src/client.rs",
@@ -117,18 +175,25 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
                  "codex-rs/core/src/responses_metadata.rs",
                  "codex-rs/core/src/session/session.rs",
                  "codex-rs/core/src/turn_metadata_tests.rs",
-                 "codex-rs/protocol/src/models.rs"
+                 "codex-rs/protocol/src/models.rs",
+                 "codex-rs/core/tests/suite/realtime_conversation.rs"
                ]
              }
 
       contract = fixture["contract"]
       assert contract["durability_boundary"] == "projection_relevant_incremental_frame_subset"
 
+      assert contract["zero_byte_function_call_output"] == %{
+               "type" => "function_call_output",
+               "output_byte_length" => 0,
+               "followed_by_final_compaction_trigger" => true
+             }
+
       assert contract["v2_trigger_metadata"]
              |> Map.fetch!("x-codex-turn-metadata")
              |> Jason.decode!() == %{
                "window_number" => 0,
-               "context_window_id" => "00000000-0000-4000-8000-000000000152",
+               "context_window_id" => "00000000-0000-4000-8000-000000000153",
                "compaction" => %{"implementation" => "responses_compaction_v2"}
              }
 
@@ -309,9 +374,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
       fixture = load_fixture!()
 
       assert fixture["fixture_source"] == %{
-               "tag" => "rust-v0.152.0",
-               "annotated_tag_object" => "7f6bee13af649d0da23ac0c2bf5c83f571fcd611",
-               "peeled_commit" => "316795b3cf2a45e90d121d9f46499d4658b2645c",
+               "tag" => "rust-v0.153.3",
+               "annotated_tag_object" => "29d1e7f316229cd65c7e4a70476050c14962cf10",
+               "peeled_commit" => "b1a547b1f73ce86205d9222ac19cff334b3b7a2e",
                "source_paths" => [
                  "codex-rs/core/src/client.rs",
                  "codex-rs/core/src/compact_remote_v2.rs",
@@ -319,7 +384,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
                  "codex-rs/core/src/responses_metadata.rs",
                  "codex-rs/core/src/session/session.rs",
                  "codex-rs/core/src/turn_metadata_tests.rs",
-                 "codex-rs/protocol/src/models.rs"
+                 "codex-rs/protocol/src/models.rs",
+                 "codex-rs/core/tests/suite/realtime_conversation.rs"
                ]
              }
 
@@ -329,7 +395,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
              |> Map.take(["window_number", "context_window_id", "request_kind", "compaction"]) ==
                %{
                  "window_number" => 0,
-                 "context_window_id" => "00000000-0000-4000-8000-000000000152",
+                 "context_window_id" => "00000000-0000-4000-8000-000000000153",
                  "request_kind" => "compaction",
                  "compaction" => %{
                    "trigger" => "auto",
@@ -389,5 +455,19 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
     assert subset["client_metadata"] == v2_trigger_metadata
     assert CompactionTrigger.compaction_result_transport(subset) == :sse
     assert is_list(subset["input"])
+  end
+
+  defp zero_byte_compaction_payload do
+    %{
+      "input" => [
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_fixture_zero_byte",
+          "output" => ""
+        },
+        %{"type" => "compaction_trigger"}
+      ],
+      "stream" => true
+    }
   end
 end

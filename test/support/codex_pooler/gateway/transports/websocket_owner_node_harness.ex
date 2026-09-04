@@ -2,6 +2,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   @moduledoc false
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
@@ -141,9 +143,45 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
       renew_owner_token: fn _session_id, _owner_lease_token, _opts ->
         {:error, :stale_owner}
       end,
+      close_request_replays: fn _session_id, _owner_lease_token, :owner_shutdown ->
+        {:ok, %{armed_closed: 0, consumed_closed: 0}}
+      end,
       release_owner_lease: fn _session_id, _owner_lease_token, _reason -> :ok end,
       interrupt_codex_session: fn _session_id, _opts -> :ok end
     }
+  end
+
+  def real_persistence_boundary do
+    %{
+      release_owner_lease: &SessionContinuity.release_owner_lease/4,
+      renew_owner_token: &SessionContinuity.renew_owner_token/3,
+      interrupt_codex_session: &Interruption.interrupt_codex_session/2
+    }
+  end
+
+  def stop_owner(codex_session_id, timeout_ms)
+      when is_binary(codex_session_id) and is_integer(timeout_ms) and timeout_ms > 0 do
+    case WebsocketOwnerSession.lookup(codex_session_id) do
+      {:ok, owner_pid} ->
+        owner_ref = Process.monitor(owner_pid)
+        GenServer.stop(owner_pid, :shutdown, timeout_ms)
+
+        receive do
+          {:DOWN, ^owner_ref, :process, ^owner_pid, _reason} -> :ok
+        after
+          timeout_ms -> {:error, :owner_stop_timeout}
+        end
+
+      {:error, :owner_unavailable} ->
+        :ok
+    end
+  catch
+    :exit, {:noproc, _details} -> :ok
+    :exit, {:normal, _details} -> :ok
+  end
+
+  def owner_absent?(codex_session_id) when is_binary(codex_session_id) do
+    Registry.lookup(WebsocketOwnerSession.Registry, codex_session_id) == []
   end
 
   def start_owner_runtime do
@@ -178,6 +216,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     after
       10_000 -> {:error, :owner_runtime_start_timeout}
     end
+  end
+
+  def start_repo(repo_config) when is_list(repo_config) do
+    Application.put_env(:codex_pooler, CodexPooler.Repo, repo_config)
+    {:ok, _applications} = Application.ensure_all_started(:ecto_sql)
+    {:ok, repo_pid} = CodexPooler.Repo.start_link()
+    Process.unlink(repo_pid)
+    repo_pid
   end
 
   def put_owner_idle_timeout(timeout) when is_integer(timeout) do

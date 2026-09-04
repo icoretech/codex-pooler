@@ -4,6 +4,25 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
 
+  test "public Responses requires visible input before a final compaction trigger" do
+    trigger = %{"type" => "compaction_trigger"}
+
+    for input <- [
+          [trigger],
+          [
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_public_zero_byte",
+              "output" => ""
+            },
+            trigger
+          ]
+        ] do
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               CompactionTrigger.prepare_bridge("/v1/responses", %{"input" => input})
+    end
+  end
+
   test "canonical Responses projection forces store false and retains one terminal trigger" do
     payload = compact_projection_payload()
 

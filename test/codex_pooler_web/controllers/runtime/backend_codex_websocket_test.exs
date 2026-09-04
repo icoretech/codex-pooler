@@ -9,7 +9,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
+
+  alias CodexPooler.Accounting.{
+    Attempt,
+    LedgerEntry,
+    Request,
+    RequestLogs,
+    RequestReplay,
+    RequestReplayEntitlement
+  }
+
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.Audit.AuditEvent
@@ -958,7 +967,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         execute_websocket_response(
           auth,
           model_serving_websocket_payload(setup, "cross-assignment", "client-true"),
-          %{request_id: request_id, connect_timeout_ms: 1_000},
+          %{request_id: request_id, connect_timeout_ms: 100},
           fn frame -> send(parent, {:websocket_frame, frame}) end
         )
       end)
@@ -2807,6 +2816,74 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert Repo.reload!(context.reserved.request).status == "failed"
     assert Repo.reload!(context.attempt).status == "failed"
+  end
+
+  @tag :replay_generation_race
+  @tag :replay_race
+  test "stale generation invalid websocket compaction finalization is a typed no-op" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-stale-invalid-compact"})
+
+    invalid_item = %{"type" => "compaction_summary", "id" => nil}
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(
+        setup,
+        auth,
+        session,
+        compact_websocket_body("resp_stale_invalid_compact", invalid_item)
+      )
+
+    stale_attempt = context.attempt
+    stale_request = context.reserved.request
+
+    turn = Repo.get_by!(CodexTurn, request_id: stale_request.id)
+    semantic_digest = <<1::256>>
+
+    turn
+    |> Ecto.Changeset.change(%{semantic_turn_digest: semantic_digest})
+    |> Repo.update!()
+
+    assert {:ok, _armed} =
+             RequestReplay.arm(%{
+               api_key_id: auth.api_key.id,
+               pool_id: auth.pool.id,
+               codex_session_id: session.id,
+               request_id: stale_request.id,
+               codex_turn_id: turn.id,
+               eligible_attempt_id: stale_attempt.id,
+               api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+               model_id: setup.model.id,
+               model_identifier: setup.model.exposed_model_id,
+               endpoint: stale_request.endpoint,
+               semantic_turn_digest: semantic_digest,
+               replay_claim_digest: <<2::256>>,
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token,
+               predecessor_epoch: 1,
+               failure_reason: :client_disconnected,
+               pre_visible_output: true
+             })
+
+    request_options =
+      context.request_options
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+      |> RequestOptions.put_payload_context(
+        compaction_trigger_bridge?: true,
+        compaction_result_mode: :native_websocket
+      )
+      |> put_incremental_compaction_input_mode()
+
+    context = %{context | request_options: request_options}
+
+    assert {:ok, %{stale_generation?: true}} =
+             Finalization.finalize_completed_websocket_response(context, finalization)
+
+    assert Repo.reload!(stale_request).status == "in_progress"
+    assert Repo.reload!(stale_attempt).status == "retryable_failed"
   end
 
   test "websocket completed settlement rollback emits one attempt-scoped failure outcome" do
@@ -7578,6 +7655,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :duplicate_turn
+  @tag :replay_matrix
   test "released 0.151.0 same-socket native tool continuation without previous response gets a request claim" do
     previous_response_id = "resp_native_tool_continuation_anchor"
     logical_turn_id = "native-tool-continuation-turn"
@@ -7931,7 +8009,252 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
            ) == 1
   end
 
+  @tag :replay_matrix
+  test "pre-visible disconnected native tool continuation recovers on byte-identical replay" do
+    thread_id = Ecto.UUID.generate()
+
+    payload = fn model ->
+      %{
+        "type" => "response.create",
+        "model" => model,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "session_id" => thread_id,
+              "thread_id" => thread_id,
+              "turn_id" => "replay-tool-continuation",
+              "request_kind" => "turn"
+            })
+        },
+        "input" => [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_replay_boundary",
+            "output" => "synthetic replay output"
+          }
+        ],
+        "instructions" => "synthetic replay instructions",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "sample_tool",
+            "parameters" => %{"type" => "object", "properties" => %{}}
+          }
+        ],
+        "stream" => true,
+        "generate" => true
+      }
+    end
+
+    assert_replay_red_boundary(payload)
+  end
+
+  @tag :replay_matrix
+  test "pre-visible disconnected compact final recovers on byte-identical replay" do
+    thread_id = Ecto.UUID.generate()
+
+    payload = fn model ->
+      %{
+        "type" => "response.create",
+        "model" => model,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "session_id" => thread_id,
+              "thread_id" => thread_id,
+              "turn_id" => "replay-compact-final",
+              "request_kind" => "turn"
+            })
+        },
+        "input" => [
+          %{
+            "type" => "compaction",
+            "encrypted_content" => "synthetic-compact-boundary"
+          }
+        ],
+        "stream" => true,
+        "generate" => true
+      }
+    end
+
+    assert_replay_red_boundary(payload)
+  end
+
+  @tag :replay_matrix
+  @tag :replay_race
+  test "a second disconnect after consumed replay cannot create generation N+2" do
+    thread_id = Ecto.UUID.generate()
+    first_release_ref = make_ref()
+    second_release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_close_without_terminal_barrier(
+             notify: self(),
+             release_ref: first_release_ref,
+             code: 1001,
+             reason: "synthetic generation zero disconnect"
+           ),
+           FakeUpstream.websocket_close_without_terminal_barrier(
+             notify: self(),
+             release_ref: second_release_ref,
+             code: 1001,
+             reason: "synthetic generation one disconnect"
+           )
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+
+    previous_owner_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      case previous_owner_forwarding do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+
+    {:ok, _auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = Ecto.UUID.generate()
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "session_id" => thread_id,
+              "thread_id" => thread_id,
+              "turn_id" => "repeated-generation-one-disconnect",
+              "request_kind" => "turn"
+            })
+        },
+        "input" => [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_repeated_generation_one_disconnect",
+            "output" => "synthetic replay output"
+          }
+        ],
+        "stream" => true,
+        "generate" => true
+      })
+
+    {server, port} = start_public_endpoint_with_server!()
+    {first_conn, first_websocket, first_ref} = public_websocket_connect!(port, setup, turn_state)
+
+    {first_conn, _first_websocket} =
+      public_websocket_send_text!(first_conn, first_websocket, first_ref, payload)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, first_upstream_pid,
+                    ^first_release_ref},
+                   @large_websocket_frame_timeout
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt_n] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+    first_downstream = :sys.get_state(owner_pid).downstream
+    assert :suspended = WebsocketOwnerSession.detach_downstream(owner_pid, first_downstream)
+    send(first_upstream_pid, {:fake_upstream_release_websocket, first_release_ref})
+
+    assert %Attempt{replay_generation: 0, status: "retryable_failed"} =
+             Repo.get!(Attempt, attempt_n.id)
+
+    {replay_conn, replay_websocket, replay_ref} =
+      public_websocket_connect!(port, setup, turn_state)
+
+    {replay_conn, _replay_websocket} =
+      public_websocket_send_text!(replay_conn, replay_websocket, replay_ref, payload)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, second_upstream_pid,
+                    ^second_release_ref},
+                   @large_websocket_frame_timeout
+
+    assert [persisted_attempt_n, attempt_n_plus_one] =
+             Repo.all(
+               from(a in Attempt,
+                 where: a.request_id == ^request.id,
+                 order_by: [asc: a.attempt_number]
+               )
+             )
+
+    assert persisted_attempt_n.id == attempt_n.id
+    assert attempt_n_plus_one.replay_generation == 1
+    assert attempt_n_plus_one.status == "in_progress"
+    replay_downstream = :sys.get_state(owner_pid).downstream
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner_pid, replay_downstream)
+    send(second_upstream_pid, {:fake_upstream_release_websocket, second_release_ref})
+
+    assert_receive {Events,
+                    %{
+                      reason: "request_finalized",
+                      payload: %{"status" => "failed"}
+                    }},
+                   @connection_shutdown_timeout_ms
+
+    assert %Request{status: "failed", last_error_code: "client_disconnected"} =
+             Repo.get!(Request, request.id)
+
+    assert %Attempt{status: "failed", network_error_code: "client_disconnected"} =
+             Repo.get!(Attempt, attempt_n_plus_one.id)
+
+    assert %RequestReplayEntitlement{status: "consumed", closed_at: %DateTime{}} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
+
+    {third_conn, third_websocket, third_ref} = public_websocket_connect!(port, setup, turn_state)
+
+    {third_conn, third_websocket} =
+      public_websocket_send_text!(third_conn, third_websocket, third_ref, payload)
+
+    {third_conn, _third_websocket, third_frame} =
+      public_websocket_receive_text!(third_conn, third_websocket, third_ref)
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} = Jason.decode!(third_frame)
+    assert FakeUpstream.count(upstream) == 2
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 2
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "release"
+             ),
+             :count
+           ) == 1
+
+    assert %CodexTurn{status: "interrupted", final_attempt_id: final_attempt_id} =
+             Repo.get!(CodexTurn, turn.id)
+
+    assert final_attempt_id == attempt_n_plus_one.id
+    {:ok, connections} = ThousandIsland.connection_pids(server)
+    connection_monitors = Enum.map(connections, &{&1, Process.monitor(&1)})
+    _result = Mint.HTTP.close(first_conn)
+    _result = Mint.HTTP.close(replay_conn)
+    _result = Mint.HTTP.close(third_conn)
+
+    Enum.each(connection_monitors, fn {pid, monitor} ->
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, @connection_shutdown_timeout_ms
+    end)
+
+    await_websocket_owner_absent!(turn.codex_session_id)
+  end
+
   @tag :duplicate_turn
+  @tag :replay_matrix
   test "compaction-shaped explicit websocket turn remains behind the durable duplicate fence" do
     upstream =
       start_upstream(
@@ -7969,6 +8292,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :saved_reset_duplicate_turn
+  @tag :replay_race
   test "duplicate explicit websocket turn id does not auto redeem saved reset before rejection" do
     upstream =
       start_upstream(
@@ -8065,6 +8389,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :duplicate_turn
+  @tag :replay_race
   test "concurrent identical native tool continuations admit exactly one lifecycle" do
     upstream =
       start_upstream(
@@ -8803,6 +9128,85 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       [initial_residency, refreshed_residency, initial_access_token, refreshed_access_token],
       logs
     )
+  end
+
+  @tag :replay_generation_race
+  @tag :replay_race
+  test "stale generation handshake auth failure exits without refresh retry or downstream frame" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_upgrade_error(
+          %{"error" => %{"code" => "invalid_api_key"}},
+          status: 401,
+          headers: [{"x-openai-authorization-error", "invalid_api_key"}],
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    parent = self()
+
+    client =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        execute_websocket_response(
+          auth,
+          websocket_auth_refresh_payload(setup, "stale-replay-generation"),
+          %{
+            request_id: "ws-auth-stale-replay-generation",
+            accepted_turn_state: Ecto.UUID.generate()
+          },
+          fn frame -> send(parent, {:stale_auth_websocket_frame, frame}) end
+        )
+      end)
+
+    assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
+                   @large_websocket_frame_timeout
+
+    assert [request] = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+    assert [attempt] = Repo.all(from attempt in Attempt, where: attempt.request_id == ^request.id)
+    assert turn = Repo.get_by!(CodexTurn, request_id: request.id)
+
+    turn
+    |> Ecto.Changeset.change(%{semantic_turn_digest: <<1::256>>})
+    |> Repo.update!()
+
+    session = Repo.get!(CodexSession, turn.codex_session_id)
+
+    assert {:ok, _armed} =
+             RequestReplay.arm(%{
+               api_key_id: auth.api_key.id,
+               pool_id: auth.pool.id,
+               codex_session_id: session.id,
+               request_id: request.id,
+               codex_turn_id: turn.id,
+               eligible_attempt_id: attempt.id,
+               api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+               model_id: setup.model.id,
+               model_identifier: setup.model.exposed_model_id,
+               endpoint: request.endpoint,
+               semantic_turn_digest: <<1::256>>,
+               replay_claim_digest: <<2::256>>,
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token,
+               predecessor_epoch: 1,
+               failure_reason: :client_disconnected,
+               pre_visible_output: true
+             })
+
+    send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+
+    assert :ok = Task.await(client, @connection_shutdown_timeout_ms)
+    refute_received {:stale_auth_websocket_frame, _frame}
+    refute Enum.any?(FakeUpstream.requests(upstream), &(&1.path == "/oauth/token"))
+    assert FakeUpstream.websocket_connection_count(upstream) == 0
+    assert Repo.reload!(request).status == "in_progress"
+    assert Repo.reload!(attempt).status == "retryable_failed"
   end
 
   @tag :feature_websocket_terminal_auth_refresh
@@ -10259,6 +10663,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :feature_websocket_connection_limit_retry
+  @tag :replay_race
   test "unknown Codex control commits output and prevents websocket retry" do
     upstream =
       start_upstream(
@@ -10340,6 +10745,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :websocket_failure
+  @tag :replay_race
   test "websocket terminal upstream failure demotes and circuit fails assignment" do
     upstream =
       start_upstream(
@@ -11751,6 +12157,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :websocket_disconnect_interrupts_turn
+  @tag :replay_race
   test "websocket disconnect interrupts active turn and request accounting" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -11994,6 +12401,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute log =~ "ordinary failure prompt sentinel"
   end
 
+  @tag :replay_race
   test "mid-stream upstream death after visible output authors exactly one error frame" do
     upstream =
       start_upstream(
@@ -13405,6 +13813,345 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end)
   end
 
+  defp assert_replay_red_boundary(payload_builder) do
+    previous_owner_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      case previous_owner_forwarding do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_close_without_terminal_barrier(
+             notify: self(),
+             release_ref: release_ref,
+             code: 1001,
+             reason: "synthetic pre-visible downstream death"
+           ),
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_replay_completed_123456",
+                 "status" => "completed",
+                 "usage" => %{
+                   "input_tokens" => 3,
+                   "output_tokens" => 2,
+                   "total_tokens" => 5
+                 }
+               }
+             })
+           ])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    serving_scope = model_serving_scope()
+    serving_revision = set_model_serving_mode!(serving_scope, setup, "lite")
+
+    setup.api_key
+    |> Ecto.Changeset.change(maximum_reasoning_effort: "medium")
+    |> Repo.update!()
+
+    assert :ok = Events.subscribe_pool(setup.pool)
+    turn_state = Ecto.UUID.generate()
+    payload = payload_builder.(setup.model.exposed_model_id)
+    raw_payload = Jason.encode!(payload)
+    {server, port} = start_public_endpoint_with_server!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    {conn, _websocket} = public_websocket_send_text!(conn, websocket, ref, raw_payload)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
+                   @large_websocket_frame_timeout
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
+    assert byte_size(turn.semantic_turn_digest) == 32
+    assert get_in(request.request_metadata, ["websocket_owner_forwarding", "enabled"]) == true
+    assert request.correlation_id =~ ~r/\Acodex-(?:request|turn):[A-Za-z0-9_-]{43}\z/
+
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+    owner_state = :sys.get_state(owner_pid)
+
+    assert :suspended = WebsocketOwnerSession.detach_downstream(owner_pid, owner_state.downstream)
+
+    assert %{active_turn: nil, suspended_replay: %{provisional_status: :armed}} =
+             :sys.get_state(owner_pid)
+
+    assert %Request{status: "in_progress", response_status_code: nil} =
+             Repo.get!(Request, request.id)
+
+    assert %RequestReplayEntitlement{status: "armed"} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
+
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+
+    assert %CodexTurn{status: "in_progress", first_visible_output_at: nil, final_attempt_id: nil} =
+             Repo.get!(CodexTurn, turn.id)
+
+    assert %Attempt{
+             id: initial_attempt_id,
+             replay_generation: 0,
+             status: "retryable_failed",
+             network_error_code: "client_disconnected"
+           } = Repo.get!(Attempt, attempt.id)
+
+    assert initial_attempt_id == attempt.id
+
+    _revision = set_model_serving_mode!(serving_scope, setup, "full", serving_revision)
+
+    counts_before = replay_boundary_counts(setup.pool.id, turn.codex_session_id, request.id)
+    assert counts_before.reservations == 1
+    assert counts_before.settlements == 0
+    assert counts_before.entitlements == 1
+
+    {altered_conn, altered_websocket, altered_ref} =
+      public_websocket_connect!(port, setup, turn_state)
+
+    altered_payload = Map.put(payload, "instructions", "altered synthetic instructions")
+
+    {altered_conn, altered_websocket} =
+      public_websocket_send_text!(
+        altered_conn,
+        altered_websocket,
+        altered_ref,
+        Jason.encode!(altered_payload)
+      )
+
+    {altered_conn, _altered_websocket, altered_frame} =
+      public_websocket_receive_text!(altered_conn, altered_websocket, altered_ref)
+
+    assert %{"status" => 409, "error" => %{"code" => "duplicate_turn"}} =
+             Jason.decode!(altered_frame)
+
+    assert FakeUpstream.count(upstream) == 1
+
+    assert replay_boundary_counts(setup.pool.id, turn.codex_session_id, request.id) ==
+             counts_before
+
+    {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+
+    {retry_conn, retry_websocket} =
+      public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, raw_payload)
+
+    {retry_conn, retry_websocket, retry_frame} =
+      public_websocket_receive_text!(retry_conn, retry_websocket, retry_ref)
+
+    retry_result = Jason.decode!(retry_frame)
+    assert %{"type" => "response.completed"} = retry_result
+
+    assert_receive {Events,
+                    %{
+                      reason: "request_finalized",
+                      payload: %{"status" => "succeeded"}
+                    }},
+                   @connection_shutdown_timeout_ms
+
+    assert %Request{status: "succeeded"} = Repo.get!(Request, request.id)
+
+    counts_after = replay_boundary_counts(setup.pool.id, turn.codex_session_id, request.id)
+    assert counts_after.requests == 1
+    assert counts_after.turns == 1
+    assert counts_after.reservations == 1
+    assert counts_after.attempts == 2
+    assert counts_after.settlements == 1
+    assert counts_after.releases == 1
+    assert counts_after.entitlements == 1
+    assert FakeUpstream.count(upstream) == 2
+
+    assert [initial_send, replay_send] = FakeUpstream.requests(upstream)
+    assert initial_send.path == "/backend-api/codex/responses"
+    assert replay_send.path == "/backend-api/codex/responses"
+
+    initial_payload = Jason.decode!(initial_send.body)
+    replay_payload = Jason.decode!(replay_send.body)
+
+    changed_fields =
+      (Map.keys(initial_payload) ++ Map.keys(replay_payload))
+      |> Enum.uniq()
+      |> Enum.filter(&(Map.get(initial_payload, &1) != Map.get(replay_payload, &1)))
+      |> Enum.map(fn field ->
+        if field in ~w(client_metadata input instructions reasoning tools parallel_tool_calls),
+          do: field,
+          else: "other"
+      end)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    assert changed_fields == []
+    byte_identical? = initial_send.body == replay_send.body
+    assert byte_identical?
+
+    assert %Request{status: "succeeded"} = Repo.get!(Request, request.id)
+
+    assert %CodexTurn{status: "succeeded", final_attempt_id: replay_attempt_id} =
+             Repo.get!(CodexTurn, turn.id)
+
+    assert %Attempt{replay_generation: 1, status: "succeeded"} =
+             Repo.get!(Attempt, replay_attempt_id)
+
+    assert %RequestReplayEntitlement{status: "consumed", closed_at: %DateTime{}} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
+
+    persisted =
+      inspect(
+        {request.request_metadata, turn,
+         Repo.all(from(a in Attempt, where: a.request_id == ^request.id))}
+      )
+
+    refute persisted =~ setup.authorization
+    refute persisted =~ raw_payload
+
+    assert FakeUpstream.count(upstream) == 2
+
+    {retry_conn, _retry_websocket} =
+      assert_replay_followup_requests(
+        {retry_conn, retry_websocket, retry_ref},
+        payload,
+        %{
+          setup: setup,
+          upstream: upstream,
+          turn: turn,
+          request: request,
+          original_counts: counts_after
+        }
+      )
+
+    {:ok, connections} = ThousandIsland.connection_pids(server)
+    connection_monitors = Enum.map(connections, &{&1, Process.monitor(&1)})
+    _result = Mint.HTTP.close(retry_conn)
+    _result = Mint.HTTP.close(altered_conn)
+    _result = Mint.HTTP.close(conn)
+
+    Enum.each(connection_monitors, fn {pid, monitor} ->
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, @connection_shutdown_timeout_ms
+    end)
+
+    await_websocket_owner_absent!(turn.codex_session_id)
+  end
+
+  defp assert_replay_followup_requests(
+         {conn, websocket, ref},
+         payload,
+         %{
+           setup: setup,
+           upstream: upstream,
+           turn: turn,
+           request: request,
+           original_counts: original_counts
+         }
+       ) do
+    {conn, websocket} =
+      Enum.reduce(
+        [payload, payload],
+        {conn, websocket},
+        fn duplicate, {current_conn, current_websocket} ->
+          {current_conn, current_websocket} =
+            public_websocket_send_text!(
+              current_conn,
+              current_websocket,
+              ref,
+              Jason.encode!(duplicate)
+            )
+
+          {current_conn, current_websocket, frame} =
+            public_websocket_receive_text!(current_conn, current_websocket, ref)
+
+          assert %{"status" => 409, "error" => %{"code" => "duplicate_turn"}} =
+                   Jason.decode!(frame)
+
+          assert FakeUpstream.count(upstream) == 2
+
+          assert replay_boundary_counts(setup.pool.id, turn.codex_session_id, request.id) ==
+                   original_counts
+
+          {current_conn, current_websocket}
+        end
+      )
+
+    fresh_payload =
+      update_in(payload, ["client_metadata", "x-codex-turn-metadata"], fn encoded ->
+        encoded
+        |> Jason.decode!()
+        |> Map.put("turn_id", "fresh-after-replay")
+        |> Jason.encode!()
+      end)
+      |> Map.put("input", [])
+      |> Map.put("previous_response_id", "resp_replay_completed_123456")
+
+    {conn, websocket} =
+      public_websocket_send_text!(conn, websocket, ref, Jason.encode!(fresh_payload))
+
+    {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+    assert %{"type" => "response.completed"} = Jason.decode!(frame)
+
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                   @connection_shutdown_timeout_ms
+
+    assert FakeUpstream.count(upstream) == 3
+    assert replay_boundary_counts(setup.pool.id, turn.codex_session_id, request.id).attempts == 2
+
+    assert Repo.aggregate(
+             from(t in CodexTurn, where: t.codex_session_id == ^turn.codex_session_id),
+             :count
+           ) == 2
+
+    {conn, websocket}
+  end
+
+  defp replay_boundary_counts(pool_id, session_id, request_id) do
+    %{
+      requests:
+        Repo.aggregate(from(request in Request, where: request.pool_id == ^pool_id), :count),
+      attempts:
+        Repo.aggregate(from(attempt in Attempt, where: attempt.request_id == ^request_id), :count),
+      turns:
+        Repo.aggregate(
+          from(turn in CodexTurn, where: turn.codex_session_id == ^session_id),
+          :count
+        ),
+      reservations:
+        Repo.aggregate(
+          from(entry in LedgerEntry,
+            where: entry.request_id == ^request_id and entry.entry_kind == "reservation"
+          ),
+          :count
+        ),
+      settlements:
+        Repo.aggregate(
+          from(entry in LedgerEntry,
+            where: entry.request_id == ^request_id and entry.entry_kind == "settlement"
+          ),
+          :count
+        ),
+      releases:
+        Repo.aggregate(
+          from(entry in LedgerEntry,
+            where: entry.request_id == ^request_id and entry.entry_kind == "release"
+          ),
+          :count
+        ),
+      entitlements:
+        Repo.aggregate(
+          from(entitlement in RequestReplayEntitlement,
+            where: entitlement.request_id == ^request_id
+          ),
+          :count
+        )
+    }
+  end
+
   defp stop_registered_websocket_owner_sessions do
     capture_log(fn ->
       WebsocketOwnerSession.Registry
@@ -13415,9 +14162,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   defp stop_websocket_owner_session(codex_session_id) do
     case WebsocketOwnerSession.lookup(codex_session_id) do
-      {:ok, owner_pid} -> GenServer.stop(owner_pid, :shutdown, 1_000)
-      {:error, _reason} -> :ok
+      {:ok, owner_pid} ->
+        monitor = Process.monitor(owner_pid)
+
+        try do
+          GenServer.stop(owner_pid, :shutdown, @connection_shutdown_timeout_ms)
+        catch
+          :exit, {:noproc, _details} -> :ok
+        end
+
+        assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason},
+                       @connection_shutdown_timeout_ms
+
+      {:error, :owner_unavailable} ->
+        :ok
     end
+
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
+  end
+
+  defp await_websocket_owner_absent!(codex_session_id) do
+    case WebsocketOwnerSession.lookup(codex_session_id) do
+      {:ok, owner_pid} ->
+        monitor = Process.monitor(owner_pid)
+
+        try do
+          GenServer.stop(owner_pid, :shutdown, @connection_shutdown_timeout_ms)
+        catch
+          :exit, {:noproc, _details} -> :ok
+        end
+
+        assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason},
+                       @connection_shutdown_timeout_ms
+
+      {:error, :owner_unavailable} ->
+        :ok
+    end
+
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
   end
 
   defp metadata_control_frame?(%{"type" => "codex.response.metadata"}), do: true

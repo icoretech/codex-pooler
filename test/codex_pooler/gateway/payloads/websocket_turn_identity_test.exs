@@ -1,5 +1,5 @@
 defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
 
@@ -255,6 +255,125 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
             ])
           ] do
         refute claim == WebsocketTurnIdentity.request_claim_key(semantic_turn_key, changed)
+      end
+    end
+  end
+
+  describe "replay_claim_digest/2" do
+    test "pins the deterministic replay claim vector" do
+      previous = Application.fetch_env!(:codex_pooler, CodexPoolerWeb.Endpoint)
+
+      Application.put_env(
+        :codex_pooler,
+        CodexPoolerWeb.Endpoint,
+        Keyword.put(previous, :secret_key_base, String.duplicate("s", 64))
+      )
+
+      on_exit(fn -> Application.put_env(:codex_pooler, CodexPoolerWeb.Endpoint, previous) end)
+
+      semantic_turn_key = :binary.list_to_bin(Enum.to_list(0..31))
+      payload = %{"input" => [], "model" => "gpt-test", "type" => "response.create"}
+
+      assert {:ok, digest} =
+               WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload)
+
+      assert Base.encode16(digest, case: :lower) ==
+               "ed1a420441e79e685f882012d046b00e267dfe8665ca86b01b43e7b26c23b190"
+    end
+
+    test "normalizes canonical metadata maps and JSON while retaining meaningful changes" do
+      semantic_turn_key = :crypto.hash(:sha256, "replay-metadata")
+
+      map_payload = %{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "input" => [],
+        "turn_id" => "top-a",
+        "request_id" => "request-a",
+        "client_metadata" => %{
+          "turn_id" => "direct-a",
+          "x-codex-ws-stream-request-start-ms" => 1,
+          "ws_request_header_traceparent" => "trace-a",
+          "ws_request_header_tracestate" => "state-a",
+          "x-codex-turn-metadata" => %{
+            "turn_id" => "nested-a",
+            "nested" => %{"turn_id" => "nested-b", "kept" => 1},
+            "kept" => true
+          }
+        }
+      }
+
+      json_payload =
+        put_in(
+          map_payload,
+          ["client_metadata", "x-codex-turn-metadata"],
+          Jason.encode!(%{
+            "kept" => true,
+            "nested" => %{"kept" => 1, "turn_id" => "different-removed"},
+            "turn_id" => "different-removed"
+          })
+        )
+        |> put_in(["client_metadata", "turn_id"], "direct-b")
+        |> put_in(["client_metadata", "x-codex-ws-stream-request-start-ms"], 2)
+        |> Map.put("turn_id", "top-b")
+        |> Map.put("request_id", "request-b")
+
+      assert {:ok, digest} =
+               WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, map_payload)
+
+      assert {:ok, ^digest} =
+               WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, json_payload)
+
+      assert {:ok, changed_digest} =
+               WebsocketTurnIdentity.replay_claim_digest(
+                 semantic_turn_key,
+                 put_in(map_payload, ["client_metadata", "x-codex-turn-metadata", "kept"], false)
+               )
+
+      refute digest == changed_digest
+    end
+
+    test "rejects malformed canonical metadata and invalid digest inputs" do
+      semantic_turn_key = :crypto.hash(:sha256, "replay-malformed")
+
+      for metadata <- ["not-json", Jason.encode!([]), [], 42] do
+        assert {:error, %{status: 400, code: "invalid_request"}} =
+                 WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, %{
+                   "type" => "response.create",
+                   "client_metadata" => %{"x-codex-turn-metadata" => metadata}
+                 })
+      end
+
+      assert {:error, %{status: 400, code: "invalid_request"}} =
+               WebsocketTurnIdentity.replay_claim_digest(<<1>>, %{"type" => "response.create"})
+    end
+
+    test "is stable across processes and fails closed without the endpoint secret" do
+      semantic_turn_key = :crypto.hash(:sha256, "replay-process")
+      payload = %{"type" => "response.create", "model" => "gpt-test", "input" => []}
+
+      assert {:ok, digest} =
+               WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload)
+
+      assert {:ok, ^digest} =
+               Task.async(fn ->
+                 WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload)
+               end)
+               |> Task.await()
+
+      previous = Application.fetch_env!(:codex_pooler, CodexPoolerWeb.Endpoint)
+
+      Application.put_env(
+        :codex_pooler,
+        CodexPoolerWeb.Endpoint,
+        Keyword.delete(previous, :secret_key_base)
+      )
+
+      try do
+        assert {:error, %{status: 400, code: "invalid_request", param: "secret_key_base"}} =
+                 WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload)
+      after
+        Application.put_env(:codex_pooler, CodexPoolerWeb.Endpoint, previous)
       end
     end
   end

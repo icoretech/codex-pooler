@@ -14,12 +14,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV4
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Repo
@@ -80,7 +82,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           UpstreamWebsocketSession.Request.t()
           | WebsocketOwnerRequest.t()
           | WebsocketOwnerRequestV2.t()
-          | WebsocketOwnerRequestV3.t(),
+          | WebsocketOwnerRequestV3.t()
+          | WebsocketOwnerRequestV4.t(),
           submit_opts()
         ) ::
           submitted_request_result()
@@ -95,9 +98,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
              (is_struct(request, UpstreamWebsocketSession.Request) or
                 is_struct(request, WebsocketOwnerRequest) or
                 is_struct(request, WebsocketOwnerRequestV2) or
-                is_struct(request, WebsocketOwnerRequestV3)) do
+                is_struct(request, WebsocketOwnerRequestV3) or
+                is_struct(request, WebsocketOwnerRequestV4)) do
     with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
          {:ok, owner} <- resolve_owner(session, opts) do
+      opts =
+        if is_struct(request, WebsocketOwnerRequestV4) do
+          Keyword.put(opts, :replay_owner_lease_token, owner_lease_token)
+        else
+          opts
+        end
+
       dispatch_submit_request(owner, session.id, downstream, request, opts)
     else
       {:error, reason} -> {:error, reason}
@@ -254,6 +265,48 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   def resolve_owner(%CodexSession{}, _opts), do: {:error, :owner_unavailable}
 
+  @spec touch_replay_liveness(CodexSession.t(), map(), submit_opts()) ::
+          :ok | {:error, :owner_unavailable}
+  def touch_replay_liveness(%CodexSession{} = session, reference, opts \\ [])
+      when is_map(reference) and is_list(opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    with {:ok, owner} <- resolve_owner(session, opts) do
+      case owner do
+        {:local, _instance} ->
+          remote_touch_replay_liveness(session.id, reference, timeout)
+
+        {:remote, node, _instance} ->
+          call_remote(node, :remote_touch_replay_liveness, [session.id, reference, timeout], opts)
+      end
+    end
+  end
+
+  @doc false
+  @spec remote_touch_replay_liveness(Ecto.UUID.t(), map()) ::
+          :ok | {:error, :owner_unavailable}
+  def remote_touch_replay_liveness(session_id, reference)
+      when is_binary(session_id) and is_map(reference),
+      do:
+        remote_touch_replay_liveness(
+          session_id,
+          reference,
+          WebsocketOwnerContract.default_forward_timeout_ms()
+        )
+
+  def remote_touch_replay_liveness(_session_id, _reference),
+    do: {:error, :owner_unavailable}
+
+  @doc false
+  @spec remote_touch_replay_liveness(Ecto.UUID.t(), map(), pos_integer()) ::
+          :ok | {:error, :owner_unavailable}
+  def remote_touch_replay_liveness(session_id, reference, timeout)
+      when is_binary(session_id) and is_map(reference) do
+    with {:ok, owner} <- WebsocketOwnerSession.lookup(session_id) do
+      WebsocketOwnerSession.touch_replay_liveness(owner, reference, timeout)
+    end
+  end
+
   @doc false
   @spec remote_attach_downstream(binary(), map(), keyword()) ::
           {:ok, WebsocketOwnerSession.downstream()}
@@ -314,6 +367,220 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   def remote_reconnect_control_v1(_control), do: {:error, :owner_unavailable}
+
+  @doc false
+  @spec remote_reconnect_control_v2(RemoteReconnectControlV2.t()) :: term()
+  def remote_reconnect_control_v2(
+        %RemoteReconnectControlV2{codex_session_id: session_id} = control
+      ) do
+    with :ok <- RemoteReconnectControlV2.validate(control),
+         {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
+      case WebsocketOwnerSession.reconnect_control_v2(owner_pid, control) do
+        {:error, :stale_owner} -> {:error, :owner_unavailable}
+        result -> result
+      end
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  def remote_reconnect_control_v2(_control), do: {:error, :owner_unavailable}
+
+  @spec consume_replay_reserve(CodexSession.t(), binary(), map(), submit_opts()) ::
+          {:ok, reference()} | {:error, :invalid | :owner_unavailable}
+  def consume_replay_reserve(session, token, proof, opts \\ [])
+
+  def consume_replay_reserve(%CodexSession{} = session, token, proof, opts)
+      when is_binary(token) and is_map(proof) and is_list(opts) do
+    with :ok <- SessionContinuity.validate_owner_token(session, token),
+         true <- proof.owner_lease_token == token,
+         {:ok, owner} <- resolve_owner(session, opts) do
+      case owner do
+        {:local, _instance} -> remote_consume_replay_reserve(session.id, proof)
+        {:remote, node, _instance} -> call_remote_replay_reserve(node, session.id, proof, opts)
+      end
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  def consume_replay_reserve(%CodexSession{}, _token, _proof, _opts),
+    do: {:error, :owner_unavailable}
+
+  @doc false
+  @spec remote_consume_replay_reserve(binary(), map()) ::
+          {:ok, reference()} | {:error, :invalid | :owner_unavailable}
+  def remote_consume_replay_reserve(codex_session_id, proof)
+      when is_binary(codex_session_id) and is_map(proof) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.consume_reserve_receipt(owner_pid, proof)
+    end
+  end
+
+  def remote_consume_replay_reserve(_codex_session_id, _proof),
+    do: {:error, :owner_unavailable}
+
+  @spec validate_replay_reserve(
+          CodexSession.t(),
+          binary(),
+          map(),
+          reference(),
+          submit_opts()
+        ) :: :ok | {:error, :invalid | :owner_unavailable}
+  def validate_replay_reserve(session, token, proof, consume_fence, opts \\ [])
+
+  def validate_replay_reserve(%CodexSession{} = session, token, proof, consume_fence, opts)
+      when is_binary(token) and is_map(proof) and is_reference(consume_fence) and is_list(opts) do
+    with :ok <- SessionContinuity.validate_owner_token(session, token),
+         true <- proof.owner_lease_token == token,
+         {:ok, owner} <- resolve_owner(session, opts) do
+      case owner do
+        {:local, _instance} ->
+          remote_validate_replay_reserve(session.id, proof, consume_fence)
+
+        {:remote, node, _instance} ->
+          call_remote_replay_reserve_action(
+            node,
+            :remote_validate_replay_reserve,
+            session.id,
+            proof,
+            consume_fence,
+            opts
+          )
+      end
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  def validate_replay_reserve(%CodexSession{}, _token, _proof, _consume_fence, _opts),
+    do: {:error, :owner_unavailable}
+
+  @doc false
+  @spec remote_validate_replay_reserve(binary(), map(), reference()) ::
+          :ok | {:error, :invalid | :owner_unavailable}
+  def remote_validate_replay_reserve(codex_session_id, proof, consume_fence)
+      when is_binary(codex_session_id) and is_map(proof) and is_reference(consume_fence) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.validate_consumed_reserve_receipt(owner_pid, proof, consume_fence)
+    end
+  end
+
+  def remote_validate_replay_reserve(_codex_session_id, _proof, _consume_fence),
+    do: {:error, :owner_unavailable}
+
+  @spec release_replay_reserve(
+          CodexSession.t(),
+          binary(),
+          map(),
+          reference(),
+          submit_opts()
+        ) :: :ok | {:error, :invalid | :owner_unavailable}
+  def release_replay_reserve(session, token, proof, consume_fence, opts \\ [])
+
+  def release_replay_reserve(%CodexSession{} = session, token, proof, consume_fence, opts)
+      when is_binary(token) and is_map(proof) and is_reference(consume_fence) and is_list(opts) do
+    with :ok <- SessionContinuity.validate_owner_token(session, token),
+         true <- proof.owner_lease_token == token,
+         {:ok, owner} <- resolve_owner(session, opts) do
+      case owner do
+        {:local, _instance} ->
+          remote_release_replay_reserve(session.id, proof, consume_fence)
+
+        {:remote, node, _instance} ->
+          call_remote_replay_reserve_action(
+            node,
+            :remote_release_replay_reserve,
+            session.id,
+            proof,
+            consume_fence,
+            opts
+          )
+      end
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  def release_replay_reserve(%CodexSession{}, _token, _proof, _consume_fence, _opts),
+    do: {:error, :owner_unavailable}
+
+  @doc false
+  @spec remote_release_replay_reserve(binary(), map(), reference()) ::
+          :ok | {:error, :invalid | :owner_unavailable}
+  def remote_release_replay_reserve(codex_session_id, proof, consume_fence)
+      when is_binary(codex_session_id) and is_map(proof) and is_reference(consume_fence) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.release_consumed_reserve_receipt(owner_pid, proof, consume_fence)
+    end
+  end
+
+  def remote_release_replay_reserve(_codex_session_id, _proof, _consume_fence),
+    do: {:error, :owner_unavailable}
+
+  @spec reconnect_control_v2(
+          CodexSession.t(),
+          binary(),
+          RemoteReconnectControlV2.t(),
+          submit_opts()
+        ) :: term()
+  def reconnect_control_v2(
+        %CodexSession{} = session,
+        token,
+        %RemoteReconnectControlV2{} = control,
+        opts \\ []
+      ) do
+    with :ok <- SessionContinuity.validate_owner_token(session, token),
+         :ok <- RemoteReconnectControlV2.validate(control),
+         {:ok, owner} <- resolve_owner(session, opts) do
+      case owner do
+        {:local, _instance} ->
+          remote_reconnect_control_v2(control)
+
+        {:remote, node, _instance} ->
+          call_remote_v2_control(node, control, opts)
+      end
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  @spec prepare_next_replay_descriptor(CodexSession.t(), binary(), map(), map(), submit_opts()) ::
+          :ok | {:error, atom()}
+  def prepare_next_replay_descriptor(session, token, downstream, descriptor, opts \\ [])
+
+  def prepare_next_replay_descriptor(
+        %CodexSession{} = session,
+        token,
+        downstream,
+        descriptor,
+        opts
+      ) do
+    with :ok <- SessionContinuity.validate_owner_token(session, token),
+         {:ok, owner} <- resolve_owner(session, opts) do
+      case owner do
+        {:local, _instance} ->
+          remote_prepare_next_replay_descriptor(session.id, downstream, descriptor)
+
+        {:remote, node, _instance} ->
+          call_remote(
+            node,
+            :remote_prepare_next_replay_descriptor,
+            [session.id, downstream, descriptor],
+            opts
+          )
+      end
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  @doc false
+  def remote_prepare_next_replay_descriptor(session_id, downstream, descriptor) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
+      WebsocketOwnerSession.prepare_next_replay_descriptor(owner_pid, downstream, descriptor)
+    end
+  end
 
   @doc false
   @spec remote_admission_control_v1(binary(), WebsocketOwnerAdmissionControlV1.t()) ::
@@ -435,6 +702,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   @doc false
+  @spec remote_submit_request_v4(
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          WebsocketOwnerRequestV4.t()
+        ) :: submitted_request_result()
+  def remote_submit_request_v4(codex_session_id, downstream, owner_request)
+      when is_binary(codex_session_id) and is_map(downstream) do
+    with :ok <- validate_owner_request_v4(owner_request),
+         {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id),
+         {:ok, request} <- WebsocketRequestCallbacks.materialize(owner_request, nil) do
+      submit_collect_owner_request(
+        owner_pid,
+        downstream,
+        request,
+        owner_request.submission_notification?
+      )
+    else
+      {:error, {:invalid_owner_request, _reason}} -> {:error, :owner_unavailable}
+      {:error, :upstream_identity_not_found} -> {:error, :owner_unavailable}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc false
   @spec remote_push_downstream(binary(), WebsocketOwnerContract.downstream_payload()) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
   def remote_push_downstream(codex_session_id, payload) when is_binary(codex_session_id) do
@@ -445,7 +736,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   @doc false
   @spec remote_cancel_downstream(binary(), WebsocketOwnerSession.downstream()) ::
-          :ok | {:error, WebsocketOwnerContract.owner_error()}
+          WebsocketOwnerContract.detach_result()
   def remote_cancel_downstream(codex_session_id, downstream)
       when is_binary(codex_session_id) and is_map(downstream) do
     with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
@@ -458,7 +749,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           binary(),
           WebsocketOwnerSession.downstream(),
           :client_disconnected | :owner_drained
-        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+        ) :: WebsocketOwnerContract.detach_result()
   def remote_cancel_downstream_v1(codex_session_id, downstream, reason)
       when is_binary(codex_session_id) and is_map(downstream) and
              reason in [:client_disconnected, :owner_drained] do
@@ -476,7 +767,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           WebsocketOwnerSession.downstream(),
           :client_disconnected | :owner_drained,
           submit_opts()
-        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+        ) :: WebsocketOwnerContract.detach_result()
   def cancel_remote_downstream(node, codex_session_id, downstream, reason, opts)
       when is_atom(node) and is_binary(codex_session_id) and is_map(downstream) and
              reason in [:client_disconnected, :owner_drained] and is_list(opts) do
@@ -573,6 +864,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
          {:local, _owner_instance_id},
          codex_session_id,
          downstream,
+         %WebsocketOwnerRequestV4{} = owner_request,
+         _opts
+       ),
+       do: remote_submit_request_v4(codex_session_id, downstream, owner_request)
+
+  defp dispatch_submit_request(
+         {:local, _owner_instance_id},
+         codex_session_id,
+         downstream,
          %WebsocketOwnerRequestV3{} = owner_request,
          _opts
        ) do
@@ -617,6 +917,41 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         opts
       )
     end
+  end
+
+  defp dispatch_submit_request(
+         {:remote, node, _owner_instance_id},
+         codex_session_id,
+         downstream,
+         %WebsocketOwnerRequestV4{} = owner_request,
+         opts
+       ) do
+    submitter = self()
+
+    cancellation_watcher =
+      start_remote_replay_cancellation_watcher(
+        submitter,
+        node,
+        codex_session_id,
+        owner_request,
+        opts
+      )
+
+    result =
+      call_remote_submission(
+        node,
+        :remote_submit_request_v4,
+        [codex_session_id, downstream, owner_request],
+        opts
+      )
+
+    stop_remote_cancellation_watcher(cancellation_watcher, submitter)
+
+    if result == {:error, :owner_forward_timeout} do
+      reconcile_remote_v4_timeout(node, codex_session_id, owner_request, opts)
+    end
+
+    result
   end
 
   defp dispatch_submit_request(
@@ -720,6 +1055,74 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
          _opts
        ),
        do: {:error, :owner_unavailable}
+
+  defp reconcile_remote_v4_timeout(node, codex_session_id, owner_request, opts) do
+    with owner_lease_token when is_binary(owner_lease_token) <-
+           Keyword.get(opts, :replay_owner_lease_token),
+         {:ok, query} <-
+           replay_timeout_control(codex_session_id, owner_request, owner_lease_token),
+         {:ok, status} <- call_remote_v2_control(node, query, replay_reconcile_opts(opts)),
+         true <- status in [:provisional, :consume_reserved],
+         {:ok, cancel} <-
+           replay_timeout_control(
+             codex_session_id,
+             owner_request,
+             owner_lease_token,
+             :provisional_cancel
+           ) do
+      _result = call_remote_v2_control(node, cancel, replay_reconcile_opts(opts))
+      :ok
+    else
+      _committed_started_terminal_or_uncertain -> :ok
+    end
+  end
+
+  defp replay_timeout_control(
+         codex_session_id,
+         %WebsocketOwnerRequestV4{} = owner_request,
+         owner_lease_token,
+         action \\ :provisional_query
+       ) do
+    RemoteReconnectControlV2.new(%{
+      version: 2,
+      action: action,
+      intent: :suspended_replay,
+      codex_session_id: codex_session_id,
+      downstream: nil,
+      semantic_turn_digest: owner_request.native_replay_binding.semantic_turn_digest,
+      replay_claim_digest: owner_request.native_replay_binding.replay_claim_digest,
+      provisional_token: owner_request.provisional_token,
+      replay_generation: 1,
+      owner_lease_token: owner_lease_token,
+      control_ref: make_ref(),
+      authorization_binding: nil,
+      consume_binding: nil
+    })
+  end
+
+  defp replay_reconcile_opts(opts) do
+    Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+  end
+
+  defp start_remote_replay_cancellation_watcher(
+         submitter,
+         node,
+         codex_session_id,
+         owner_request,
+         opts
+       ) do
+    spawn(fn ->
+      submitter_monitor = Process.monitor(submitter)
+
+      receive do
+        {:remote_submit_complete, ^submitter} ->
+          Process.demonitor(submitter_monitor, [:flush])
+
+        {:DOWN, ^submitter_monitor, :process, ^submitter, _reason} ->
+          reconcile_remote_v4_timeout(node, codex_session_id, owner_request, opts)
+      end
+    end)
+  end
 
   defp start_remote_cancellation_watcher(submitter, node, codex_session_id, downstream, opts) do
     spawn(fn ->
@@ -955,6 +1358,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp validate_owner_request_v3(_owner_request),
     do: {:error, {:invalid_owner_request, {:invalid_field, :envelope}}}
 
+  defp validate_owner_request_v4(%WebsocketOwnerRequestV4{} = owner_request) do
+    case WebsocketOwnerRequestV4.validate(owner_request) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:invalid_owner_request, reason}}
+    end
+  end
+
+  defp validate_owner_request_v4(_owner_request),
+    do: {:error, {:invalid_owner_request, {:invalid_field, :envelope}}}
+
   defp validate_admission_control(%WebsocketOwnerAdmissionControlV1{} = control) do
     case WebsocketOwnerAdmissionControlV1.validate(control) do
       :ok -> :ok
@@ -1151,7 +1564,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   @doc false
   @spec call_remote(node(), atom(), [term()], submit_opts()) ::
-          request_result()
+          request_result() | WebsocketOwnerContract.detach_result()
   def call_remote(node, function, args, opts)
       when is_atom(node) and is_atom(function) and is_list(args) and is_list(opts) do
     timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
@@ -1159,8 +1572,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     opts
     |> node_client()
     |> safe_remote_call(node, __MODULE__, function, args, timeout)
-    |> normalize_forward_result()
+    |> normalize_remote_call_result(function)
   end
+
+  defp normalize_remote_call_result(result, :remote_cancel_downstream)
+       when result in [:reattachable, :suspended],
+       do: result
+
+  defp normalize_remote_call_result({:error, result}, :remote_cancel_downstream)
+       when result in [:reattachable, :suspended],
+       do: result
+
+  defp normalize_remote_call_result(result, _function), do: normalize_forward_result(result)
 
   defp call_remote_submission(node, function, args, opts) do
     timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
@@ -1180,6 +1603,100 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     |> normalize_reconnect_control_result()
   end
 
+  defp call_remote_v2_control(node, control, opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(node, __MODULE__, :remote_reconnect_control_v2, [control], timeout)
+    |> normalize_v2_control_result()
+  end
+
+  defp call_remote_replay_reserve(node, codex_session_id, proof, opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(
+      node,
+      __MODULE__,
+      :remote_consume_replay_reserve,
+      [codex_session_id, proof],
+      timeout
+    )
+    |> case do
+      {:ok, consume_fence} when is_reference(consume_fence) -> {:ok, consume_fence}
+      {:error, :invalid} = error -> error
+      {:error, _reason} -> {:error, :owner_unavailable}
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  defp call_remote_replay_reserve_action(
+         node,
+         function,
+         codex_session_id,
+         proof,
+         consume_fence,
+         opts
+       ) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(
+      node,
+      __MODULE__,
+      function,
+      [codex_session_id, proof, consume_fence],
+      timeout
+    )
+    |> case do
+      :ok -> :ok
+      {:error, :invalid} = error -> error
+      {:error, _reason} -> {:error, :owner_unavailable}
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  defp normalize_v2_control_result({:ok, :fresh_dispatch, downstream} = result)
+       when is_map(downstream), do: result
+
+  defp normalize_v2_control_result({:ok, :same_turn_reattach, downstream} = result)
+       when is_map(downstream), do: result
+
+  defp normalize_v2_control_result({:ok, :provisional, token, 1, generation, downstream} = result)
+       when is_binary(token) and byte_size(token) == 32 and is_integer(generation) and
+              generation > 0 and is_map(downstream),
+       do: result
+
+  defp normalize_v2_control_result({:ok, :consume_reserved, timeout, receipt, digest} = result)
+       when is_integer(timeout) and timeout in 1..60_000 and is_binary(receipt) and
+              byte_size(receipt) == 32 and is_binary(digest) and byte_size(digest) == 32,
+       do: result
+
+  defp normalize_v2_control_result({:ok, phase, binding} = result)
+       when phase in [:committed_not_started, :started] and is_map(binding), do: result
+
+  defp normalize_v2_control_result({:ok, status} = result)
+       when status in [
+              :provisional,
+              :consume_reserved,
+              :committed_not_started,
+              :started,
+              :cancelled,
+              :expired
+            ],
+       do: result
+
+  defp normalize_v2_control_result({:error, reason}) do
+    if WebsocketOwnerContract.owner_error?(reason),
+      do: {:error, reason},
+      else: {:error, :owner_crashed}
+  end
+
+  defp normalize_v2_control_result(_result), do: {:error, :owner_crashed}
+
   defp normalize_reconnect_control_result(result)
        when result in [{:ok, :dispatch}, {:ok, :same_turn_replay}, :ok],
        do: result
@@ -1187,6 +1704,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp normalize_reconnect_control_result({:ok, disposition, control_ref} = result)
        when disposition in [:replacement_handoff, :duplicate_replacement] and
               is_reference(control_ref),
+       do: result
+
+  defp normalize_reconnect_control_result({:ok, :fresh_dispatch, downstream} = result)
+       when is_map(downstream), do: result
+
+  defp normalize_reconnect_control_result({:ok, :same_turn_reattach, downstream} = result)
+       when is_map(downstream), do: result
+
+  defp normalize_reconnect_control_result(
+         {:ok, :provisional, token, 1, generation, downstream} = result
+       )
+       when is_binary(token) and byte_size(token) == 32 and is_integer(generation) and
+              generation > 0 and is_map(downstream),
+       do: result
+
+  defp normalize_reconnect_control_result({:ok, status} = result)
+       when status in [
+              :provisional,
+              :consume_reserved,
+              :committed_not_started,
+              :started,
+              :cancelled,
+              :expired
+            ],
        do: result
 
   defp normalize_reconnect_control_result({:error, reason}) do

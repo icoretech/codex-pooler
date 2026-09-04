@@ -2440,7 +2440,15 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         [trigger],
         [trigger, visible],
         [visible, trigger, trigger],
-        [%{"type" => "reasoning", "encrypted_content" => "hidden-only-trigger-fixture"}, trigger]
+        [%{"type" => "reasoning", "encrypted_content" => "hidden-only-trigger-fixture"}, trigger],
+        [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_public_zero_byte",
+            "output" => ""
+          },
+          trigger
+        ]
       ]
 
       {conn, websocket} =

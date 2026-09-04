@@ -13,6 +13,12 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @claim_prefix "codex-turn:"
   @request_claim_prefix "codex-request:"
   @request_claim_domain "native_websocket_response_claim_v1"
+  @replay_claim_domain "native_websocket_response_replay_claim_v1"
+  @replay_volatile_metadata_keys [
+    "x-codex-ws-stream-request-start-ms",
+    "ws_request_header_traceparent",
+    "ws_request_header_tracestate"
+  ]
   @excluded_client_metadata_keys [
     "turn_id",
     @canonical_metadata_key,
@@ -77,6 +83,26 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
 
     @request_claim_prefix <> Base.url_encode64(digest, padding: false)
   end
+
+  @spec replay_claim_digest(<<_::256>>, map()) ::
+          {:ok, <<_::256>>} | {:error, Error.reason()}
+  def replay_claim_digest(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_map(payload) do
+    with {:ok, projection} <- replay_claim_projection(payload),
+         {:ok, key} <- replay_claim_hmac_key() do
+      input =
+        :erlang.term_to_binary(
+          {@replay_claim_domain, semantic_turn_key, projection},
+          [:deterministic]
+        )
+
+      {:ok, :crypto.mac(:hmac, :sha256, key, input)}
+    end
+  end
+
+  def replay_claim_digest(_semantic_turn_key, _payload),
+    do: invalid_replay_claim("semantic_turn_key")
 
   @spec raw_turn_id(map()) :: {:ok, String.t()} | :missing | {:error, Error.reason()}
   defp raw_turn_id(payload) do
@@ -187,6 +213,99 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     payload
     |> Map.drop([@turn_param, @request_param])
     |> scrub_request_client_metadata()
+  end
+
+  defp replay_claim_projection(payload) do
+    payload
+    |> Map.drop([@turn_param, @request_param])
+    |> normalize_replay_client_metadata()
+  end
+
+  defp normalize_replay_client_metadata(%{"client_metadata" => metadata} = payload)
+       when is_map(metadata) do
+    metadata = Map.drop(metadata, ["turn_id" | @replay_volatile_metadata_keys])
+
+    case Map.fetch(metadata, @canonical_metadata_key) do
+      {:ok, value} ->
+        with {:ok, canonical} <- decode_canonical_metadata(value),
+             {:ok, normalized} <- normalize_replay_metadata(canonical) do
+          {:ok,
+           Map.put(
+             payload,
+             "client_metadata",
+             Map.put(metadata, @canonical_metadata_key, normalized)
+           )}
+        end
+
+      :error ->
+        {:ok, Map.put(payload, "client_metadata", metadata)}
+    end
+  end
+
+  defp normalize_replay_client_metadata(%{"client_metadata" => nil} = payload),
+    do: {:ok, payload}
+
+  defp normalize_replay_client_metadata(%{"client_metadata" => _invalid}),
+    do: invalid_replay_claim(@canonical_metadata_param)
+
+  defp normalize_replay_client_metadata(payload), do: {:ok, payload}
+
+  defp normalize_replay_metadata(value) when is_map(value) do
+    value
+    |> Map.drop(["turn_id"])
+    |> Enum.reduce_while({:ok, %{}}, fn
+      {key, child}, {:ok, acc} when is_binary(key) ->
+        case normalize_replay_metadata(child) do
+          {:ok, normalized} -> {:cont, {:ok, Map.put(acc, key, normalized)}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+
+      _entry, _acc ->
+        {:halt, invalid_replay_claim(@canonical_metadata_param)}
+    end)
+  end
+
+  defp normalize_replay_metadata(value) when is_list(value) do
+    Enum.reduce_while(value, {:ok, []}, fn child, {:ok, acc} ->
+      case normalize_replay_metadata(child) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp normalize_replay_metadata(value)
+       when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value),
+       do: {:ok, value}
+
+  defp normalize_replay_metadata(_value),
+    do: invalid_replay_claim(@canonical_metadata_param)
+
+  defp replay_claim_hmac_key do
+    with {:ok, secret} <- configured_secret_key_base() do
+      {:ok, :crypto.hash(:sha256, secret <> <<0>> <> @replay_claim_domain)}
+    end
+  end
+
+  defp configured_secret_key_base do
+    case Application.fetch_env(:codex_pooler, CodexPoolerWeb.Endpoint) do
+      {:ok, config} when is_list(config) ->
+        case Keyword.fetch(config, :secret_key_base) do
+          {:ok, secret} when is_binary(secret) and secret != "" -> {:ok, secret}
+          _invalid -> invalid_replay_claim("secret_key_base")
+        end
+
+      _missing ->
+        invalid_replay_claim("secret_key_base")
+    end
+  end
+
+  defp invalid_replay_claim(param) do
+    {:error, Error.invalid_request("native websocket replay claim is invalid", param)}
   end
 
   defp scrub_request_client_metadata(%{"client_metadata" => client_metadata} = payload)

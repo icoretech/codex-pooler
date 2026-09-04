@@ -86,6 +86,29 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
     assert_lease_preserved!(fixture)
   end
 
+  test "owner monitor recovery failure preserves the lease and unfinished turn", fixture do
+    turn = active_turn_fixture(fixture, "websocket")
+
+    state =
+      fixture.state
+      |> Map.put(:codex_session, fixture.session)
+      |> Map.put(:websocket_owner_pid, fixture.owner_pid)
+      |> Map.update!(:opts, fn opts ->
+        RequestOptions.put_transport(opts, websocket_owner_lease_token: Ecto.UUID.generate())
+      end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:stop, {1011, "websocket owner crashed"}, _state} =
+                 DownstreamSession.handle_monitor_down(state, fixture.owner_pid, :crashed)
+      end)
+
+    assert log =~ "websocket owner monitor recovery failed"
+    assert Repo.get!(Request, turn.request.id).status == "in_progress"
+    assert Repo.get!(CodexTurn, turn.turn.id).status == "in_progress"
+    assert_lease_preserved!(fixture)
+  end
+
   test "successful detach preserves accounting success that wins before turn completion",
        fixture do
     turn = active_turn_fixture(fixture, "websocket")

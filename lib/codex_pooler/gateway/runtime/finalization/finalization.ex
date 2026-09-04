@@ -6,7 +6,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
-  alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
@@ -61,7 +60,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           optional(atom()) => term()
         }
   @type stream_failure :: StreamProtocol.terminal_failure()
-  @type stream_finalization_result :: {:ok, term()} | {:error, map()}
+  @type stream_finalization_result :: Streaming.finalization_result()
   @spec handle_http_response(
           Req.Response.t(),
           SelectedCandidateContext.t(),
@@ -74,16 +73,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         _callbacks
       )
       when status == 429 or status >= 500 do
-    %{identity: identity} = context
-
-    RateLimitObserver.record_headers(identity, response)
-
     if Metadata.response_body_limit_exceeded?(response) do
       finalize_response_body_limit_exceeded(response, context)
     else
       body = Metadata.response_body(response)
-      RateLimitObserver.record_error(identity, body)
-
       finalize_retryable_non_success_response(response, context, body)
     end
   end
@@ -94,23 +87,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         callbacks
       )
       when status >= 200 and status < 300 do
-    %{identity: identity} = context
-
-    RateLimitObserver.record_headers(identity, response)
-
     if Metadata.response_body_limit_exceeded?(response) do
       finalize_response_body_limit_exceeded(response, context)
     else
       %{
-        reserved: reserved,
-        assignment: assignment,
         payload: payload,
         request_options: request_options
       } =
         context
 
       body = Metadata.response_body(response)
-      SideEffects.maybe_enqueue_gateway_reconciliation(reserved.request.pool_id, assignment)
 
       cond do
         RouteClass.streaming?(payload) or CompactionTrigger.streaming_result?(request_options) ->
@@ -133,16 +119,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         %SelectedCandidateContext{} = context,
         _callbacks
       ) do
-    %{identity: identity} = context
-
-    RateLimitObserver.record_headers(identity, response)
-
     if Metadata.response_body_limit_exceeded?(response) do
       finalize_response_body_limit_exceeded(response, context)
     else
       body = Metadata.response_body(response)
-      RateLimitObserver.record_error(identity, body)
-
       finalize_non_success_response(response, context, body)
     end
   end
@@ -176,9 +156,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         finalize_assignment_model_unavailable(response, context, body)
 
       true ->
-        with :ok <- maybe_record_unauthorized_route_failure(status, context) do
-          finalize_upstream_status_failure(response, context, body)
-        end
+        finalize_upstream_status_failure(response, context, body,
+          before_finalize: fn -> maybe_record_unauthorized_route_failure(status, context) end
+        )
     end
   end
 
@@ -193,13 +173,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   end
 
   defp finalize_misalignment_policy_violation(response, context, summary) do
-    with :ok <- DispatchLifecycle.neutral_completion(context) do
-      finalize_upstream_status_failure(response, context, "",
-        error_code: summary.code,
-        accounting_message: MisalignmentPolicyViolation.fallback_message(),
-        failure_projection: {:misalignment_policy_violation, summary}
-      )
-    end
+    finalize_upstream_status_failure(response, context, "",
+      error_code: summary.code,
+      accounting_message: MisalignmentPolicyViolation.fallback_message(),
+      failure_projection: {:misalignment_policy_violation, summary},
+      before_finalize: fn -> DispatchLifecycle.neutral_completion(context) end
+    )
   end
 
   defp public_ineligible_misalignment_policy_violation?(status, body, context)
@@ -228,9 +207,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     if assignment_model_unavailable?(status, body, context) do
       finalize_assignment_model_unavailable(response, context, body)
     else
-      with :ok <- record_status_route_failure(context, status) do
-        finalize_retryable_status_or_failure(response, context, body)
-      end
+      finalize_retryable_status_or_failure(response, context, body)
     end
   end
 
@@ -253,15 +230,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       })
       |> maybe_put_transport_failure_metadata(reason)
 
-    with :ok <- record_dispatch_route_failure(code, context) do
-      finalize_dispatch_error_after_route_failure(
-        reason,
-        context,
-        latency,
-        code,
-        attempt_metadata
-      )
-    end
+    finalize_dispatch_error_after_route_failure(
+      reason,
+      context,
+      latency,
+      code,
+      attempt_metadata
+    )
   end
 
   @spec finalize_completed_websocket_response(
@@ -363,8 +338,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                  response,
                  "retryable_upstream_status",
                  request_options
-               )
+               ),
+             before_finalize: fn ->
+               SideEffects.observe_http_response(context, response, body)
+               record_status_route_failure(context, status)
+             end
            }) do
+        {:stale_generation, finalized} -> {:ok, finalized}
         {:ok, _attempt} -> {:retry, :retryable_status}
         {:error, gateway_error} -> {:error, gateway_error}
       end
@@ -376,14 +356,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   end
 
   defp finalize_assignment_model_unavailable(response, context, body) do
-    with :ok <- record_dispatch_route_failure("upstream_model_unavailable", context) do
-      if context.allow_retry? do
-        record_assignment_model_unavailable_retry(response, context)
-      else
-        finalize_upstream_status_failure(response, context, body,
-          failure_projection: :passthrough
-        )
-      end
+    if context.allow_retry? do
+      record_assignment_model_unavailable_retry(response, context)
+    else
+      finalize_upstream_status_failure(response, context, body,
+        failure_projection: :passthrough,
+        before_finalize: fn ->
+          record_dispatch_route_failure("upstream_model_unavailable", context)
+        end
+      )
     end
   end
 
@@ -400,8 +381,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                response,
                "upstream_model_unavailable",
                request_options
+             ),
+           before_finalize: fn ->
+             SideEffects.observe_http_response(
+               context,
+               response,
+               Metadata.response_body(response)
              )
+
+             record_dispatch_route_failure("upstream_model_unavailable", context)
+           end
          }) do
+      {:stale_generation, finalized} -> {:ok, finalized}
       {:ok, _attempt} -> {:retry, :upstream_model_unavailable}
       {:error, gateway_error} -> {:error, gateway_error}
     end
@@ -435,8 +426,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
              last_error_code: code,
              error_message: Metadata.safe_reason(reason),
              latency_ms: latency,
-             attempt_metadata: attempt_metadata
+             attempt_metadata: attempt_metadata,
+             before_finalize: fn -> record_dispatch_route_failure(code, context) end
            }) do
+        {:stale_generation, finalized} -> {:ok, finalized}
         {:ok, _attempt} -> {:retry, code}
         {:error, gateway_error} -> {:error, gateway_error}
       end
@@ -450,9 +443,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                code,
                Metadata.safe_reason(reason),
                attempt_metadata,
-               latency_ms: latency
+               latency_ms: latency,
+               before_finalize: fn -> record_dispatch_route_failure(code, context) end
              )
            ) do
+        {:stale_generation, finalized} ->
+          {:ok, finalized}
+
         {:ok, _finalized} ->
           {:error,
            error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))}
@@ -484,7 +481,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
          response,
          %SelectedCandidateContext{} = context,
          body,
-         opts \\ []
+         opts
        ) do
     %{
       reserved: reserved,
@@ -514,12 +511,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       )
 
     attrs =
-      case Keyword.fetch(opts, :attempt_status) do
-        {:ok, attempt_status} -> Map.put(attrs, :attempt_status, attempt_status)
-        :error -> attrs
-      end
+      attrs
+      |> apply_failure_settlement_options(opts)
+      |> observe_http_response(context, response, body)
 
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} ->
         headers =
           Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
@@ -543,6 +542,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
       {:error, gateway_error} ->
         {:error, gateway_error}
+    end
+  end
+
+  defp apply_failure_settlement_options(attrs, opts) do
+    attrs =
+      case Keyword.fetch(opts, :attempt_status) do
+        {:ok, attempt_status} -> Map.put(attrs, :attempt_status, attempt_status)
+        :error -> attrs
+      end
+
+    case Keyword.fetch(opts, :before_finalize) do
+      {:ok, callback} -> SettlementAttrs.chain_before_finalize(attrs, callback)
+      :error -> attrs
     end
   end
 
@@ -679,22 +691,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     message = "upstream response body exceeded maximum allowed size"
     latency = elapsed_ms(context.started)
 
-    with :ok <- record_dispatch_route_failure(code, context),
-         {:ok, _finalized} <-
-           AttemptSettlement.finalize_failure(
-             reserved.request,
-             attempt,
-             SettlementAttrs.failure(
-               context,
-               502,
-               code,
-               message,
-               Metadata.response_metadata(response, code, request_options),
-               latency_ms: latency
-             )
-           ) do
-      {:error, error(502, code, message)}
-    else
+    case AttemptSettlement.finalize_failure(
+           reserved.request,
+           attempt,
+           SettlementAttrs.failure(
+             context,
+             502,
+             code,
+             message,
+             Metadata.response_metadata(response, code, request_options),
+             latency_ms: latency,
+             before_finalize: fn ->
+               SideEffects.observe_http_response(
+                 context,
+                 response,
+                 Metadata.response_body(response)
+               )
+
+               record_dispatch_route_failure(code, context)
+             end
+           )
+         ) do
+      {:stale_generation, finalized} -> {:ok, finalized}
+      {:ok, _finalized} -> {:error, error(502, code, message)}
       {:error, gateway_error} -> {:error, gateway_error}
     end
   end
@@ -713,9 +732,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
              "invalid_upstream_response",
              "upstream response was not valid json",
              Metadata.response_metadata(response, "invalid_upstream_response", request_options),
-             latency_ms: latency
+             latency_ms: latency,
+             before_finalize: fn ->
+               SideEffects.observe_http_response(
+                 context,
+                 response,
+                 Metadata.response_body(response)
+               )
+             end
            )
          ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} ->
         {:error, error(502, "invalid_upstream_response", "upstream response was not valid json")}
 
@@ -798,10 +827,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         error.code,
         error.message,
         Metadata.response_metadata(response, error.code, request_options),
-        latency_ms: elapsed_ms(context.started)
+        latency_ms: elapsed_ms(context.started),
+        before_finalize: fn ->
+          SideEffects.observe_http_response(context, response, Metadata.response_body(response))
+        end
       )
 
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} ->
         if Keyword.get(opts, :public_compaction_error?, false) do
           {:error, Map.put(error, :public_compaction_error?, true)}
@@ -837,9 +872,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
              context,
              response.status,
              Metadata.response_metadata(response, nil, request_options),
-             latency_ms: latency
+             latency_ms: latency,
+             before_finalize: fn ->
+               SideEffects.observe_http_response(context, response, body)
+               SideEffects.before_finalize_success(context, request_options)
+             end
            )
          ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
       {:ok, _finalized} ->
         SideEffects.record_success(context, payload, body, request_options, callbacks)
 
@@ -856,6 +898,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   end
 
   defp compact_endpoint?(endpoint), do: endpoint == "/backend-api/codex/responses/compact"
+
+  defp observe_http_response(attrs, context, response, body) do
+    SettlementAttrs.chain_before_finalize(attrs, fn ->
+      SideEffects.observe_http_response(context, response, body)
+    end)
+  end
 
   @spec maybe_put_transport_failure_metadata(map(), term()) :: map()
   defp maybe_put_transport_failure_metadata(metadata, %{transport_failure: transport_failure})

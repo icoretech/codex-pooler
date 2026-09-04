@@ -2,7 +2,9 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Runtim
   @moduledoc false
 
   import Ecto.Query
+  import ExUnit.Assertions, only: [assert: 1]
   import ExUnit.Callbacks, only: [on_exit: 1, start_supervised!: 1]
+  import ExUnit.CaptureLog, only: [with_log: 1]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
@@ -143,7 +145,13 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Runtim
 
     rollback = fn -> Repo.transaction(fn -> Repo.rollback(:rollback) end) end
 
-    {:error, %{code: code}} = execute_session_routable(prepared, fixture, rollback)
+    {{:error, %{code: code}}, logs} =
+      with_log(fn -> execute_session_routable(prepared, fixture, rollback) end)
+
+    assert logs =~ "gateway pre-attempt reservation failed"
+    assert logs =~ "operation=reserve_and_start_turn"
+    assert logs =~ "failure_code=gateway_reservation_failed"
+    assert logs =~ "failure_reason=rollback retryable=true"
 
     true = is_binary(code)
     observe_zero_work(owner, fixture.upstream, correlation_id)

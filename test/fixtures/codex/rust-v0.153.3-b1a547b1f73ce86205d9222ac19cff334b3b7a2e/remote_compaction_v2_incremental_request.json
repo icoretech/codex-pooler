@@ -1,8 +1,8 @@
 {
   "fixture_source": {
-    "tag": "rust-v0.152.0",
-    "annotated_tag_object": "7f6bee13af649d0da23ac0c2bf5c83f571fcd611",
-    "peeled_commit": "316795b3cf2a45e90d121d9f46499d4658b2645c",
+    "tag": "rust-v0.153.3",
+    "annotated_tag_object": "29d1e7f316229cd65c7e4a70476050c14962cf10",
+    "peeled_commit": "b1a547b1f73ce86205d9222ac19cff334b3b7a2e",
     "source_paths": [
       "codex-rs/codex-api/src/common.rs",
       "codex-rs/core/src/client.rs",
@@ -11,11 +11,17 @@
       "codex-rs/core/src/responses_metadata.rs",
       "codex-rs/core/src/session/session.rs",
       "codex-rs/core/src/turn_metadata_tests.rs",
-      "codex-rs/protocol/src/models.rs"
+      "codex-rs/protocol/src/models.rs",
+      "codex-rs/core/tests/suite/realtime_conversation.rs"
     ]
   },
   "contract": {
     "durability_boundary": "projection_relevant_incremental_frame_subset",
+    "zero_byte_function_call_output": {
+      "type": "function_call_output",
+      "output_byte_length": 0,
+      "followed_by_final_compaction_trigger": true
+    },
     "previous_request_input": [
       {
         "type": "message",
@@ -39,7 +45,7 @@
     ],
     "provider_response_id": "resp_fixture_incremental_0001",
     "v2_trigger_metadata": {
-      "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+      "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000153\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
     },
     "scenarios": {
       "anchored_tool_output_and_trigger": {
@@ -66,7 +72,7 @@
             "call_id": "call_fixture_incremental",
             "name": "fixture_tool",
             "namespace": "fixture.tools",
-            "output": "fixture tool output"
+            "output": ""
           },
           {
             "type": "compaction_trigger"
@@ -81,7 +87,7 @@
               "call_id": "call_fixture_incremental",
               "name": "fixture_tool",
               "namespace": "fixture.tools",
-              "output": "fixture tool output"
+              "output": ""
             },
             {
               "type": "compaction_trigger"
@@ -89,7 +95,7 @@
           ],
           "stream": true,
           "client_metadata": {
-            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000153\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
           }
         }
       },
@@ -126,7 +132,7 @@
           ],
           "stream": true,
           "client_metadata": {
-            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000153\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
           }
         }
       },
@@ -154,7 +160,7 @@
             "call_id": "call_fixture_incremental",
             "name": "fixture_tool",
             "namespace": "fixture.tools",
-            "output": "fixture tool output"
+            "output": ""
           },
           {
             "type": "compaction_trigger"
@@ -185,7 +191,7 @@
               "call_id": "call_fixture_incremental",
               "name": "fixture_tool",
               "namespace": "fixture.tools",
-              "output": "fixture tool output"
+              "output": ""
             },
             {
               "type": "compaction_trigger"
@@ -193,7 +199,7 @@
           ],
           "stream": true,
           "client_metadata": {
-            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000153\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
           }
         }
       }

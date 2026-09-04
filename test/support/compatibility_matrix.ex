@@ -1471,7 +1471,12 @@ defmodule CodexPooler.CompatibilityMatrix do
         },
         harness_applicability: %{
           codex: %{
-            version: "rust-v0.152.0",
+            version: "rust-v0.153.3",
+            peeled_commit: "b1a547b1f73ce86205d9222ac19cff334b3b7a2e",
+            sanitized_fixtures: [
+              "test/fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_request.json",
+              "test/fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_incremental_request.json"
+            ],
             applicability: "native_v2",
             classifier_authority: true,
             verification: "commit_blocking"

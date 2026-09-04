@@ -25,5 +25,6 @@ defmodule CodexPooler.Accounting.Attempt do
     field :latency_ms, :integer
     field :usage_status, :string
     field :response_metadata, :map
+    field :replay_generation, :integer, default: 0
   end
 end

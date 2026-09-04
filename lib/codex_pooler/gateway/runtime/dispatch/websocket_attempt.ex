@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.{AttemptSettlement, Metadata}
+  alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
@@ -154,6 +155,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
              failure,
              started
            ) do
+        {:stale_generation, finalized} ->
+          {:ok, finalized}
+
         {:ok, retry_prepared_context, retry_dispatch_request} ->
           dispatch(retry_prepared_context, retry_dispatch_request, callbacks)
 
@@ -182,31 +186,38 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
        ) do
     response_context = auth_refresh_websocket_response_context(context, response)
 
-    with {:ok, _recorded_failure} <-
-           record_auth_refresh_first_attempt_failure(
-             context,
-             response_context,
-             failure,
-             started
-           ),
-         {:ok, refresh_metadata, refreshed_identity} <- refresh_websocket_auth(context),
-         {:ok, refreshed_context} <- record_auth_refresh_metadata(context, refresh_metadata),
-         {:ok, retry_context} <-
-           create_same_assignment_retry_context(%{
-             refreshed_context
-             | identity: refreshed_identity,
-               auth_refresh_retry_attempted?: true
-           }),
-         {:ok, refreshed_token} <-
-           Secrets.decrypt_active_secret(refreshed_identity, @access_token_secret_kind) do
-      retry_prepared_context = %{
-        prepared_context
-        | context: retry_context,
-          token: refreshed_token
-      }
+    case record_auth_refresh_first_attempt_failure(
+           context,
+           response_context,
+           failure,
+           started
+         ) do
+      {:stale_generation, finalized} ->
+        {:stale_generation, finalized}
 
-      {:ok, retry_prepared_context,
-       retry_dispatch_request(retry_prepared_context, dispatch_request)}
+      {:ok, _recorded_failure} ->
+        with {:ok, refresh_metadata, refreshed_identity} <- refresh_websocket_auth(context),
+             {:ok, refreshed_context} <- record_auth_refresh_metadata(context, refresh_metadata),
+             {:ok, retry_context} <-
+               create_same_assignment_retry_context(%{
+                 refreshed_context
+                 | identity: refreshed_identity,
+                   auth_refresh_retry_attempted?: true
+               }),
+             {:ok, refreshed_token} <-
+               Secrets.decrypt_active_secret(refreshed_identity, @access_token_secret_kind) do
+          retry_prepared_context = %{
+            prepared_context
+            | context: retry_context,
+              token: refreshed_token
+          }
+
+          {:ok, retry_prepared_context,
+           retry_dispatch_request(retry_prepared_context, dispatch_request)}
+        end
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -225,27 +236,32 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     else
       code = Finalization.stream_error_code(response.reason)
 
-      with {:ok, _recorded_failure} <-
-             AttemptSettlement.record_retryable_failure(
-               context.reserved.request,
-               context.attempt,
-               %{
-                 last_error_code: code,
-                 error_message: Metadata.safe_reason(response.reason),
-                 latency_ms: elapsed_ms(started),
-                 attempt_metadata:
-                   response
-                   |> pre_visible_transport_metadata(context, code)
-                   |> maybe_put_transport_failure_metadata(response)
-                   |> Metadata.maybe_put_upstream_error_param(response),
-                 retry_count: context.retry_count
-               }
-             ),
-           {:ok, retry_context} <- create_same_assignment_retry_context(context) do
-        retry_prepared_context = %{prepared_context | context: retry_context}
-        retry_dispatch_request = retry_dispatch_request(retry_prepared_context, dispatch_request)
+      case AttemptSettlement.record_retryable_failure(
+             context.reserved.request,
+             context.attempt,
+             %{
+               last_error_code: code,
+               error_message: Metadata.safe_reason(response.reason),
+               latency_ms: elapsed_ms(started),
+               attempt_metadata:
+                 response
+                 |> pre_visible_transport_metadata(context, code)
+                 |> maybe_put_transport_failure_metadata(response)
+                 |> Metadata.maybe_put_upstream_error_param(response),
+               retry_count: context.retry_count,
+               before_finalize: fn ->
+                 SideEffects.observe_websocket_response(context, response)
+               end
+             }
+           ) do
+        {:stale_generation, finalized} ->
+          {:ok, finalized}
 
-        dispatch(retry_prepared_context, retry_dispatch_request, callbacks)
+        {:ok, _recorded_failure} ->
+          dispatch_same_assignment_retry(prepared_context, dispatch_request, callbacks)
+
+        {:error, _reason} = error ->
+          error
       end
     end
   end
@@ -303,20 +319,20 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       :same_assignment ->
         response_context = retryable_websocket_response_context(context, response)
 
-        with {:ok, _recorded_failure} <-
-               Finalization.record_retryable_first_event_stream_failure(
-                 Map.get(response, :body, ""),
-                 failure,
-                 response_context,
-                 record_health?: false
-               ),
-             {:ok, retry_context} <- create_same_assignment_retry_context(context) do
-          retry_prepared_context = %{prepared_context | context: retry_context}
+        case Finalization.record_retryable_first_event_stream_failure(
+               Map.get(response, :body, ""),
+               failure,
+               response_context,
+               record_health?: false
+             ) do
+          {:stale_generation, finalized} ->
+            {:ok, finalized}
 
-          retry_dispatch_request =
-            retry_dispatch_request(retry_prepared_context, dispatch_request)
+          {:ok, _recorded_failure} ->
+            dispatch_same_assignment_retry(prepared_context, dispatch_request, callbacks)
 
-          dispatch(retry_prepared_context, retry_dispatch_request, callbacks)
+          {:error, _reason} = error ->
+            error
         end
     end
   end
@@ -341,6 +357,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       |> Map.put(:upstream_error_code, failure.upstream_code || failure.code)
       |> Map.put(:upstream_error_param, Map.get(failure, :upstream_error_param))
     )
+  end
+
+  defp dispatch_same_assignment_retry(
+         %PreparedContext{context: context} = prepared_context,
+         dispatch_request,
+         callbacks
+       ) do
+    with {:ok, retry_context} <- create_same_assignment_retry_context(context) do
+      retry_prepared_context = %{prepared_context | context: retry_context}
+      retry_dispatch_request = retry_dispatch_request(retry_prepared_context, dispatch_request)
+
+      dispatch(retry_prepared_context, retry_dispatch_request, callbacks)
+    end
   end
 
   defp finalize_retryable_first_websocket_event(
@@ -389,6 +418,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
                failure,
                response_context
              ) do
+          {:stale_generation, finalized} -> {:ok, finalized}
           {:ok, _recorded_failure} -> {:retry, :upstream_model_unavailable}
           {:error, _reason} = error -> error
         end
@@ -477,7 +507,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           )
         )
         |> Map.put("auth_refresh_trigger", @auth_refresh_trigger_kind),
-      retry_count: context.retry_count
+      retry_count: context.retry_count,
+      before_finalize: fn ->
+        SideEffects.observe_websocket_response(context, response_context.response)
+      end
     })
   end
 

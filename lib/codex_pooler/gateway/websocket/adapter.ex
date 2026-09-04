@@ -48,6 +48,13 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     DownstreamSession.preflight_reconnect(state, semantic_turn_key, control_ref)
   end
 
+  @spec reconnect_control_v2(
+          socket_state(),
+          CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2.t()
+        ) :: term()
+  def reconnect_control_v2(state, control),
+    do: DownstreamSession.reconnect_control_v2(state, control)
+
   @spec cancel_reconnect(socket_state(), <<_::256>>, reference()) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
   def cancel_reconnect(state, semantic_turn_key, control_ref) do

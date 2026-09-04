@@ -164,8 +164,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp mark_visible_output(request) do
-    SessionContinuity.mark_codex_turn_visible(request)
+  defp mark_visible_output(request, attempt) do
+    SessionContinuity.mark_codex_turn_visible(request, attempt)
   end
 
   defp visible_websocket_data?(data), do: is_binary(data) and data != ""
@@ -189,7 +189,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp base_stream_relay_state(target, %RequestOptions{} = opts, response) do
     DownstreamStream.initial_state(target, opts, stream_source(response))
+    |> Map.put(:rate_limit_identity, stream_rate_limit_identity(response))
   end
+
+  defp stream_rate_limit_identity(%Req.Response{body: %WebsocketBridgeStream{}}), do: nil
+  defp stream_rate_limit_identity(%Req.Response{}), do: :selected
 
   @spec stream_source(Req.Response.t()) :: DownstreamStream.source()
   defp stream_source(%Req.Response{body: %WebsocketBridgeStream{}}), do: :websocket_bridge
@@ -569,39 +573,49 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
          visible_data?
        )
        when is_function(visible_data?, 1) do
-    %{reserved: reserved, identity: identity, payload: payload, request_options: opts} = context
+    %{reserved: reserved, payload: payload, request_options: opts} = context
 
     {:ok, rate_limit_state} =
-      RateLimitObserver.record_events(identity, data, rate_limit_state(state))
+      case Map.get(state, :rate_limit_identity) do
+        nil -> {:ok, rate_limit_state(state)}
+        _identity -> RateLimitObserver.collect_events(data, rate_limit_state(state))
+      end
 
     state = put_rate_limit_state(state, rate_limit_state)
 
     state = put_usage_state(state, StreamUsageObserver.observe(usage_state(state), data))
 
-    state = maybe_mark_visible_output(state, reserved.request, data, visible_data?)
+    case maybe_mark_visible_output(state, reserved.request, context.attempt, data, visible_data?) do
+      {:ok, state} ->
+        DownstreamStream.normalize_data(
+          data,
+          DownstreamStream.endpoint(payload, opts),
+          opts,
+          state
+        )
 
-    DownstreamStream.normalize_data(
-      data,
-      DownstreamStream.endpoint(payload, opts),
-      opts,
-      state
-    )
+      {:error, :stale_generation, state} ->
+        {"", state}
+    end
   end
 
   defp maybe_mark_visible_output(
          %{visible_output_marked?: true} = state,
          _request,
+         _attempt,
          _data,
          _visible_data?
        ),
-       do: state
+       do: {:ok, state}
 
-  defp maybe_mark_visible_output(state, request, data, visible_data?) do
+  defp maybe_mark_visible_output(state, request, attempt, data, visible_data?) do
     if visible_data?.(data) do
-      mark_visible_output(request)
-      Map.put(state, :visible_output_marked?, true)
+      case mark_visible_output(request, attempt) do
+        :ok -> {:ok, Map.put(state, :visible_output_marked?, true)}
+        {:error, :stale_generation} -> {:error, :stale_generation, state}
+      end
     else
-      state
+      {:ok, state}
     end
   end
 

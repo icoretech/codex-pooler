@@ -8,7 +8,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   import ExUnit.CaptureLog
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestReplayEntitlement}
+  alias CodexPooler.Accounting.RequestReplay
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -23,10 +24,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias Ecto.Adapters.SQL.Sandbox
 
   @detection_timeout_ms 5_000
   @remote_node :"codex_pooler@protocol-owner.example"
@@ -156,14 +159,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
           )
         end)
 
+      assert Task.yield(submitter, 0) == nil
+
+      quota_writer_pid = await_quota_commit!(quota_handler_id)
+
+      assert %{upstream_pid: ^quota_writer_pid, active_turn: %{upstream_pid: ^quota_writer_pid}} =
+               :sys.get_state(owner)
+
+      assert FakeUpstream.count(upstream) == 1
+      send(quota_writer_pid, {quota_handler_id, :release_quota_commit})
+      :telemetry.detach(quota_handler_id)
+
       assert_receive {:websocket_owner_harness_terminal_delivery_barrier, barrier_pid,
                       ^release_ref}
 
-      assert Task.yield(submitter, 0) == nil
-      assert FakeUpstream.count(upstream) == 1
-
-      quota_task_pid = await_quota_commit!(quota_handler_id)
-      :telemetry.detach(quota_handler_id)
       send(barrier_pid, {:websocket_owner_harness_release_terminal_delivery, release_ref})
 
       assert_receive {:websocket_owner_harness_terminal_delivered, ^release_ref}
@@ -189,11 +198,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       assert {:ok, %{status: 200, websocket_messages: []}} =
                Task.await(submitter, @detection_timeout_ms)
-
-      quota_fence = Task.async(&await_rate_limit_event_tasks!/0)
-      assert Task.yield(quota_fence, 0) == nil
-      send(quota_task_pid, {quota_handler_id, :release_quota_commit})
-      assert :ok = Task.await(quota_fence, @detection_timeout_ms)
 
       assert_receive {:submission_observed, ^mapper, observer_pid}
       assert observer_pid == submitter.pid
@@ -240,6 +244,120 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert_successful_accounting!(accounting)
       assert %{active_turn: nil} = :sys.get_state(owner)
     end
+  end
+
+  @tag :replay_generation_race
+  @tag :replay_race
+  @tag :replay_topology
+  test "owner drops an internal frame authorized before replay arm but delivered after cutover",
+       %{
+         auth: auth
+       } do
+    fixture = replay_observation_fixture(auth, "stale-owner-internal")
+    release_ref = make_ref()
+    barrier_ref = make_ref()
+    rate_limit = rate_limit_event(DateTime.add(DateTime.utc_now(), 900, :second))
+    encoded = Jason.encode!(rate_limit)
+
+    Application.put_env(
+      :codex_pooler,
+      :rate_limit_persistence_test_barrier,
+      {self(), barrier_ref}
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:codex_pooler, :rate_limit_persistence_test_barrier)
+    end)
+
+    upstream = stale_observation_owner_upstream(self(), release_ref, encoded, rate_limit)
+    {:ok, owner} = start_owner(fixture.session, upstream: upstream)
+    {:ok, downstream} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("stale"))
+
+    descriptor = replay_descriptor(fixture, fixture.attempt)
+
+    assert :ok =
+             WebsocketOwnerSession.prepare_next_replay_descriptor(owner, downstream, descriptor)
+
+    request = %{
+      owner_data_request()
+      | frame_observer:
+          WebsocketRequestCallbacks.frame_observer(
+            fixture.identity,
+            observation(fixture.attempt)
+          )
+    }
+
+    submitter =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, request)
+      end)
+
+    assert_receive {:owner_observation_request_started, worker, ^release_ref}
+    assert_receive {:rate_limit_persistence_ready, persistence_pid, ^barrier_ref}
+    assert persistence_pid == worker
+    assert %{active_turn: %{task_pid: ^worker}} = :sys.get_state(owner)
+
+    assert {:ok, _armed} = RequestReplay.arm(replay_arm_input(fixture))
+
+    persistence_monitor = Process.monitor(persistence_pid)
+    send(persistence_pid, {:release_rate_limit_persistence, barrier_ref})
+    assert_receive {:owner_observation_frame_written, ^worker, ^release_ref}
+    send(worker, {:release_owner_observation_request, release_ref})
+    assert :ok = Task.await(submitter, @detection_timeout_ms)
+
+    assert_receive {:DOWN, ^persistence_monitor, :process, ^persistence_pid, :normal},
+                   @detection_timeout_ms
+
+    refute_received {:websocket_owner_frame, "stale", 1, {:data, ^encoded}}
+
+    refute Enum.any?(
+             QuotaWindows.list_quota_windows(fixture.identity),
+             &(&1.source == "codex_rate_limit_event")
+           )
+  end
+
+  @tag :replay_generation_race
+  @tag :replay_matrix
+  @tag :replay_topology
+  test "current generation one observes and delivers an internal rate-limit frame", %{auth: auth} do
+    fixture = replay_observation_fixture(auth, "current-owner-internal")
+    current = install_started_generation_one!(fixture)
+    release_ref = make_ref()
+    upstream = blocking_owner_upstream(self(), release_ref)
+    {:ok, owner} = start_owner(fixture.session, upstream: upstream)
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("current-gen1"))
+
+    descriptor = replay_descriptor(fixture, current.attempt)
+
+    assert :ok =
+             WebsocketOwnerSession.prepare_next_replay_descriptor(owner, downstream, descriptor)
+
+    submitter =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, owner_data_request())
+      end)
+
+    assert_receive {:owner_observation_request_started, worker, ^release_ref}
+    assert %{active_turn: %{ref: active_ref}} = :sys.get_state(owner)
+
+    rate_limit = rate_limit_event(DateTime.add(DateTime.utc_now(), 900, :second))
+    encoded = Jason.encode!(rate_limit)
+
+    observer =
+      WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(current.attempt))
+
+    assert observer.(encoded, rate_limit) in [:ok, nil]
+    send(owner, {:websocket_owner_upstream_frame, active_ref, encoded})
+
+    assert_receive {:websocket_owner_frame, "current-gen1", 1, {:data, ^encoded}}
+    assert window = wait_for_rate_limit_event_window(fixture.identity, "primary")
+    assert window.source == "codex_rate_limit_event"
+    await_rate_limit_event_tasks!()
+
+    send(worker, {:release_owner_observation_request, release_ref})
+    assert :ok = Task.await(submitter, @detection_timeout_ms)
   end
 
   test "v1 owner preserves real upstream connection lifecycle metadata", %{auth: auth} do
@@ -1049,6 +1167,190 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     %{request: reserved.request, attempt: attempt, turn: turn}
   end
 
+  defp replay_observation_fixture(auth, suffix) do
+    %{identity: identity, assignment: assignment} = active_upstream_assignment_fixture(auth.pool)
+
+    model =
+      model_fixture(auth.pool, %{
+        exposed_model_id: "replay-observation-#{suffix}-#{System.unique_integer([:positive])}",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    %{session: session} = owner_session_fixture(auth, suffix, Atom.to_string(node()))
+    accounting = accounting_turn_fixture(auth, session, assignment, model, suffix)
+
+    turn =
+      accounting.turn
+      |> Ecto.Changeset.change(%{semantic_turn_digest: <<1::256>>})
+      |> Repo.update!()
+
+    reservation =
+      Repo.one!(
+        from entry in LedgerEntry,
+          where: entry.request_id == ^accounting.request.id and entry.entry_kind == "reservation"
+      )
+
+    %{
+      auth: auth,
+      assignment: assignment,
+      attempt: accounting.attempt,
+      identity: identity,
+      model: model,
+      replay_claim_digest: <<2::256>>,
+      request: accounting.request,
+      reservation: reservation,
+      semantic_digest: <<1::256>>,
+      session: Repo.reload!(session),
+      turn: turn
+    }
+  end
+
+  defp replay_arm_input(fixture) do
+    %{
+      api_key_id: fixture.auth.api_key.id,
+      pool_id: fixture.auth.pool.id,
+      codex_session_id: fixture.session.id,
+      request_id: fixture.request.id,
+      codex_turn_id: fixture.turn.id,
+      eligible_attempt_id: fixture.attempt.id,
+      api_key_runtime_epoch: fixture.auth.api_key.runtime_revocation_epoch,
+      model_id: fixture.model.id,
+      model_identifier: fixture.model.exposed_model_id,
+      endpoint: fixture.request.endpoint,
+      semantic_turn_digest: fixture.semantic_digest,
+      replay_claim_digest: fixture.replay_claim_digest,
+      owner_instance_id: fixture.session.owner_instance_id,
+      owner_lease_token: fixture.session.owner_lease_token,
+      predecessor_epoch: 1,
+      failure_reason: :client_disconnected,
+      pre_visible_output: true
+    }
+  end
+
+  defp install_started_generation_one!(fixture) do
+    assert {:ok, armed} = RequestReplay.arm(replay_arm_input(fixture))
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    replay_attempt =
+      CodexPooler.PoolerFixtures.attempt_fixture(fixture.request, fixture.assignment, %{
+        attempt_number: 2,
+        status: "in_progress",
+        completed_at: nil,
+        upstream_status_code: nil,
+        usage_status: "usage_pending"
+      })
+      |> Ecto.Changeset.change(%{model_id: fixture.model.id, replay_generation: 1})
+      |> Repo.update!()
+
+    entitlement = Repo.get!(RequestReplayEntitlement, armed.entitlement_id)
+
+    entitlement =
+      entitlement
+      |> RequestReplayEntitlement.changeset(%{
+        status: "consumed",
+        replay_attempt_id: replay_attempt.id,
+        provisional_binding_digest: <<3::256>>,
+        consumed_at: now,
+        started_at: now,
+        last_liveness_at: now,
+        abandon_at: DateTime.add(now, 60, :second)
+      })
+      |> Repo.update!()
+
+    %{attempt: replay_attempt, entitlement: entitlement}
+  end
+
+  defp replay_descriptor(fixture, attempt) do
+    %{
+      semantic_turn_key: fixture.semantic_digest,
+      replay_claim_digest: fixture.replay_claim_digest,
+      authorization_snapshot: %{
+        api_key_id: fixture.auth.api_key.id,
+        api_key_runtime_epoch: fixture.auth.api_key.runtime_revocation_epoch,
+        pool_id: fixture.auth.pool.id,
+        codex_session_id: fixture.session.id,
+        model_identifier: fixture.model.exposed_model_id
+      },
+      request_id: fixture.request.id,
+      codex_turn_id: fixture.turn.id,
+      model_id: fixture.model.id,
+      endpoint: fixture.request.endpoint,
+      attempt_id: attempt.id,
+      replay_generation: attempt.replay_generation
+    }
+  end
+
+  defp observation(attempt) do
+    %{
+      request_id: attempt.request_id,
+      client_request_id: "generation-observation",
+      attempt_id: attempt.id,
+      mode: "full"
+    }
+  end
+
+  defp wait_for_rate_limit_event_window(identity, window_kind, attempts \\ 1_000)
+
+  defp wait_for_rate_limit_event_window(_identity, _window_kind, 0),
+    do: flunk("expected generation-authorized rate-limit evidence")
+
+  defp wait_for_rate_limit_event_window(identity, window_kind, attempts) do
+    case Enum.find(
+           QuotaWindows.list_quota_windows(identity),
+           &(&1.source == "codex_rate_limit_event" and &1.window_kind == window_kind)
+         ) do
+      nil ->
+        :erlang.yield()
+        wait_for_rate_limit_event_window(identity, window_kind, attempts - 1)
+
+      window ->
+        window
+    end
+  end
+
+  defp owner_data_request do
+    %UpstreamWebsocketSession.Request{
+      url: "https://upstream.example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "{}",
+      timeouts: RequestOptions.build(%{}, "/backend-api/codex/responses", %{}).timeout_config,
+      message_mapper: & &1,
+      effective_serving_mode: "full"
+    }
+  end
+
+  defp blocking_owner_upstream(parent, release_ref) do
+    %{
+      start: fn -> Agent.start_link(fn -> :open end) end,
+      send: fn _upstream_pid, _request, _writer ->
+        send(parent, {:owner_observation_request_started, self(), release_ref})
+
+        receive do
+          {:release_owner_observation_request, ^release_ref} ->
+            :ok
+        end
+      end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid, :normal) end
+    }
+  end
+
+  defp stale_observation_owner_upstream(parent, release_ref, encoded, decoded) do
+    %{
+      start: fn -> Agent.start_link(fn -> :open end) end,
+      send: fn _upstream_pid, request, writer ->
+        send(parent, {:owner_observation_request_started, self(), release_ref})
+        invoke_frame_observer(request.frame_observer, encoded, decoded)
+        writer.(encoded, UpstreamWebsocketSession.TerminalDiscriminator.classify(decoded))
+        send(parent, {:owner_observation_frame_written, self(), release_ref})
+
+        receive do
+          {:release_owner_observation_request, ^release_ref} -> :ok
+        end
+      end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid, :normal) end
+    }
+  end
+
   defp protocol_runtime_fixture(auth, suffix, owner_instance_id \\ Atom.to_string(@remote_node)) do
     %{identity: identity, assignment: assignment} = active_upstream_assignment_fixture(auth.pool)
 
@@ -1104,7 +1406,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
              Repo.all(
                from entry in LedgerEntry,
                  where: entry.request_id == ^accounting.request.id,
-                 order_by: [asc: entry.occurred_at, asc: entry.entry_kind]
+                 order_by: [
+                   asc:
+                     fragment(
+                       "CASE ? WHEN 'reservation' THEN 0 WHEN 'release' THEN 1 WHEN 'settlement' THEN 2 ELSE 3 END",
+                       entry.entry_kind
+                     ),
+                   asc: entry.occurred_at,
+                   asc: entry.id
+                 ]
              )
 
     assert reservation.entry_kind == "reservation"
@@ -1236,17 +1546,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   end
 
   defp start_owner(session, opts \\ []) do
-    WebsocketOwnerSession.start_owner(
-      Keyword.merge(
-        [
-          codex_session_id: session.id,
-          owner_lease_token: session.owner_lease_token,
-          owner_instance_id: session.owner_instance_id,
-          owner_renewal_ms: 60_000
-        ],
-        opts
+    result =
+      WebsocketOwnerSession.start_owner(
+        Keyword.merge(
+          [
+            codex_session_id: session.id,
+            owner_lease_token: session.owner_lease_token,
+            owner_instance_id: session.owner_instance_id,
+            owner_renewal_ms: 60_000
+          ],
+          opts
+        )
       )
-    )
+
+    case result do
+      {:ok, owner} -> Sandbox.allow(Repo, self(), owner)
+      {:ok, owner, :existing} -> Sandbox.allow(Repo, self(), owner)
+      _result -> :ok
+    end
+
+    result
   end
 
   defp frame_observer_failure_upstream(parent, kind) do
@@ -1723,7 +2042,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     await_quota_commit_query!(handler_id, task_pid)
 
     assert_receive {^handler_id, :quota_write_committed, ^task_pid}
-    assert task_pid in Task.Supervisor.children(CodexPooler.RateLimitEventSupervisor)
     task_pid
   end
 

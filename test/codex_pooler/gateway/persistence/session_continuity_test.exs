@@ -726,6 +726,30 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert %DateTime{} = completed_at
   end
 
+  @tag :replay_schema
+  test "fresh native turn insertion stores semantic digest atomically while legacy shape stays nil" do
+    %{auth: auth, session: session} = owner_session_fixture()
+    native_request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+    semantic_turn_digest = :crypto.hash(:sha256, "synthetic-native-semantic-turn")
+
+    native_options =
+      RequestOptions.for_websocket(%{})
+      |> RequestOptions.put_continuity(semantic_turn_key: semantic_turn_digest)
+
+    assert {:ok, %CodexTurn{semantic_turn_digest: ^semantic_turn_digest}} =
+             SessionContinuity.start_codex_turn(session, native_request, native_options)
+
+    legacy_request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+
+    assert {:ok, %CodexTurn{semantic_turn_digest: nil}} =
+             SessionContinuity.start_codex_turn(
+               session,
+               legacy_request,
+               RequestOptions.for_websocket(%{})
+             )
+  end
+
+  @tag :replay_liveness
   test "active owner renewal keeps a websocket-style turn fenced-valid beyond initial ttl" do
     %{session: session, token: token} =
       owner_session_fixture(%{bridge_owner_lease_ttl_seconds: 1})

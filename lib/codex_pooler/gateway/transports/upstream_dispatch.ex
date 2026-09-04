@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   @moduledoc false
 
+  import Ecto.Query
+
   require Logger
 
   alias CodexPooler.Gateway.OperationalSettings
@@ -12,30 +14,33 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
-  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
-  alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.RejectionBody
+  alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV4
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
+  alias CodexPooler.Repo
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   # Every field an owner success reply must carry, taken from what the local
   # producer emits (`UpstreamWebsocketSession` request_success) and what the
-  # consumers destructure without a default: `record_upstream_websocket_body/3`
+  # consumers destructure without a default: `mark_upstream_websocket_body_visible/3`
   # needs `:body`, `WebsocketAttempt` dispatches on `:terminal`, and
   # `Finalization.Websocket` destructures `:status` and `:headers`. Extend this
   # list whenever a consumer starts requiring another field.
@@ -78,6 +83,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           required(:connection_bound_continuation?) => boolean(),
           required(:websocket_delivery_mode) => :relay | :collect_compaction,
           required(:effective_serving_mode) => String.t(),
+          required(:request_id) => Ecto.UUID.t() | nil,
+          required(:attempt_id) => Ecto.UUID.t() | nil,
+          required(:native_replay_binding) => NativeReplayAdmission.Binding.t() | nil,
+          required(:native_replay_proof) => RuntimeAdmissionProof.t() | nil,
+          required(:provisional_token) => <<_::256>> | nil,
           required(:native_compaction_capability) =>
             CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability.t()
             | nil,
@@ -464,7 +474,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           else: :relay
         ),
       effective_serving_mode: RequestOptions.model_serving_mode(request_options),
+      request_id: observation.request_id,
+      attempt_id: observation.attempt_id,
       native_compaction_capability: native_compaction_capability(request_options),
+      native_replay_binding: request_options.runtime.native_replay_binding,
+      native_replay_proof: request_options.runtime.native_replay_proof,
+      provisional_token: request_options.runtime.replay_provisional_token,
       first_compact_collection: request_options.first_compact_collection,
       expected_connection_lifecycle: native_compaction_lifecycle(request_options),
       forward_error_body?: false
@@ -472,26 +487,97 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
     case owner_transport(request_options) do
       {:ok, session, owner_lease_token, downstream, forwarder_opts} ->
-        request_data
-        |> owner_websocket_request(request_options)
-        |> submit_owner_websocket_request(
-          session,
-          owner_lease_token,
-          downstream,
-          owner_request_forwarder_opts(forwarder_opts, request_options),
-          request_options
-        )
-        |> owner_request_result(identity, request, request_options)
+        case maybe_prepare_replay_descriptor(
+               session,
+               owner_lease_token,
+               downstream,
+               request_options,
+               request,
+               attempt,
+               forwarder_opts
+             ) do
+          :ok ->
+            request_data
+            |> owner_websocket_request(request_options)
+            |> submit_owner_websocket_request(
+              session,
+              owner_lease_token,
+              downstream,
+              owner_request_forwarder_opts(forwarder_opts, request_options),
+              request_options
+            )
+            |> owner_request_result(identity, request, attempt, request_options)
+
+          {:error, reason} ->
+            owner_request_result({:error, reason}, identity, request, attempt, request_options)
+        end
 
       :local ->
         request_data
         |> direct_websocket_request_data(writer, request_options)
-        |> direct_websocket_request(request_options, identity, request)
+        |> direct_websocket_request(request_options, identity, request, attempt)
 
       {:error, reason} ->
-        owner_request_result({:error, reason}, identity, request, request_options)
+        owner_request_result({:error, reason}, identity, request, attempt, request_options)
     end
   end
+
+  defp maybe_prepare_replay_descriptor(
+         session,
+         token,
+         downstream,
+         %RequestOptions{
+           runtime: %{replay_authorization_binding: authorization},
+           continuity: %{semantic_turn_key: semantic, replay_claim_digest: replay}
+         } = request_options,
+         request,
+         attempt,
+         forwarder_opts
+       )
+       when is_map(authorization) and is_binary(semantic) and is_binary(replay) and
+              is_map(request) and is_map(attempt) do
+    lifecycle = request_options.runtime.replay_lifecycle_binding || %{}
+
+    codex_turn_id =
+      Map.get(lifecycle, :codex_turn_id) ||
+        Repo.one(from turn in CodexTurn, where: turn.request_id == ^request.id, select: turn.id)
+
+    descriptor = %{
+      semantic_turn_key: semantic,
+      replay_claim_digest: replay,
+      authorization_snapshot: authorization,
+      request_id: Map.get(lifecycle, :request_id, request.id),
+      codex_turn_id: codex_turn_id,
+      model_id: request.model_id,
+      endpoint: request.endpoint,
+      attempt_id:
+        if(Map.get(attempt, :replay_generation, 0) == 1,
+          do: Map.get(lifecycle, :replay_attempt_id, attempt.id),
+          else: Map.get(lifecycle, :eligible_attempt_id, attempt.id)
+        ),
+      replay_generation:
+        Map.get(attempt, :replay_generation, Map.get(lifecycle, :replay_generation, 0))
+    }
+
+    WebsocketOwnerForwarder.prepare_next_replay_descriptor(
+      session,
+      token,
+      downstream,
+      descriptor,
+      forwarder_opts
+    )
+  end
+
+  defp maybe_prepare_replay_descriptor(
+         _session,
+         _token,
+         _downstream,
+         _options,
+         _request,
+         _attempt,
+         _opts
+       ),
+       do: :ok
 
   @egress_observation_flag :permanent_full_mode_egress_observation_enabled
 
@@ -611,9 +697,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   @spec owner_websocket_request(websocket_request_data(), RequestOptions.t()) ::
-          {:ok, WebsocketOwnerRequest.t() | WebsocketOwnerRequestV2.t()}
-          | {:error,
-             WebsocketOwnerRequest.validation_error() | WebsocketOwnerRequestV2.validation_error()}
+          {:ok, WebsocketOwnerContract.upstream_request()}
+          | {:error, WebsocketOwnerRequest.validation_error()}
   defp owner_websocket_request(request_data, request_options) do
     case request_data.identity.id do
       upstream_identity_id when is_binary(upstream_identity_id) ->
@@ -644,6 +729,30 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp owner_request_envelope(attrs, request_data, request_options) do
     admission = RequestOptions.native_compaction_admission(request_options)
 
+    case request_options.runtime do
+      %{
+        native_replay_binding: %NativeReplayAdmission.Binding{} = binding,
+        native_replay_proof: %RuntimeAdmissionProof{} = proof,
+        replay_provisional_token: token
+      }
+      when is_binary(token) and byte_size(token) == 32 ->
+        attrs
+        |> Map.merge(%{
+          version: 4,
+          websocket_delivery_mode: request_data.websocket_delivery_mode,
+          effective_serving_mode: String.to_existing_atom(request_data.effective_serving_mode),
+          native_replay_binding: binding,
+          native_replay_proof: proof,
+          provisional_token: token
+        })
+        |> WebsocketOwnerRequestV4.new()
+
+      _no_replay ->
+        owner_request_envelope_without_replay(attrs, request_data, request_options, admission)
+    end
+  end
+
+  defp owner_request_envelope_without_replay(attrs, request_data, request_options, admission) do
     case {request_data.websocket_delivery_mode, admission} do
       {delivery_mode,
        {:ok, capability, {:forwarded, _session, _lease, _downstream, _opts}, _lifecycle}}
@@ -762,16 +871,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
        ),
        do: {:error, :owner_unavailable}
 
-  defp direct_websocket_request(upstream_request, request_options, identity, request) do
+  defp direct_websocket_request(upstream_request, request_options, _identity, request, attempt) do
     case request_options.transport.upstream_websocket_session do
       pid when is_pid(pid) ->
         result = UpstreamWebsocketSession.request(pid, upstream_request)
 
-        record_upstream_websocket_body(result, identity, request)
+        mark_upstream_websocket_body_visible(result, request, attempt)
 
       _pid ->
         UpstreamWebsocketSession.request_once(upstream_request)
-        |> record_upstream_websocket_body(identity, request)
+        |> mark_upstream_websocket_body_visible(request, attempt)
     end
   end
 
@@ -974,18 +1083,18 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp owner_instance_matches?(_owner_instance_id, _owner_session), do: false
 
-  defp owner_request_result(:ok, identity, request, _request_options) do
+  defp owner_request_result(:ok, _identity, request, attempt, _request_options) do
     {:ok, %{body: "", terminal: "response.completed", status: 200, headers: []}}
-    |> record_upstream_websocket_body(identity, request)
+    |> mark_upstream_websocket_body_visible(request, attempt)
   end
 
   # An owner success reply crosses a node boundary, so validate the producer's
   # contract before any consumer destructures or combines its values. A bad
   # shape settles as one normal owner-crash failure without logging the reply.
-  defp owner_request_result({:ok, result}, identity, request, request_options) do
+  defp owner_request_result({:ok, result}, _identity, request, attempt, request_options) do
     case owner_reply_problem(result) do
       :ok ->
-        record_upstream_websocket_body({:ok, result}, identity, request)
+        mark_upstream_websocket_body_visible({:ok, result}, request, attempt)
 
       problem ->
         contain_malformed_owner_reply(problem, request_options)
@@ -996,12 +1105,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
          {:error, %{body: _body, reason: _reason} = response},
          _identity,
          _request,
+         _attempt,
          _request_options
        ) do
     {:error, response}
   end
 
-  defp owner_request_result({:error, reason}, _identity, _request, _request_options) do
+  defp owner_request_result({:error, reason}, _identity, _request, _attempt, _request_options) do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
 
@@ -1124,49 +1234,54 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp owner_request_id(%RequestOptions{request_metadata: %{request_id: request_id}}),
     do: request_id
 
-  defp record_upstream_websocket_body(result, identity, request)
+  defp mark_upstream_websocket_body_visible(result, request, attempt)
 
-  defp record_upstream_websocket_body(
+  defp mark_upstream_websocket_body_visible(
          {:error,
           %{
             body: _body,
-            reason: {:websocket_upgrade_failed, _status, headers}
+            reason: {:websocket_upgrade_failed, _status, _headers}
           }} = result,
-         identity,
-         request
+         request,
+         attempt
        ) do
-    RateLimitObserver.record_websocket_upgrade_headers(identity, headers)
-    mark_visible_output(request, result)
+    mark_visible_output(request, attempt, result)
     result
   end
 
-  defp record_upstream_websocket_body(
-         {:ok, %{body: _body, websocket_frame_headers: frame_headers}} = result,
-         identity,
-         request
+  defp mark_upstream_websocket_body_visible(
+         {:ok, %{body: _body, websocket_frame_headers: _frame_headers}} = result,
+         request,
+         attempt
        ) do
-    RateLimitObserver.record_websocket_frame_headers(identity, frame_headers)
-    mark_visible_output(request, result)
+    mark_visible_output(request, attempt, result)
     result
   end
 
-  defp record_upstream_websocket_body({:ok, %{body: _body}} = result, _identity, request) do
-    mark_visible_output(request, result)
-    result
-  end
-
-  defp record_upstream_websocket_body(
-         {:error, %{body: _body, websocket_frame_headers: frame_headers}} = result,
-         identity,
-         request
+  defp mark_upstream_websocket_body_visible(
+         {:ok, %{body: _body}} = result,
+         request,
+         attempt
        ) do
-    RateLimitObserver.record_websocket_frame_headers(identity, frame_headers)
-    mark_visible_output(request, result)
+    mark_visible_output(request, attempt, result)
     result
   end
 
-  defp record_upstream_websocket_body({:error, %{body: _body}} = result, _identity, request) do
-    mark_visible_output(request, result)
+  defp mark_upstream_websocket_body_visible(
+         {:error, %{body: _body, websocket_frame_headers: _frame_headers}} = result,
+         request,
+         attempt
+       ) do
+    mark_visible_output(request, attempt, result)
+    result
+  end
+
+  defp mark_upstream_websocket_body_visible(
+         {:error, %{body: _body}} = result,
+         request,
+         attempt
+       ) do
+    mark_visible_output(request, attempt, result)
     result
   end
 
@@ -1332,14 +1447,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     TransportEnvelope.headers(identity, token, headers, include_codex_identity?: true)
   end
 
-  defp mark_visible_output(request, {status, %{body: body} = result})
+  defp mark_visible_output(request, attempt, {status, %{body: body} = result})
        when status in [:ok, :error] and is_binary(body) and body != "" do
     if downstream_output_visible?(status, result, body) do
-      PersistenceSessionContinuity.mark_codex_turn_visible(request)
+      PersistenceSessionContinuity.mark_codex_turn_visible(request, attempt)
     end
   end
 
-  defp mark_visible_output(_request, _result), do: :ok
+  defp mark_visible_output(_request, _attempt, _result), do: :ok
 
   defp downstream_output_visible?(
          :error,

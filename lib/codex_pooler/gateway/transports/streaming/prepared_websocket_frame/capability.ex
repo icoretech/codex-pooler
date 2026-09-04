@@ -19,16 +19,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
     %__MODULE__{server: server, reference: reference}
   end
 
-  @spec seal(t(), binary(), <<_::256>> | nil) :: :ok
-  def seal(%__MODULE__{server: server, reference: reference}, frame_token, binding_digest \\ nil)
+  @spec seal(t(), binary(), <<_::256>> | nil, :native_compaction | :native_replay | nil) :: :ok
+  def seal(
+        %__MODULE__{server: server, reference: reference},
+        frame_token,
+        binding_digest \\ nil,
+        kind \\ nil
+      )
       when is_pid(server) and is_reference(reference) and is_binary(frame_token) do
-    GenServer.call(server, {:seal, reference, frame_token, binding_digest}, 1_000)
+    GenServer.call(server, {:seal, reference, frame_token, binding_digest, kind}, 1_000)
   end
 
   @spec consume(t(), binary()) :: :ok | {:error, :consumed | :invalid}
   def consume(%__MODULE__{server: server, reference: reference}, frame_token)
       when is_pid(server) and is_reference(reference) and is_binary(frame_token) do
     GenServer.call(server, {:consume, reference, frame_token}, 1_000)
+  catch
+    :exit, _reason -> {:error, :invalid}
+  end
+
+  @spec validate(t(), binary()) :: :ok | {:error, :consumed | :invalid}
+  def validate(%__MODULE__{server: server, reference: reference}, frame_token)
+      when is_pid(server) and is_reference(reference) and is_binary(frame_token) do
+    GenServer.call(server, {:validate, reference, frame_token}, 1_000)
   catch
     :exit, _reason -> {:error, :invalid}
   end
@@ -44,21 +57,34 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
 
   @spec redeem_runtime_admission(RuntimeAdmissionProof.t(), <<_::256>>) ::
           {:ok, Ecto.UUID.t()} | {:error, :invalid | :replayed}
+  @spec redeem_runtime_admission(
+          RuntimeAdmissionProof.t(),
+          <<_::256>>,
+          :native_compaction | :native_replay
+        ) ::
+          {:ok, Ecto.UUID.t()} | {:error, :invalid | :replayed}
   def redeem_runtime_admission(
         %RuntimeAdmissionProof{
           server: server,
           reference: reference,
           nonce: nonce,
-          binding_digest: proof_digest
+          binding_digest: proof_digest,
+          kind: kind
         },
-        expected_digest
+        expected_digest,
+        expected_kind \\ :native_compaction
       )
-      when is_binary(expected_digest) and byte_size(expected_digest) == 32 do
-    GenServer.call(
-      server,
-      {:redeem_runtime_admission, reference, nonce, proof_digest, expected_digest},
-      1_000
-    )
+      when is_binary(expected_digest) and byte_size(expected_digest) == 32 and
+             expected_kind in [:native_compaction, :native_replay] do
+    if kind == expected_kind do
+      GenServer.call(
+        server,
+        {:redeem_runtime_admission, reference, nonce, proof_digest, expected_digest},
+        1_000
+      )
+    else
+      {:error, :invalid}
+    end
   catch
     :exit, _reason -> {:error, :invalid}
   end
@@ -78,6 +104,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
        frame_token: nil,
        consumed?: false,
        runtime_binding_digest: nil,
+       runtime_proof_kind: nil,
        runtime_proof_nonce: nil,
        runtime_proof_redeemed?: false,
        authorized_correlation_id: nil
@@ -86,16 +113,41 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
 
   @impl true
   def handle_call(
-        {:seal, reference, frame_token, binding_digest},
+        {:seal, reference, frame_token, binding_digest, kind},
         _from,
         %{reference: reference, frame_token: nil, consumed?: false} = state
       ) do
-    if valid_binding_digest?(binding_digest) do
-      {:reply, :ok, %{state | frame_token: frame_token, runtime_binding_digest: binding_digest},
-       @timeout_ms}
+    if valid_binding_digest?(binding_digest) and valid_kind?(binding_digest, kind) do
+      {:reply, :ok,
+       %{
+         state
+         | frame_token: frame_token,
+           runtime_binding_digest: binding_digest,
+           runtime_proof_kind: kind
+       }, @timeout_ms}
     else
       {:reply, {:error, :invalid}, state, @timeout_ms}
     end
+  end
+
+  def handle_call(
+        {:validate, reference, frame_token},
+        _from,
+        %{reference: reference, frame_token: frame_token, consumed?: false} = state
+      ) do
+    {:reply, :ok, state, @timeout_ms}
+  end
+
+  def handle_call(
+        {:validate, reference, frame_token},
+        _from,
+        %{reference: reference, frame_token: frame_token, consumed?: true} = state
+      ) do
+    {:reply, {:error, :consumed}, state}
+  end
+
+  def handle_call({:validate, _reference, _frame_token}, _from, state) do
+    {:reply, {:error, :invalid}, state, @timeout_ms}
   end
 
   def handle_call(
@@ -130,7 +182,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
       binding_digest ->
         nonce = make_ref()
         correlation_id = Ecto.UUID.generate()
-        proof = RuntimeAdmissionProof.new(self(), reference, nonce, binding_digest)
+
+        proof =
+          RuntimeAdmissionProof.new(
+            self(),
+            reference,
+            nonce,
+            binding_digest,
+            state.runtime_proof_kind
+          )
 
         {:reply, {:ok, proof},
          %{
@@ -200,6 +260,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
 
   defp valid_binding_digest?(nil), do: true
   defp valid_binding_digest?(digest), do: is_binary(digest) and byte_size(digest) == 32
+  defp valid_kind?(nil, nil), do: true
+
+  defp valid_kind?(digest, kind),
+    do: valid_binding_digest?(digest) and kind in [:native_compaction, :native_replay]
 
   defp secure_digest_match?(expected, presented)
        when is_binary(expected) and is_binary(presented) and

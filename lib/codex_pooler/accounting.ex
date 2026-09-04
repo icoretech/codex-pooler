@@ -15,6 +15,8 @@ defmodule CodexPooler.Accounting do
     Request,
     RequestLifecycle,
     RequestLogs,
+    RequestReplay,
+    RequestReplayEntitlement,
     Rollups,
     UsageReadModel
   }
@@ -47,6 +49,76 @@ defmodule CodexPooler.Accounting do
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   defdelegate record_denied_request(auth, model_or_id, opts \\ %{}), to: RequestLifecycle
 
+  @spec replay_preflight_snapshot(RequestReplay.preflight_input()) ::
+          :none
+          | {:active_generation_zero, map()}
+          | {:armed_generation_one, map()}
+          | {:error, atom()}
+  defdelegate replay_preflight_snapshot(input), to: RequestReplay, as: :preflight_snapshot
+
+  @spec replay_provisional_binding_status(RequestReplay.provisional_reference()) ::
+          :armed
+          | {:consumed, map(), atom(), DateTime.t()}
+          | :terminal
+          | :absent
+          | {:error, atom()}
+  defdelegate replay_provisional_binding_status(reference),
+    to: RequestReplay,
+    as: :provisional_binding_status
+
+  @spec replay_provisional_token_status(map()) :: term()
+  defdelegate replay_provisional_token_status(reference),
+    to: RequestReplay,
+    as: :provisional_token_status
+
+  @spec arm_request_replay(RequestReplay.arm_input()) :: {:ok, map()} | {:error, term()}
+  defdelegate arm_request_replay(input), to: RequestReplay, as: :arm
+
+  @spec consume_request_replay(RequestReplay.consume_input()) :: {:ok, map()} | {:error, term()}
+  defdelegate consume_request_replay(input), to: RequestReplay, as: :consume
+
+  @spec mark_request_replay_started(RequestReplay.provisional_reference()) ::
+          {:ok, RequestReplayEntitlement.t()} | {:error, term()}
+  defdelegate mark_request_replay_started(reference), to: RequestReplay, as: :mark_started
+
+  @spec compensate_request_replay_no_send(RequestReplay.provisional_reference()) ::
+          {:ok, map()} | {:error, term()}
+  defdelegate compensate_request_replay_no_send(reference),
+    to: RequestReplay,
+    as: :compensate_no_send
+
+  @spec request_replay_dispatch_lifecycle(RequestReplay.provisional_reference()) ::
+          {:ok, map()} | {:error, term()}
+  defdelegate request_replay_dispatch_lifecycle(reference),
+    to: RequestReplay,
+    as: :dispatch_lifecycle
+
+  @spec touch_request_replay_liveness(RequestReplay.provisional_reference()) ::
+          {:ok, RequestReplayEntitlement.t()} | {:error, term()}
+  defdelegate touch_request_replay_liveness(reference), to: RequestReplay, as: :touch_liveness
+
+  @spec cleanup_request_replays() :: {:ok, map()} | {:error, term()}
+  defdelegate cleanup_request_replays(), to: RequestReplay, as: :cleanup_due
+
+  @spec close_request_replays_for_session(
+          Ecto.UUID.t(),
+          Ecto.UUID.t() | RequestReplay.owner_snapshot(),
+          RequestReplay.close_reason()
+        ) ::
+          {:ok, map() | :stale_owner} | {:error, term()}
+  defdelegate close_request_replays_for_session(session_id, owner_lease_token, reason),
+    to: RequestReplay,
+    as: :close_for_session
+
+  @spec request_replay_ids_for_api_key(Ecto.UUID.t()) :: [Ecto.UUID.t()]
+  defdelegate request_replay_ids_for_api_key(api_key_id),
+    to: RequestReplay,
+    as: :request_ids_for_api_key
+
+  @spec close_request_replay(Ecto.UUID.t(), RequestReplay.close_reason()) ::
+          {:ok, :closed | :noop} | {:error, term()}
+  defdelegate close_request_replay(request_id, reason), to: RequestReplay, as: :close
+
   @spec record_metadata_request(auth(), map()) :: request_result()
   defdelegate record_metadata_request(auth, attrs \\ %{}), to: Metadata
 
@@ -76,6 +148,12 @@ defmodule CodexPooler.Accounting do
   @spec record_retryable_attempt_failure(Attempt.t(), map()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
   defdelegate record_retryable_attempt_failure(attempt, attrs \\ %{}), to: RequestLifecycle
+
+  @doc false
+  @spec with_current_replay_generation(Request.t(), Attempt.t(), (-> result)) ::
+          {:ok, result} | {:error, :stale_generation}
+        when result: term()
+  defdelegate with_current_replay_generation(request, attempt, callback), to: RequestLifecycle
 
   @spec mark_attempt_upstream_transport(Attempt.t(), String.t()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t()}

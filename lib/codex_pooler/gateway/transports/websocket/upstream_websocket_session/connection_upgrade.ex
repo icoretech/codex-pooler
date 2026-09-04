@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
   @moduledoc false
 
   @type request_caller :: {pid(), reference()} | nil
+  @type upgrade_response :: %{status: non_neg_integer() | nil, headers: Mint.Types.headers()}
   @connect_ready_tag :upstream_websocket_connect_ready
   @connect_result_tag :upstream_websocket_connect_result
   @connect_task_shutdown_timeout_ms 1_000
@@ -347,6 +348,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
   defp websocket_transport_opts(_target, timeouts), do: [timeout: timeouts.connect_timeout_ms]
 
   defp await_upgrade(conn, ref, timeouts, request_caller) do
+    deadline = System.monotonic_time(:millisecond) + timeouts.connect_timeout_ms
+    await_upgrade(conn, ref, deadline, request_caller, %{status: nil, headers: []})
+  end
+
+  defp await_upgrade(conn, ref, deadline, request_caller, response) do
     socket = mint_socket(conn)
     request_caller_pid = request_caller_pid(request_caller)
     request_caller_monitor = request_caller_monitor(request_caller)
@@ -357,45 +363,91 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
         {:error, conn, :client_disconnected}
 
       {:tcp, ^socket, _data} = message ->
-        handle_upgrade_message(conn, ref, timeouts, request_caller, message)
+        handle_upgrade_message(conn, ref, deadline, request_caller, response, message)
 
       {:ssl, ^socket, _data} = message ->
-        handle_upgrade_message(conn, ref, timeouts, request_caller, message)
+        handle_upgrade_message(conn, ref, deadline, request_caller, response, message)
 
       {:tcp_closed, ^socket} = message ->
-        handle_upgrade_message(conn, ref, timeouts, request_caller, message)
+        handle_upgrade_message(conn, ref, deadline, request_caller, response, message)
 
       {:ssl_closed, ^socket} = message ->
-        handle_upgrade_message(conn, ref, timeouts, request_caller, message)
+        handle_upgrade_message(conn, ref, deadline, request_caller, response, message)
 
       {:tcp_error, ^socket, _reason} = message ->
-        handle_upgrade_message(conn, ref, timeouts, request_caller, message)
+        handle_upgrade_message(conn, ref, deadline, request_caller, response, message)
 
       {:ssl_error, ^socket, _reason} = message ->
-        handle_upgrade_message(conn, ref, timeouts, request_caller, message)
+        handle_upgrade_message(conn, ref, deadline, request_caller, response, message)
     after
-      timeouts.connect_timeout_ms -> {:error, :upstream_websocket_upgrade_timeout}
+      max(deadline - System.monotonic_time(:millisecond), 0) ->
+        {:error, :upstream_websocket_upgrade_timeout}
     end
   end
 
-  defp handle_upgrade_message(conn, ref, timeouts, request_caller, message) do
+  defp handle_upgrade_message(conn, ref, deadline, request_caller, response, message) do
     case Mint.WebSocket.stream(conn, message) do
-      {:ok, conn, responses} -> upgrade_response(conn, ref, responses, timeouts, request_caller)
-      {:error, conn, reason, _responses} -> {:error, conn, reason}
-      :unknown -> await_upgrade(conn, ref, timeouts, request_caller)
+      {:ok, conn, responses} ->
+        upgrade_response(conn, ref, responses, deadline, request_caller, response)
+
+      {:error, conn, reason, _responses} ->
+        {:error, conn, reason}
+
+      :unknown ->
+        await_upgrade(conn, ref, deadline, request_caller, response)
     end
   end
 
-  defp upgrade_response(conn, ref, responses, timeouts, request_caller) do
-    status = response_status(responses, ref)
-    headers = response_headers(responses, ref)
-    done? = Enum.any?(responses, &match?({:done, ^ref}, &1))
+  defp upgrade_response(conn, ref, responses, deadline, request_caller, response) do
+    case fold_upgrade_responses(responses, ref, response) do
+      {:done, %{status: 101, headers: headers}} ->
+        {:ok, conn, headers}
+
+      {:done, %{status: status, headers: headers}} when is_integer(status) ->
+        {:error, conn, {:websocket_upgrade_failed, status, headers}}
+
+      {:done, _response} ->
+        {:error, conn, :invalid_upstream_websocket_upgrade}
+
+      {:continue, response} ->
+        await_upgrade(conn, ref, deadline, request_caller, response)
+    end
+  end
+
+  @spec fold_upgrade_responses(
+          [Mint.Types.response()],
+          Mint.Types.request_ref(),
+          upgrade_response()
+        ) ::
+          {:continue, upgrade_response()} | {:done, upgrade_response()}
+  defp fold_upgrade_responses(responses, ref, response) do
+    {response, completed_response, open?} =
+      Enum.reduce(responses, {response, nil, is_integer(response.status)}, fn
+        {:status, ^ref, status}, {_response, completed_response, _open?}
+        when is_integer(status) and status >= 0 ->
+          {%{status: status, headers: []}, completed_response, true}
+
+        {:headers, ^ref, headers}, {response, completed_response, true}
+        when is_list(headers) ->
+          headers =
+            Enum.filter(headers, fn
+              {name, value} when is_binary(name) and is_binary(value) -> true
+              _header -> false
+            end)
+
+          {%{response | headers: response.headers ++ headers}, completed_response, true}
+
+        {:done, ^ref}, {response, _completed_response, true} ->
+          {response, response, false}
+
+        _part, accumulator ->
+          accumulator
+      end)
 
     cond do
-      done? and status == 101 -> {:ok, conn, headers}
-      done? and is_integer(status) -> {:error, conn, {:websocket_upgrade_failed, status, headers}}
-      done? -> {:error, conn, :invalid_upstream_websocket_upgrade}
-      true -> await_upgrade(conn, ref, timeouts, request_caller)
+      open? -> {:continue, response}
+      completed_response -> {:done, completed_response}
+      true -> {:continue, response}
     end
   end
 
@@ -417,29 +469,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
     do: request_caller_monitor
 
   defp request_caller_monitor(_request_caller), do: nil
-
-  @spec response_status([Mint.Types.response()], Mint.Types.request_ref()) ::
-          Mint.Types.status() | nil
-  defp response_status(responses, ref) do
-    Enum.find_value(responses, fn
-      {:status, ^ref, status} -> status
-      _part -> nil
-    end)
-  end
-
-  @spec response_headers([Mint.Types.response()], Mint.Types.request_ref()) ::
-          Mint.Types.headers()
-  defp response_headers(responses, ref) do
-    responses
-    |> Enum.find_value([], fn
-      {:headers, ^ref, headers} -> headers
-      _part -> nil
-    end)
-    |> Enum.filter(fn
-      {name, value} when is_binary(name) and is_binary(value) -> true
-      _header -> false
-    end)
-  end
 
   defp mint_socket(conn), do: Mint.HTTP.get_socket(conn)
 end

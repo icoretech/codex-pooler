@@ -121,9 +121,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
   @spec active_turn?(map()) :: boolean()
   def active_turn?(%{active_turn: active_turn}), do: is_map(active_turn)
 
-  @spec next_downstream_epoch(map() | nil) :: pos_integer()
-  def next_downstream_epoch(nil), do: 1
-  def next_downstream_epoch(%{epoch: epoch}), do: epoch + 1
+  @spec next_downstream_epoch(non_neg_integer()) :: pos_integer()
+  def next_downstream_epoch(epoch) when is_integer(epoch) and epoch >= 0, do: epoch + 1
 
   @spec demonitor_downstream(map()) :: map()
   def demonitor_downstream(%{downstream_monitor: ref} = state) when is_reference(ref) do
