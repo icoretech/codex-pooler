@@ -642,103 +642,111 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
-  test "session-routable execution rejects a claimed turn after a real transaction rollback" do
-    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
-    setup = gateway_setup(upstream)
-    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+  for {failure_reason, status, retryable} <- [
+        {:rollback, 503, true},
+        {:invalid_transition, 500, false}
+      ] do
+    @tag failure_reason: failure_reason, failure_status: status, failure_retryable: retryable
+    test "session-routable execution rejects a claimed turn after a #{failure_reason} rollback",
+         %{failure_reason: failure_reason, failure_status: status, failure_retryable: retryable} do
+      upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+      setup = gateway_setup(upstream)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    payload = %{
-      "model" => setup.model.exposed_model_id,
-      "input" => [
-        %{
-          "type" => "message",
-          "role" => "user",
-          "content" => [%{"type" => "input_text", "text" => "pre-attempt rollback regression"}]
-        }
-      ],
-      "stream" => true
-    }
+      payload = %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "pre-attempt rollback regression"}]
+          }
+        ],
+        "stream" => true
+      }
 
-    request_options = request_options(auth, payload, setup.model.exposed_model_id)
+      request_options = request_options(auth, payload, setup.model.exposed_model_id)
 
-    assert {:ok, prepared} =
-             PreDispatch.prepare(auth, @endpoint, payload, request_options, setup.model)
+      assert {:ok, prepared} =
+               PreDispatch.prepare(auth, @endpoint, payload, request_options, setup.model)
 
-    claim_attrs =
-      AccountingReservation.attrs(
-        auth,
-        payload,
-        @endpoint,
-        prepared.request_options,
-        prepared.route_state
-      )
+      claim_attrs =
+        AccountingReservation.attrs(
+          auth,
+          payload,
+          @endpoint,
+          prepared.request_options,
+          prepared.route_state
+        )
 
-    assert {:ok, %{request: turn_claim}} =
-             Accounting.claim_websocket_turn(auth, setup.model, claim_attrs)
+      assert {:ok, %{request: turn_claim}} =
+               Accounting.claim_websocket_turn(auth, setup.model, claim_attrs)
 
-    reserve_and_start_turn = fn
-      received_auth,
-      received_model,
-      received_payload,
-      received_endpoint,
-      received_request_options,
-      received_route_state,
-      received_turn_claim,
-      received_authorized_correlation_id ->
-        assert received_auth == auth
-        assert received_model.id == setup.model.id
-        assert received_payload == payload
-        assert received_endpoint == @endpoint
-        assert received_request_options.transport.transport == "websocket"
-        assert received_route_state == prepared.route_state
-        assert received_turn_claim.id == turn_claim.id
-        assert received_authorized_correlation_id == nil
+      reserve_and_start_turn = fn
+        received_auth,
+        received_model,
+        received_payload,
+        received_endpoint,
+        received_request_options,
+        received_route_state,
+        received_turn_claim,
+        received_authorized_correlation_id ->
+          assert received_auth == auth
+          assert received_model.id == setup.model.id
+          assert received_payload == payload
+          assert received_endpoint == @endpoint
+          assert received_request_options.transport.transport == "websocket"
+          assert received_route_state == prepared.route_state
+          assert received_turn_claim.id == turn_claim.id
+          assert received_authorized_correlation_id == nil
 
-        Repo.transaction(fn -> Repo.rollback(:rollback) end)
+          Repo.transaction(fn -> Repo.rollback(failure_reason) end)
+      end
+
+      log =
+        capture_log(fn ->
+          assert {:error,
+                  %{
+                    status: status,
+                    code: "gateway_reservation_failed",
+                    message: "gateway request reservation failed",
+                    retryable: retryable
+                  }} ==
+                   Service.execute_session_routable_model(
+                     %{
+                       auth: auth,
+                       endpoint: @endpoint,
+                       payload: payload,
+                       request_options: prepared.request_options,
+                       model: setup.model,
+                       candidates: prepared.candidates,
+                       route_state: prepared.route_state,
+                       turn_claim: turn_claim
+                     },
+                     reserve_and_start_turn
+                   )
+        end)
+
+      assert log =~ "gateway pre-attempt reservation failed"
+      assert log =~ "phase=pre_attempt"
+      assert log =~ "operation=reserve_and_start_turn"
+      assert log =~ "failure_code=gateway_reservation_failed"
+      assert log =~ "status=#{status}"
+      assert log =~ "request_id=pre-attempt-rollback"
+      assert log =~ "failure_reason=#{failure_reason}"
+      assert log =~ "retryable=#{retryable}"
+      refute log =~ "finalization"
+      refute log =~ "attempt_id=unknown"
+
+      assert %Request{
+               status: "rejected",
+               response_status_code: ^status,
+               last_error_code: "gateway_reservation_failed"
+             } = Repo.reload!(turn_claim)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
     end
-
-    log =
-      capture_log(fn ->
-        assert {:error,
-                %{
-                  status: 503,
-                  code: "gateway_reservation_failed",
-                  message: "gateway request reservation failed",
-                  retryable: true
-                }} =
-                 Service.execute_session_routable_model(
-                   %{
-                     auth: auth,
-                     endpoint: @endpoint,
-                     payload: payload,
-                     request_options: prepared.request_options,
-                     model: setup.model,
-                     candidates: prepared.candidates,
-                     route_state: prepared.route_state,
-                     turn_claim: turn_claim
-                   },
-                   reserve_and_start_turn
-                 )
-      end)
-
-    assert log =~ "gateway pre-attempt reservation failed"
-    assert log =~ "phase=pre_attempt"
-    assert log =~ "operation=reserve_and_start_turn"
-    assert log =~ "failure_code=gateway_reservation_failed"
-    assert log =~ "status=503"
-    assert log =~ "request_id=pre-attempt-rollback"
-    assert log =~ "failure_reason=rollback"
-    assert log =~ "retryable=true"
-    refute log =~ "finalization"
-    refute log =~ "attempt_id=unknown"
-
-    assert %Request{
-             status: "rejected",
-             response_status_code: 503,
-             last_error_code: "gateway_reservation_failed"
-           } = Repo.reload!(turn_claim)
-
-    assert FakeUpstream.count(upstream) == 0
   end
 
   test "unknown pre-attempt failures stay non-retryable" do

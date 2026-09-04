@@ -69,6 +69,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       " failure_code=gateway_reservation_failed",
       " status=#{status}",
       " request_id=#{DiagnosticTaxonomy.safe_correlator(request_options.request_metadata.request_id)}",
+      native_lifecycle_log_metadata(request_options),
       " failure_reason=#{failure_reason}",
       " retryable=#{retryable}"
     ])
@@ -79,6 +80,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       message: "gateway request reservation failed",
       retryable: retryable
     }
+  end
+
+  defp native_lifecycle_log_metadata(request_options) do
+    case RequestOptions.native_compaction_admission(request_options) do
+      {:ok, _capability, _owner, %{lifecycle_id: lifecycle_id}} ->
+        " native_lifecycle_id=#{DiagnosticTaxonomy.safe_correlator(lifecycle_id)}"
+
+      _no_valid_admission ->
+        ""
+    end
   end
 
   @spec attrs(auth(), map(), String.t(), RequestOptions.t()) :: map()

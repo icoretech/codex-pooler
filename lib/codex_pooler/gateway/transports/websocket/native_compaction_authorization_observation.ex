@@ -1,6 +1,9 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation do
   @moduledoc false
 
+  require Logger
+
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias NativeCompactionAdmission.Capability
   alias NativeCompactionAdmission.Topology.Direct
@@ -65,6 +68,53 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorization
     topology = topology(capability.binding.topology)
     :ok = emit(transition, topology)
   end
+
+  @spec log_accounting_rejection(
+          NativeCompactionAdmission.t() | nil,
+          Capability.t(),
+          topology(),
+          atom()
+        ) :: :ok
+  def log_accounting_rejection(
+        admission,
+        %Capability{phase: phase, binding: binding},
+        topology,
+        reason
+      )
+      when topology in @topologies do
+    phase = if phase in [:compact, :final], do: phase, else: :unknown
+    current_state = if admission, do: NativeCompactionAdmission.phase(admission), else: :cleared
+
+    expected_state =
+      case phase do
+        :compact -> :reserved_compact
+        :final -> :reserved_final
+        :unknown -> :unknown
+      end
+
+    Logger.error([
+      "native compaction admission rejected",
+      " step=mark_accounting_started",
+      " phase=#{phase}",
+      " current_state=#{DiagnosticTaxonomy.identifier(current_state)}",
+      " expected_state=#{expected_state}",
+      " topology=#{topology}",
+      " native_lifecycle_id=#{safe_lifecycle_id(binding)}",
+      " reason=#{DiagnosticTaxonomy.identifier(reason)}"
+    ])
+
+    :ok
+  end
+
+  defp safe_lifecycle_id(%{lifecycle_id: lifecycle_id})
+       when is_binary(lifecycle_id) and byte_size(lifecycle_id) == 36 do
+    case Ecto.UUID.cast(lifecycle_id) do
+      {:ok, uuid} -> DiagnosticTaxonomy.safe_correlator(uuid)
+      :error -> "none"
+    end
+  end
+
+  defp safe_lifecycle_id(_binding), do: "none"
 
   defp transition(:compact, :owner_issued), do: :compact_owner_issued
   defp transition(:compact, :reserved), do: :compact_reserved

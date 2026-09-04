@@ -159,6 +159,49 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert state.native_compaction_admission_downstream == nil
   end
 
+  test "forwarded accounting rejection logs the admission state before clearing it", context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("admission-diagnostic")
+             )
+
+    now_ms = System.system_time(:millisecond)
+    binding = forwarded_binding(context, downstream)
+    capability = reserve_accounted_capability(owner, downstream, binding, now_ms)
+
+    for current_state <- [:accounting_started_compact, :cleared] do
+      log =
+        capture_log(fn ->
+          assert {:error, :invalid_transition} =
+                   WebsocketOwnerSession.admission_control(
+                     owner,
+                     admission_control(:mark_accounting_started, downstream,
+                       capability: capability,
+                       now_ms: now_ms
+                     )
+                   )
+        end)
+
+      assert [line] = String.split(log, "\n", trim: true)
+      assert line =~ "native compaction admission rejected"
+      assert line =~ "step=mark_accounting_started"
+      assert line =~ "phase=compact"
+      assert line =~ "current_state=#{current_state}"
+      assert line =~ "expected_state=reserved_compact"
+      assert line =~ "topology=forwarded"
+      assert line =~ "reason=invalid_transition"
+      assert line =~ "native_lifecycle_id=#{binding.lifecycle_id}"
+      refute log =~ context.owner_lease_token
+      refute log =~ Base.encode16(capability.token)
+      assert :sys.get_state(owner).native_compaction_admission == nil
+    end
+  end
+
   test "forwarded admission follows one socket across per-turn correlation ids", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     assert {:ok, owner} = start_owner(context, upstream: upstream)

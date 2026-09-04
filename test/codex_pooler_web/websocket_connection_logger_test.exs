@@ -195,6 +195,55 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
   end
 
   describe "native turn failures" do
+    test "preserves diagnostic code words while redacting sensitive correlators" do
+      for code <- ~w(prompt_parse_failed header_contract_failed payload_shape_failed) do
+        log =
+          capture_lifecycle_log(
+            fn ->
+              WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                %{
+                  request_id: "request-with-prompt-value",
+                  codex_session_id: "session-with-header-value",
+                  error_code: code,
+                  payload: "PRIVATE_DIAGNOSTIC_SENTINEL"
+                },
+                %{"code" => code, "message" => "PRIVATE_DIAGNOSTIC_SENTINEL"}
+              )
+            end,
+            :warning
+          )
+
+        assert log =~ "error_code=#{code}"
+        assert log =~ "reason_code=#{code}"
+        assert log =~ "reason_class=#{code}"
+        assert log =~ "request_id=redacted"
+        assert log =~ "codex_session_id=redacted"
+        refute log =~ "PRIVATE_DIAGNOSTIC_SENTINEL"
+      end
+    end
+
+    test "classifies atom and string map codes without logging other map fields" do
+      for reason <- [
+            %{code: :invalid_transition, details: "PRIVATE_DIAGNOSTIC_SENTINEL"},
+            %{"code" => "invalid_transition", "message" => "PRIVATE_DIAGNOSTIC_SENTINEL"}
+          ] do
+        log =
+          capture_lifecycle_log(
+            fn ->
+              WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                %{request_id: "safe-request", error_code: :gateway_reservation_failed},
+                reason
+              )
+            end,
+            :warning
+          )
+
+        assert log =~ "reason_class=invalid_transition"
+        assert log =~ "reason_code=invalid_transition"
+        refute log =~ "PRIVATE_DIAGNOSTIC_SENTINEL"
+      end
+    end
+
     test "renders known map, atom, and tuple codes without a fabricated phase" do
       cases = [
         {%{code: :owner_unavailable}, "owner_unavailable"},
@@ -295,6 +344,30 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
       assert line =~ "error_code=#{fingerprint}"
       assert line =~ "reason_code=#{fingerprint}"
       refute log =~ raw_code
+    end
+
+    test "fingerprints control invalid UTF-8 and overlong diagnostic codes" do
+      for raw_code <- ["prompt\nheader", <<255, 0>>, String.duplicate("payload", 20)] do
+        fingerprint = DiagnosticTaxonomy.identifier(raw_code)
+
+        log =
+          capture_lifecycle_log(
+            fn ->
+              WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                %{request_id: "safe-request", error_code: raw_code},
+                %{code: raw_code}
+              )
+            end,
+            :warning
+          )
+
+        assert fingerprint =~ ~r/^sha256_[0-9a-f]{12}$/
+        assert log =~ "error_code=#{fingerprint}"
+        assert log =~ "reason_code=#{fingerprint}"
+        assert log =~ "reason_class=#{fingerprint}"
+        assert String.valid?(log)
+        refute log =~ raw_code
+      end
     end
 
     test "does not invent a reason code for a non-code map" do

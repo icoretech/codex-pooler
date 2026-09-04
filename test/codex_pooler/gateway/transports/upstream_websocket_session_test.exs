@@ -5,6 +5,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -170,6 +172,98 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       refute inspect(dispatch_request) =~ marker
       refute inspect(formatted) =~ marker
     end
+  end
+
+  test "direct accounting rejection logs the admission state before clearing it" do
+    upstream = start_upstream(websocket_success("resp_ws_admission_diagnostics"))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(FakeUpstream.url(upstream))
+             )
+
+    binding = direct_admission_binding(lifecycle_state(session))
+    now_ms = System.system_time(:millisecond)
+    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, now_ms + 30_000)
+
+    assert {:ok, capability} =
+             UpstreamWebsocketSession.reserve_compaction(
+               session,
+               :compact,
+               binding,
+               make_ref(),
+               now_ms
+             )
+
+    assert :ok =
+             UpstreamWebsocketSession.mark_compaction_accounting_started(
+               session,
+               capability,
+               now_ms
+             )
+
+    payload = %{"model" => "gpt-test"}
+
+    request_options =
+      %{request_id: "admission-diagnostic-request"}
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> RequestOptions.put_native_compaction_admission(
+        capability,
+        {:direct, session},
+        lifecycle_state(session)
+      )
+
+    for current_state <- [:accounting_started_compact, :cleared] do
+      log =
+        capture_log(fn ->
+          assert {:error, :invalid_transition} =
+                   UpstreamWebsocketSession.mark_compaction_accounting_started(
+                     session,
+                     capability,
+                     now_ms
+                   )
+
+          assert AccountingReservation.pre_attempt_failure(:invalid_transition, request_options) ==
+                   %{
+                     status: 500,
+                     code: "gateway_reservation_failed",
+                     message: "gateway request reservation failed",
+                     retryable: false
+                   }
+        end)
+
+      assert [line, reservation_line] = String.split(log, "\n", trim: true)
+      assert line =~ "native compaction admission rejected"
+      assert line =~ "step=mark_accounting_started"
+      assert line =~ "phase=compact"
+      assert line =~ "current_state=#{current_state}"
+      assert line =~ "expected_state=reserved_compact"
+      assert line =~ "topology=direct"
+      assert line =~ "reason=invalid_transition"
+      assert line =~ "native_lifecycle_id=#{binding.lifecycle_id}"
+      assert reservation_line =~ "native_lifecycle_id=#{binding.lifecycle_id}"
+      assert reservation_line =~ "request_id=admission-diagnostic-request"
+      refute log =~ Base.encode16(capability.token)
+    end
+
+    malformed_capability = %{capability | phase: :private_phase_sentinel, binding: nil}
+
+    malformed_log =
+      capture_log(fn ->
+        assert {:error, :invalid_transition} =
+                 UpstreamWebsocketSession.mark_compaction_accounting_started(
+                   session,
+                   malformed_capability,
+                   now_ms
+                 )
+      end)
+
+    assert malformed_log =~ "phase=unknown"
+    assert malformed_log =~ "native_lifecycle_id=none"
+    refute malformed_log =~ "private_phase_sentinel"
   end
 
   test "direct admission reserves once, consumes immediately before send, and acknowledges compact collection" do

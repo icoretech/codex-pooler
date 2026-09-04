@@ -119,6 +119,10 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   def reason_class(reason) when is_binary(reason), do: "binary_reason"
   def reason_class(reason) when is_integer(reason), do: "numeric_reason"
   def reason_class(%module{}) when is_atom(module), do: safe_log_value(inspect(module))
+
+  def reason_class(reason) when is_map(reason),
+    do: DiagnosticTaxonomy.reason_code(reason) || "non_atom_reason"
+
   def reason_class(_reason), do: "non_atom_reason"
 
   defp log_fixed_reconnect_event(_message, _metadata, _key, nil), do: :ok
@@ -228,6 +232,9 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
       reason_code -> Map.put(metadata, :reason_code, reason_code)
     end
   end
+
+  defp safe_log_value(key, value) when key in [:error_code, :reason_code, :reason_class],
+    do: DiagnosticTaxonomy.identifier(value) || "unknown"
 
   defp safe_log_value(_key, value), do: safe_log_value(value)
 

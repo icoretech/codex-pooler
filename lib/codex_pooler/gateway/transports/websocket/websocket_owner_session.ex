@@ -551,8 +551,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:ok, next, %{state | native_compaction_admission: next}}
 
       {:error, reason} ->
+        :ok =
+          NativeCompactionAuthorizationObservation.log_accounting_rejection(
+            admission,
+            control.capability,
+            :forwarded,
+            reason
+          )
+
         {:error, reason, clear_native_compaction_admission(state)}
     end
+  end
+
+  defp execute_admission_control(
+         %{native_compaction_admission: nil} = state,
+         %{action: :mark_accounting_started, capability: capability}
+       ) do
+    :ok =
+      NativeCompactionAuthorizationObservation.log_accounting_rejection(
+        nil,
+        capability,
+        :forwarded,
+        :invalid_transition
+      )
+
+    {:error, :invalid_transition, clear_native_compaction_admission(state)}
   end
 
   defp execute_admission_control(

@@ -436,6 +436,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
 
       {:error, reason} ->
+        :ok =
+          NativeCompactionAuthorizationObservation.log_accounting_rejection(
+            admission_state(state),
+            capability,
+            :direct,
+            reason
+          )
+
         {:reply, {:error, reason}, clear_admission(state)}
     end
   end
