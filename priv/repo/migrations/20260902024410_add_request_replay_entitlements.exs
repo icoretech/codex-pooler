@@ -3,6 +3,28 @@ defmodule CodexPooler.Repo.Migrations.AddRequestReplayEntitlements do
 
   def up do
     execute("""
+    DO $migration_lock$
+    DECLARE
+      deadline timestamp with time zone := clock_timestamp() + interval '10 seconds';
+    BEGIN
+      LOOP
+        BEGIN
+          LOCK TABLE public.requests, public.api_keys, public.pools, public.models
+            IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+          LOCK TABLE public.codex_turns, public.attempts IN ACCESS EXCLUSIVE MODE NOWAIT;
+          EXIT;
+        EXCEPTION WHEN lock_not_available THEN
+          IF clock_timestamp() >= deadline THEN
+            RAISE;
+          END IF;
+        END;
+        PERFORM pg_sleep(0.05);
+      END LOOP;
+    END
+    $migration_lock$
+    """)
+
+    execute("""
     CREATE FUNCTION public.request_replay_db_now()
     RETURNS timestamp with time zone
     LANGUAGE sql VOLATILE PARALLEL SAFE

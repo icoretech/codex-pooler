@@ -1,3 +1,5 @@
+Code.require_file("request_replay_migration_projection.exs", __DIR__)
+
 defmodule CodexPooler.Verification.RequestReplayMigration do
   @moduledoc """
   Provider-free populated rehearsal. Run with MIX_ENV=test, MIX_TEST_PARTITION=1,
@@ -5,12 +7,19 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
 
       mix run --no-start scripts/verification/request_replay_migration.exs --rows 10000
 
-  Creates and drops only the exact namespaced local test database. Refuses an
+  A focused committed projection-writer lock regression is also available:
+
+      mix run --no-start scripts/verification/request_replay_migration.exs --projection-lock
+
+  Creates and drops only the exact namespaced test database. Refuses an
   existing database. Prints metadata-only JSON receipts, including global WAL
   deltas (which may include other databases on the same PostgreSQL server).
+  Non-loopback PostgreSQL services require an explicit
+  CODEX_POOLER_TEST_POSTGRES_HOST matching the test repository configuration.
   """
 
   alias CodexPooler.Repo
+  alias CodexPooler.Verification.RequestReplayMigrationProjection
   alias Ecto.Adapters.Postgres
   alias Ecto.Adapters.SQL.Sandbox
   alias Ecto.Migrator
@@ -22,39 +31,82 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
   @spec run([String.t()]) :: :ok
   def run(["--help"]), do: IO.puts(@moduledoc)
 
+  def run(["--projection-lock"]), do: run_rehearsal(&projection_rehearsal/1)
+
+  def run(["--lock-matrix"]), do: run_rehearsal(&lock_matrix/1)
+
+  def run(["--writer-failure"]), do: run_rehearsal(&projection_rehearsal(&1, :writer_failure))
+
   def run(["--rows", value]) do
     case Integer.parse(value) do
       {rows, ""} when rows in 1_000..100_000 and rem(rows, 4) == 0 ->
-        config = safe_config!()
-        Logger.configure(level: :warning)
-        {:ok, _} = Application.ensure_all_started(:ecto_sql)
-        {:ok, _} = Application.ensure_all_started(:postgrex)
-        :ok = Postgres.storage_up(config)
-
-        try do
-          {:ok, :ok, _} = Migrator.with_repo(Repo, &rehearse(&1, rows), pool_size: 8)
-        after
-          :ok = Postgres.storage_down(config)
-          receipt("cleanup", %{database_dropped: true, build_cache_retained: true})
-        end
-
-        :ok
+        run_rehearsal(&rehearse(&1, rows))
 
       _ ->
         raise ArgumentError, "--rows requires a multiple of four between 1000 and 100000"
     end
   end
 
-  def run(_args), do: raise(ArgumentError, "usage: --rows 10000 | --help")
+  def run(_args),
+    do:
+      raise(
+        ArgumentError,
+        "usage: --rows 10000 | --projection-lock | --lock-matrix | --writer-failure | --help"
+      )
+
+  defp run_rehearsal(fun) do
+    config = safe_config!()
+    Logger.configure(level: :warning)
+    {:ok, _} = Application.ensure_all_started(:ecto_sql)
+    {:ok, _} = Application.ensure_all_started(:postgrex)
+    :ok = Postgres.storage_up(config)
+
+    try do
+      {:ok, :ok, _} = Migrator.with_repo(Repo, fun, pool_size: 8)
+    after
+      :ok = Postgres.storage_down(config)
+      receipt("cleanup", %{database_dropped: true, build_cache_retained: true})
+    end
+  end
+
+  defp projection_rehearsal(_repo, scenario \\ :projection) do
+    Sandbox.mode(Repo, :auto)
+    timed("baseline_schema", fn -> Migrator.run(Repo, :up, to: @version - 1, log: false) end)
+    Code.require_file("priv/repo/migrations/20260902024410_add_request_replay_entitlements.exs")
+    seed(4)
+    RequestReplayMigrationProjection.run(&migrate_up/0, scenario)
+    assert_already_applied!()
+  end
+
+  defp lock_matrix(_repo) do
+    Sandbox.mode(Repo, :auto)
+    Migrator.run(Repo, :up, to: @version - 1, log: false)
+    Code.require_file("priv/repo/migrations/20260902024410_add_request_replay_entitlements.exs")
+    seed(4)
+
+    for scenario <- [:projection, :finalizer, :turn, :reservation, :pool, :model] do
+      RequestReplayMigrationProjection.run(&migrate_up/0, scenario)
+      :ok = Migrator.down(Repo, @version, @migration, log: false)
+    end
+
+    RequestReplayMigrationProjection.run(&migrate_up/0, :expiry)
+  end
 
   defp safe_config! do
     config = Repo.config()
     database = Keyword.fetch!(config, :database)
+    hostname = Keyword.fetch!(config, :hostname)
+
+    permitted_host? =
+      hostname in ["localhost", "127.0.0.1"] or
+        (is_binary(hostname) and hostname != "" and
+           hostname == System.get_env("CODEX_POOLER_TEST_POSTGRES_HOST"))
 
     unless Mix.env() == :test and is_nil(Process.whereis(Repo)) and
-             config[:hostname] in ["localhost", "127.0.0.1"] and is_nil(config[:url]) and
+             permitted_host? and is_nil(config[:url]) and
              Regex.match?(~r/\Acodex_pooler_test_[0-9a-f]{8}_[0-9a-f]{16}_p1\z/, database) do
-      raise ArgumentError, "requires --no-start and an isolated local partition-one test database"
+      raise ArgumentError,
+            "requires --no-start and an isolated partition-one database on an explicit test host"
     end
 
     config
@@ -67,7 +119,8 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
     fixture = seed(rows)
     baseline_checksum = rows_checksum()
     receipt("before_upgrade", counts())
-    upgrade_with_lock_witness()
+    timed("first_upgrade", fn -> RequestReplayMigrationProjection.run(&migrate_up/0, :reader) end)
+    assert_already_applied!()
     assert_counts!(rows, div(rows, 4), div(rows, 2))
     true = baseline_checksum == rows_checksum()
     legacy_insert(fixture, "legacy-after-up")
@@ -90,7 +143,12 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
     legacy_insert(fixture, "legacy-after-down")
     assert_counts!(rows + 2, div(rows, 4), div(rows, 2) + 2)
     rollback_checksum = rows_checksum()
-    timed("second_upgrade", &migrate_up/0)
+
+    timed("second_upgrade", fn ->
+      RequestReplayMigrationProjection.run(&migrate_up/0)
+    end)
+
+    assert_already_applied!()
     assert_counts!(rows + 2, div(rows, 4), div(rows, 2) + 2)
     true = rollback_checksum == rows_checksum()
 
@@ -206,63 +264,14 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
     })
   end
 
-  defp upgrade_with_lock_witness do
-    parent = self()
-
-    holder =
-      Task.async(fn ->
-        Repo.transaction(fn ->
-          query("LOCK TABLE codex_turns IN ACCESS SHARE MODE")
-          send(parent, {:lock_held, self()})
-
-          receive do
-            :release -> :ok
-          after
-            @budget -> raise "lock holder release timeout"
-          end
-        end)
-      end)
-
-    receive do
-      {:lock_held, _pid} -> :ok
-    after
-      @budget -> raise "lock holder readiness timeout"
-    end
-
-    migration = Task.async(fn -> timed("first_upgrade", &migrate_up/0) end)
-
-    try do
-      await_lock(System.monotonic_time(:millisecond) + 15_000)
-      receipt("migration_lock_wait", %{access_exclusive_blocked_by_reader: true})
-    after
-      send(holder.pid, :release)
-    end
-
-    {:ok, :ok} = Task.await(holder, @budget)
-    :ok = Task.await(migration, @budget)
-  end
-
-  defp await_lock(deadline) do
-    [[waiting]] =
-      query("""
-      SELECT EXISTS (SELECT 1 FROM pg_locks WHERE relation = 'codex_turns'::regclass
-        AND mode = 'AccessExclusiveLock' AND NOT granted)
-      """).rows
-
-    cond do
-      waiting ->
-        :ok
-
-      System.monotonic_time(:millisecond) >= deadline ->
-        raise "migration lock wait not observed"
-
-      true ->
-        query("SELECT pg_sleep(0.01)")
-        await_lock(deadline)
-    end
-  end
-
   defp migrate_up, do: :ok = Migrator.up(Repo, @version, @migration, log: false)
+
+  defp assert_already_applied! do
+    checksum = rows_checksum()
+    :already_up = Migrator.up(Repo, @version, @migration, log: false)
+    ^checksum = rows_checksum()
+    receipt("already_applied", %{migration_skipped: true, request_rows_unchanged: true})
+  end
 
   defp timed(stage, fun) do
     [[wal]] = query("SELECT pg_current_wal_lsn()::text").rows
