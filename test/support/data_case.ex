@@ -52,15 +52,19 @@ defmodule CodexPooler.DataCase do
     pid = Sandbox.start_owner!(Repo, shared: not tags[:async])
     settings_cache = InstanceSettings.snapshot_cache_for_test()
 
-    on_exit(fn ->
-      TouchDebounce.reset()
+    on_exit(fn -> stop_sandbox(pid, settings_cache) end)
+  end
 
-      unless InstanceSettings.snapshot_cache_for_test() == settings_cache do
-        InstanceSettings.restore_cache_for_test(settings_cache)
-      end
+  @doc false
+  @spec stop_sandbox(pid(), term()) :: :ok
+  def stop_sandbox(pid, settings_cache) do
+    TouchDebounce.reset()
 
-      Sandbox.stop_owner(pid)
-    end)
+    # Reconciliation can still use the shared connection without changing the snapshot.
+    # The synchronous restore drains that work and cancels its timer before owner exit.
+    InstanceSettings.restore_cache_for_test(settings_cache)
+
+    Sandbox.stop_owner(pid)
   end
 
   @doc """
