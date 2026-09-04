@@ -105,6 +105,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     end
   end
 
+  def terminal_outcome(%{native_terminal_outcome: :completed}), do: :completed
   def terminal_outcome(_state), do: nil
 
   @spec synthetic_terminal_failure(state(), term()) :: {binary() | nil, state()}
@@ -253,11 +254,27 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           |> IO.iodata_to_binary()
         end
 
-      {data, Map.put(state, :codex_responses_sse_block_state, sse_block_state)}
+      state =
+        state
+        |> Map.put(:codex_responses_sse_block_state, sse_block_state)
+        |> track_native_completion(blocks)
+
+      {data, state}
     end
   end
 
   defp normalize_codex_responses_stream_data(data, _endpoint, _opts, state), do: {data, state}
+
+  defp track_native_completion(%{target: :websocket} = state, _blocks), do: state
+
+  defp track_native_completion(state, blocks) do
+    Enum.reduce(blocks, state, fn block, state ->
+      case StreamProtocol.terminal_outcome(block <> "\n\n") do
+        {:ok, %{kind: :completed}} -> Map.put(state, :native_terminal_outcome, :completed)
+        _outcome -> state
+      end
+    end)
+  end
 
   defp normalize_codex_responses_sse_block(block, opts, %{target: target})
        when target != :websocket do
