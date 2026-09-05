@@ -87,6 +87,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     end
   end
 
+  defp prepare_decoded_frame(%{"type" => type}, _opts, _push_frame)
+       when type != "response.create" do
+    {:error, Error.invalid_request("websocket message type is not supported", "type")}
+  end
+
   defp prepare_decoded_frame(%{"generate" => false} = payload, opts, _push_frame) do
     with :ok <- validate_optional_model(payload) do
       {:ok,
@@ -124,8 +129,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
          payload,
          %RequestOptions{openai_compatibility: %{public_openai_responses_stream: false}} = opts,
          push_frame
-       ) do
-    prepare_decoded_frame(Map.put_new(payload, "type", "response.create"), opts, push_frame)
+       )
+       when not is_map_key(payload, "type") do
+    prepare_decoded_frame(Map.put(payload, "type", "response.create"), opts, push_frame)
   end
 
   defp prepare_decoded_frame(_payload, _opts, _push_frame) do

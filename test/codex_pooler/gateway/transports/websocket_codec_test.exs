@@ -94,6 +94,55 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   end
 
   describe "prepare_frame/3" do
+    test "rejects explicit unsupported frame types before preparation or prewarming" do
+      parent = self()
+      preparation_detection_budget_ms = 15_000
+
+      for type <- ["response.steer", "unsupported", "", nil, true, 123, [], %{}],
+          generate <- [true, false],
+          mode <- [:native, :public] do
+        payload = %{
+          "type" => type,
+          "generate" => generate,
+          "model" => "gpt-example",
+          "input" => []
+        }
+
+        opts =
+          case mode do
+            :native -> native_responses_options(payload)
+            :public -> public_responses_options(payload)
+          end
+
+        observer = fn -> send(parent, :unsupported_frame_prepared) end
+        opts = %{opts | extra: Map.put(opts.extra, :websocket_preparation_observer, observer)}
+
+        task =
+          Task.async(fn ->
+            WebsocketCodec.prepare_frame(
+              Jason.encode!(payload),
+              opts,
+              fn _frame -> send(parent, :unsupported_frame_pushed) end
+            )
+          end)
+
+        result =
+          Task.yield(task, preparation_detection_budget_ms) || Task.shutdown(task, :brutal_kill)
+
+        assert {:ok,
+                {:error,
+                 %{
+                   status: 400,
+                   code: "invalid_request",
+                   message: "websocket message type is not supported",
+                   param: "type"
+                 }}} = result
+
+        refute_received :unsupported_frame_prepared
+        refute_received :unsupported_frame_pushed
+      end
+    end
+
     test "final compaction item bypasses retry preflight on an owner websocket" do
       turn_metadata =
         Jason.encode!(%{
