@@ -19,6 +19,13 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
   @type saved_reset_recovery :: %{
           required(String.t()) => boolean() | pos_integer() | String.t()
         }
+  @type locked_saved_reset_capacity :: %{
+          required(:evaluated_at) => DateTime.t(),
+          required(:routable_assignment_ids) => MapSet.t(Ecto.UUID.t()),
+          required(:states_by_assignment_id) => %{
+            required(Ecto.UUID.t()) => RoutingCircuitState.t() | nil
+          }
+        }
 
   @spec blocked?(
           RoutingCircuitState.t() | nil,
@@ -76,6 +83,90 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
           asc: state.model_identifier,
           asc: state.route_class
         ]
+    )
+  end
+
+  @spec lock_saved_reset_capacity_fence(map()) ::
+          {:ok, locked_saved_reset_capacity()} | :context_mismatch
+  def lock_saved_reset_capacity_fence(%{
+        gateway_auto_context: %{
+          capacity_assignment_ids: assignment_ids,
+          capacity_identity_ids: identity_ids,
+          quota_scope: %{catalog_model: model_identifier},
+          route_class: route_class,
+          transient_circuit_exclusions: exclusions
+        },
+        locked_assignment: %PoolUpstreamAssignment{pool_id: pool_id},
+        locked_cohort: locked_cohort,
+        timestamp: %DateTime{}
+      })
+      when is_list(assignment_ids) and is_list(identity_ids) and is_list(exclusions) and
+             is_binary(model_identifier) and is_binary(route_class) and is_map(locked_cohort) do
+    identity_by_assignment_id = Map.new(Enum.zip(assignment_ids, identity_ids))
+
+    locked_circuits =
+      lock_current_capacity_circuits(pool_id, assignment_ids, model_identifier, route_class)
+
+    states_by_assignment_id =
+      Enum.reduce(locked_circuits, %{}, fn circuit, states ->
+        Map.put_new(states, circuit.pool_upstream_assignment_id, circuit)
+      end)
+
+    with true <-
+           locked_capacity_rows_match?(
+             locked_circuits,
+             identity_by_assignment_id,
+             locked_cohort,
+             pool_id,
+             model_identifier,
+             route_class
+           ),
+         true <-
+           exclusions_match_latest_states?(
+             exclusions,
+             states_by_assignment_id,
+             model_identifier,
+             route_class
+           ) do
+      states_by_assignment_id =
+        Map.new(assignment_ids, fn assignment_id ->
+          {assignment_id, Map.get(states_by_assignment_id, assignment_id)}
+        end)
+
+      evaluated_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      routable_assignment_ids =
+        states_by_assignment_id
+        |> Enum.filter(fn {_assignment_id, state} ->
+          not blocked?(state, settings(), evaluated_at)
+        end)
+        |> MapSet.new(&elem(&1, 0))
+
+      {:ok,
+       %{
+         evaluated_at: evaluated_at,
+         routable_assignment_ids: routable_assignment_ids,
+         states_by_assignment_id: states_by_assignment_id
+       }}
+    else
+      _mismatch -> :context_mismatch
+    end
+  end
+
+  defp lock_current_capacity_circuits(pool_id, assignment_ids, model_identifier, route_class) do
+    Repo.all(
+      from circuit in RoutingCircuitState,
+        where:
+          circuit.pool_id == ^pool_id and is_nil(circuit.api_key_id) and
+            circuit.pool_upstream_assignment_id in ^assignment_ids and
+            circuit.model_identifier == ^model_identifier and circuit.route_class == ^route_class,
+        order_by: [
+          asc: circuit.pool_upstream_assignment_id,
+          desc: circuit.updated_at,
+          desc: circuit.created_at,
+          desc: circuit.id
+        ],
+        lock: "FOR UPDATE"
     )
   end
 
@@ -283,29 +374,32 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
        ),
        do: false
 
-  defp saved_reset_recovery_pending?(
-         %RoutingCircuitState{status: status},
-         _timestamp
-       )
-       when status in [@closed_status, @half_open_status],
-       do: true
+  @spec saved_reset_recovery_pending?(RoutingCircuitState.t() | nil, DateTime.t()) :: boolean()
+  def saved_reset_recovery_pending?(
+        %RoutingCircuitState{status: status},
+        _timestamp
+      )
+      when status in [@closed_status, @half_open_status],
+      do: true
 
-  defp saved_reset_recovery_pending?(
-         %RoutingCircuitState{status: @open_status, next_probe_at: nil},
-         _timestamp
-       ),
-       do: false
+  def saved_reset_recovery_pending?(
+        %RoutingCircuitState{status: @open_status, next_probe_at: nil},
+        _timestamp
+      ),
+      do: false
 
-  defp saved_reset_recovery_pending?(
-         %RoutingCircuitState{status: @open_status, next_probe_at: next_probe_at} = circuit,
-         timestamp
-       ) do
+  def saved_reset_recovery_pending?(
+        %RoutingCircuitState{status: @open_status, next_probe_at: next_probe_at} = circuit,
+        timestamp
+      ) do
     DateTime.compare(next_probe_at, timestamp) != :gt or
       not saved_reset_recovery_attempted?(circuit) or
       probe_in_flight_count(circuit) > 0
   end
 
-  defp saved_reset_recovery_pending?(%RoutingCircuitState{}, _timestamp), do: true
+  def saved_reset_recovery_pending?(%RoutingCircuitState{}, _timestamp), do: true
+
+  def saved_reset_recovery_pending?(nil, _timestamp), do: false
 
   defp saved_reset_recovery_pending_for_usable_sibling?(
          {circuit, sibling},
@@ -321,4 +415,44 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
 
   defp success_stamp(%RoutingCircuitState{}), do: "never"
   defp success_stamp(nil), do: "never"
+
+  defp locked_capacity_rows_match?(
+         circuits,
+         identity_by_assignment_id,
+         locked_cohort,
+         pool_id,
+         model_identifier,
+         route_class
+       ) do
+    Enum.all?(circuits, fn circuit ->
+      expected_identity_id =
+        Map.get(identity_by_assignment_id, circuit.pool_upstream_assignment_id)
+
+      is_binary(expected_identity_id) and Map.has_key?(locked_cohort, expected_identity_id) and
+        circuit.upstream_identity_id == expected_identity_id and circuit.pool_id == pool_id and
+        is_nil(circuit.api_key_id) and circuit.model_identifier == model_identifier and
+        circuit.route_class == route_class
+    end)
+  end
+
+  defp exclusions_match_latest_states?(
+         exclusions,
+         states_by_assignment_id,
+         model_identifier,
+         route_class
+       ) do
+    Enum.all?(exclusions, fn exclusion ->
+      case Map.get(states_by_assignment_id, exclusion.pool_upstream_assignment_id) do
+        %RoutingCircuitState{} = circuit ->
+          circuit.id == exclusion.routing_circuit_state_id and
+            circuit.upstream_identity_id == exclusion.upstream_identity_id and
+            circuit.model_identifier == model_identifier and
+            circuit.model_identifier == exclusion.model_identifier and
+            circuit.route_class == route_class and circuit.route_class == exclusion.route_class
+
+        nil ->
+          false
+      end
+    end)
+  end
 end

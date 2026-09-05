@@ -17,7 +17,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
           required(:upstream_identity_id) => Ecto.UUID.t(),
           required(:candidate_assignment_ids) => [Ecto.UUID.t()],
           required(:candidate_identity_ids) => [Ecto.UUID.t()],
+          required(:capacity_assignment_ids) => [Ecto.UUID.t()],
+          required(:capacity_identity_ids) => [Ecto.UUID.t()],
           required(:cohort_identity_ids) => [Ecto.UUID.t()],
+          required(:routable_assignment_ids) => [Ecto.UUID.t()],
           required(:routable_identity_ids) => [Ecto.UUID.t()],
           required(:route_class) => String.t(),
           required(:transient_circuit_exclusions) => [transient_circuit_exclusion()],
@@ -53,14 +56,27 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
            normalize_uuid_list(context_value(context, :candidate_assignment_ids)),
          {:ok, candidate_identity_ids} <-
            normalize_uuid_list(context_value(context, :candidate_identity_ids)),
+         {:ok, capacity_assignment_ids} <-
+           normalize_uuid_list(context_value(context, :capacity_assignment_ids)),
+         {:ok, capacity_identity_ids} <-
+           normalize_uuid_list(context_value(context, :capacity_identity_ids)),
          {:ok, cohort_identity_ids} <-
            normalize_uuid_list(context_value(context, :cohort_identity_ids),
              deterministic?: true
            ),
+         {:ok, routable_assignment_ids} <-
+           normalize_uuid_list(context_value(context, :routable_assignment_ids)),
          {:ok, routable_identity_ids} <-
-           normalize_uuid_list(
-             context_value(context, :routable_identity_ids) || candidate_identity_ids,
-             deterministic?: true
+           normalize_uuid_list(context_value(context, :routable_identity_ids)),
+         :ok <-
+           validate_candidate_sets(
+             {assignment_id, identity_id},
+             %{
+               dispatch: {candidate_assignment_ids, candidate_identity_ids},
+               capacity: {capacity_assignment_ids, capacity_identity_ids},
+               routable: {routable_assignment_ids, routable_identity_ids},
+               cohort_identity_ids: cohort_identity_ids
+             }
            ),
          route_class when is_binary(route_class) and route_class != "" <-
            context_value(context, :route_class),
@@ -87,7 +103,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
          upstream_identity_id: identity_id,
          candidate_assignment_ids: candidate_assignment_ids,
          candidate_identity_ids: candidate_identity_ids,
+         capacity_assignment_ids: capacity_assignment_ids,
+         capacity_identity_ids: capacity_identity_ids,
          cohort_identity_ids: cohort_identity_ids,
+         routable_assignment_ids: routable_assignment_ids,
          routable_identity_ids: routable_identity_ids,
          route_class: route_class,
          transient_circuit_exclusions: transient_circuit_exclusions,
@@ -124,6 +143,47 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
   end
 
   defp normalize_uuid_list(_values, _opts), do: :error
+
+  defp validate_candidate_sets(
+         target_pair,
+         %{
+           dispatch: {candidate_assignment_ids, candidate_identity_ids},
+           capacity: {capacity_assignment_ids, capacity_identity_ids},
+           routable: {routable_assignment_ids, routable_identity_ids},
+           cohort_identity_ids: cohort_identity_ids
+         }
+       ) do
+    dispatch_pairs = aligned_pairs(candidate_assignment_ids, candidate_identity_ids)
+    capacity_pairs = aligned_pairs(capacity_assignment_ids, capacity_identity_ids)
+    routable_pairs = aligned_pairs(routable_assignment_ids, routable_identity_ids)
+
+    if valid_unique_pairs?(dispatch_pairs, candidate_assignment_ids, candidate_identity_ids) and
+         valid_unique_pairs?(capacity_pairs, capacity_assignment_ids, capacity_identity_ids) and
+         valid_unique_pairs?(routable_pairs, routable_assignment_ids, routable_identity_ids) and
+         target_pair in dispatch_pairs and
+         subset?(dispatch_pairs, routable_pairs) and
+         subset?(routable_pairs, capacity_pairs) and
+         subset?(capacity_identity_ids, cohort_identity_ids) do
+      :ok
+    else
+      {:error, :gateway_auto_context_mismatch}
+    end
+  end
+
+  defp aligned_pairs(assignment_ids, identity_ids) do
+    if length(assignment_ids) == length(identity_ids),
+      do: Enum.zip(assignment_ids, identity_ids),
+      else: []
+  end
+
+  defp valid_unique_pairs?(pairs, assignment_ids, identity_ids) do
+    pairs != [] and length(pairs) == length(assignment_ids) and
+      length(pairs) == length(identity_ids) and length(pairs) == length(Enum.uniq(pairs)) and
+      length(assignment_ids) == length(Enum.uniq(assignment_ids)) and
+      length(identity_ids) == length(Enum.uniq(identity_ids))
+  end
+
+  defp subset?(members, set), do: Enum.all?(members, &(&1 in set))
 
   defp normalize_quota_scope(nil), do: {:ok, nil}
 

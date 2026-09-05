@@ -160,7 +160,28 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     |> Enum.find_value(&early_redeemable_candidate(&1, candidates, timestamp))
     |> case do
       {{assignment, identity}, trigger} ->
-        redeem_and_refilter(result, refresh_plan, assignment, identity, trigger, timestamp, opts)
+        if whole_model_capacity_available?(refresh_plan, assignment, identity, trigger, timestamp) do
+          log_redemption(
+            assignment,
+            identity,
+            "gateway_auto",
+            trigger_detail(trigger),
+            "gateway_auto_sibling_usable_capacity",
+            false
+          )
+
+          result
+        else
+          redeem_and_refilter(
+            result,
+            refresh_plan,
+            assignment,
+            identity,
+            trigger,
+            timestamp,
+            opts
+          )
+        end
 
       nil ->
         result
@@ -415,6 +436,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         ) :: map()
   def gateway_auto_context(refresh_plan, assignment, identity, trigger) do
     candidates = candidate_order(refresh_plan)
+    capacity = capacity_order(refresh_plan)
+    routable = routable_order(refresh_plan)
     cohort = cohort_order(refresh_plan)
 
     %{
@@ -429,12 +452,24 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         Enum.map(candidates, fn {_candidate_assignment, candidate_identity} ->
           candidate_identity.id
         end),
+      capacity_assignment_ids:
+        Enum.map(capacity, fn {capacity_assignment, _capacity_identity} ->
+          capacity_assignment.id
+        end),
+      capacity_identity_ids:
+        Enum.map(capacity, fn {_capacity_assignment, capacity_identity} ->
+          capacity_identity.id
+        end),
       cohort_identity_ids:
         Enum.map(cohort, fn {_candidate_assignment, candidate_identity} ->
           candidate_identity.id
         end),
+      routable_assignment_ids:
+        Enum.map(routable, fn {routable_assignment, _routable_identity} ->
+          routable_assignment.id
+        end),
       routable_identity_ids:
-        Enum.map(routable_order(refresh_plan), fn {_candidate_assignment, candidate_identity} ->
+        Enum.map(routable, fn {_candidate_assignment, candidate_identity} ->
           candidate_identity.id
         end),
       route_class: route_class(refresh_plan),
@@ -445,14 +480,14 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   end
 
   defp transient_circuit_exclusions(%{route_state: %RouteState{} = route_state} = refresh_plan) do
-    candidate_assignment_ids =
+    routable_assignment_ids =
       refresh_plan
-      |> candidate_order()
+      |> routable_order()
       |> MapSet.new(fn {assignment, _identity} -> assignment.id end)
 
     refresh_plan
     |> cohort_order()
-    |> Enum.reject(fn {assignment, _identity} -> assignment.id in candidate_assignment_ids end)
+    |> Enum.reject(fn {assignment, _identity} -> assignment.id in routable_assignment_ids end)
     |> Enum.flat_map(fn {assignment, _identity} ->
       case RouteState.circuit_snapshot(route_state, assignment.id) do
         %{
@@ -514,8 +549,19 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp cohort_order(refresh_plan), do: candidate_order(refresh_plan)
 
-  defp routable_order(%{filter_input: %{candidates: candidates}}) when is_list(candidates),
-    do: candidates
+  defp capacity_order(%{route_state: %RouteState{saved_reset_auto_capacity: capacity}})
+       when is_list(capacity) and capacity != [],
+       do: capacity
+
+  defp capacity_order(refresh_plan), do: candidate_order(refresh_plan)
+
+  defp routable_order(%{route_state: %RouteState{} = route_state} = refresh_plan) do
+    refresh_plan
+    |> capacity_order()
+    |> Enum.filter(fn {assignment, _identity} ->
+      RouteState.circuit_eligible?(route_state, assignment.id)
+    end)
+  end
 
   defp routable_order(refresh_plan), do: candidate_order(refresh_plan)
 
@@ -601,6 +647,36 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp threshold_redeemable_candidate?(_candidate, _candidates, _timestamp), do: false
 
+  defp whole_model_capacity_available?(
+         refresh_plan,
+         %PoolUpstreamAssignment{} = assignment,
+         %UpstreamIdentity{} = target_identity,
+         :threshold_pressure,
+         timestamp
+       ) do
+    with {:ok, context} <-
+           refresh_plan
+           |> gateway_auto_context(assignment, target_identity, :threshold_pressure)
+           |> AutoEligibility.normalize_context(),
+         false <- context.hard_pinned_continuity? do
+      Enum.any?(routable_order(refresh_plan), fn {_assignment, sibling} ->
+        sibling.id != target_identity.id and
+          AutoEligibility.locked_sibling_usable_capacity?(sibling, context, timestamp)
+      end)
+    else
+      _invalid_or_durable_pin -> false
+    end
+  end
+
+  defp whole_model_capacity_available?(
+         _refresh_plan,
+         _assignment,
+         _identity,
+         _trigger,
+         _timestamp
+       ),
+       do: false
+
   defp saved_reset_available?(%UpstreamIdentity{} = identity, policy, timestamp) do
     AutoEligibility.gateway_auto_ready?(identity, policy, timestamp)
   end
@@ -650,7 +726,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp refresh_route_state_quota(%RouteState{} = route_state, timestamp) do
     snapshots =
-      route_state.candidates
+      (route_state.saved_reset_auto_capacity ++ route_state.candidates)
+      |> Enum.uniq_by(fn {assignment, identity} -> {assignment.id, identity.id} end)
       |> Enum.map(fn {_assignment, identity} -> identity.id end)
       |> Enum.uniq()
       |> Windows.load_routing_quota_snapshots(timestamp)

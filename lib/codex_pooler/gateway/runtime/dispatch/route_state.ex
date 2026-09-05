@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
     effective_model_serving_modes: %{},
     candidate_snapshots: [],
     saved_reset_auto_cohort: [],
+    saved_reset_auto_capacity: [],
     candidates: [],
     routing_settings: nil,
     quota_snapshots: %{},
@@ -59,6 +60,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           effective_model_serving_modes: effective_model_serving_modes(),
           candidate_snapshots: [candidate()],
           saved_reset_auto_cohort: [candidate()],
+          saved_reset_auto_capacity: [candidate()],
           candidates: [candidate()],
           routing_settings: RoutingSettings.t() | nil,
           quota_snapshots: quota_snapshots(),
@@ -77,6 +79,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           optional(:effective_model_serving_modes) => effective_model_serving_modes(),
           optional(:candidate_snapshots) => [candidate()],
           optional(:saved_reset_auto_cohort) => [candidate()],
+          optional(:saved_reset_auto_capacity) => [candidate()],
           optional(:routing_settings) => RoutingSettings.t() | nil,
           optional(:quota_snapshots) => quota_snapshots(),
           optional(:circuit_snapshots) => circuit_snapshots(),
@@ -97,6 +100,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       effective_model_serving_modes: Map.get(attrs, :effective_model_serving_modes, %{}),
       candidate_snapshots: Map.get(attrs, :candidate_snapshots, candidates),
       saved_reset_auto_cohort: Map.get(attrs, :saved_reset_auto_cohort, candidates),
+      saved_reset_auto_capacity: Map.get(attrs, :saved_reset_auto_capacity, candidates),
       candidates: candidates,
       routing_settings: Map.get(attrs, :routing_settings),
       circuit_snapshots: circuit_snapshots(attrs),
@@ -116,6 +120,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   def put_saved_reset_auto_cohort(%__MODULE__{} = route_state, candidates)
       when is_list(candidates),
       do: %{route_state | saved_reset_auto_cohort: candidates}
+
+  @spec put_saved_reset_auto_capacity(t(), [candidate()]) :: t()
+  def put_saved_reset_auto_capacity(%__MODULE__{} = route_state, candidates)
+      when is_list(candidates),
+      do: %{route_state | saved_reset_auto_capacity: candidates}
 
   @spec put_reset_probe(t(), ResetProbe.t()) :: t()
   def put_reset_probe(%__MODULE__{} = route_state, %ResetProbe{} = reset_probe),
@@ -163,17 +172,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
 
   @spec preload_routing_snapshots(t(), auth(), Model.t(), RequestOptions.t()) :: t()
   def preload_routing_snapshots(
-        %__MODULE__{candidates: candidates} = route_state,
+        %__MODULE__{} = route_state,
         auth,
         %Model{} = model,
         %RequestOptions{} = request_options
       ) do
     route_class = RequestOptions.route_class(request_options)
 
+    routing_candidates = routing_snapshot_candidates(route_state)
+
     route_state
-    |> maybe_load_quota_snapshot(candidates)
+    |> maybe_load_quota_snapshot(routing_candidates)
     |> put_circuit_snapshots(
-      CircuitState.eligibility_snapshots(auth, model, candidates, route_class)
+      CircuitState.eligibility_snapshots(auth, model, routing_candidates, route_class)
     )
   end
 
@@ -197,18 +208,24 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
         end)
 
   @spec refresh_quota_snapshots(t()) :: t()
-  def refresh_quota_snapshots(%__MODULE__{candidates: candidates} = route_state) do
-    put_quota_snapshots(route_state, load_quota_snapshot(candidates))
+  def refresh_quota_snapshots(%__MODULE__{} = route_state) do
+    put_quota_snapshots(
+      route_state,
+      load_quota_snapshot(routing_snapshot_candidates(route_state))
+    )
   end
 
   @doc false
   @spec refresh_quota_snapshots(t(), ([Ecto.UUID.t()], DateTime.t() -> quota_snapshots())) :: t()
   def refresh_quota_snapshots(
-        %__MODULE__{candidates: candidates} = route_state,
+        %__MODULE__{} = route_state,
         loader
       )
       when is_function(loader, 2) do
-    put_quota_snapshots(route_state, load_quota_snapshot(candidates, loader))
+    put_quota_snapshots(
+      route_state,
+      load_quota_snapshot(routing_snapshot_candidates(route_state), loader)
+    )
   end
 
   @spec quota_windows_for_identity(t(), UpstreamIdentity.t()) :: [AccountQuotaWindow.t()]
@@ -258,6 +275,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
     |> Enum.map(fn {_assignment, identity} -> identity.id end)
     |> Enum.uniq()
     |> loader.(snapshot_at)
+  end
+
+  defp routing_snapshot_candidates(%__MODULE__{} = route_state) do
+    (route_state.saved_reset_auto_capacity ++ route_state.candidates)
+    |> Enum.uniq_by(fn {assignment, identity} -> {assignment.id, identity.id} end)
   end
 
   defp quota_snapshot_for_identity!(%__MODULE__{quota_snapshots: snapshots}, identity_id) do

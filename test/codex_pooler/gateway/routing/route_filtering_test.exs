@@ -1096,13 +1096,54 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert Repo.reload!(sibling_identity).metadata == before_sibling
     end
 
+    test "an owner-forwarded websocket pin retains its non-bypass threshold policy" do
+      %{
+        upstream: upstream,
+        filter_input: filter_input,
+        sibling_identity: sibling_identity,
+        target_identity: target_identity,
+        session: session
+      } = first_turn_capacity_arrangement("owner-forwarded-capacity")
+
+      request_options = %{
+        filter_input.request_options
+        | transport: %{
+            filter_input.request_options.transport
+            | websocket_owner: %{
+                filter_input.request_options.transport.websocket_owner
+                | enabled?: true,
+                  session: session,
+                  lease_token: "synthetic-owner-lease",
+                  downstream: %{pid: self(), correlation_id: "synthetic-owner-correlation"}
+              }
+          }
+      }
+
+      refute SessionContinuity.hard_pinned_continuity?(request_options, filter_input.model)
+
+      before_target = Repo.reload!(target_identity).metadata
+      before_sibling = Repo.reload!(sibling_identity).metadata
+
+      {result, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates(%{filter_input | request_options: request_options})
+        end)
+
+      assert {:ok, _candidates, returned_options} = result
+      assert log =~ "result_code=gateway_auto_sibling_usable_capacity"
+      assert log =~ "applied=false"
+      refute log =~ "result_code=reset"
+      refute ResetProbe.bound?(returned_options.routing.reset_probe)
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.reload!(target_identity).metadata == before_target
+      assert Repo.reload!(sibling_identity).metadata == before_sibling
+    end
+
     test "normal redemption refilters from a newer persisted snapshot and preserves route state" do
-      # July 25, 2026 is past/historical relative to Monday, July 27, 2026.
-      historical_scan_at = ~U[2026-07-25 12:00:00.000000Z]
-      # This historical +1µs value is post-snapshot, not future relative to today.
+      historical_scan_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       post_snapshot = DateTime.add(historical_scan_at, 1, :microsecond)
-      expiration = ~U[2026-07-25 13:00:00.000000Z]
-      natural_reset_at = ~U[2026-07-25 14:00:00.000000Z]
+      expiration = DateTime.add(historical_scan_at, 1, :hour)
+      natural_reset_at = DateTime.add(historical_scan_at, 2, :hour)
 
       {:ok, upstream} =
         FakeUpstream.start_link(

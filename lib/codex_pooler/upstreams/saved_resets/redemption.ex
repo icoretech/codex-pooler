@@ -1691,20 +1691,79 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              gateway_auto_context,
              timestamp
            ),
+         {:ok, current_capacity} <-
+           lock_current_capacity(
+             locked_cohort,
+             locked_assignment,
+             gateway_auto_context,
+             timestamp
+           ),
+         evaluated_at = current_capacity_evaluated_at(current_capacity, timestamp),
+         :ok <-
+           revalidate_current_gateway_auto(
+             locked_identity,
+             locked_assignment,
+             gateway_auto_context,
+             evaluated_at
+           ),
          :ok <-
            sibling_transient_exclusion_fence(
              locked_identity,
              locked_cohort,
              locked_assignment,
              gateway_auto_context,
-             timestamp
+             current_capacity,
+             evaluated_at
            ) do
       sibling_usable_capacity_fence(
         locked_identity,
         locked_cohort,
         gateway_auto_context,
-        timestamp
+        current_capacity,
+        evaluated_at
       )
+    end
+  end
+
+  defp current_capacity_evaluated_at(%{evaluated_at: %DateTime{} = evaluated_at}, _timestamp),
+    do: evaluated_at
+
+  defp current_capacity_evaluated_at(_current_capacity, timestamp), do: timestamp
+
+  defp revalidate_current_gateway_auto(
+         _locked_identity,
+         _locked_assignment,
+         nil,
+         _evaluated_at
+       ),
+       do: :ok
+
+  defp revalidate_current_gateway_auto(
+         locked_identity,
+         locked_assignment,
+         gateway_auto_context,
+         evaluated_at
+       ) do
+    AutoEligibility.validate_locked_gateway_auto(
+      locked_identity,
+      locked_assignment,
+      gateway_auto_context,
+      evaluated_at
+    )
+  end
+
+  defp lock_current_capacity(_locked_cohort, _locked_assignment, nil, _timestamp),
+    do: {:ok, nil}
+
+  defp lock_current_capacity(locked_cohort, locked_assignment, gateway_auto_context, timestamp) do
+    case CircuitHealth.lock_saved_reset_capacity_fence(%{
+           gateway_auto_context: gateway_auto_context,
+           locked_assignment: locked_assignment,
+           locked_cohort: locked_cohort,
+           timestamp: timestamp
+         }) do
+      {:ok, current_capacity} -> {:ok, current_capacity}
+      :context_mismatch -> {:noop, "gateway_auto_context_mismatch"}
     end
   end
 
@@ -1757,56 +1816,23 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp sibling_transient_exclusion_fence(
-         _locked_identity,
-         _locked_cohort,
-         _locked_assignment,
-         nil,
-         _timestamp
-       ),
-       do: :ok
-
-  defp sibling_transient_exclusion_fence(
-         _locked_identity,
-         _locked_cohort,
-         _locked_assignment,
-         %{transient_circuit_exclusions: []},
-         _timestamp
-       ),
-       do: :ok
-
-  defp sibling_transient_exclusion_fence(
          locked_identity,
          locked_cohort,
-         locked_assignment,
+         _locked_assignment,
          gateway_auto_context,
+         current_capacity,
          timestamp
        ) do
     if transient_exclusion_fence_applies?(gateway_auto_context) do
-      usable_sibling_identity_ids =
-        locked_cohort
-        |> Enum.filter(fn {identity_id, sibling} ->
-          identity_id != locked_identity.id and
-            AutoEligibility.locked_sibling_usable_capacity?(
-              sibling,
-              gateway_auto_context,
-              timestamp
-            )
-        end)
-        |> Enum.map(fn {identity_id, _sibling} -> identity_id end)
-        |> MapSet.new()
-
-      case CircuitHealth.lock_saved_reset_recovery_fence(%{
-             gateway_auto_context: gateway_auto_context,
-             locked_assignment: locked_assignment,
-             locked_cohort: locked_cohort,
-             locked_identity: locked_identity,
-             timestamp: timestamp,
-             usable_sibling_identity_ids: usable_sibling_identity_ids
-           }) do
-        :pending -> {:noop, "gateway_auto_sibling_transient_exclusion"}
-        :clear -> :ok
-        :context_mismatch -> {:noop, "gateway_auto_context_mismatch"}
-      end
+      if current_transient_sibling_pending?(
+           locked_identity,
+           locked_cohort,
+           gateway_auto_context,
+           current_capacity,
+           timestamp
+         ),
+         do: {:noop, "gateway_auto_sibling_transient_exclusion"},
+         else: :ok
     else
       :ok
     end
@@ -1821,37 +1847,107 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp transient_exclusion_fence_applies?(%{trigger: :blocked_weekly_exhaustion}), do: true
   defp transient_exclusion_fence_applies?(_context), do: false
 
-  defp sibling_usable_capacity_fence(_locked_identity, _locked_cohort, nil, _timestamp), do: :ok
-
   defp sibling_usable_capacity_fence(
          locked_identity,
          locked_cohort,
          %{trigger: :threshold_pressure, hard_pinned_continuity?: false} = gateway_auto_context,
+         current_capacity,
          timestamp
        ) do
-    routable_identity_ids =
-      Map.get(
-        gateway_auto_context,
-        :routable_identity_ids,
-        gateway_auto_context.candidate_identity_ids
-      )
-
-    if Enum.any?(locked_cohort, fn {identity_id, sibling} ->
-         identity_id != locked_identity.id and identity_id in routable_identity_ids and
-           AutoEligibility.locked_sibling_usable_capacity?(
-             sibling,
-             gateway_auto_context,
-             timestamp
-           )
-       end) do
+    if current_usable_sibling_capacity?(
+         locked_identity,
+         locked_cohort,
+         gateway_auto_context,
+         current_capacity,
+         timestamp
+       ) do
       {:noop, "gateway_auto_sibling_usable_capacity"}
     else
       :ok
     end
   end
 
-  defp sibling_usable_capacity_fence(_locked_identity, _locked_cohort, _context, _timestamp),
-    do: :ok
+  defp sibling_usable_capacity_fence(
+         _locked_identity,
+         _locked_cohort,
+         _context,
+         _current_capacity,
+         _timestamp
+       ),
+       do: :ok
+
+  defp current_usable_sibling_capacity?(
+         locked_identity,
+         locked_cohort,
+         gateway_auto_context,
+         %{routable_assignment_ids: routable_assignment_ids},
+         timestamp
+       ) do
+    gateway_auto_context.capacity_assignment_ids
+    |> Enum.zip(gateway_auto_context.capacity_identity_ids)
+    |> Enum.any?(fn {assignment_id, identity_id} ->
+      case Map.get(locked_cohort, identity_id) do
+        %UpstreamIdentity{} = sibling ->
+          identity_id != locked_identity.id and
+            MapSet.member?(routable_assignment_ids, assignment_id) and
+            AutoEligibility.locked_sibling_usable_capacity?(
+              sibling,
+              gateway_auto_context,
+              timestamp
+            )
+
+        nil ->
+          false
+      end
+    end)
+  end
+
+  defp current_usable_sibling_capacity?(
+         _locked_identity,
+         _locked_cohort,
+         _gateway_auto_context,
+         _current_capacity,
+         _timestamp
+       ),
+       do: false
+
+  defp current_transient_sibling_pending?(
+         locked_identity,
+         locked_cohort,
+         gateway_auto_context,
+         %{states_by_assignment_id: states_by_assignment_id},
+         timestamp
+       ) do
+    gateway_auto_context.capacity_assignment_ids
+    |> Enum.zip(gateway_auto_context.capacity_identity_ids)
+    |> Enum.any?(fn {assignment_id, identity_id} ->
+      case Map.get(locked_cohort, identity_id) do
+        %UpstreamIdentity{} = sibling ->
+          identity_id != locked_identity.id and
+            AutoEligibility.locked_sibling_usable_capacity?(
+              sibling,
+              gateway_auto_context,
+              timestamp
+            ) and
+            CircuitHealth.saved_reset_recovery_pending?(
+              Map.get(states_by_assignment_id, assignment_id),
+              timestamp
+            )
+
+        nil ->
+          false
+      end
+    end)
+  end
+
+  defp current_transient_sibling_pending?(
+         _locked_identity,
+         _locked_cohort,
+         _gateway_auto_context,
+         _current_capacity,
+         _timestamp
+       ),
+       do: false
 
   defp lock_scheduled_identity(identity_id) do
     case Ecto.UUID.cast(identity_id) do

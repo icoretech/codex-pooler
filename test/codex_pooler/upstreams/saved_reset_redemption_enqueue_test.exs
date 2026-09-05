@@ -104,6 +104,42 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
       assert saved_reset_job_count() == 0
     end
 
+    test "rejects a canonically expired active secret and creates no Oban job" do
+      scope = owner_scope()
+      pool = pool_fixture()
+      %{identity: identity} = assignment_with_saved_resets(pool, 1)
+
+      identity =
+        update_identity_metadata!(
+          identity,
+          canonical_expiry_metadata(DateTime.add(DateTime.utc_now(), -60, :second))
+        )
+
+      assert {:error, %{code: :upstream_secret_not_routable}} =
+               Upstreams.enqueue_saved_reset_redemption_for_scope(scope, identity, pool.id)
+
+      assert saved_reset_job_count() == 0
+    end
+
+    test "treats untrusted raw past expiry as unknown and keeps the active-secret gate" do
+      scope = owner_scope()
+      pool = pool_fixture()
+      %{identity: identity, assignment: assignment} = assignment_with_saved_resets(pool, 1)
+
+      identity =
+        update_identity_metadata!(identity, %{
+          "credential_epoch" => 2,
+          "access_token_expires_at" =>
+            DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.to_iso8601(),
+          "token_refresh" => nil
+        })
+
+      assert {:ok, %{status: :queued, job: job, secret_status: :present}} =
+               Upstreams.enqueue_saved_reset_redemption_for_scope(scope, identity, pool.id)
+
+      assert job.args["pool_upstream_assignment_id"] == assignment.id
+    end
+
     test "rejects fresh in-progress redemption and creates no Oban job" do
       scope = owner_scope()
       pool = pool_fixture()
@@ -320,6 +356,32 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
       updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     })
     |> Repo.update!()
+  end
+
+  defp update_identity_metadata!(identity, expiry_metadata) do
+    metadata = Map.merge(identity.metadata || %{}, expiry_metadata)
+
+    identity
+    |> UpstreamIdentity.changeset(%{
+      metadata: metadata,
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+  end
+
+  defp canonical_expiry_metadata(deadline) do
+    %{
+      "credential_epoch" => 1,
+      "access_token_expires_at" => DateTime.to_iso8601(deadline),
+      "token_refresh" => %{
+        "access_token_expiry" => %{
+          "version" => 1,
+          "credential_epoch" => 1,
+          "state" => "known",
+          "source" => "explicit"
+        }
+      }
+    }
   end
 
   defp saved_reset_job_count do

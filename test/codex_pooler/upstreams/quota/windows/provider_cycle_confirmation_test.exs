@@ -459,7 +459,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
         upstream_identity_id: identity.id,
         candidate_assignment_ids: [assignment.id],
         candidate_identity_ids: [identity.id],
+        capacity_assignment_ids: [assignment.id],
+        capacity_identity_ids: [identity.id],
         cohort_identity_ids: [identity.id],
+        routable_assignment_ids: [assignment.id],
+        routable_identity_ids: [identity.id],
         route_class: "proxy_http"
       }
 

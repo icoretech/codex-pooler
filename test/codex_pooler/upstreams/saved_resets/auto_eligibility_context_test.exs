@@ -19,7 +19,11 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
       upstream_identity_id: @identity_id,
       candidate_assignment_ids: [@assignment_id],
       candidate_identity_ids: [@identity_id],
+      capacity_assignment_ids: [@assignment_id, @sibling_assignment_id],
+      capacity_identity_ids: [@identity_id, @sibling_id],
       cohort_identity_ids: [@sibling_id, @identity_id, @sibling_id],
+      routable_assignment_ids: [@assignment_id, @sibling_assignment_id],
+      routable_identity_ids: [@identity_id, @sibling_id],
       route_class: "proxy_http"
     }
 
@@ -51,7 +55,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
       upstream_identity_id: @identity_id,
       candidate_assignment_ids: [@assignment_id],
       candidate_identity_ids: [@identity_id],
+      capacity_assignment_ids: [@assignment_id, @sibling_assignment_id],
+      capacity_identity_ids: [@identity_id, @sibling_id],
       cohort_identity_ids: [@identity_id, @sibling_id],
+      routable_assignment_ids: [@assignment_id],
       routable_identity_ids: [@identity_id],
       route_class: "proxy_http",
       quota_scope: quota_scope(),
@@ -167,7 +174,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
       upstream_identity_id: @identity_id,
       candidate_assignment_ids: [@assignment_id],
       candidate_identity_ids: [@identity_id],
+      capacity_assignment_ids: [@assignment_id, @sibling_assignment_id],
+      capacity_identity_ids: [@identity_id, @sibling_id],
       cohort_identity_ids: cohort_identity_ids,
+      routable_assignment_ids: [@assignment_id],
       routable_identity_ids: [@identity_id],
       route_class: "proxy_http",
       quota_scope: quota_scope(),

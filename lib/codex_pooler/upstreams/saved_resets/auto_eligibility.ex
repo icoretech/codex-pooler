@@ -227,11 +227,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           context.upstream_identity_id != identity.id ->
         {:noop, "gateway_auto_context_mismatch"}
 
-      assignment.id not in context.candidate_assignment_ids or
-          identity.id not in context.candidate_identity_ids ->
+      {assignment.id, identity.id} not in candidate_pairs(context) ->
         {:noop, "gateway_auto_context_mismatch"}
 
-      identity.id not in context.cohort_identity_ids or invalid_identity_sets?(context) ->
+      identity.id not in context.cohort_identity_ids ->
         {:noop, "gateway_auto_context_mismatch"}
 
       true ->
@@ -239,15 +238,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     end
   end
 
-  defp invalid_identity_sets?(context) do
-    routable_identity_ids =
-      Map.get(context, :routable_identity_ids, context.candidate_identity_ids)
-
-    not subset?(context.candidate_identity_ids, routable_identity_ids) or
-      not subset?(routable_identity_ids, context.cohort_identity_ids)
-  end
-
-  defp subset?(members, set), do: Enum.all?(members, &(&1 in set))
+  defp candidate_pairs(context),
+    do: Enum.zip(context.candidate_assignment_ids, context.candidate_identity_ids)
 
   @spec locked_sibling_usable_capacity?(UpstreamIdentity.t(), context(), DateTime.t()) ::
           boolean()

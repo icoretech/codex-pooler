@@ -189,7 +189,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
                visible_model_context.valid_canonical_assignment_ids
              )
            ),
-         {:ok, candidates} <-
+         {:ok, candidates, request_compatible_capacity} <-
            finish_canonical_filtering(
              candidates,
              canonical_filter_input_candidates,
@@ -200,6 +200,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
            ) do
       route_state =
         route_state
+        |> RouteState.put_saved_reset_auto_capacity(request_compatible_capacity)
         |> RouteState.put_candidates(candidates)
         |> RouteState.preload_routing_snapshots(auth, model, request_options)
         |> RouteState.put_reservation_snapshot_inputs(
@@ -442,10 +443,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       with {:ok, candidates} <-
              SessionContinuity.filter_file_affinity(candidates, request_options),
            {:ok, candidates} <- CandidateEligibility.maybe_filter_compact(endpoint, candidates),
+           request_compatible_capacity = candidates,
            {:ok, candidates} <-
              SessionContinuity.apply_codex_session_assignment(candidates, request_options, model),
            :ok <- ensure_candidates_available(candidates) do
-        {:ok, candidates}
+        {:ok, candidates, request_compatible_capacity}
       end
 
     if canonical_filter_zero_work?(

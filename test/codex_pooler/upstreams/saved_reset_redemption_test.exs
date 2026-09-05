@@ -5916,7 +5916,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, latched_fake} = codex_reset_fake(0)
       {:ok, fake} = codex_reset_fake(0)
 
-      %{identity: latched_identity} =
+      %{identity: latched_identity, assignment: latched_assignment} =
         assignment_with_fake(latched_fake, "/api/codex/usage", "codex_api",
           redemption: applied_gateway_auto_redemption("reblocked", 5)
         )
@@ -5937,8 +5937,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         pool_upstream_assignment_id: assignment.id,
         upstream_identity_id: identity.id,
         candidate_assignment_ids: [assignment.id],
-        candidate_identity_ids: [latched_identity.id, identity.id],
+        candidate_identity_ids: [identity.id],
+        capacity_assignment_ids: [assignment.id, latched_assignment.id],
+        capacity_identity_ids: [identity.id, latched_identity.id],
         cohort_identity_ids: [latched_identity.id, identity.id],
+        routable_assignment_ids: [assignment.id, latched_assignment.id],
+        routable_identity_ids: [identity.id, latched_identity.id],
         route_class: "proxy_http"
       }
 
@@ -6242,6 +6246,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       context =
         gateway_auto_context(target.assignment, target_identity, :blocked_weekly_exhaustion, %{
           cohort_identity_ids: [target_identity.id, sibling.identity.id],
+          capacity_assignment_ids: [target.assignment.id, sibling.assignment.id],
+          capacity_identity_ids: [target_identity.id, sibling.identity.id],
           routable_identity_ids: [target_identity.id],
           transient_circuit_exclusions: [request_snapshot]
         })
@@ -6476,6 +6482,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
            quota_scope: "model",
            quota_family: "codex_model",
            model: "test-model"
+         ]},
+        {:additional_only, Decimal.new("20"),
+         [
+           quota_key: "synthetic_additional_meter",
+           quota_scope: "model",
+           quota_family: "additional",
+           model: "test-model",
+           metered_feature: "synthetic_additional_meter",
+           raw_metered_feature: "synthetic_additional_meter"
          ]}
       ]
 
@@ -6495,6 +6510,41 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
         assert provider_consume_count(fake) == 1, "scenario=#{scenario}"
       end)
+    end
+
+    test "matching model exhaustion blocks otherwise usable sibling account capacity" do
+      %{fake: fake, target: target, context: context, siblings: [sibling]} =
+        transient_circuit_claim_fixture!(true)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(sibling.identity, [
+                 %{
+                   quota_key: "test-model",
+                   window_kind: "secondary",
+                   window_minutes: 10_080,
+                   used_percent: Decimal.new("100"),
+                   reset_at: DateTime.add(now, 2, :hour),
+                   observed_at: now,
+                   last_sync_at: now,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   quota_scope: "model",
+                   quota_family: "codex_model",
+                   model: "test-model",
+                   upstream_model: "test-model",
+                   freshness_state: "fresh"
+                 }
+               ])
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(target.assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert provider_consume_count(fake) == 1
     end
 
     test "disabled and deleted circuit-excluded siblings do not veto" do
@@ -6517,65 +6567,95 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       )
     end
 
-    test "canonical partition, health, cooldown, and no-snapshot controls do not veto" do
-      Enum.each([:canonical_partition, :health_status, :cooldown, :no_snapshot], fn scenario ->
-        %{
-          fake: fake,
-          target: target,
-          target_identity: target_identity,
-          context: context,
-          siblings: [sibling]
-        } = transient_circuit_claim_fixture!(false)
+    test "canonical partition, health, cooldown, and current no-snapshot circuit controls" do
+      Enum.each(
+        [
+          canonical_partition: :consume,
+          health_status: :consume,
+          cooldown: :consume,
+          no_snapshot: :noop
+        ],
+        fn {scenario, expected} ->
+          %{
+            fake: fake,
+            target: target,
+            target_identity: target_identity,
+            context: context,
+            siblings: [sibling]
+          } = transient_circuit_claim_fixture!(false)
 
-        context =
-          case scenario do
-            :canonical_partition ->
-              %{
-                context
-                | cohort_identity_ids: [target_identity.id],
-                  transient_circuit_exclusions: []
-              }
+          context =
+            case scenario do
+              :canonical_partition ->
+                %{
+                  context
+                  | capacity_assignment_ids: [target.assignment.id],
+                    capacity_identity_ids: [target_identity.id],
+                    cohort_identity_ids: [target_identity.id],
+                    transient_circuit_exclusions: []
+                }
 
-            :health_status ->
-              sibling.assignment
-              |> PoolUpstreamAssignment.changeset(%{
-                health_status: PoolUpstreamAssignment.disabled_health_status()
-              })
-              |> Repo.update!()
+              :health_status ->
+                sibling.assignment
+                |> PoolUpstreamAssignment.changeset(%{
+                  health_status: PoolUpstreamAssignment.disabled_health_status()
+                })
+                |> Repo.update!()
 
-              %{
-                context
-                | cohort_identity_ids: [target_identity.id],
-                  transient_circuit_exclusions: []
-              }
+                %{
+                  context
+                  | capacity_assignment_ids: [target.assignment.id],
+                    capacity_identity_ids: [target_identity.id],
+                    cohort_identity_ids: [target_identity.id],
+                    transient_circuit_exclusions: []
+                }
 
-            :cooldown ->
-              sibling.assignment
-              |> PoolUpstreamAssignment.changeset(%{
-                health_status: PoolUpstreamAssignment.cooldown_health_status(),
-                cooldown_until: DateTime.utc_now() |> DateTime.add(60, :second)
-              })
-              |> Repo.update!()
+              :cooldown ->
+                sibling.assignment
+                |> PoolUpstreamAssignment.changeset(%{
+                  health_status: PoolUpstreamAssignment.cooldown_health_status(),
+                  cooldown_until: DateTime.utc_now() |> DateTime.add(60, :second)
+                })
+                |> Repo.update!()
 
-              %{
-                context
-                | cohort_identity_ids: [target_identity.id],
-                  transient_circuit_exclusions: []
-              }
+                %{
+                  context
+                  | capacity_assignment_ids: [target.assignment.id],
+                    capacity_identity_ids: [target_identity.id],
+                    cohort_identity_ids: [target_identity.id],
+                    transient_circuit_exclusions: []
+                }
 
-            :no_snapshot ->
-              %{context | transient_circuit_exclusions: []}
+              :no_snapshot ->
+                %{context | transient_circuit_exclusions: []}
+            end
+
+          result =
+            SavedResetRedemption.redeem(target.assignment,
+              trigger_kind: "gateway_auto",
+              gateway_auto_context: context
+            )
+
+          case expected do
+            :consume ->
+              assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} = result,
+                     "scenario=#{scenario}"
+
+              assert provider_consume_count(fake) == 1, "scenario=#{scenario}"
+
+            :noop ->
+              assert {:ok,
+                      %{
+                        status: :noop,
+                        applied?: false,
+                        code: "gateway_auto_sibling_transient_exclusion"
+                      }} = result,
+                     "scenario=#{scenario}"
+
+              assert provider_consume_count(fake) == 0, "scenario=#{scenario}"
           end
-
-        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
-                 SavedResetRedemption.redeem(target.assignment,
-                   trigger_kind: "gateway_auto",
-                   gateway_auto_context: context
-                 ),
-               "scenario=#{scenario}"
-
-        assert provider_consume_count(fake) == 1, "scenario=#{scenario}"
-      end)
+        end
+      )
     end
 
     test "gateway auto locks a failed-recovery sibling before existing spend policy proceeds" do
@@ -6622,9 +6702,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
         assert_receive {:claim_lock, :cohort}, 1_000
         assert_receive {:claim_lock, :assignment}, 1_000
-        assert_receive {:claim_lock, :circuits, query, [locked_ids]}, 1_000
-        assert query =~ ~r/ORDER BY .*\."id" FOR UPDATE/
-        assert length(locked_ids) == 2
+
+        assert_receive {:claim_lock, :circuits, query,
+                        [_pool_id, locked_ids, "test-model", "proxy_http"]},
+                       1_000
+
+        assert query =~
+                 ~r/ORDER BY .*pool_upstream_assignment_id.*updated_at.*created_at.*id.*FOR UPDATE/
+
+        assert length(locked_ids) == 3
 
         {:messages, remaining_messages} = Process.info(self(), :messages)
         refute Enum.any?(remaining_messages, &match?({:claim_lock, :circuits, _, _}, &1))
@@ -7164,7 +7250,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         upstream_identity_id: identity.id,
         candidate_assignment_ids: [assignment.id],
         candidate_identity_ids: [identity.id],
+        capacity_assignment_ids: [assignment.id],
+        capacity_identity_ids: [identity.id],
         cohort_identity_ids: [identity.id],
+        routable_assignment_ids: [assignment.id],
+        routable_identity_ids: [identity.id],
         route_class: "proxy_http",
         quota_scope: test_quota_scope(),
         hard_pinned_continuity?: false
@@ -7563,9 +7653,19 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp circuit_lock_event(metadata) do
     %{
-      lock_ids: lock_query_ids(metadata[:params]),
+      lock_ids: lock_query_list_ids(metadata[:params]),
       query: metadata[:query]
     }
+  end
+
+  defp lock_query_list_ids(params) do
+    params
+    |> List.wrap()
+    |> Enum.find(&is_list/1)
+    |> case do
+      nil -> []
+      ids -> lock_query_ids([ids])
+    end
   end
 
   defp transient_circuit_claim_fixture!(
@@ -7676,6 +7776,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         trigger,
         %{
           cohort_identity_ids: [target_identity.id | Enum.map(siblings, & &1.identity.id)],
+          capacity_assignment_ids: [
+            target_assignment.id | Enum.map(siblings, & &1.assignment.id)
+          ],
+          capacity_identity_ids: [target_identity.id | Enum.map(siblings, & &1.identity.id)],
           routable_identity_ids: [target_identity.id],
           transient_circuit_exclusions: request_snapshots,
           hard_pinned_continuity?: Keyword.get(opts, :hard_pinned_continuity?, false)
@@ -8236,8 +8340,28 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     candidate_identity_ids =
       Map.get(context_overrides, :candidate_identity_ids, [identity.id])
 
+    candidate_assignment_ids =
+      Enum.map(candidate_identity_ids, fn candidate_identity_id ->
+        index = Enum.find_index(fixture.identity_ids, &(&1 == candidate_identity_id))
+        Enum.at(fixture.assignment_ids, index)
+      end)
+
+    routable_identity_ids =
+      Map.get(context_overrides, :routable_identity_ids, candidate_identity_ids)
+
+    routable_assignment_ids =
+      Enum.map(routable_identity_ids, fn routable_identity_id ->
+        index = Enum.find_index(fixture.identity_ids, &(&1 == routable_identity_id))
+        Enum.at(fixture.assignment_ids, index)
+      end)
+
     context_overrides =
-      Map.put_new(context_overrides, :routable_identity_ids, candidate_identity_ids)
+      context_overrides
+      |> Map.put(:candidate_assignment_ids, candidate_assignment_ids)
+      |> Map.put_new(:capacity_assignment_ids, routable_assignment_ids)
+      |> Map.put_new(:capacity_identity_ids, routable_identity_ids)
+      |> Map.put_new(:routable_assignment_ids, routable_assignment_ids)
+      |> Map.put_new(:routable_identity_ids, routable_identity_ids)
 
     context =
       assignment
@@ -8470,6 +8594,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {role, backend_pid, redeem_gateway_auto_target!(fixture, target_index, cohort_identity_ids)}
     after
       Process.delete({__MODULE__, barrier, :role})
+      Process.delete({__MODULE__, barrier, :cohort_barrier_passed?})
     end
   end
 
@@ -8479,8 +8604,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       [:codex_pooler, :repo, :query],
       fn _event, _measurements, metadata, _config ->
         role = Process.get({__MODULE__, barrier, :role})
+        barrier_passed? = Process.get({__MODULE__, barrier, :cohort_barrier_passed?}, false)
 
-        if role in [:winner, :loser] and cohort_identity_lock_query?(metadata) do
+        if role in [:winner, :loser] and not barrier_passed? and
+             cohort_identity_lock_query?(metadata) do
+          Process.put({__MODULE__, barrier, :cohort_barrier_passed?}, true)
           send(parent, {barrier, :cohort_locked, role, self(), claim_lock_event(metadata)})
 
           receive do
@@ -8666,6 +8794,33 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     assert provider_consume_count(fixture.fake) == 1
   end
 
+  @tag :saved_reset_capacity_current_circuit
+  test "claim ignores stale routable capacity after the sibling circuit opens" do
+    fixture =
+      committed_transient_circuit_claim_fixture!(false, [], 1, circuit_status: "half_open")
+
+    [sibling] = fixture.siblings
+
+    context = %{
+      fixture.context
+      | capacity_assignment_ids: [fixture.target.assignment.id, sibling.assignment.id],
+        capacity_identity_ids: [fixture.target_identity.id, sibling.identity.id],
+        routable_assignment_ids: [fixture.target.assignment.id, sibling.assignment.id],
+        routable_identity_ids: [fixture.target_identity.id, sibling.identity.id],
+        transient_circuit_exclusions: []
+    }
+
+    evidence = run_claim_behind_probe_completion!(%{fixture | context: context}, :failure)
+
+    assert evidence.probe_backend_pid != evidence.claim_backend_pid
+    assert evidence.probe_backend_pid in evidence.blocking_pids
+    assert evidence.wait_event_type == "Lock"
+    assert {:ok, %RoutingCircuitState{status: "open"}} = evidence.probe_result
+    assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} = evidence.claim_result
+    assert evidence.persisted_circuit.status == "open"
+    assert provider_consume_count(fixture.fake) == 1
+  end
+
   @tag :saved_reset_two_redeemers_after_failed_recovery
   test "two redeemers after failed recovery still consume exactly once" do
     fixture = committed_transient_circuit_claim_fixture!(true)
@@ -8689,7 +8844,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     }
 
     evidence = run_transient_claim_race!(fixture, reversed, fixture.context)
-    expected_ids = fixture.circuits |> Enum.map(& &1.id) |> Enum.sort()
+
+    expected_ids =
+      [fixture.target.assignment.id | Enum.map(fixture.siblings, & &1.assignment.id)]
+      |> Enum.sort()
 
     assert evidence.winner_backend_pid in evidence.blocking_pids
     assert evidence.winner_circuit_lock_ids == expected_ids
