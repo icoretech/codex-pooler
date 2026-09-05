@@ -175,7 +175,11 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   end
 
   defp maybe_lock_slots(_attrs, true), do: :ok
-  defp maybe_lock_slots(attrs, false), do: IdentitySlotLock.lock_slots!([attrs]) && :ok
+
+  defp maybe_lock_slots(attrs, false) do
+    IdentitySlotLock.lock_slots!([attrs])
+    :ok
+  end
 
   defp upsert_link_identity(%Scope{} = scope, %PreparedAccount{attrs: attrs} = prepared) do
     timestamp = now()

@@ -5,7 +5,7 @@ defmodule CodexPooler.Access.InviteOnboarding do
 
   import Ecto.Query
 
-  alias CodexPooler.Access.Invites
+  alias CodexPooler.Access.{Invite, Invites}
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -28,8 +28,12 @@ defmodule CodexPooler.Access.InviteOnboarding do
           required(:verification) => map()
         }
   @type completed_onboarding :: %{
+          required(:status) => atom(),
           required(:identity) => UpstreamIdentity.t(),
-          required(:assignment) => PoolUpstreamAssignment.t()
+          required(:assignment) => PoolUpstreamAssignment.t(),
+          required(:secret_status) => atom(),
+          required(:invite) => Invite.t(),
+          required(:info) => CodexAuth.token_info()
         }
 
   @spec start_device(String.t()) :: {:ok, device_start()} | invite_error()
@@ -234,17 +238,20 @@ defmodule CodexPooler.Access.InviteOnboarding do
                info
              ),
            {:ok, _deleted} <- delete_pending_placeholder(pending_identity, linked.identity) do
-        Map.merge(linked, %{invite: accepted_invite, info: info})
+        %{linked: linked, invite: accepted_invite, info: info}
       else
         {:error, reason} -> Repo.rollback(invite_completion_error(reason))
       end
     end)
     |> case do
-      {:ok, completed} ->
-        TokenLinking.publish_link_result(scope, pool, completed,
-          quota_trigger_kind: "account_link",
-          broadcast_reason: "upstream_account_onboarded"
-        )
+      {:ok, %{linked: linked, invite: accepted_invite, info: info}} ->
+        with {:ok, published} <-
+               TokenLinking.publish_link_result(scope, pool, linked,
+                 quota_trigger_kind: "account_link",
+                 broadcast_reason: "upstream_account_onboarded"
+               ) do
+          {:ok, Map.merge(published, %{invite: accepted_invite, info: info})}
+        end
 
       {:error, reason} ->
         {:error, invite_completion_error(reason)}

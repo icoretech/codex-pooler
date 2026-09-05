@@ -20,6 +20,13 @@ defmodule CodexPooler.Access.InviteCredentialWriterTest do
 
     assert {:ok, completed} = complete_invite(token)
 
+    assert Enum.sort(Map.keys(completed)) ==
+             [:assignment, :identity, :info, :invite, :secret_status, :status]
+
+    assert completed.invite.status == "accepted"
+    assert completed.info.email == completed.identity.account_email
+    assert completed.secret_status == :present
+
     identity = Repo.reload!(completed.identity)
     assert identity.metadata["credential_epoch"] == 1
 
