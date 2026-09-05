@@ -10151,7 +10151,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     upstream = start_upstream(FakeUpstream.websocket_text_frames(frames))
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    previous = Application.fetch_env!(:codex_pooler, :websocket_owner_forwarding_enabled)
+    previous = Application.fetch_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
     parent = self()
 
@@ -10175,7 +10175,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert_forwarding_cardinality!(request, nil, "succeeded")
     after
       if Process.alive?(receiver), do: Process.exit(receiver, :kill)
-      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+
+      case previous do
+        :error ->
+          Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+        {:ok, value} ->
+          Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
     end
   end
 

@@ -47,7 +47,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   end
 
   defp queued_lite_compaction_case(topology, flip?) do
-    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    previous = Application.fetch_env(:codex_pooler, :websocket_owner_forwarding_enabled)
 
     Application.put_env(
       :codex_pooler,
@@ -56,7 +56,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     )
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+      case previous do
+        :error ->
+          Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+        {:ok, value} ->
+          Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
     end)
 
     item = incremental_compaction_item("queued-lite")

@@ -21,11 +21,19 @@ defmodule CodexPooler.Gateway.Runtime.WebsocketBridgeBindingTest do
   alias CodexPooler.Gateway.Websocket
 
   test "a conflicting owner binding rejects before websocket or HTTP dispatch and settles once" do
-    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    previous = Application.fetch_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+      case previous do
+        :error ->
+          Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+        {:ok, value} ->
+          Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+
+      assert Application.fetch_env(:codex_pooler, :websocket_owner_forwarding_enabled) == previous
     end)
 
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must-not-be-sent"}))
@@ -65,7 +73,7 @@ defmodule CodexPooler.Gateway.Runtime.WebsocketBridgeBindingTest do
 
     options =
       RequestOptions.build(%{}, "/v1/responses", payload)
-      |> RequestOptions.put_continuity(codex_session: session)
+      |> RequestOptions.put_continuity(codex_session: session, session_key: session.session_key)
       |> RequestOptions.put_transport(transport: "http_sse")
       |> RequestOptions.put_openai_compatibility(
         source_endpoint: "/v1/responses",
@@ -110,13 +118,20 @@ defmodule CodexPooler.Gateway.Runtime.WebsocketBridgeBindingTest do
                ),
                :count
              ) == 1
+
+      assert {:ok, owner} = WebsocketOwnerSession.lookup(session.id)
+      assert Process.alive?(owner)
     after
       Repo.delete_all(from turn in CodexTurn, where: turn.request_id == ^reserved.request.id)
 
       if match?({:ok, _}, WebsocketOwnerSession.lookup(session.id)) do
         {:ok, owner} = WebsocketOwnerSession.lookup(session.id)
+        monitor = Process.monitor(owner)
         GenServer.stop(owner)
+        assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 15_000
       end
     end
+
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
   end
 end
