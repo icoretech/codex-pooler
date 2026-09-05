@@ -380,6 +380,27 @@ defmodule CodexPooler.Quotas.AccountAvailabilityTest do
       end
     end
 
+    test "a partial additional collection retains parseable meter evidence but marks availability conflicted" do
+      payload = %{
+        "plan_type" => "plus",
+        "rate_limit" => status(true, false),
+        "additional_rate_limits" => [
+          additional(status(true, false, valid_window(42))),
+          %{"limit_name" => "incomplete", "metered_feature" => 7}
+        ]
+      }
+
+      assert {:ok, %{windows: [window], account_availability: observation}} = parse(payload)
+      assert window.quota_scope == "model"
+      assert Decimal.equal?(window.used_percent, Decimal.new("42.0"))
+
+      assert observation == %AccountAvailability{
+               state: :unknown,
+               basis: :conflict,
+               account_windows: :absent
+             }
+    end
+
     test "additional selected windows require the complete pinned integer shape" do
       for invalid_window <- invalid_pinned_windows() do
         payload = %{

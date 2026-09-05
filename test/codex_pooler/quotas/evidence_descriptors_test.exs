@@ -29,6 +29,36 @@ defmodule CodexPooler.Quotas.Evidence.DescriptorsTest do
            }
   end
 
+  test "a stable meter token preserves the legacy model descriptor while its display label changes" do
+    assert Descriptors.limit_descriptor("stable_meter", "Initial provider label", %{}) == %{
+             quota_key: "initial_provider_label",
+             quota_scope: "model",
+             quota_family: "codex_model",
+             display_label: "Initial provider label",
+             model: "Initial provider label",
+             limit_name: "Initial provider label",
+             metered_feature: "stable_meter",
+             raw_limit_id: "stable_meter",
+             raw_limit_name: "Initial provider label",
+             raw_metered_feature: "stable_meter"
+           }
+
+    assert Descriptors.limit_descriptor("stable_meter", "Renamed provider label", %{})
+           |> Map.take([
+             :quota_scope,
+             :quota_family,
+             :metered_feature,
+             :raw_limit_id,
+             :raw_metered_feature
+           ]) == %{
+             quota_scope: "model",
+             quota_family: "codex_model",
+             metered_feature: "stable_meter",
+             raw_limit_id: "stable_meter",
+             raw_metered_feature: "stable_meter"
+           }
+  end
+
   test "recognized weekly Spark tokens canonicalize from either eligible field in both target scopes" do
     for token <- @spark_tokens,
         value <- [token, String.upcase(token)],

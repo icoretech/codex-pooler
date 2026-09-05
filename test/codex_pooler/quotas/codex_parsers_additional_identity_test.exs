@@ -52,6 +52,35 @@ defmodule CodexPooler.Quotas.CodexParsersAdditionalIdentityTest do
            ]
   end
 
+  test "synthetic Reserve-shaped weekly payload preserves its wire identity without a model substitution" do
+    payload = %{
+      "additional_rate_limits" => [
+        %{
+          "limit_name" => "gpt-reserve",
+          "metered_feature" => "base_model_inference",
+          "rate_limit" => %{
+            "primary_window" => %{
+              "used_percent" => 25,
+              "limit_window_seconds" => 604_800,
+              "reset_after_seconds" => 604_800,
+              "reset_at" => 1_778_000_000
+            }
+          }
+        }
+      ]
+    }
+
+    assert {:ok, [evidence]} = CodexParsers.parse_codex_usage_payload(payload, @observed_at)
+
+    assert evidence.quota_key == "gpt_reserve"
+    assert evidence.quota_scope == "model"
+    assert evidence.model == "gpt-reserve"
+    assert evidence.raw_limit_name == "gpt-reserve"
+    assert evidence.raw_metered_feature == "base_model_inference"
+    assert evidence.window_kind == "secondary"
+    assert evidence.window_minutes == 10_080
+  end
+
   test "exact duplicate meter identity deterministically retains highest pressure" do
     payload = %{
       "additional_rate_limits" => [

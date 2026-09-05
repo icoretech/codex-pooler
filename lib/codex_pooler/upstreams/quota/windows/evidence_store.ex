@@ -327,7 +327,36 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp alias_existing_evidence(_identity_id, _evidence), do: {:ok, nil}
 
-  defp fallback_existing_evidence(_identity_id, _evidence), do: {:ok, nil}
+  defp fallback_existing_evidence(identity_id, %Evidence{} = evidence) do
+    case stable_additional_meter_token(evidence) do
+      nil ->
+        {:ok, nil}
+
+      token ->
+        Repo.all(
+          from window in Quota.AccountQuotaWindow,
+            where: window.upstream_identity_id == ^identity_id,
+            where: window.window_kind == ^evidence.window_kind,
+            where: window.window_minutes == ^evidence.window_minutes,
+            where: window.source == ^evidence.source,
+            where: fragment("COALESCE(?, '')", window.raw_limit_id) == ^token,
+            where: fragment("COALESCE(?, '')", window.raw_metered_feature) == ^token,
+            limit: 2
+        )
+        |> unambiguous_existing(:ambiguous_quota_window_meter)
+    end
+  end
+
+  defp stable_additional_meter_token(%Evidence{quota_scope: "account"}), do: nil
+  defp stable_additional_meter_token(%Evidence{quota_key: "codex_spark"}), do: nil
+
+  defp stable_additional_meter_token(%Evidence{} = evidence) do
+    raw_metered_feature = optional_string(evidence.raw_metered_feature)
+    raw_limit_id = optional_string(evidence.raw_limit_id)
+
+    if raw_metered_feature != "" and raw_metered_feature == raw_limit_id,
+      do: raw_metered_feature
+  end
 
   defp unambiguous_existing([], _code), do: {:ok, nil}
   defp unambiguous_existing([window], _code), do: {:ok, window}
