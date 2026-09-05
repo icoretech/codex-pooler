@@ -77,7 +77,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     >
       <header
         data-role="upstream-account-card-header"
-        class="flex flex-row items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3"
+        class="flex flex-col items-stretch justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3 sm:flex-row sm:items-center"
       >
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
@@ -106,7 +106,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <p
             id={"upstream-account-#{@account.identity.id}-auth-expiration"}
             data-role="upstream-auth-expiration"
-            class="truncate text-xs leading-4 text-base-content/55"
+            class="text-xs leading-4 text-base-content/55 sm:truncate"
             title={@auth_expiration.title}
           >
             {@auth_expiration.label}
@@ -114,7 +114,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
         </div>
         <div
           id={"upstream-account-#{@account.identity.id}-header-actions"}
-          class="flex shrink-0 items-center gap-2 self-center"
+          class="flex shrink-0 items-center gap-2 self-end sm:self-center"
         >
           <SavedResetMeter.saved_reset_count_badge
             id={"upstream-account-#{@account.identity.id}-saved-reset-count"}
