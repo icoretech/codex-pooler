@@ -91,6 +91,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
 
         Repo.transaction(fn ->
           locked_identity = CredentialFencing.lock_credential_replacement(identity.id)
+          validate_lifecycle_epoch!(locked_identity)
 
           paused_identity =
             locked_identity
@@ -158,6 +159,8 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
          :ok <- ensure_reactivatable_identity(identity),
          :ok <- ensure_reactivation_secret(identity),
          [_ | _] = assignments <- reactivatable_assignments(identity) do
+      validate_lifecycle_epoch!(identity)
+
       active_identity =
         identity
         |> UpstreamIdentity.changeset(%{
@@ -204,6 +207,13 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
 
       {:error, reason} ->
         Repo.rollback(reason)
+    end
+  end
+
+  defp validate_lifecycle_epoch!(identity) do
+    case CredentialFencing.validate_current_credential_epoch(identity) do
+      {:ok, _epoch} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 

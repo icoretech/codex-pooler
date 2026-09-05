@@ -89,21 +89,53 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshMetadata do
 
   def project_access_token_expiry(_metadata), do: AccessTokenExpiry.unknown()
 
-  @spec rebind_access_token_expiry(map(), pos_integer(), pos_integer()) :: map()
-  def rebind_access_token_expiry(metadata, old_epoch, new_epoch)
-      when is_map(metadata) and is_integer(old_epoch) and old_epoch > 0 and
-             is_integer(new_epoch) and new_epoch > 0 do
+  @spec rebind_access_token_expiry(map(), map(), pos_integer()) :: map()
+  def rebind_access_token_expiry(metadata, previous_metadata, new_epoch)
+      when is_map(metadata) and is_map(previous_metadata) and is_integer(new_epoch) and
+             new_epoch > 0 do
+    old_epoch = previous_metadata[@credential_epoch_key]
+
     with ^new_epoch <- metadata[@credential_epoch_key],
+         true <- is_integer(old_epoch) and old_epoch > 0,
          %{} = refresh <- metadata[@token_refresh_key],
          %{} = marker <- refresh[@marker_key],
-         true <- trusted_marker?(metadata, marker, old_epoch) do
+         true <- trusted_marker?(previous_metadata, marker, old_epoch) do
       put_in(metadata, [@token_refresh_key, @marker_key, @credential_epoch_key], new_epoch)
     else
-      _untrusted -> metadata
+      _untrusted -> preserve_untrusted_or_legacy_expiry(metadata, previous_metadata, new_epoch)
     end
   end
 
   def rebind_access_token_expiry(metadata, _old_epoch, _new_epoch), do: metadata
+
+  defp preserve_untrusted_or_legacy_expiry(metadata, previous_metadata, new_epoch) do
+    case Map.fetch(metadata, @token_refresh_key) do
+      {:ok, %{@marker_key => _untrusted} = refresh} ->
+        Map.put(
+          metadata,
+          @token_refresh_key,
+          Map.put(refresh, @marker_key, marker(AccessTokenExpiry.unknown(), new_epoch))
+        )
+
+      :error ->
+        preserve_legacy_expiry(metadata, previous_metadata, new_epoch)
+
+      _without_marker ->
+        metadata
+    end
+  end
+
+  defp preserve_legacy_expiry(metadata, previous_metadata, new_epoch) do
+    case project_access_token_expiry(previous_metadata) do
+      %{state: :known, deadline: deadline} = resolution ->
+        metadata
+        |> Map.put(@canonical_expiry_key, DateTime.to_iso8601(deadline))
+        |> Map.put(@token_refresh_key, %{@marker_key => marker(resolution, new_epoch)})
+
+      _unknown ->
+        metadata
+    end
+  end
 
   defp build_replacement(metadata, resolution, epoch, required_fields, supplied_fields \\ %{})
        when is_integer(epoch) and epoch > 0 do

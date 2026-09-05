@@ -76,12 +76,11 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   @spec advance_credential_epoch_preserving_expiry(UpstreamIdentity.t()) :: map()
   def advance_credential_epoch_preserving_expiry(%UpstreamIdentity{} = identity) do
     old_metadata = normalize_metadata(identity.metadata)
-    old_epoch = old_metadata[@credential_epoch_key]
     advanced = advance_credential_epoch(identity)
 
     TokenRefreshMetadata.rebind_access_token_expiry(
       advanced,
-      old_epoch,
+      old_metadata,
       advanced[@credential_epoch_key]
     )
   end

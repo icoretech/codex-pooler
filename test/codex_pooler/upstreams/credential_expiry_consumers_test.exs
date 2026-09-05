@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.CredentialExpiryConsumersTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import Ecto.Query
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.FakeUpstream
@@ -11,6 +12,7 @@ defmodule CodexPooler.Upstreams.CredentialExpiryConsumersTest do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
+  alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment}
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
 
@@ -187,14 +189,176 @@ defmodule CodexPooler.Upstreams.CredentialExpiryConsumersTest do
       |> put_in(["token_refresh", "access_token_expiry", "credential_epoch"], 7)
 
     %{scope: scope, identity: identity} = lifecycle_fixture(untrusted)
-    original_marker = get_in(identity.metadata, ["token_refresh", "access_token_expiry"])
+    original_refresh = Map.delete(identity.metadata["token_refresh"], "access_token_expiry")
 
     assert {:ok, %{identity: paused, secret_status: :present}} =
              Upstreams.pause_account_for_scope(scope, identity, %{paused_at: transition_at})
 
     assert paused.metadata["credential_epoch"] == 2
-    assert get_in(paused.metadata, ["token_refresh", "access_token_expiry"]) == original_marker
+    assert Map.delete(paused.metadata["token_refresh"], "access_token_expiry") == original_refresh
+
+    assert get_in(paused.metadata, ["token_refresh", "access_token_expiry"]) == %{
+             "version" => 1,
+             "credential_epoch" => 2,
+             "state" => "unknown",
+             "source" => "unavailable"
+           }
+
     assert TokenRefreshMetadata.project_access_token_expiry(paused.metadata).state == :unknown
+  end
+
+  for action <- [:pause, :reactivate], epoch <- [nil, "2", %{"value" => 2}, 0, -1] do
+    test "#{action} rejects persisted malformed epoch #{inspect(epoch)} before any mutation" do
+      assert_invalid_lifecycle_epoch(unquote(action), unquote(Macro.escape(epoch)))
+    end
+  end
+
+  for action <- [:pause, :reactivate] do
+    test "#{action} preserves missing legacy epoch support" do
+      %{scope: scope, identity: identity} = lifecycle_fixture(%{})
+      identity = prepare_lifecycle_identity(identity, unquote(action), %{})
+      assert {:ok, %{identity: changed}} = lifecycle_action(unquote(action), scope, identity)
+      assert changed.metadata["credential_epoch"] == 2
+    end
+
+    test "#{action} cannot promote a next epoch mismatched expiry marker" do
+      for marker_epoch <- [1, 3, 7], marker_state <- [:known, :unknown] do
+        metadata =
+          if marker_state == :known,
+            do: trusted_metadata(DateTime.add(now(), 1, :day)),
+            else: unknown_metadata()
+
+        metadata =
+          metadata
+          |> Map.put("credential_epoch", 2)
+          |> put_in(["token_refresh", "access_token_expiry", "credential_epoch"], marker_epoch)
+
+        %{scope: scope, identity: identity} = lifecycle_fixture(%{})
+        identity = prepare_lifecycle_identity(identity, unquote(action), metadata)
+
+        assert TokenRefreshMetadata.project_access_token_expiry(identity.metadata).state ==
+                 :unknown
+
+        assert {:ok, %{identity: changed}} = lifecycle_action(unquote(action), scope, identity)
+        assert changed.metadata["credential_epoch"] == 3
+
+        assert TokenRefreshMetadata.project_access_token_expiry(changed.metadata).state ==
+                 :unknown
+
+        assert {:ok, %{identity: repeated}} = lifecycle_action(unquote(action), scope, changed)
+
+        assert TokenRefreshMetadata.project_access_token_expiry(repeated.metadata).state ==
+                 :unknown
+      end
+    end
+  end
+
+  test "missing root does not grant trust to either current or next marker epoch" do
+    for action <- [:pause, :reactivate],
+        marker_epoch <- [1, 2],
+        marker_state <- [:known, :unknown] do
+      metadata =
+        if marker_state == :known,
+          do: trusted_metadata(DateTime.add(now(), 1, :day)),
+          else: unknown_metadata()
+
+      metadata =
+        metadata
+        |> Map.delete("credential_epoch")
+        |> put_in(["token_refresh", "access_token_expiry", "credential_epoch"], marker_epoch)
+
+      %{scope: scope, identity: identity} = lifecycle_fixture(%{})
+      identity = prepare_lifecycle_identity(identity, action, metadata)
+      assert TokenRefreshMetadata.project_access_token_expiry(identity.metadata).state == :unknown
+      assert {:ok, %{identity: changed}} = lifecycle_action(action, scope, identity)
+      assert changed.metadata["credential_epoch"] == 2
+      assert TokenRefreshMetadata.project_access_token_expiry(changed.metadata).state == :unknown
+      assert {:ok, %{identity: repeated}} = lifecycle_action(action, scope, changed)
+      assert TokenRefreshMetadata.project_access_token_expiry(repeated.metadata).state == :unknown
+    end
+  end
+
+  test "reactivation status rejection retains precedence over malformed epoch" do
+    %{scope: scope, identity: identity} = lifecycle_fixture(%{})
+
+    identity =
+      update_identity!(identity, %{
+        status: "reauth_required",
+        metadata: %{"credential_epoch" => nil}
+      })
+
+    before = lifecycle_snapshot(identity)
+
+    assert {:error, %{code: :upstream_identity_not_reactivatable}} =
+             Upstreams.reactivate_account_for_scope(scope, identity, %{})
+
+    assert lifecycle_snapshot(identity) == before
+  end
+
+  test "legacy known expiry survives a lifecycle advance only from an eligible original epoch" do
+    deadline = DateTime.add(now(), 1, :day)
+
+    for root <- [:absent, 1, 2] do
+      metadata = %{"secret_expires_at" => DateTime.to_iso8601(deadline)}
+
+      metadata =
+        if root == :absent, do: metadata, else: Map.put(metadata, "credential_epoch", root)
+
+      %{scope: scope, identity: identity} = lifecycle_fixture(%{})
+      identity = prepare_lifecycle_identity(identity, :pause, metadata)
+      original = TokenRefreshMetadata.project_access_token_expiry(identity.metadata)
+      assert {:ok, %{identity: paused}} = lifecycle_action(:pause, scope, identity)
+      assert TokenRefreshMetadata.project_access_token_expiry(paused.metadata) == original
+      assert {:ok, %{identity: active}} = lifecycle_action(:reactivate, scope, paused)
+      assert TokenRefreshMetadata.project_access_token_expiry(active.metadata) == original
+    end
+  end
+
+  defp assert_invalid_lifecycle_epoch(action, epoch) do
+    metadata = %{
+      "credential_epoch" => epoch,
+      "access_token_expires_at" => DateTime.to_iso8601(DateTime.add(now(), 1, :day))
+    }
+
+    %{scope: scope, identity: identity} = lifecycle_fixture(%{})
+    identity = prepare_lifecycle_identity(identity, action, metadata)
+    before = lifecycle_snapshot(identity)
+    assert TokenRefreshMetadata.project_access_token_expiry(identity.metadata).state == :unknown
+
+    assert {:error, %{code: :invalid_credential_epoch, message: "credential epoch is invalid"}} =
+             lifecycle_action(action, scope, identity)
+
+    assert lifecycle_snapshot(identity) == before
+
+    assert TokenRefreshMetadata.project_access_token_expiry(Repo.reload!(identity).metadata).state ==
+             :unknown
+  end
+
+  defp prepare_lifecycle_identity(identity, action, metadata) do
+    status = if action == :reactivate, do: "paused", else: "active"
+    update_identity!(identity, %{status: status, metadata: metadata})
+  end
+
+  defp lifecycle_action(:pause, scope, identity),
+    do: Upstreams.pause_account_for_scope(scope, identity, %{})
+
+  defp lifecycle_action(:reactivate, scope, identity),
+    do: Upstreams.reactivate_account_for_scope(scope, identity, %{})
+
+  defp lifecycle_snapshot(identity) do
+    %{
+      identity: Repo.reload!(identity),
+      assignments:
+        Repo.all(
+          from a in PoolUpstreamAssignment,
+            where: a.upstream_identity_id == ^identity.id,
+            order_by: a.id
+        ),
+      secrets:
+        Repo.all(
+          from s in EncryptedSecret, where: s.upstream_identity_id == ^identity.id, order_by: s.id
+        )
+    }
   end
 
   defp lifecycle_fixture(metadata) do
