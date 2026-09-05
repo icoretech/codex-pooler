@@ -100,7 +100,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
               updated_at: timestamp,
               metadata:
                 locked_identity
-                |> CredentialFencing.advance_credential_epoch()
+                |> CredentialFencing.advance_credential_epoch_preserving_expiry()
                 |> lifecycle_metadata("paused", attrs, timestamp)
             })
             |> Repo.update!()
@@ -168,7 +168,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
           updated_at: timestamp,
           metadata:
             identity
-            |> CredentialFencing.advance_credential_epoch()
+            |> CredentialFencing.advance_credential_epoch_preserving_expiry()
             |> lifecycle_metadata("reactivated", attrs, timestamp)
         })
         |> Repo.update!()

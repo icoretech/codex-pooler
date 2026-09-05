@@ -10,7 +10,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
-  alias CodexPooler.Upstreams.Auth.CodexAuth
+  alias CodexPooler.Upstreams.Auth.{CodexAuth, TokenRefreshMetadata}
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
@@ -64,6 +64,351 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       refute inspect(result) =~ access_token
       refute inspect(result) =~ refresh_token
       refute inspect(result) =~ new_access_token
+    end
+
+    test "valid provider success advances the validated epoch and writes its canonical expiry marker" do
+      refresh_token = secret("refresh", "canonical-expiry")
+      new_access_token = secret("access", "canonical-expiry")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {200, %{"access_token" => new_access_token, "expires_in" => "3600"}}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{
+          "base_url" => FakeUpstream.url(upstream),
+          "credential_epoch" => 4,
+          "unrelated" => %{"preserved" => true}
+        })
+
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :active, retryable?: false}} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "canonical_expiry_test")
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      refresh_metadata = persisted.metadata["token_refresh"]
+
+      assert persisted.metadata["credential_epoch"] == 5
+      assert persisted.metadata["unrelated"] == %{"preserved" => true}
+      assert is_binary(persisted.metadata["access_token_expires_at"])
+      refute Map.has_key?(persisted.metadata, "secret_expires_at")
+
+      assert refresh_metadata["access_token_expiry"] == %{
+               "version" => 1,
+               "credential_epoch" => 5,
+               "state" => "known",
+               "source" => "expires_in"
+             }
+
+      assert refresh_metadata["status"] == "succeeded"
+      assert refresh_metadata["trigger_kind"] == "canonical_expiry_test"
+      assert is_binary(refresh_metadata["attempt_id"])
+      assert is_binary(refresh_metadata["started_at"])
+      assert is_integer(refresh_metadata["receive_timeout_ms"])
+      assert is_integer(refresh_metadata["stale_after_ms"])
+      assert refresh_metadata["rotated_refresh_token"] == false
+    end
+
+    test "opaque provider success advances once and records unknown expiry" do
+      refresh_token = secret("refresh", "opaque")
+      old_access_token = secret("access", "opaque-old")
+      new_access_token = secret("access", "opaque-new")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {200, %{"access_token" => new_access_token}}
+        })
+
+      identity =
+        refreshable_identity_fixture("refresh_due", %{
+          "base_url" => FakeUpstream.url(upstream),
+          "credential_epoch" => 7,
+          "access_token_expires_at" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 600))
+        })
+
+      store_secret!(identity, "access_token", old_access_token)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :active}} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "opaque_expiry_test")
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.metadata["credential_epoch"] == 8
+      refute Map.has_key?(persisted.metadata, "access_token_expires_at")
+      refute Map.has_key?(persisted.metadata, "secret_expires_at")
+
+      assert persisted.metadata["token_refresh"]["access_token_expiry"] == %{
+               "version" => 1,
+               "credential_epoch" => 8,
+               "state" => "unknown",
+               "source" => "unavailable"
+             }
+
+      assert {:ok, ^new_access_token} = Secrets.decrypt_active_secret(identity, "access_token")
+    end
+
+    test "past provider success becomes retryable invalid response and retains the old credential" do
+      refresh_token = secret("refresh", "past")
+      old_access_token = secret("access", "past-old")
+      past_access_token = jwt_with_exp(DateTime.to_unix(DateTime.utc_now()) - 60)
+      marker = known_expiry_metadata(3, DateTime.add(DateTime.utc_now(), 600))
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {200, %{"access_token" => past_access_token, "expires_in" => 3600}}
+        })
+
+      identity =
+        refreshable_identity_fixture(
+          "active",
+          Map.put(marker, "base_url", FakeUpstream.url(upstream))
+        )
+
+      store_secret!(identity, "access_token", old_access_token)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok,
+              %{
+                status: :refresh_failed,
+                retryable?: true,
+                reason: "upstream returned an invalid refresh response"
+              }} = TokenRefresh.refresh_access_token(identity, trigger_kind: "past_response_test")
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "refresh_failed"
+      assert persisted.metadata["credential_epoch"] == 3
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "invalid_refresh_response"
+      assert expiry_marker(persisted) == expiry_marker(marker)
+      assert {:ok, ^old_access_token} = Secrets.decrypt_active_secret(identity, "access_token")
+      refute inspect(persisted.metadata) =~ past_access_token
+    end
+
+    test "candidate statuses reject malformed epochs before claim, decrypt, or provider I/O" do
+      for status <- ~w(active refresh_due refresh_failed refreshing) do
+        upstream =
+          start_path_upstream(%{
+            "/oauth/token" => {200, %{"access_token" => secret("access", "unused-#{status}")}}
+          })
+
+        identity =
+          refreshable_identity_fixture(status, %{
+            "base_url" => FakeUpstream.url(upstream),
+            "credential_epoch" => "broken",
+            "token_refresh" => active_attempt_metadata()
+          })
+
+        before = Repo.get!(UpstreamIdentity, identity.id)
+
+        assert {:error,
+                %{code: :invalid_credential_epoch, message: "credential epoch is invalid"}} =
+                 TokenRefresh.refresh_access_token(identity, trigger_kind: "invalid_epoch_test")
+
+        after_attempt = Repo.get!(UpstreamIdentity, identity.id)
+        assert after_attempt.status == before.status
+        assert after_attempt.metadata == before.metadata
+        assert FakeUpstream.count(upstream) == 0
+      end
+    end
+
+    test "terminal and noncandidate status priority remains ahead of malformed epoch validation" do
+      for status <- ~w(paused deleted reauth_required pending) do
+        identity =
+          refreshable_identity_fixture(status, %{
+            "credential_epoch" => "broken",
+            "token_refresh" => %{"status" => "preserved"}
+          })
+
+        assert {:ok, %{status: :noop, retryable?: false, reason: "account is " <> ^status}} =
+                 TokenRefresh.refresh_access_token(identity, trigger_kind: "status_priority_test")
+
+        persisted = Repo.get!(UpstreamIdentity, identity.id)
+        assert persisted.status == status
+        assert persisted.metadata["credential_epoch"] == "broken"
+        assert persisted.metadata["token_refresh"] == %{"status" => "preserved"}
+      end
+    end
+
+    test "claim, timeout, malformed response, and revoked response preserve the expiry marker" do
+      timeout_release_ref = make_ref()
+
+      cases = [
+        {:timeout,
+         FakeUpstream.timeout_before_headers(notify: self(), release_ref: timeout_release_ref),
+         "codex_auth_transient", timeout_release_ref},
+        {:malformed, FakeUpstream.json_response(%{"expires_in" => 3600}),
+         "codex_oauth_refresh_failed", nil},
+        {:revoked, FakeUpstream.json_response(%{"error" => "invalid_grant"}, 400),
+         "refresh_token_revoked", nil}
+      ]
+
+      for {label, response, expected_code, release_ref} <- cases do
+        refresh_token = secret("refresh", Atom.to_string(label))
+        marker = known_expiry_metadata(2, DateTime.add(DateTime.utc_now(), 600))
+        upstream = start_upstream(response)
+
+        identity =
+          refreshable_identity_fixture(
+            "active",
+            Map.put(marker, "base_url", FakeUpstream.url(upstream))
+          )
+
+        store_secret!(identity, "refresh_token", refresh_token)
+
+        result =
+          TokenRefresh.refresh_access_token(identity,
+            trigger_kind: "marker_#{label}",
+            receive_timeout: 25
+          )
+
+        if release_ref do
+          assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
+                          ^release_ref},
+                         1_000
+
+          send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+        end
+
+        assert {:ok, %{status: status}} = result
+        assert status in [:refresh_failed, :reauth_required]
+
+        persisted = Repo.get!(UpstreamIdentity, identity.id)
+        assert expiry_marker(persisted) == expiry_marker(marker)
+        assert persisted.metadata["token_refresh"]["credential_epoch"] == 2
+        assert persisted.metadata["token_refresh"]["reason"]["code"] == expected_code
+      end
+    end
+
+    test "provider rejection lifecycle preserves the canonical expiry marker" do
+      marker = known_expiry_metadata(2, DateTime.add(DateTime.utc_now(), 600))
+      identity = refreshable_identity_fixture("active", marker)
+      _assignment = active_assignment_for_identity!(identity)
+
+      assert {:ok, _allocated, fence} = CredentialFencing.allocate_usage_probe(identity)
+
+      assert {:ok, :applied, rejected} =
+               CredentialFencing.mark_definitive_rejection(identity, fence)
+
+      assert rejected.status == "reauth_required"
+      assert expiry_marker(rejected) == expiry_marker(marker)
+      assert TokenRefreshMetadata.project_access_token_expiry(rejected.metadata).state == :known
+    end
+
+    test "late provider success cannot overwrite a newer credential epoch" do
+      refresh_token = secret("refresh", "late-epoch")
+      stale_access_token = secret("access", "late-epoch-stale")
+      current_access_token = secret("access", "late-epoch-current")
+      release_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.barrier_json_response(
+            %{"access_token" => stale_access_token, "expires_in" => 3600},
+            notify: self(),
+            release_ref: release_ref
+          )
+        )
+
+      identity =
+        refreshable_identity_fixture(
+          "active",
+          known_expiry_metadata(2, DateTime.add(DateTime.utc_now(), 600))
+          |> Map.put("base_url", FakeUpstream.url(upstream))
+        )
+
+      store_secret!(identity, "access_token", current_access_token)
+      store_secret!(identity, "refresh_token", refresh_token)
+      parent = self()
+
+      refresh =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+          TokenRefresh.refresh_access_token(identity, trigger_kind: "late_epoch_test")
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
+                      ^release_ref},
+                     1_000
+
+      claimed = Repo.get!(UpstreamIdentity, identity.id)
+
+      advanced_metadata =
+        claimed.metadata
+        |> Map.put("credential_epoch", 3)
+        |> put_in(["token_refresh", "access_token_expiry", "credential_epoch"], 3)
+
+      claimed
+      |> UpstreamIdentity.changeset(%{metadata: advanced_metadata})
+      |> Repo.update!()
+
+      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:ok, %{status: :noop, reason: "refresh attempt was superseded"}} =
+               Task.await(refresh, 15_000)
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "refreshing"
+      assert persisted.metadata == advanced_metadata
+
+      assert {:ok, ^current_access_token} =
+               Secrets.decrypt_active_secret(identity, "access_token")
+
+      refute inspect(persisted.metadata) =~ stale_access_token
+    end
+
+    test "malformed epoch at result time leaves the refreshing claim unchanged" do
+      refresh_token = secret("refresh", "invalid-result-epoch")
+      old_access_token = secret("access", "invalid-result-epoch-old")
+      new_access_token = secret("access", "invalid-result-epoch-new")
+      release_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.barrier_json_response(
+            %{"access_token" => new_access_token, "expires_in" => 3600},
+            notify: self(),
+            release_ref: release_ref
+          )
+        )
+
+      identity =
+        refreshable_identity_fixture("active", %{
+          "base_url" => FakeUpstream.url(upstream),
+          "credential_epoch" => 2
+        })
+
+      store_secret!(identity, "access_token", old_access_token)
+      store_secret!(identity, "refresh_token", refresh_token)
+      parent = self()
+
+      refresh =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+          TokenRefresh.refresh_access_token(identity, trigger_kind: "invalid_result_epoch_test")
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
+                      ^release_ref},
+                     1_000
+
+      claimed = Repo.get!(UpstreamIdentity, identity.id)
+      malformed_metadata = Map.put(claimed.metadata, "credential_epoch", %{"invalid" => true})
+
+      claimed
+      |> UpstreamIdentity.changeset(%{metadata: malformed_metadata})
+      |> Repo.update!()
+
+      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:error, %{code: :invalid_credential_epoch, message: "credential epoch is invalid"}} =
+               Task.await(refresh, 15_000)
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "refreshing"
+      assert persisted.metadata == malformed_metadata
+      assert {:ok, ^old_access_token} = Secrets.decrypt_active_secret(identity, "access_token")
+      refute inspect(persisted.metadata) =~ new_access_token
     end
 
     test "codex refresh uses the OAuth issuer form body and client id" do
@@ -1024,6 +1369,31 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
     {:ok, upstream} = FakeUpstream.start_link({:path_json, routes})
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     upstream
+  end
+
+  defp known_expiry_metadata(epoch, deadline) do
+    %{
+      "credential_epoch" => epoch,
+      "access_token_expires_at" => DateTime.to_iso8601(deadline),
+      "token_refresh" => %{
+        "status" => "succeeded",
+        "access_token_expiry" => %{
+          "version" => 1,
+          "credential_epoch" => epoch,
+          "state" => "known",
+          "source" => "explicit"
+        }
+      }
+    }
+  end
+
+  defp expiry_marker(%UpstreamIdentity{} = identity), do: expiry_marker(identity.metadata)
+  defp expiry_marker(metadata), do: get_in(metadata, ["token_refresh", "access_token_expiry"])
+
+  defp jwt_with_exp(exp) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(Jason.encode!(%{"exp" => exp}), padding: false)
+    header <> "." <> payload <> ".signature"
   end
 
   defp secret(kind, label), do: Enum.join(["token", kind, label, "do", "not", "leak"], "-")

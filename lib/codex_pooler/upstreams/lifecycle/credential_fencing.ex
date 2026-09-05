@@ -5,6 +5,8 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
 
   alias CodexPooler.Events
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
+  alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
@@ -21,6 +23,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   @assignment_eligible AssignmentStatus.eligible_status()
   @assignment_ineligible AssignmentStatus.ineligible_status()
   @active IdentityStatus.active_status()
+  @pending IdentityStatus.pending_status()
   @refresh_failed IdentityStatus.refresh_failed_status()
   @reauth_required IdentityStatus.reauth_required_status()
 
@@ -50,6 +53,39 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
     |> preserve_terminal_provider_auth_rejection()
   end
 
+  @spec prepare_replacement_metadata(UpstreamIdentity.t()) ::
+          {:ok, map(), pos_integer()} | {:error, %{code: atom(), message: String.t()}}
+  def prepare_replacement_metadata(%UpstreamIdentity{} = identity) do
+    metadata = normalize_metadata(identity.metadata)
+
+    case replacement_epoch(identity.status, Map.fetch(metadata, @credential_epoch_key)) do
+      {:ok, epoch} ->
+        metadata =
+          metadata
+          |> initialize_metadata()
+          |> Map.put(@credential_epoch_key, epoch)
+          |> preserve_terminal_provider_auth_rejection()
+
+        {:ok, metadata, epoch}
+
+      :error ->
+        {:error, %{code: :invalid_credential_epoch, message: "credential epoch is invalid"}}
+    end
+  end
+
+  @spec advance_credential_epoch_preserving_expiry(UpstreamIdentity.t()) :: map()
+  def advance_credential_epoch_preserving_expiry(%UpstreamIdentity{} = identity) do
+    old_metadata = normalize_metadata(identity.metadata)
+    old_epoch = old_metadata[@credential_epoch_key]
+    advanced = advance_credential_epoch(identity)
+
+    TokenRefreshMetadata.rebind_access_token_expiry(
+      advanced,
+      old_epoch,
+      advanced[@credential_epoch_key]
+    )
+  end
+
   @spec current_credential_epoch?(UpstreamIdentity.t() | Ecto.UUID.t(), pos_integer()) ::
           boolean()
   def current_credential_epoch?(identity_or_id, credential_epoch)
@@ -72,6 +108,24 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   end
 
   def credential_epoch(_identity), do: nil
+
+  @spec validate_current_credential_epoch(UpstreamIdentity.t()) ::
+          {:ok, pos_integer()} | {:error, %{code: atom(), message: String.t()}}
+  def validate_current_credential_epoch(%UpstreamIdentity{} = identity) do
+    identity.metadata
+    |> normalize_metadata()
+    |> Map.fetch(@credential_epoch_key)
+    |> case do
+      :error ->
+        {:ok, 1}
+
+      {:ok, epoch} when is_integer(epoch) and epoch > 0 ->
+        {:ok, epoch}
+
+      _invalid ->
+        {:error, %{code: :invalid_credential_epoch, message: "credential epoch is invalid"}}
+    end
+  end
 
   @spec awaiting_provider_auth_recovery?(UpstreamIdentity.t() | Ecto.UUID.t()) :: boolean()
   def awaiting_provider_auth_recovery?(%UpstreamIdentity{} = identity) do
@@ -121,15 +175,18 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   @spec lock_credential_replacement(UpstreamIdentity.t() | Ecto.UUID.t()) ::
           UpstreamIdentity.t() | nil
   def lock_credential_replacement(identity_or_id) do
-    case lock_identity(identity_id(identity_or_id)) do
-      %UpstreamIdentity{} = identity ->
-        lock_assignments(identity.id)
-        Secrets.lock_encrypted_secrets(identity.id)
-        identity
+    identity_or_id
+    |> List.wrap()
+    |> lock_credential_replacements()
+    |> List.first()
+  end
 
-      nil ->
-        nil
-    end
+  @spec lock_credential_replacements([UpstreamIdentity.t() | Ecto.UUID.t()]) ::
+          [UpstreamIdentity.t()]
+  def lock_credential_replacements(identity_refs) when is_list(identity_refs) do
+    identity_refs
+    |> IdentitySlotLock.lock_identity_rows!()
+    |> Map.fetch!(:identities)
   end
 
   @spec lock_credential_replacement_after_identity(UpstreamIdentity.t()) :: UpstreamIdentity.t()
@@ -566,7 +623,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   end
 
   defp provider_rejection_metadata(metadata, timestamp) do
-    Map.put(metadata, "token_refresh", %{
+    replacement = %{
       "status" => "reauth_required",
       "trigger_kind" => "account_reconciliation",
       "completed_at" => DateTime.to_iso8601(timestamp),
@@ -574,7 +631,13 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
         "code" => "provider_usage_auth_rejected",
         "message" => "provider usage authentication was rejected"
       }
-    })
+    }
+
+    Map.put(
+      metadata,
+      "token_refresh",
+      TokenRefreshMetadata.preserve_access_token_expiry(metadata, replacement)
+    )
   end
 
   defp preserve_terminal_provider_auth_rejection(metadata) do
@@ -678,6 +741,17 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
 
   defp normalize_metadata(%{} = metadata), do: metadata
   defp normalize_metadata(_metadata), do: %{}
+
+  defp replacement_epoch(status, :error) when status == @pending, do: {:ok, 1}
+  defp replacement_epoch(status, :error) when status != @pending, do: {:ok, 2}
+
+  defp replacement_epoch(@pending, {:ok, epoch}) when is_integer(epoch) and epoch > 0,
+    do: {:ok, epoch}
+
+  defp replacement_epoch(_status, {:ok, epoch}) when is_integer(epoch) and epoch > 0,
+    do: {:ok, epoch + 1}
+
+  defp replacement_epoch(_status, _epoch), do: :error
 
   defp identity_id(%UpstreamIdentity{id: id}), do: id
   defp identity_id(id) when is_binary(id), do: id

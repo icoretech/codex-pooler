@@ -9,6 +9,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   alias CodexPooler.Pools.{Membership, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
+  alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
+  alias CodexPooler.Upstreams.PreparedAccount
   alias CodexPooler.Upstreams.Secrets
   alias CodexPooler.Upstreams.TokenLinking
   alias __MODULE__.{CLI, PrivateFile}
@@ -52,27 +55,20 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     with :ok <- require_dev_environment(),
          {:ok, command} <- parse_export_args(args),
          {:ok, password} <- password_from_environment(),
-         {:ok, pool} <- pool_by_slug(command.pool_slug) do
-      # Dialyzer cannot see repository-backed dev rows through this boundary and
-      # otherwise collapses the real success branch to `no_return`.
-      case apply(__MODULE__, :export_bundle, [pool, password]) do
-        {:ok, bundle, receipt} ->
-          case write_bundle_file(command.out_path, bundle) do
-            {:ok, mode} ->
-              {:ok,
-               Map.merge(receipt, %{
-                 status: "exported",
-                 path_mode: mode,
-                 path_fingerprint: fingerprint(command.out_path)
-               })}
-
-            {:error, message} ->
-              {:error, message}
-          end
-
-        {:error, %{message: message}} ->
-          {:error, message}
-      end
+         {:ok, pool} <- pool_by_slug(command.pool_slug),
+         # Dialyzer cannot see repository-backed dev rows through this boundary and
+         # otherwise collapses the real success branch to `no_return`.
+         {:ok, bundle, receipt} <- apply(__MODULE__, :export_bundle, [pool, password]),
+         {:ok, mode} <- write_bundle_file(command.out_path, bundle) do
+      {:ok,
+       Map.merge(receipt, %{
+         status: "exported",
+         path_mode: mode,
+         path_fingerprint: fingerprint(command.out_path)
+       })}
+    else
+      {:error, %{message: message}} -> {:error, message}
+      {:error, message} when is_binary(message) -> {:error, message}
     end
   end
 
@@ -138,18 +134,18 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     with :ok <- validate_password(password),
          {:ok, accounts} <- open_accounts(bundle, password),
          :ok <- validate_import_accounts(accounts),
-         :ok <- validate_import_scope(accounts, pool, scope) do
+         {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope) do
       if dry_run? do
         {:ok,
          %{
            version: @version,
-           account_count: length(accounts),
-           valid: length(accounts),
+           account_count: length(prepared_accounts),
+           valid: length(prepared_accounts),
            imported: 0,
            dry_run: true
          }}
       else
-        import_accounts(accounts, pool, scope)
+        import_accounts(prepared_accounts, pool, scope)
       end
     end
   end
@@ -257,7 +253,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
          "credential_provenance" => identity.credential_provenance,
          "access_token" => access_token,
          "refresh_token" => refresh_token,
-         "access_token_expires_at" => access_token_expires_at(identity.metadata)
+         "access_token_expires_at" => trusted_access_token_expires_at(identity.metadata)
        }}
     end
   end
@@ -275,14 +271,20 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   defp empty_skips, do: %{missing_access_token: 0, missing_refresh_token: 0}
   defp increment_skip(skips, key), do: Map.update!(skips, key, &(&1 + 1))
 
-  defp access_token_expires_at(%{} = metadata) do
-    case Map.get(metadata, "access_token_expires_at") do
-      value when is_binary(value) -> value
-      _value -> nil
+  defp trusted_access_token_expires_at(%{} = metadata) do
+    case get_in(metadata, ["token_refresh", "access_token_expiry"]) do
+      %{} ->
+        case TokenRefreshMetadata.project_access_token_expiry(metadata) do
+          %{state: :known, deadline: %DateTime{} = deadline} -> DateTime.to_iso8601(deadline)
+          _expiry -> nil
+        end
+
+      _markerless ->
+        nil
     end
   end
 
-  defp access_token_expires_at(_metadata), do: nil
+  defp trusted_access_token_expires_at(_metadata), do: nil
 
   @spec seal_accounts([account()], binary()) :: {:ok, binary()} | {:error, lifecycle_error()}
   defp seal_accounts(accounts, password) do
@@ -329,9 +331,8 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
          {:ok, encrypted} <- decode_encrypted(header["ciphertext"]),
          {:ok, key} <- derive_key(password, salt, kdf),
          {:ok, plaintext} <-
-           decrypt(encrypted, key, nonce, canonical_header(Map.delete(header, "ciphertext"))),
-         {:ok, accounts} <- decode_accounts(plaintext, header["account_count"]) do
-      {:ok, accounts}
+           decrypt(encrypted, key, nonce, canonical_header(Map.delete(header, "ciphertext"))) do
+      decode_accounts(plaintext, header["account_count"])
     end
   end
 
@@ -481,10 +482,12 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end
   end
 
-  defp import_accounts_transaction(accounts, pool, scope) do
-    accounts
-    |> Enum.reduce_while([], fn account, results ->
-      case Upstreams.import_trusted_account_in_transaction(scope, pool, import_attrs(account)) do
+  defp import_accounts_transaction(prepared_accounts, pool, scope) do
+    IdentitySlotLock.lock_slots!(Enum.map(prepared_accounts, & &1.attrs))
+
+    prepared_accounts
+    |> Enum.reduce_while([], fn prepared, results ->
+      case TokenLinking.link_prepared_in_transaction(scope, pool, prepared, slots_locked?: true) do
         {:ok, result} -> {:cont, [result | results]}
         {:error, _reason} -> Repo.rollback(:bundle_import_failed)
       end
@@ -502,13 +505,18 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end)
   end
 
-  defp validate_import_scope(accounts, pool, scope) do
-    Enum.reduce_while(accounts, :ok, fn account, :ok ->
-      case Upstreams.validate_trusted_account(scope, pool, import_attrs(account)) do
-        {:ok, _attrs} -> {:cont, :ok}
+  defp prepare_import_accounts(accounts, pool, scope) do
+    accounts
+    |> Enum.reduce_while({:ok, []}, fn account, {:ok, prepared} ->
+      case Upstreams.prepare_bundle_account(scope, pool, import_attrs(account)) do
+        {:ok, %PreparedAccount{} = entry} -> {:cont, {:ok, [entry | prepared]}}
         {:error, _reason} -> {:halt, {:error, lifecycle_error(:bundle_import_denied)}}
       end
     end)
+    |> case do
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp import_attrs(account) do

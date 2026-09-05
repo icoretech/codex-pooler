@@ -1,6 +1,8 @@
 defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
   @moduledoc false
 
+  alias CodexPooler.Upstreams.Auth.JwtPayload
+
   @safe_onboarding_metadata %{
     "onboarding_method" => "auth_json_import",
     "auth_json_imported" => true
@@ -136,13 +138,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
     do: parse_error(:missing_token, "Codex auth.json is missing #{token_name}")
 
   defp decode_jwt_payload(jwt) do
-    with [_header, payload, _signature] <- String.split(jwt, "."),
-         {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{} = claims} <- Jason.decode(json) do
-      {:ok, claims}
-    else
-      _invalid -> {:error, :invalid_jwt}
-    end
+    JwtPayload.decode(jwt)
   end
 
   defp ensure_not_expired(claims, now) do

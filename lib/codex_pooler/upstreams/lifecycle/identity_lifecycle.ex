@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
   import Ecto.Query
 
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
@@ -57,13 +58,19 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
           {:ok, UpstreamIdentity.t() | nil} | {:error, identity_conflict()}
   def select_upsert_identity(attrs) when is_map(attrs) do
     attrs = atomize_attrs(attrs)
-    chatgpt_account_id = attrs |> Map.get(:chatgpt_account_id) |> present_string()
-    workspace_id = attrs |> Map.get(:workspace_id) |> present_string()
-    chatgpt_user_id = attrs |> Map.get(:chatgpt_user_id) |> present_string()
+    normalized = IdentitySlotLock.normalize(attrs)
 
-    case chatgpt_account_id do
-      nil -> select_email_fallback_identity(attrs, workspace_id)
-      account_id -> select_account_slot_identity(account_id, workspace_id, chatgpt_user_id, attrs)
+    case normalized.chatgpt_account_id do
+      nil ->
+        select_email_fallback_identity(attrs, normalized)
+
+      account_id ->
+        select_account_slot_identity(
+          account_id,
+          normalized.workspace_id,
+          normalized.chatgpt_user_id,
+          attrs
+        )
     end
   end
 
@@ -234,15 +241,13 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
 
   defp claimable_subjectless_legacy_identity(_identities, _workspace_id), do: nil
 
-  defp select_email_fallback_identity(attrs, workspace_id) do
-    account_email = attrs |> Map.get(:account_email) |> normalize_email()
-
-    case account_email do
+  defp select_email_fallback_identity(attrs, normalized) do
+    case normalized.account_email do
       nil ->
         {:error, identity_conflict(attrs, nil)}
 
       email ->
-        candidates = identities_for_email_workspace(email, workspace_id)
+        candidates = identities_for_email_workspace(email, normalized.workspace_id)
 
         case candidates do
           [candidate] -> maybe_select_email_candidate(candidate, attrs)
@@ -446,15 +451,6 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
   end
 
   defp present_string(_value), do: nil
-
-  defp normalize_email(value) do
-    value
-    |> present_string()
-    |> case do
-      nil -> nil
-      email -> String.downcase(email)
-    end
-  end
 
   defp atomize_attrs(attrs) when is_map(attrs) do
     Map.new(attrs, fn

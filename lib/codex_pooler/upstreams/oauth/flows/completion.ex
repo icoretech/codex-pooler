@@ -6,6 +6,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Auth.{CodexAuth, OAuthCallback}
   alias CodexPooler.Upstreams.OAuthFlows.Lifecycle
+  alias CodexPooler.Upstreams.PreparedAccount
   alias CodexPooler.Upstreams.Schemas.OAuthFlow
   alias CodexPooler.Upstreams.TokenLinking
 
@@ -32,7 +33,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
         {:error, reason} -> oauth_error(reason)
       end
     end)
-    |> Lifecycle.unwrap_transaction()
+    |> finish_completion(scope)
   end
 
   def complete_browser_oauth(_scope, _flow_id, _callback_url),
@@ -46,7 +47,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-    |> Lifecycle.unwrap_transaction()
+    |> finish_completion(scope)
   end
 
   def poll_device_oauth(_scope, _flow_id), do: {:error, Lifecycle.invalid_request_error()}
@@ -216,19 +217,28 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
          token_info,
          config
        ) do
-    case TokenLinking.link_tokens(scope, pool, oauth_link_attrs(tokens, token_info, config),
-           onboarding_method: config.onboarding_method,
-           credential_provenance: :codex_chatgpt,
-           actor_metadata_key: "oauth_linked_by_user_id",
-           audit_action: config.audit_action,
-           broadcast_reason: "upstream_account_oauth_linked",
-           quota_trigger_kind: "account_link",
-           token_refresh_trigger_kind: config.token_refresh_trigger_kind,
-           target_identity_id: flow.upstream_identity_id
-         ) do
+    attrs = oauth_link_attrs(tokens, token_info, config)
+    opts = oauth_link_options(flow, config)
+
+    case PreparedAccount.prepare(scope, pool, attrs, opts) do
+      {:ok, prepared} ->
+        link_pending_oauth_tokens(scope, pool, flow, prepared, opts, config)
+
+      {:error, %{code: :access_token_expired} = reason} ->
+        Lifecycle.fail_oauth_flow!(flow, reason)
+        oauth_error(OAuthCallback.safe_error(:token_exchange_failed))
+
+      {:error, reason} ->
+        Lifecycle.fail_oauth_flow!(flow, OAuthCallback.safe_error(:token_exchange_failed))
+        oauth_error(oauth_link_failure(reason))
+    end
+  end
+
+  defp link_pending_oauth_tokens(scope, pool, flow, %PreparedAccount{} = prepared, opts, config) do
+    case persist_oauth_link(scope, pool, prepared) do
       {:ok, link_result} ->
         case mark_oauth_flow_completed(flow, scope, link_result, config) do
-          {:ok, completed_flow} -> oauth_completion_result(completed_flow, link_result)
+          {:ok, completed_flow} -> {:publish_oauth_link, pool, completed_flow, link_result, opts}
           {:error, reason} -> Repo.rollback(reason)
         end
 
@@ -236,6 +246,47 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
         reason = oauth_link_failure(link_error)
         Lifecycle.fail_oauth_flow!(flow, reason)
         oauth_error(reason)
+    end
+  end
+
+  defp persist_oauth_link(scope, pool, prepared) do
+    Repo.query!("SAVEPOINT oauth_credential_link")
+
+    case TokenLinking.persist_prepared(scope, pool, prepared) do
+      {:ok, result} ->
+        Repo.query!("RELEASE SAVEPOINT oauth_credential_link")
+        {:ok, result}
+
+      {:error, reason} ->
+        Repo.query!("ROLLBACK TO SAVEPOINT oauth_credential_link")
+        Repo.query!("RELEASE SAVEPOINT oauth_credential_link")
+        {:error, reason}
+    end
+  end
+
+  defp oauth_link_options(flow, config) do
+    [
+      onboarding_method: config.onboarding_method,
+      credential_provenance: :codex_chatgpt,
+      actor_metadata_key: "oauth_linked_by_user_id",
+      audit_action: config.audit_action,
+      broadcast_reason: "upstream_account_oauth_linked",
+      quota_trigger_kind: "account_link",
+      token_refresh_trigger_kind: config.token_refresh_trigger_kind,
+      target_identity_id: flow.upstream_identity_id
+    ]
+  end
+
+  defp finish_completion(transaction_result, scope) do
+    case Lifecycle.unwrap_transaction(transaction_result) do
+      {:ok, {:publish_oauth_link, pool, flow, link_result, opts}} ->
+        case TokenLinking.publish_link_result(scope, pool, link_result, opts) do
+          {:ok, published} -> {:ok, oauth_completion_result(flow, published)}
+          {:error, reason} -> {:error, reason}
+        end
+
+      result ->
+        result
     end
   end
 
@@ -259,6 +310,8 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
       plan_label: token_info.plan_label,
       token: tokens.access_token,
       refresh_token: tokens.refresh_token,
+      expires_in: Map.get(tokens, :expires_in),
+      received_at: Map.get(tokens, :received_at),
       identity_metadata: oauth_identity_metadata(token_info, config.identity_onboarding_method)
     }
   end

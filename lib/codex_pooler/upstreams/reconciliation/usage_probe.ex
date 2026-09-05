@@ -5,7 +5,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   alias CodexPooler.Quotas.{AccountAvailability, Evidence}
   alias CodexPooler.Quotas.Evidence.CodexParsers
   alias CodexPooler.Quotas.Evidence.Descriptors
-  alias CodexPooler.Upstreams.Auth.TokenRefresh
+  alias CodexPooler.Upstreams.Auth.{AccessTokenExpiry, TokenRefresh, TokenRefreshMetadata}
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
@@ -940,30 +940,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
          %UpstreamIdentity{} = identity,
          %DateTime{} = observed_at
        ) do
-    case access_token_expires_at(identity.metadata) do
-      {:ok, expires_at} ->
-        refresh_at = DateTime.add(observed_at, @usage_auth_refresh_skew_seconds, :second)
-        DateTime.compare(expires_at, refresh_at) in [:lt, :eq]
+    refresh_at = DateTime.add(observed_at, @usage_auth_refresh_skew_seconds, :second)
 
-      :unknown ->
-        true
-    end
+    identity.metadata
+    |> TokenRefreshMetadata.project_access_token_expiry()
+    |> AccessTokenExpiry.evaluate(refresh_at)
+    |> Map.fetch!(:state)
+    |> then(&(&1 in [:expired, :unknown]))
   end
-
-  defp access_token_expires_at(%{} = metadata) do
-    case metadata["access_token_expires_at"] do
-      expires_at when is_binary(expires_at) ->
-        case DateTime.from_iso8601(expires_at) do
-          {:ok, parsed, _offset} -> {:ok, DateTime.truncate(parsed, :microsecond)}
-          _invalid -> :unknown
-        end
-
-      _value ->
-        :unknown
-    end
-  end
-
-  defp access_token_expires_at(_metadata), do: :unknown
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

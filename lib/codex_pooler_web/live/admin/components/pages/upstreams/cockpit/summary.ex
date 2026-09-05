@@ -417,8 +417,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
       %{
         id: "upstream-vitals-access-token",
         label: "Access token",
-        value: Formatting.strip_label_prefix(header.access_token_label, "access token "),
-        class: access_token_class(header.access_token_label)
+        value: credential_expiry_label(header.credential_expiry),
+        class: credential_expiry_class(header.credential_expiry)
       },
       %{
         id: "upstream-vitals-token-refresh",
@@ -486,11 +486,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp reconciliation_class("failed"), do: "text-error"
   defp reconciliation_class(_status), do: "text-warning"
 
-  defp access_token_class(label) when is_binary(label) do
-    if String.contains?(label, "expired"), do: "text-error", else: "text-base-content/80"
-  end
+  defp credential_expiry_label(%{state: "known_future", age: age}) when is_binary(age),
+    do: "expires #{age}"
 
-  defp access_token_class(_label), do: "text-base-content/80"
+  defp credential_expiry_label(%{state: "known_past", age: age}) when is_binary(age),
+    do: "expired #{age}"
+
+  defp credential_expiry_label(_expiry), do: "expiry unavailable"
+
+  defp credential_expiry_class(%{state: "known_past"}), do: "text-error"
+
+  defp credential_expiry_class(_expiry), do: "text-base-content/80"
 
   defp refresh_status_class(status) when status in ["succeeded", "imported"], do: "text-success"
   defp refresh_status_class("refreshing"), do: "text-info"

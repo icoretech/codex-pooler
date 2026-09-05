@@ -8,6 +8,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
   alias CodexPooler.Events
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Auth.{AccessTokenExpiry, TokenRefreshMetadata}
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
 
@@ -299,6 +300,106 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     assert Upstreams.list_active_pool_assignments(dry_run_pool) == []
   end
 
+  test "trusted bundle recovery imports a known-past token only when a refresh token is present" do
+    source_pool = pool_fixture()
+    past = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+    source = account_fixture(source_pool, expires_at: past)
+    target_pool = pool_fixture()
+    scope = owner_scope()
+
+    assert {:ok, bundle, _receipt} = UpstreamAccountBundle.export_bundle(source_pool, @password)
+
+    assert {:ok, %{imported: 1}} =
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+
+    imported =
+      Upstreams.get_upstream_identity_by_chatgpt_account(source.identity.chatgpt_account_id)
+
+    assert imported.metadata["access_token_expires_at"] == DateTime.to_iso8601(past)
+    assert imported.metadata["token_refresh"]["access_token_expiry"]["state"] == "known"
+    assert {:ok, source.refresh_token} == Secrets.decrypt_active_secret(imported, "refresh_token")
+
+    missing_refresh = reseal_first_account(bundle, &Map.put(&1, "refresh_token", ""))
+
+    assert {:error, %{code: :bundle_invalid_account}} =
+             UpstreamAccountBundle.import_bundle(
+               missing_refresh,
+               pool_fixture(),
+               scope,
+               @password
+             )
+  end
+
+  test "exports only marker-backed expiry and makes markerless legacy expiry unknown on recovery" do
+    source_pool = pool_fixture()
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    future = DateTime.add(now, 3_600, :second)
+    past = DateTime.add(now, -60, :second)
+
+    known_future = account_fixture(source_pool, expires_at: future)
+    known_past = account_fixture(source_pool, expires_at: past)
+    unknown = account_fixture(source_pool, metadata: unknown_expiry_metadata())
+
+    markerless =
+      account_fixture(source_pool,
+        metadata: %{"access_token_expires_at" => DateTime.to_iso8601(past)}
+      )
+
+    target_pool = pool_fixture()
+    scope = owner_scope()
+
+    assert {:ok, bundle, %{exported: 4}} =
+             UpstreamAccountBundle.export_bundle(source_pool, @password)
+
+    assert {:ok, %{imported: 4}} =
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+
+    assert %{state: :known, deadline: ^future} =
+             known_future.identity
+             |> Repo.reload!()
+             |> then(&TokenRefreshMetadata.project_access_token_expiry(&1.metadata))
+
+    assert %{state: :expired, deadline: ^past} =
+             known_past.identity
+             |> Repo.reload!()
+             |> then(&TokenRefreshMetadata.project_access_token_expiry(&1.metadata))
+             |> AccessTokenExpiry.evaluate(now)
+
+    assert %{state: :unknown} =
+             unknown.identity
+             |> Repo.reload!()
+             |> then(&TokenRefreshMetadata.project_access_token_expiry(&1.metadata))
+
+    markerless_identity = Repo.reload!(markerless.identity)
+
+    assert %{state: :unknown} =
+             TokenRefreshMetadata.project_access_token_expiry(markerless_identity.metadata)
+
+    refute Map.has_key?(markerless_identity.metadata, "access_token_expires_at")
+  end
+
+  test "multi-account imports preserve input order after acquiring the ordered union" do
+    source_pool = pool_fixture()
+    first = account_fixture(source_pool)
+    second = account_fixture(source_pool)
+    target_pool = pool_fixture()
+    scope = owner_scope()
+
+    assert {:ok, bundle, %{exported: 2}} =
+             UpstreamAccountBundle.export_bundle(source_pool, @password)
+
+    assert {:ok, %{imported: 2}} =
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+
+    assignment_identity_ids =
+      target_pool
+      |> Upstreams.list_active_pool_assignments()
+      |> Enum.map(& &1.upstream_identity_id)
+
+    assert MapSet.new(assignment_identity_ids) ==
+             MapSet.new([first.identity.id, second.identity.id])
+  end
+
   test "successful import publishes only sanitized post-commit audit and PubSub metadata" do
     source_pool = pool_fixture()
     source = account_fixture(source_pool)
@@ -579,12 +680,12 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
         account_email: "bundle-#{unique}@example.com",
         account_label: "Synthetic bundle #{unique}",
         access_token: access_token,
-        metadata: %{
-          "access_token_expires_at" =>
+        metadata:
+          Keyword.get_lazy(opts, :metadata, fn ->
             opts
             |> Keyword.get(:expires_at, DateTime.add(DateTime.utc_now(), 3600, :second))
-            |> DateTime.to_iso8601()
-        }
+            |> trusted_expiry_metadata()
+          end)
       })
 
     assert {:ok, _secret} =
@@ -604,6 +705,35 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     fixture
     |> Map.put(:identity, identity)
     |> Map.merge(%{access_token: access_token, refresh_token: refresh_token})
+  end
+
+  defp trusted_expiry_metadata(%DateTime{} = deadline) do
+    %{
+      "credential_epoch" => 2,
+      "access_token_expires_at" => DateTime.to_iso8601(deadline),
+      "token_refresh" => %{
+        "access_token_expiry" => %{
+          "version" => 1,
+          "credential_epoch" => 2,
+          "state" => "known",
+          "source" => "explicit"
+        }
+      }
+    }
+  end
+
+  defp unknown_expiry_metadata do
+    %{
+      "credential_epoch" => 2,
+      "token_refresh" => %{
+        "access_token_expiry" => %{
+          "version" => 1,
+          "credential_epoch" => 2,
+          "state" => "unknown",
+          "source" => "unavailable"
+        }
+      }
+    }
   end
 
   defp owner_scope do

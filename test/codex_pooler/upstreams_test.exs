@@ -5697,7 +5697,18 @@ defmodule CodexPooler.UpstreamsTest do
 
       observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       covered = persist_descriptor_primary!(identity, observed_at, "Provider limit alpha")
-      failed_path = persist_descriptor_primary!(identity, observed_at, "Provider limit beta")
+
+      failed_path =
+        persist_descriptor_primary!(
+          identity,
+          observed_at,
+          "Provider limit beta",
+          "codex_usage_api",
+          "beta_meter",
+          []
+        )
+
+      assert covered.id != failed_path.id
 
       assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
 

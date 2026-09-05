@@ -119,6 +119,105 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
       assert [_request] = FakeOpenAIAuthProvider.requests(provider)
     end
 
+    test "authorization code exchange preserves raw lifetime terms and a UTC receipt after a valid response" do
+      for expires_in <- [3600, "3600", "opaque-lifetime", nil, []] do
+        provider =
+          start_provider!(%{
+            "/oauth/token" =>
+              {200,
+               %{
+                 "access_token" => "opaque-access-token",
+                 "id_token" => "opaque-id-token",
+                 "refresh_token" => nil,
+                 "expires_in" => expires_in
+               }}
+          })
+
+        assert {:ok,
+                %{
+                  access_token: "opaque-access-token",
+                  id_token: "opaque-id-token",
+                  refresh_token: nil,
+                  expires_in: ^expires_in,
+                  received_at: %DateTime{time_zone: "Etc/UTC", utc_offset: 0, std_offset: 0}
+                }} =
+                 CodexAuth.exchange_authorization_code(
+                   "authorization-code-example",
+                   "code-verifier-example"
+                 )
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
+    end
+
+    test "authorization code exchange rejects malformed 2xx token fields without a partial result" do
+      valid = %{
+        "access_token" => "opaque-access-token",
+        "id_token" => "opaque-id-token",
+        "refresh_token" => "rotated-refresh-token"
+      }
+
+      malformed_bodies =
+        Enum.map(
+          [
+            {"access_token", ""},
+            {"access_token", " \t "},
+            {"access_token", nil},
+            {"access_token", []},
+            {"access_token", 42},
+            {"id_token", ""},
+            {"id_token", " \t "},
+            {"id_token", nil},
+            {"id_token", []},
+            {"id_token", 42},
+            {"refresh_token", ""},
+            {"refresh_token", " \t "},
+            {"refresh_token", []},
+            {"refresh_token", 42}
+          ],
+          fn {field, value} -> Map.put(valid, field, value) end
+        ) ++ [Map.delete(valid, "access_token"), Map.delete(valid, "id_token")]
+
+      for body <- malformed_bodies do
+        provider =
+          start_provider!(%{
+            "/oauth/token" => {200, body}
+          })
+
+        assert {:error,
+                %{
+                  code: :codex_oauth_exchange_failed,
+                  message: "Codex token exchange failed",
+                  status: 502
+                }} =
+                 CodexAuth.exchange_authorization_code(
+                   "authorization-code-example",
+                   "code-verifier-example"
+                 )
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
+    end
+
+    test "authorization code exchange rejects malformed 2xx response bodies" do
+      for body <- [nil, [], %{}] do
+        provider = start_provider!(%{"/oauth/token" => {200, body}})
+
+        assert {:error,
+                %{
+                  code: :codex_oauth_exchange_failed,
+                  message: "Codex token exchange failed",
+                  status: 502
+                }} =
+                 CodexAuth.exchange_authorization_code(
+                   "authorization-code-example",
+                   "code-verifier-example"
+                 )
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
+    end
+
     test "invalid authorization code verifier is rejected before provider I/O" do
       provider =
         start_provider!(%{
@@ -406,6 +505,85 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
       assert form["grant_type"] == "refresh_token"
       assert form["refresh_token"] == "refresh-token-example"
       assert form["client_id"] == CodexAuth.client_id()
+    end
+
+    test "refresh token exchange preserves raw lifetime terms and a UTC receipt after a valid response" do
+      for expires_in <- [3600, "3600", "opaque-lifetime", nil, []] do
+        provider =
+          start_provider!(%{
+            "/oauth/token" =>
+              {200,
+               %{
+                 "access_token" => "opaque-access-token",
+                 "refresh_token" => nil,
+                 "expires_in" => expires_in
+               }}
+          })
+
+        assert {:ok,
+                %{
+                  access_token: "opaque-access-token",
+                  refresh_token: nil,
+                  expires_in: ^expires_in,
+                  received_at: %DateTime{time_zone: "Etc/UTC", utc_offset: 0, std_offset: 0}
+                }} = CodexAuth.refresh_token("refresh-token-example")
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
+    end
+
+    test "refresh token exchange rejects malformed 2xx token fields without a partial result" do
+      valid = %{
+        "access_token" => "opaque-access-token",
+        "refresh_token" => "rotated-refresh-token"
+      }
+
+      malformed_bodies =
+        Enum.map(
+          [
+            {"access_token", ""},
+            {"access_token", " \t "},
+            {"access_token", nil},
+            {"access_token", []},
+            {"access_token", 42},
+            {"refresh_token", ""},
+            {"refresh_token", " \t "},
+            {"refresh_token", []},
+            {"refresh_token", 42}
+          ],
+          fn {field, value} -> Map.put(valid, field, value) end
+        ) ++ [Map.delete(valid, "access_token")]
+
+      for body <- malformed_bodies do
+        provider =
+          start_provider!(%{
+            "/oauth/token" => {200, body}
+          })
+
+        assert {:error,
+                %{
+                  code: :codex_oauth_refresh_failed,
+                  message: "Codex token refresh failed",
+                  status: 502
+                }} = CodexAuth.refresh_token("refresh-token-example")
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
+    end
+
+    test "refresh token exchange rejects malformed 2xx response bodies" do
+      for body <- [nil, [], %{}] do
+        provider = start_provider!(%{"/oauth/token" => {200, body}})
+
+        assert {:error,
+                %{
+                  code: :codex_oauth_refresh_failed,
+                  message: "Codex token refresh failed",
+                  status: 502
+                }} = CodexAuth.refresh_token("refresh-token-example")
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
     end
   end
 

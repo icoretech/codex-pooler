@@ -6,8 +6,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
   alias CodexPoolerWeb.DateTimeDisplay
 
-  @usable_refresh_statuses ~w(succeeded imported refreshing)
-
   # Human-readable phase labels for operators. Deliberately omits any token,
   # idempotency key, or raw provider detail.
   @lifecycle_labels %{
@@ -202,14 +200,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   defp auth_clearly_usable?(%{
          reauth_required?: false,
          refresh_status: refresh_status,
-         access_token_label: access_token_label
+         secret_status: :present
        }) do
-    refresh_status in @usable_refresh_statuses and
-      not expired_access_token_label?(access_token_label)
+    refresh_status in ~w(succeeded imported refreshing)
   end
 
   defp auth_clearly_usable?(_account), do: false
-
-  defp expired_access_token_label?(label) when is_binary(label),
-    do: String.starts_with?(label, "access token expired")
 end

@@ -6867,10 +6867,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         auth_fresh_at: auth_fresh_at,
         auth_verified_at: auth_verified_at,
         metadata: %{
+          "credential_epoch" => 1,
           "access_token_expires_at" => DateTime.to_iso8601(access_expires_at),
           "token_refresh" => %{
             "status" => "failed",
             "finished_at" => DateTime.to_iso8601(token_finished_at),
+            "access_token_expiry" => %{
+              "version" => 1,
+              "credential_epoch" => 1,
+              "state" => "known",
+              "source" => "explicit"
+            },
             "reason" => %{
               "code" => "codex_oauth_refresh_failed",
               "message" => "upstream OAuth refresh failed"
@@ -6939,19 +6946,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "auth-expiration", name: "Auth Expiration"})
 
-    future_expires_at = DateTime.add(DateTime.utc_now(), 2, :hour)
-    past_expires_at = DateTime.add(DateTime.utc_now(), -2, :hour)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    future_expires_at = DateTime.add(now, 2, :hour)
+    past_expires_at = DateTime.add(now, -2, :hour)
 
     %{identity: future_identity} =
       active_upstream_assignment_fixture(pool, %{
         account_label: "Future Auth Expiration",
-        metadata: %{"access_token_expires_at" => DateTime.to_iso8601(future_expires_at)}
+        metadata: credential_expiry_metadata(:known, future_expires_at)
       })
 
     %{identity: past_identity} =
       active_upstream_assignment_fixture(pool, %{
         account_label: "Past Auth Expiration",
-        metadata: %{"access_token_expires_at" => DateTime.to_iso8601(past_expires_at)}
+        metadata: credential_expiry_metadata(:known, past_expires_at)
       })
 
     %{identity: missing_identity} =
@@ -6960,7 +6968,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     %{identity: malformed_identity} =
       active_upstream_assignment_fixture(pool, %{
         account_label: "Malformed Auth Expiration",
-        metadata: %{"access_token_expires_at" => "not-a-timestamp"}
+        metadata: credential_expiry_metadata(:malformed, future_expires_at)
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
@@ -6968,19 +6976,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{future_identity.id}-auth-expiration[title]",
-             "Auth expires"
+             "Access token expires"
            )
 
     assert has_element?(
              view,
              "#upstream-account-#{past_identity.id}-auth-expiration[title]",
-             "Auth expired"
+             "Access token expired"
            )
 
     for identity <- [missing_identity, malformed_identity] do
       selector = "#upstream-account-#{identity.id}-auth-expiration"
 
-      assert has_element?(view, selector, "Expiration unavailable")
+      assert has_element?(view, selector, "Access token expiry unavailable")
       refute has_element?(view, "#{selector}[title]")
       refute has_element?(view, selector, "No expiration")
     end
@@ -6999,6 +7007,139 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{future_identity.id} header #upstream-account-#{future_identity.id}-routing-readiness"
            )
+  end
+
+  @tag :credential_expiry_list
+  test "renders canonical credential expiry and preserves manual action gates", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "structured-expiry", name: "Structured Expiry"})
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    future_deadline = DateTime.add(now, 2, :hour)
+    past_deadline = DateTime.add(now, -2, :hour)
+    reset_metadata = available_saved_reset_metadata(now)
+    secret_sentinel = runtime_secret("structured-expiry")
+
+    assert UpstreamAccountsReadModel.identity_observability(
+             %UpstreamIdentity{metadata: credential_expiry_metadata(:malformed, future_deadline)},
+             [],
+             [],
+             now
+           ).credential_expiry == %{state: "unavailable", expires_at: nil, age: nil}
+
+    %{identity: future} =
+      active_upstream_assignment_fixture(pool, %{
+        account_label: "Known future expiry",
+        access_token: secret_sentinel <> "-future",
+        metadata:
+          credential_expiry_metadata(:known, future_deadline)
+          |> Map.merge(reset_metadata)
+      })
+
+    %{identity: past} =
+      active_upstream_assignment_fixture(pool, %{
+        account_label: "Known past expiry",
+        access_token: secret_sentinel <> "-past",
+        metadata:
+          credential_expiry_metadata(:known, past_deadline)
+          |> Map.merge(reset_metadata)
+      })
+
+    %{identity: unknown} =
+      active_upstream_assignment_fixture(pool, %{
+        account_label: "Unknown expiry",
+        access_token: secret_sentinel <> "-unknown",
+        metadata: credential_expiry_metadata(:unknown, nil) |> Map.merge(reset_metadata)
+      })
+
+    %{identity: malformed} =
+      active_upstream_assignment_fixture(pool, %{
+        account_label: "Malformed expiry",
+        access_token: secret_sentinel <> "-malformed",
+        metadata:
+          credential_expiry_metadata(:malformed, future_deadline)
+          |> Map.merge(reset_metadata)
+      })
+
+    %{identity: missing_secret} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Missing expiry secret",
+        identity_metadata: credential_expiry_metadata(:unknown, nil) |> Map.merge(reset_metadata)
+      })
+
+    %{identity: reauth} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Reauthentication priority",
+        identity_status: "reauth_required",
+        identity_metadata:
+          credential_expiry_metadata(:known, future_deadline) |> Map.merge(reset_metadata)
+      })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(reauth, %{
+               secret_kind: "access_token",
+               plaintext: secret_sentinel <> "-reauth"
+             })
+
+    accounts = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    accounts_by_id = Map.new(accounts, &{&1.identity.id, &1})
+
+    assert accounts_by_id[future.id].identity_observability.credential_expiry.state ==
+             "known_future"
+
+    assert accounts_by_id[past.id].identity_observability.credential_expiry.state == "known_past"
+
+    for identity <- [unknown, malformed] do
+      assert accounts_by_id[identity.id].identity_observability.credential_expiry == %{
+               state: "unavailable",
+               expires_at: nil,
+               age: nil
+             }
+    end
+
+    assert accounts_by_id[future.id].saved_reset_redemption_action.available?
+    refute accounts_by_id[past.id].saved_reset_redemption_action.available?
+    assert accounts_by_id[unknown.id].saved_reset_redemption_action.available?
+    assert accounts_by_id[malformed.id].saved_reset_redemption_action.available?
+    refute accounts_by_id[missing_secret.id].saved_reset_redemption_action.available?
+    refute accounts_by_id[reauth.id].saved_reset_redemption_action.available?
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{future.id}-auth-expiration",
+             "Access token expires"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{past.id}-auth-expiration",
+             "Access token expired"
+           )
+
+    for identity <- [unknown, malformed] do
+      selector = "#upstream-account-#{identity.id}-auth-expiration"
+      assert has_element?(view, selector, "Access token expiry unavailable")
+      refute has_element?(view, "#{selector}[title]")
+    end
+
+    assert has_element?(view, "#replace-auth-json-upstream-account-#{reauth.id}")
+    assert has_element?(view, "#oauth-relink-upstream-account-#{reauth.id}")
+
+    for identity <- [future, past, unknown, malformed] do
+      assert has_element?(view, "#pause-upstream-account-#{identity.id}")
+      assert has_element?(view, "#reactivate-upstream-account-#{identity.id}[disabled]")
+    end
+
+    assert has_element?(view, "#pause-upstream-account-#{reauth.id}[disabled]")
+    assert has_element?(view, "#reactivate-upstream-account-#{reauth.id}[disabled]")
+
+    html = render(view)
+    refute html =~ secret_sentinel
   end
 
   @tag :relative_countdown_contract
@@ -8237,7 +8378,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
               recovery_component_assignment(pool.id, "Recovery Edge")
             ],
             refresh_status: "succeeded",
-            access_token_label: "access token expires 2026-05-04 12:00 UTC"
+            secret_status: :present
           ),
         account_index: 0
       )
@@ -8362,6 +8503,65 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     }
   end
 
+  defp credential_expiry_metadata(:known, %DateTime{} = deadline) do
+    %{
+      "credential_epoch" => 1,
+      "access_token_expires_at" => DateTime.to_iso8601(deadline),
+      "token_refresh" => %{
+        "status" => "succeeded",
+        "access_token_expiry" => %{
+          "version" => 1,
+          "credential_epoch" => 1,
+          "state" => "known",
+          "source" => "explicit"
+        }
+      }
+    }
+  end
+
+  defp credential_expiry_metadata(:unknown, nil) do
+    %{
+      "credential_epoch" => 1,
+      "token_refresh" => %{
+        "status" => "succeeded",
+        "access_token_expiry" => %{
+          "version" => 1,
+          "credential_epoch" => 1,
+          "state" => "unknown",
+          "source" => "unavailable"
+        }
+      }
+    }
+  end
+
+  defp credential_expiry_metadata(:malformed, %DateTime{} = deadline) do
+    %{
+      "credential_epoch" => 1,
+      "access_token_expires_at" => DateTime.to_iso8601(deadline),
+      "token_refresh" => %{
+        "status" => "succeeded",
+        "access_token_expiry" => %{
+          "version" => 1,
+          "credential_epoch" => 1,
+          "state" => "known",
+          "source" => "explicit",
+          "untrusted" => true
+        }
+      }
+    }
+  end
+
+  defp available_saved_reset_metadata(%DateTime{} = now) do
+    %{
+      "saved_resets" => %{
+        "status" => "reported",
+        "available_count" => 1,
+        "source" => "codex_usage_api",
+        "observed_at" => DateTime.to_iso8601(now)
+      }
+    }
+  end
+
   defp recovery_component_assignment(pool_id, pool_label) do
     %{
       id: Ecto.UUID.generate(),
@@ -8407,7 +8607,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         credential_expiry: %{state: "unavailable", expires_at: nil, age: nil}
       },
       access_token_label:
-        Keyword.get(opts, :access_token_label, "access token expired 2026-05-04 12:00 UTC"),
+        Keyword.get(opts, :access_token_label, "access token expiry unavailable"),
+      secret_status: Keyword.get(opts, :secret_status, :expired),
       reauth_required?: status == "reauth_required",
       reauth_reason_code: nil,
       reauth_reason_message: nil,

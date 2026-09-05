@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   Codex OAuth/device authorization client used by invite onboarding.
   """
 
+  alias CodexPooler.Upstreams.Auth.JwtPayload
   alias CodexPooler.Upstreams.CodexClientIdentity
 
   @issuer "https://auth.openai.com"
@@ -35,13 +36,16 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   @type token_result :: %{
           access_token: String.t(),
           refresh_token: String.t() | nil,
-          id_token: String.t()
+          id_token: String.t(),
+          expires_in: term(),
+          received_at: DateTime.t()
         }
 
   @type refresh_result :: %{
           required(:access_token) => String.t(),
           optional(:refresh_token) => String.t() | nil,
-          optional(:expires_in) => pos_integer() | String.t() | nil
+          optional(:expires_in) => term(),
+          optional(:received_at) => DateTime.t()
         }
 
   @type client_error :: auth_error() | term()
@@ -198,13 +202,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   defp blank_string?(value), do: !is_binary(value) or String.trim(value) == ""
 
   defp decode_jwt_payload(token) do
-    with [_header, payload, _signature] <- String.split(token, "."),
-         {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{} = claims} <- Jason.decode(json) do
-      {:ok, claims}
-    else
-      _invalid -> :error
-    end
+    JwtPayload.decode(token)
   end
 
   defp compute_residency_from_claims(claims) do
@@ -404,9 +402,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
              retry: false,
              receive_timeout: 30_000
            ) do
-        {:ok, %{status: status, body: %{"access_token" => access, "id_token" => id} = body}}
-        when status in 200..299 ->
-          {:ok, %{access_token: access, refresh_token: body["refresh_token"], id_token: id}}
+        {:ok, %{status: status, body: body}} when status in 200..299 ->
+          decode_authorization_code_token_response(body)
 
         {:ok, %{status: status}} when status >= 500 ->
           auth_error(
@@ -441,14 +438,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
              retry: false,
              receive_timeout: receive_timeout
            ) do
-        {:ok, %{status: status, body: %{"access_token" => access} = body}}
-        when status in 200..299 ->
-          {:ok,
-           %{
-             access_token: access,
-             refresh_token: body["refresh_token"],
-             expires_in: body["expires_in"]
-           }}
+        {:ok, %{status: status, body: body}} when status in 200..299 ->
+          decode_refresh_token_response(body)
 
         {:ok, %{status: status, body: body}} when status in [400, 401, 403] ->
           refresh_error(body, status)
@@ -547,6 +538,53 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     end
 
     defp refresh_token_reauth_text?(_text), do: false
+
+    defp decode_authorization_code_token_response(%{} = body) do
+      with {:ok, access_token} <- nonblank_token(body["access_token"]),
+           {:ok, id_token} <- nonblank_token(body["id_token"]),
+           {:ok, refresh_token} <- optional_refresh_token(body["refresh_token"]) do
+        {:ok,
+         %{
+           access_token: access_token,
+           refresh_token: refresh_token,
+           id_token: id_token,
+           expires_in: body["expires_in"],
+           received_at: DateTime.utc_now()
+         }}
+      else
+        :error -> auth_error(:codex_oauth_exchange_failed, "Codex token exchange failed", 502)
+      end
+    end
+
+    defp decode_authorization_code_token_response(_body),
+      do: auth_error(:codex_oauth_exchange_failed, "Codex token exchange failed", 502)
+
+    defp decode_refresh_token_response(%{} = body) do
+      with {:ok, access_token} <- nonblank_token(body["access_token"]),
+           {:ok, refresh_token} <- optional_refresh_token(body["refresh_token"]) do
+        {:ok,
+         %{
+           access_token: access_token,
+           refresh_token: refresh_token,
+           expires_in: body["expires_in"],
+           received_at: DateTime.utc_now()
+         }}
+      else
+        :error -> auth_error(:codex_oauth_refresh_failed, "Codex token refresh failed", 502)
+      end
+    end
+
+    defp decode_refresh_token_response(_body),
+      do: auth_error(:codex_oauth_refresh_failed, "Codex token refresh failed", 502)
+
+    defp nonblank_token(value) when is_binary(value) do
+      if String.trim(value) == "", do: :error, else: {:ok, value}
+    end
+
+    defp nonblank_token(_value), do: :error
+
+    defp optional_refresh_token(nil), do: {:ok, nil}
+    defp optional_refresh_token(value), do: nonblank_token(value)
 
     defp decode_device_code(%{} = body) do
       user_code = body["user_code"] || body["usercode"]

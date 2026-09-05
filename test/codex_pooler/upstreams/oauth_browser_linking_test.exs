@@ -346,6 +346,40 @@ defmodule CodexPooler.Upstreams.OAuthBrowserLinkingTest do
     end
   end
 
+  test "browser completion persists a failed flow while rejecting an expired access token without credentials" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+    expired_access_token = access_token_with_exp(DateTime.utc_now() |> DateTime.add(-60, :second))
+
+    start_provider!(%{
+      "/oauth/token" =>
+        {200,
+         FakeOpenAIAuthProvider.token_response(
+           access_token: expired_access_token,
+           refresh_token: "expired-refresh-token-must-not-persist",
+           id_token: browser_id_token("acct_browser_expired")
+         )}
+    })
+
+    assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
+             Upstreams.start_browser_oauth(scope, pool)
+
+    assert {:error, %{code: :token_exchange_failed, message: "OAuth token exchange failed"}} =
+             Upstreams.complete_browser_oauth(
+               scope,
+               flow.id,
+               callback_url(authorization_state(authorization_url), "browser-code-expired")
+             )
+
+    persisted = Repo.get!(OAuthFlow, flow.id)
+    assert persisted.status == "failed"
+    assert persisted.error_code == "token_exchange_failed"
+    assert Repo.aggregate(UpstreamIdentity, :count) == 0
+    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 0
+    assert Repo.aggregate(EncryptedSecret, :count) == 0
+    refute inspect(persisted) =~ expired_access_token
+  end
+
   defp fixture_owner_scope do
     %{user: user} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     Scope.for_user(user, ["instance_owner"])
@@ -383,6 +417,15 @@ defmodule CodexPooler.Upstreams.OAuthBrowserLinkingTest do
   defp callback_url(state, code) do
     "http://localhost:1455/auth/callback?" <>
       URI.encode_query(%{"state" => state, "code" => code})
+  end
+
+  defp access_token_with_exp(%DateTime{} = expiry) do
+    header = Base.url_encode64(~s({"alg":"none"}), padding: false)
+
+    payload =
+      Base.url_encode64(Jason.encode!(%{"exp" => DateTime.to_unix(expiry)}), padding: false)
+
+    header <> "." <> payload <> ".signature"
   end
 
   defp active_secret_count(secret_kind) do

@@ -3,22 +3,20 @@ defmodule CodexPooler.Access.InviteOnboarding do
   LiveView-facing invite onboarding orchestration for Codex upstream accounts.
   """
 
+  import Ecto.Query
+
   alias CodexPooler.Access.Invites
-  alias CodexPooler.Events
-  alias CodexPooler.Jobs
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
-  alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
   alias CodexPooler.Upstreams.Lifecycle.InternalLifecycle
-  alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
-  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
-  alias CodexPooler.Upstreams.Secrets
-  alias CodexPooler.Upstreams.SecretStore, as: UpstreamSecretStore
+  alias CodexPooler.Upstreams.{PreparedAccount, Secrets, SecretStore, TokenLinking}
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @type invite_error :: {:error, term()}
   @type pending_account :: %{
@@ -57,7 +55,7 @@ defmodule CodexPooler.Access.InviteOnboarding do
            Secrets.decrypt_active_secret(identity, "device_code"),
          {:ok, state} <- Jason.decode(state_json),
          {:ok, tokens} <- CodexAuth.poll_device_authorization(state) do
-      complete_onboarding(invite, identity, assignment, tokens, "device")
+      complete_onboarding(invite, pool, identity, assignment, tokens, "device")
     end
   end
 
@@ -70,7 +68,7 @@ defmodule CodexPooler.Access.InviteOnboarding do
            {:ok, identity, assignment} <- pending_account(invite, pool, label, method) do
         # Reason: secret write failure must rollback the pending invite account.
         # credo:disable-for-next-line Credo.Check.Refactor.Nesting
-        case UpstreamSecretStore.store_encrypted_secret(identity, %{
+        case SecretStore.store_encrypted_secret(identity, %{
                secret_kind: "device_code",
                plaintext: Jason.encode!(auth_state)
              }) do
@@ -81,10 +79,6 @@ defmodule CodexPooler.Access.InviteOnboarding do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-  end
-
-  defp complete_onboarding_metadata(metadata, invite, method) do
-    Map.merge(metadata || %{}, %{"invite_id" => invite.id, "onboarding_method" => method})
   end
 
   defp pending_account(invite, pool, label, method) do
@@ -175,36 +169,283 @@ defmodule CodexPooler.Access.InviteOnboarding do
     end
   end
 
-  defp complete_onboarding(invite, identity, assignment, tokens, method) do
+  defp complete_onboarding(invite, pool, identity, assignment, tokens, method) do
+    with {:ok, info} <- CodexAuth.token_info(tokens.id_token),
+         {:ok, info} <- verify_invited_email(invite, info),
+         {:ok, scope} <- invite_scope(invite),
+         {:ok, prepared} <-
+           prepare_verified_account(scope, pool, identity, invite, tokens, method, info) do
+      persist_completed_onboarding(
+        scope,
+        invite,
+        pool,
+        identity,
+        assignment,
+        prepared,
+        method,
+        info
+      )
+    end
+  end
+
+  defp persist_completed_onboarding(
+         scope,
+         invite,
+         pool,
+         pending_identity,
+         pending_assignment,
+         prepared,
+         method,
+         info
+       ) do
     Repo.transaction(fn ->
-      with {:ok, info} <- CodexAuth.token_info(tokens.id_token),
-           {:ok, info} <- verify_invited_email(invite, info),
-           {:ok, completed} <-
-             complete_verified_account(invite, identity, assignment, tokens, method, info) do
-        completed
+      with {:ok, locked_invite} <- Invites.lock_usable_invite(invite),
+           _resources <- IdentitySlotLock.lock_slots!([prepared.attrs]),
+           {:ok, selected_identity} <- IdentityLifecycle.select_upsert_identity(prepared.attrs),
+           candidate_identities <- candidate_identities(prepared, selected_identity),
+           locked_rows <-
+             IdentitySlotLock.lock_identity_rows!([pending_identity | candidate_identities]),
+           {:ok, pending_identity, _pending_assignment} <-
+             revalidate_pending_account(
+               locked_invite,
+               pool,
+               pending_identity,
+               pending_assignment,
+               locked_rows
+             ),
+           :ok <- revalidate_selected_identity(prepared, selected_identity, locked_rows),
+           :ok <- ensure_selected_assignment(scope, pool, selected_identity, prepared),
+           prepared <-
+             bind_prepared_target(
+               prepared,
+               pending_identity,
+               selected_identity,
+               locked_rows,
+               pool
+             ),
+           {:ok, linked} <-
+             TokenLinking.link_prepared_in_transaction(scope, pool, prepared, slots_locked?: true),
+           {:ok, %{invite: accepted_invite}} <-
+             consume_verified_invite(
+               locked_invite,
+               linked.identity,
+               linked.assignment,
+               method,
+               info
+             ),
+           {:ok, _deleted} <- delete_pending_placeholder(pending_identity, linked.identity) do
+        Map.merge(linked, %{invite: accepted_invite, info: info})
       else
-        {:error, reason} -> Repo.rollback(reason)
+        {:error, reason} -> Repo.rollback(invite_completion_error(reason))
       end
     end)
     |> case do
       {:ok, completed} ->
-        _job =
-          Jobs.enqueue_assignment_priming(completed.assignment.pool_id, completed.assignment,
-            trigger_kind: "account_link"
-          )
-
-        Events.broadcast_upstreams(completed.assignment.pool_id, "upstream_account_onboarded", %{
-          assignment_id: completed.assignment.id,
-          upstream_identity_id: completed.identity.id,
-          onboarding_method: method
-        })
-
-        {:ok, completed}
+        TokenLinking.publish_link_result(scope, pool, completed,
+          quota_trigger_kind: "account_link",
+          broadcast_reason: "upstream_account_onboarded"
+        )
 
       {:error, reason} ->
-        {:error, reason}
+        {:error, invite_completion_error(reason)}
     end
   end
+
+  defp invite_scope(%{created_by_user_id: user_id}) when is_binary(user_id) do
+    case Repo.get(User, user_id) do
+      %User{} = user -> {:ok, Scope.for_user(user)}
+      nil -> {:error, invite_not_usable_error()}
+    end
+  end
+
+  defp invite_scope(_invite), do: {:error, invite_not_usable_error()}
+
+  defp prepare_verified_account(scope, pool, identity, invite, tokens, method, info) do
+    with chatgpt_account_id when is_binary(chatgpt_account_id) <-
+           present_string(info.chatgpt_account_id),
+         {:ok, prepared} <-
+           PreparedAccount.prepare(
+             scope,
+             pool,
+             %{
+               chatgpt_account_id: chatgpt_account_id,
+               chatgpt_user_id: info.chatgpt_user_id,
+               account_email: info.email,
+               account_label: info.email || identity.account_label,
+               workspace_id: info.workspace_id,
+               workspace_label: info.workspace_label,
+               seat_type: info.seat_type,
+               plan_label: info.plan_label,
+               access_token: tokens.access_token,
+               refresh_token: tokens.refresh_token,
+               expires_in: Map.get(tokens, :expires_in),
+               received_at: Map.get(tokens, :received_at),
+               identity_metadata: %{"invite_id" => invite.id, "onboarding_method" => method}
+             },
+             credential_provenance: :codex_chatgpt,
+             onboarding_method: "invite",
+             actor_metadata_key: "invited_by_user_id",
+             token_refresh_trigger_kind: "device_authorization"
+           ),
+         :ok <- PreparedAccount.evaluate(prepared, now()) do
+      {:ok, prepared}
+    else
+      nil ->
+        {:error,
+         %{
+           code: :codex_account_identity_missing,
+           message: "Codex account identity was not returned by upstream auth"
+         }}
+
+      {:error, reason} ->
+        map_preparation_error({:error, reason})
+    end
+  end
+
+  defp map_preparation_error({:error, %{code: :access_token_expired}}),
+    do: {:error, invite_not_usable_error()}
+
+  defp map_preparation_error(result), do: result
+
+  defp revalidate_pending_account(
+         invite,
+         pool,
+         pending_identity,
+         pending_assignment,
+         locked_rows
+       ) do
+    identity = Enum.find(locked_rows.identities, &(&1.id == pending_identity.id))
+    assignment = Enum.find(locked_rows.assignments, &(&1.id == pending_assignment.id))
+
+    if pending_account?(identity, assignment, invite) and assignment.pool_id == pool.id do
+      {:ok, identity, assignment}
+    else
+      {:error, invite_not_usable_error()}
+    end
+  end
+
+  defp revalidate_selected_identity(prepared, initially_selected, locked_rows) do
+    with {:ok, selected} <- IdentityLifecycle.select_upsert_identity(prepared.attrs),
+         true <- identity_id(selected) == identity_id(initially_selected),
+         true <- is_nil(selected) or Enum.any?(locked_rows.identities, &(&1.id == selected.id)) do
+      :ok
+    else
+      _changed -> {:error, invite_not_usable_error()}
+    end
+  end
+
+  defp candidate_identities(prepared, selected_identity) do
+    siblings =
+      IdentityLifecycle.list_upstream_identities_by_chatgpt_account(
+        prepared.attrs.chatgpt_account_id
+      )
+
+    [selected_identity | siblings]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(& &1.id)
+  end
+
+  defp ensure_selected_assignment(_scope, _pool, nil, _prepared), do: :ok
+
+  defp ensure_selected_assignment(scope, pool, selected_identity, prepared) do
+    case assignment_for(pool, selected_identity) do
+      %PoolUpstreamAssignment{} ->
+        :ok
+
+      nil ->
+        with :ok <- PreparedAccount.evaluate(prepared, now()) do
+          insert_selected_assignment(scope, pool, selected_identity, prepared)
+        end
+    end
+  end
+
+  defp insert_selected_assignment(scope, pool, selected_identity, prepared) do
+    timestamp = now()
+
+    result =
+      %PoolUpstreamAssignment{}
+      |> PoolUpstreamAssignment.changeset(%{
+        pool_id: pool.id,
+        upstream_identity_id: selected_identity.id,
+        assignment_label: selected_identity.account_label,
+        status: PoolUpstreamAssignment.pending_status(),
+        health_status: PoolUpstreamAssignment.unknown_health_status(),
+        eligibility_status: PoolUpstreamAssignment.eligible_status(),
+        created_by_user_id: scope.user.id,
+        created_at: timestamp,
+        updated_at: timestamp,
+        metadata: %{
+          "invite_id" => prepared.attrs.identity_metadata["invite_id"],
+          "onboarding_method" => "invite"
+        }
+      })
+      |> Repo.insert(mode: :savepoint)
+
+    case result do
+      {:ok, _assignment} ->
+        :ok
+
+      {:error, changeset} ->
+        refetch_assignment_after_conflict(pool, selected_identity, changeset)
+    end
+  end
+
+  defp refetch_assignment_after_conflict(pool, selected_identity, changeset) do
+    if assignment_unique_conflict?(changeset) do
+      case Repo.one(
+             from assignment in PoolUpstreamAssignment,
+               where:
+                 assignment.pool_id == ^pool.id and
+                   assignment.upstream_identity_id == ^selected_identity.id,
+               limit: 1
+           ) do
+        %PoolUpstreamAssignment{} -> :ok
+        nil -> {:error, changeset}
+      end
+    else
+      {:error, changeset}
+    end
+  end
+
+  defp assignment_unique_conflict?(%Ecto.Changeset{} = changeset) do
+    Enum.any?(changeset.errors, fn {_field, {_message, metadata}} ->
+      metadata[:constraint_name] == "pool_upstream_assignments_identity_uq"
+    end)
+  end
+
+  defp bind_prepared_target(prepared, pending_identity, nil, locked_rows, _pool) do
+    if Enum.any?(locked_rows.identities, fn identity ->
+         identity.id != pending_identity.id and
+           identity.chatgpt_account_id == prepared.attrs.chatgpt_account_id
+       end) do
+      prepared
+    else
+      put_in(prepared.attrs.target_identity_id, pending_identity.id)
+    end
+  end
+
+  defp bind_prepared_target(
+         prepared,
+         _pending_identity,
+         selected_identity,
+         _locked_rows,
+         pool
+       ) do
+    if assignment_for(pool, selected_identity) do
+      put_in(prepared.attrs.target_identity_id, selected_identity.id)
+    else
+      prepared
+    end
+  end
+
+  defp identity_id(%UpstreamIdentity{id: id}), do: id
+  defp identity_id(nil), do: nil
+
+  defp invite_completion_error(%{code: :access_token_expired}), do: invite_not_usable_error()
+  defp invite_completion_error(reason), do: reason
+
+  defp invite_not_usable_error,
+    do: %{code: :invite_consumed, message: "invite is expired or already consumed"}
 
   defp verify_invited_email(invite, info) do
     case normalized_email(invite.invited_email) do
@@ -226,176 +467,6 @@ defmodule CodexPooler.Access.InviteOnboarding do
     end
   end
 
-  defp complete_verified_account(invite, identity, assignment, tokens, method, info) do
-    case present_string(info.chatgpt_account_id) do
-      nil ->
-        {:error,
-         %{
-           code: :codex_account_identity_missing,
-           message: "Codex account identity was not returned by upstream auth"
-         }}
-
-      chatgpt_account_id ->
-        info = Map.put(info, :chatgpt_account_id, chatgpt_account_id)
-
-        case IdentityLifecycle.select_upsert_identity(verified_identity_attrs(identity, info)) do
-          {:error, reason} ->
-            {:error, reason}
-
-          {:ok, %UpstreamIdentity{id: existing_id} = existing} when existing_id != identity.id ->
-            complete_existing_account(
-              invite,
-              identity,
-              assignment,
-              existing,
-              tokens,
-              method,
-              info
-            )
-
-          _missing_or_same ->
-            complete_pending_account(invite, identity, assignment, tokens, method, info)
-        end
-    end
-  end
-
-  defp verified_identity_attrs(identity, info) do
-    %{
-      chatgpt_account_id: info.chatgpt_account_id,
-      account_email: info.email,
-      account_label: info.email || identity.account_label,
-      workspace_id: info.workspace_id,
-      workspace_label: info.workspace_label,
-      seat_type: info.seat_type,
-      plan_family: info.plan_family,
-      plan_label: info.plan_label
-    }
-  end
-
-  defp complete_pending_account(invite, identity, assignment, tokens, method, info) do
-    identity = CredentialFencing.lock_credential_replacement(identity)
-
-    with {:ok, %{identity: identity, assignment: assignment}} <-
-           activate_verified_pool_account(identity, assignment, invite, method, info),
-         {:ok, _secret} <- store_verified_tokens(identity, tokens),
-         {:ok, %{invite: invite}} <-
-           consume_verified_invite(invite, identity, assignment, method, info) do
-      {:ok, %{identity: identity, assignment: assignment, invite: invite, info: info}}
-    end
-  end
-
-  defp complete_existing_account(
-         invite,
-         pending_identity,
-         _pending_assignment,
-         existing,
-         tokens,
-         method,
-         info
-       ) do
-    existing = CredentialFencing.lock_credential_replacement(existing)
-
-    with {:ok, identity} <- activate_verified_identity(existing, invite, method, info),
-         {:ok, _secret} <- store_verified_tokens(identity, tokens),
-         {:ok, assignment} <- ensure_verified_assignment(invite, identity, method),
-         {:ok, %{invite: invite}} <-
-           consume_verified_invite(invite, identity, assignment, method, info),
-         {:ok, _deleted} <- delete_pending_placeholder(pending_identity) do
-      {:ok, %{identity: identity, assignment: assignment, invite: invite, info: info}}
-    end
-  end
-
-  defp activate_verified_identity(identity, invite, method, info) do
-    attrs =
-      identity
-      |> verified_identity_attrs(info)
-      |> Map.put(:account_label, identity.account_label)
-      |> Map.put(
-        :metadata,
-        identity
-        |> replacement_metadata()
-        |> complete_onboarding_metadata(invite, method)
-        |> Map.put("chatgpt_user_id", info.chatgpt_user_id)
-        |> put_account_email(info.email)
-      )
-
-    with {:ok, identity} <-
-           IdentityLifecycle.activate_upstream_identity_with_plan(identity, attrs) do
-      classify_verified_codex_identity(identity)
-    end
-  end
-
-  defp activate_verified_pool_account(identity, assignment, invite, method, info) do
-    with {:ok, %{identity: identity} = completed} <-
-           InternalLifecycle.activate_verified_pool_account(
-             identity,
-             assignment,
-             Map.put(
-               verified_identity_attrs(identity, info),
-               :metadata,
-               identity
-               |> replacement_metadata()
-               |> complete_onboarding_metadata(invite, method)
-               |> Map.put("chatgpt_user_id", info.chatgpt_user_id)
-               |> put_account_email(info.email)
-             ),
-             %{
-               metadata: complete_onboarding_metadata(assignment.metadata, invite, method),
-               skip_quota_priming: true
-             }
-           ),
-         {:ok, identity} <- classify_verified_codex_identity(identity) do
-      {:ok, %{completed | identity: identity}}
-    end
-  end
-
-  defp classify_verified_codex_identity(identity) do
-    identity
-    |> Ecto.Changeset.change()
-    |> UpstreamIdentity.put_credential_provenance(:codex_chatgpt)
-    |> Repo.update()
-  end
-
-  defp store_verified_tokens(identity, tokens) do
-    with {:ok, secret} <-
-           UpstreamSecretStore.store_encrypted_secret(identity, %{
-             secret_kind: "access_token",
-             plaintext: tokens.access_token
-           }),
-         {:ok, _refresh} <- maybe_store_refresh_token(identity, tokens.refresh_token) do
-      {:ok, secret}
-    end
-  end
-
-  defp replacement_metadata(%UpstreamIdentity{status: "pending", metadata: metadata}),
-    do: CredentialFencing.initialize_metadata(metadata)
-
-  defp replacement_metadata(%UpstreamIdentity{} = identity),
-    do: CredentialFencing.advance_credential_epoch(identity)
-
-  defp activate_verified_assignment(assignment, invite, method) do
-    PoolAssignments.activate_pool_assignment(assignment, %{
-      metadata: complete_onboarding_metadata(assignment.metadata, invite, method),
-      skip_quota_priming: true
-    })
-  end
-
-  defp ensure_verified_assignment(invite, identity, method) do
-    pool = Repo.get!(Pool, invite.pool_id)
-
-    case assignment_for(pool, identity) do
-      %PoolUpstreamAssignment{} = assignment ->
-        activate_verified_assignment(assignment, invite, method)
-
-      nil ->
-        InternalLifecycle.ensure_active_pool_assignment(pool, identity, %{
-          assignment_label: identity.account_label,
-          metadata: complete_onboarding_metadata(%{}, invite, method),
-          skip_quota_priming: true
-        })
-    end
-  end
-
   defp consume_verified_invite(invite, identity, assignment, method, info) do
     Invites.consume_invite(invite, %{
       upstream_identity_id: identity.id,
@@ -406,19 +477,14 @@ defmodule CodexPooler.Access.InviteOnboarding do
     })
   end
 
-  defp delete_pending_placeholder(%UpstreamIdentity{status: "pending"} = identity),
-    do: Repo.delete(identity)
+  defp delete_pending_placeholder(
+         %UpstreamIdentity{status: "pending", id: pending_id} = identity,
+         %UpstreamIdentity{id: completed_id}
+       )
+       when pending_id != completed_id,
+       do: Repo.delete(identity)
 
-  defp delete_pending_placeholder(_identity), do: {:ok, nil}
-
-  defp maybe_store_refresh_token(_identity, nil), do: {:ok, nil}
-
-  defp maybe_store_refresh_token(identity, refresh_token) do
-    UpstreamSecretStore.store_encrypted_secret(identity, %{
-      secret_kind: "refresh_token",
-      plaintext: refresh_token
-    })
-  end
+  defp delete_pending_placeholder(_pending_identity, _completed_identity), do: {:ok, nil}
 
   defp assignment_for(pool, identity) do
     pool.id
@@ -427,11 +493,6 @@ defmodule CodexPooler.Access.InviteOnboarding do
   end
 
   defp invite_bound?(metadata, invite), do: Map.get(metadata || %{}, "invite_id") == invite.id
-
-  defp put_account_email(metadata, email) when is_binary(email),
-    do: Map.put(metadata, "account_email", email)
-
-  defp put_account_email(metadata, _email), do: metadata
 
   defp present_string(value) when is_binary(value) do
     value = String.trim(value)
@@ -448,4 +509,6 @@ defmodule CodexPooler.Access.InviteOnboarding do
       email -> String.downcase(email)
     end
   end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

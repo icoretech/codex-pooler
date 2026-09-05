@@ -126,6 +126,8 @@ defmodule CodexPooler.Upstreams do
 
   @spec import_trusted_account(Scope.t(), Pool.t(), map()) :: import_result()
   defdelegate import_trusted_account(scope, pool, attrs), to: Import
+  defdelegate prepare_trusted_account(scope, pool, attrs), to: Import
+  defdelegate prepare_bundle_account(scope, pool, attrs), to: Import
 
   @spec validate_trusted_account(Scope.t(), Pool.t(), map()) ::
           {:ok, map()} | {:error, Ecto.Changeset.t() | lifecycle_error()}

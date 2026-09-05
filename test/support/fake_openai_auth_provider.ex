@@ -8,7 +8,7 @@ defmodule CodexPooler.FakeOpenAIAuthProvider do
 
   alias CodexPooler.FakeUpstream
 
-  @type route_payload :: {non_neg_integer(), map()}
+  @type route_payload :: {non_neg_integer(), term()}
   @type routes :: %{String.t() => route_payload()}
 
   @spec start_link(routes()) :: {:ok, FakeUpstream.t()}
@@ -35,6 +35,7 @@ defmodule CodexPooler.FakeOpenAIAuthProvider do
       "refresh_token" => Keyword.get(opts, :refresh_token, "refresh-token-example"),
       "id_token" => Keyword.get(opts, :id_token, id_token())
     }
+    |> maybe_put("expires_in", Keyword.get(opts, :expires_in))
   end
 
   @spec device_code_response(keyword()) :: map()
@@ -77,4 +78,7 @@ defmodule CodexPooler.FakeOpenAIAuthProvider do
     payload = Base.url_encode64(Jason.encode!(claims), padding: false)
     header <> "." <> payload <> ".signature"
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

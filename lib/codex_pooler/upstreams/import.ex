@@ -7,6 +7,7 @@ defmodule CodexPooler.Upstreams.Import do
 
   alias CodexPooler.Upstreams.Auth.CodexAuthJson
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.PreparedAccount
   alias CodexPooler.Upstreams.TokenLinking
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
@@ -28,8 +29,13 @@ defmodule CodexPooler.Upstreams.Import do
 
   @spec import_trusted_account(Scope.t(), Pool.t(), map()) :: import_result()
   def import_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
-    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
-      TokenLinking.link_tokens(scope, pool, attrs, trusted_account_link_options(attrs))
+    with {:ok, prepared} <- prepare_trusted_account(scope, pool, attrs) do
+      TokenLinking.link_prepared(
+        scope,
+        pool,
+        prepared,
+        trusted_account_link_options(prepared.attrs)
+      )
     end
   end
 
@@ -58,15 +64,37 @@ defmodule CodexPooler.Upstreams.Import do
     {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
   end
 
+  @spec prepare_trusted_account(Scope.t(), Pool.t(), map()) ::
+          {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  def prepare_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
+    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
+      PreparedAccount.prepare(scope, pool, attrs, trusted_account_link_options(attrs))
+    end
+  end
+
+  def prepare_trusted_account(_scope, _pool, _attrs),
+    do: {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
+
+  @spec prepare_bundle_account(Scope.t(), Pool.t(), map()) ::
+          {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  def prepare_bundle_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
+    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
+      PreparedAccount.prepare_bundle(scope, pool, attrs, trusted_account_link_options(attrs))
+    end
+  end
+
+  def prepare_bundle_account(_scope, _pool, _attrs),
+    do: {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
+
   @spec import_trusted_account_in_transaction(Scope.t(), Pool.t(), map()) :: import_result()
   def import_trusted_account_in_transaction(%Scope{} = scope, %Pool{} = pool, attrs)
       when is_map(attrs) do
-    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
-      TokenLinking.link_tokens_in_transaction(
+    with {:ok, prepared} <- prepare_trusted_account(scope, pool, attrs) do
+      TokenLinking.link_prepared_in_transaction(
         scope,
         pool,
-        attrs,
-        trusted_account_link_options(attrs)
+        prepared,
+        trusted_account_link_options(prepared.attrs)
       )
     end
   end
@@ -85,7 +113,10 @@ defmodule CodexPooler.Upstreams.Import do
     ]
   end
 
-  defp trusted_credential_provenance("codex_chatgpt_oauth"), do: :codex_chatgpt
+  defp trusted_credential_provenance(value) when value in ["codex_chatgpt_oauth", :codex_chatgpt],
+    do: :codex_chatgpt
+
+  defp trusted_credential_provenance(:unclassified), do: :unclassified
   defp trusted_credential_provenance(nil), do: :unclassified
 
   defp import_trusted_auth_json_account(scope, %Pool{} = pool, attrs) when is_map(attrs) do
