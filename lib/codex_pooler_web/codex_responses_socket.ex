@@ -242,7 +242,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         outcome: response_result_outcome(result)
       })
 
-    state = mark_response_task_result_ready(state, pid)
+    state =
+      state
+      |> mark_response_task_result_ready(pid)
+      |> put_response_task_cleanup_result(pid, result)
 
     result =
       pid
@@ -396,10 +399,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     log_closed_before_request_reservation(reason, state)
 
-    remaining_tasks =
-      state
-      |> Map.get(:tasks, MapSet.new())
-      |> await_response_tasks(@pre_cleanup_response_task_drain_ms)
+    {remaining_tasks, state} = await_response_task_cleanup_results(state)
 
     cleanup_websocket_session(reason, state)
 
@@ -511,6 +511,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:response_task_delivery_outcomes, %{})
     |> Map.put(:response_task_results_ready, MapSet.new())
     |> Map.put(:response_task_terminals_accepted, MapSet.new())
+    |> Map.put(:response_task_completed_terminals, MapSet.new())
+    |> Map.put(:response_task_cleanup_results, %{})
     |> Map.put(:native_owner_terminal_delivered?, false)
     |> Map.put(:websocket_owner_pending_handoff, nil)
   end
@@ -2712,6 +2714,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> Map.update(:response_task_delivery_outcomes, %{}, &Map.delete(&1, pid))
         |> Map.update(:response_task_results_ready, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_terminals_accepted, MapSet.new(), &MapSet.delete(&1, pid))
+        |> Map.update(:response_task_completed_terminals, MapSet.new(), &MapSet.delete(&1, pid))
+        |> Map.update(:response_task_cleanup_results, %{}, &Map.delete(&1, pid))
         |> do_remove_tracked_response_task(pid)
         |> remove_native_turn_output(pid)
         |> Map.put(:native_owner_terminal_delivered?, false)
@@ -2736,12 +2740,84 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.get(:tasks, MapSet.new())
     |> Enum.each(fn pid ->
       case authoritative_delivery_target(state, pid, registry) do
-        {:ok, token, ack_pid} -> ResponseTask.acknowledge_delivery(ack_pid, token, :aborted)
-        :unknown -> :ok
+        {:ok, token, ack_pid} ->
+          outcome = response_task_cleanup_outcome(state, pid, token, ack_pid, registry)
+          ResponseTask.acknowledge_delivery(ack_pid, token, outcome)
+
+        :unknown ->
+          :ok
       end
     end)
 
     :ok
+  end
+
+  defp response_task_cleanup_outcome(state, pid, token, pid, registry) do
+    completed? =
+      MapSet.member?(Map.get(state, :response_task_completed_terminals, MapSet.new()), pid)
+
+    if completed? and Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :ok and
+         ActivityRegistry.delivery_target(pid, name: registry) == {:ok, token, pid, :admitted},
+       do: :completed,
+       else: :aborted
+  catch
+    :exit, _reason -> :aborted
+  end
+
+  defp response_task_cleanup_outcome(_state, _pid, _token, _ack_pid, _registry), do: :aborted
+
+  defp put_response_task_cleanup_result(state, pid, result) do
+    if tracked_response_task?(state, pid) do
+      outcome = response_task_cleanup_result(result)
+
+      Map.update(
+        state,
+        :response_task_cleanup_results,
+        %{pid => outcome},
+        &Map.put(&1, pid, outcome)
+      )
+    else
+      state
+    end
+  end
+
+  defp response_task_cleanup_result(:ok), do: :ok
+  defp response_task_cleanup_result({:ok, _result}), do: :ok
+
+  defp response_task_cleanup_result({:socket_response_result, _source, result}),
+    do: response_task_cleanup_result(result)
+
+  defp response_task_cleanup_result({:response_task_result, result, _visible?}),
+    do: response_task_cleanup_result(result)
+
+  defp response_task_cleanup_result(_result), do: :error
+
+  defp await_response_task_cleanup_results(state) do
+    tasks = Map.get(state, :tasks, MapSet.new())
+    monitors = Map.new(tasks, &{&1, Process.monitor(&1)})
+    deadline = response_task_deadline(@pre_cleanup_response_task_drain_ms)
+    await_response_task_cleanup_results(state, tasks, monitors, deadline)
+  end
+
+  defp await_response_task_cleanup_results(state, tasks, monitors, deadline) do
+    if MapSet.size(tasks) == 0 do
+      {tasks, state}
+    else
+      receive do
+        {:codex_response_done, pid, result} when is_map_key(monitors, pid) ->
+          state = put_response_task_cleanup_result(state, pid, result)
+          await_response_task_cleanup_results(state, tasks, monitors, deadline)
+
+        {:DOWN, ref, :process, pid, _reason}
+        when is_map_key(monitors, pid) and :erlang.map_get(monitors, pid) == ref ->
+          tasks = remove_response_task(tasks, monitors, pid)
+          await_response_task_cleanup_results(state, tasks, monitors, deadline)
+      after
+        response_task_wait_timeout(deadline) ->
+          demonitor_response_tasks(monitors)
+          {tasks, state}
+      end
+    end
   end
 
   defp authoritative_response_task_activity?(state, pid) do
@@ -2857,16 +2933,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           outcome: terminal_outcome(data)
         })
 
-      Map.update(
-        state,
-        :response_task_terminals_accepted,
-        MapSet.new([pid]),
-        &MapSet.put(&1, pid)
-      )
+      state
+      |> Map.update(:response_task_terminals_accepted, MapSet.new([pid]), &MapSet.put(&1, pid))
+      |> maybe_mark_completed_response_task_terminal(pid, terminal_outcome(data))
     else
       state
     end
   end
+
+  defp maybe_mark_completed_response_task_terminal(state, pid, :ok) do
+    Map.update(state, :response_task_completed_terminals, MapSet.new([pid]), &MapSet.put(&1, pid))
+  end
+
+  defp maybe_mark_completed_response_task_terminal(state, _pid, _outcome), do: state
 
   defp response_task_terminal_accepted?(state, pid) when is_pid(pid) do
     MapSet.member?(Map.get(state, :response_task_terminals_accepted, MapSet.new()), pid)
