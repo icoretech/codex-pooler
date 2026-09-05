@@ -252,7 +252,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
        "model" => payload["model"],
        "input" => payload["prompt"],
        "tools" => [tool],
-       "tool_choice" => %{"type" => "image_generation"},
        "store" => false,
        "stream" => true
      }}

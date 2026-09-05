@@ -1122,7 +1122,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert result.payload["model"] == "gpt-image-1"
     assert result.payload["stream"] == true
     assert [%{"type" => "image_generation", "quality" => "high"}] = result.payload["tools"]
-    assert result.payload["tool_choice"] == %{"type" => "image_generation"}
+    refute Map.has_key?(result.payload, "tool_choice")
   end
 
   @tag :responses_coercion
