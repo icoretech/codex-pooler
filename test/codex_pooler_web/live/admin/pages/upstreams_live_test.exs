@@ -3373,7 +3373,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id} header[data-role='upstream-account-card-header'].flex-row.items-center.justify-between.py-3"
+             "#upstream-account-#{identity.id} header[data-role='upstream-account-card-header'].flex-col.items-stretch.justify-between.py-3[class~='sm:flex-row'][class~='sm:items-center']"
            )
 
     assert has_element?(
@@ -3383,7 +3383,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-header-actions.items-center.self-center #upstream-account-#{identity.id}-plan-label.self-center",
+             "#upstream-account-#{identity.id}-header-actions.items-center.self-end[class~='sm:self-center'] #upstream-account-#{identity.id}-plan-label.self-center",
              "Team"
            )
 
