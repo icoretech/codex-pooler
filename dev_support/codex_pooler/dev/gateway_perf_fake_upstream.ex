@@ -633,8 +633,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       get_in(payload, ["client_metadata", "turn_id"]) || metadata_value(metadata, "turn_id")
 
     if is_binary(turn_id) and String.trim(turn_id) != "" do
-      turn_id
-      |> :crypto.hash(:sha256)
+      :crypto.hash(:sha256, turn_id)
       |> Base.encode16(case: :lower)
       |> binary_part(0, 16)
     end

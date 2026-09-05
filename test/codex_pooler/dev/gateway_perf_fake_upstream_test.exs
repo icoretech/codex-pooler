@@ -391,6 +391,44 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     refute encoded =~ "RAW_NESTED_SENTINEL"
   end
 
+  test "HTTP observations hash nonblank logical turn ids into stable bounded fingerprints" do
+    server = start_server!("native-compaction-v2-success")
+
+    metadata_cases = [
+      {%{"turn_id" => "abc"}, "ba7816bf8f01cfea"},
+      {%{"x-codex-turn-metadata" => Jason.encode!(%{"turn_id" => "abc"})}, "ba7816bf8f01cfea"},
+      {%{
+         "turn_id" => "xyz",
+         "x-codex-turn-metadata" => Jason.encode!(%{"turn_id" => "abc"})
+       }, "3608bca1e44ea6c4"},
+      {%{"turn_id" => "  "}, nil},
+      {%{"turn_id" => 123}, nil},
+      {%{}, nil}
+    ]
+
+    for {metadata, expected} <- metadata_cases do
+      response =
+        Req.post!(server.url <> "/backend-api/codex/responses",
+          json: %{
+            "model" => "gateway-perf-full",
+            "input" => [%{"type" => "compaction_trigger"}],
+            "client_metadata" => metadata
+          },
+          retry: false
+        )
+
+      assert response.status == 200
+
+      assert %{"observations" => observations} =
+               Req.get!(server.url <> "/__smoke/request-observations").body
+
+      observation = List.last(observations)
+      assert observation["logicalTurnFingerprint"] == expected
+      refute Map.has_key?(observation, "turn_id")
+      refute Map.has_key?(observation, "client_metadata")
+    end
+  end
+
   test "simultaneous websocket connections receive opaque ordered metadata-only observations" do
     server = start_server!("quota-429")
 
