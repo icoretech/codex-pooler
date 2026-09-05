@@ -86,6 +86,36 @@ defmodule CodexPooler.InstanceSettingsSandboxLifecycleTest do
     end
   end
 
+  test "restored settings do not schedule database work after sandbox teardown" do
+    previous_cache = Cache.snapshot_for_test()
+    owner = Sandbox.start_owner!(Repo, shared: true)
+    cache = Process.whereis(Cache)
+
+    try do
+      :ok = Cache.put_for_test(InstanceSettings.ensure_singleton!())
+      snapshot = Cache.snapshot_for_test()
+      :ok = DataCase.stop_sandbox(owner, snapshot)
+
+      log =
+        capture_log(fn ->
+          case :sys.get_state(cache).reconciliation_timer do
+            %{generation: generation} -> send(cache, {Cache, {:reconcile, generation}})
+            nil -> :ok
+          end
+
+          :sys.get_state(cache)
+        end)
+
+      refute log =~ "instance settings db load failed", log
+      assert Cache.snapshot_for_test() == snapshot
+      assert :sys.get_state(cache).reconciliation_timer == nil
+      assert :sys.get_state(cache).retry_timer == nil
+    after
+      Cache.restore_for_test(previous_cache)
+      if Process.alive?(owner), do: Sandbox.stop_owner(owner)
+    end
+  end
+
   defp await_teardown_call(teardown, cache, owner) do
     receive do
       {:trace, ^teardown, :send, _message, destination} when destination in [cache, owner] ->

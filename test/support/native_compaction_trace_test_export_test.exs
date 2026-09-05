@@ -25,6 +25,7 @@ defmodule CodexPooler.NativeCompactionTraceTestExportTest do
     assert Path.wildcard(Path.join(root, "success.jsonl")) == []
   end
 
+  @tag :unix_integration
   test "exports a complete private file atomically and refuses overwrite" do
     {source_root, source} = completed_trace_fixture()
     export_root = fresh_root("trace-test-export")
@@ -34,10 +35,13 @@ defmodule CodexPooler.NativeCompactionTraceTestExportTest do
       File.rm_rf!(export_root)
     end)
 
-    assert {:ok, destination} =
-             NativeCompactionTraceTestExport.export!(source, export_root, :success)
+    assert {{:ok, destination}, output} =
+             ExUnit.CaptureIO.with_io(fn ->
+               NativeCompactionTraceTestExport.export!(source, export_root, :success)
+             end)
 
     assert destination == Path.join(export_root, "success.jsonl")
+    assert output == "TRACE_TEST_EXPORT=#{destination}\n"
     assert Bitwise.band(File.stat!(export_root).mode, 0o777) == 0o700
     assert Bitwise.band(File.stat!(destination).mode, 0o777) == 0o600
 
@@ -49,6 +53,7 @@ defmodule CodexPooler.NativeCompactionTraceTestExportTest do
     end
   end
 
+  @tag :unix_integration
   test "rejects relative unsafe and symlink paths" do
     {source_root, source} = completed_trace_fixture()
     relative = "trace-export-relative"
@@ -72,6 +77,7 @@ defmodule CodexPooler.NativeCompactionTraceTestExportTest do
     end
   end
 
+  @tag :unix_integration
   test "rejects an incomplete source" do
     source_root = fresh_root("trace-test-incomplete")
     export_root = fresh_root("trace-test-incomplete-export")

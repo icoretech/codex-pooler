@@ -1,5 +1,8 @@
 defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
-  use ExUnit.Case, async: false
+  use CodexPooler.UnixIntegrationCase,
+    async: false,
+    tools: ~w(git stat shasum readlink perl docker),
+    docker_compose: true
 
   @wrapper Path.expand("../../../dev_support/bin/reliability-qa-lifecycle", __DIR__)
   @lifecycle Path.expand("../../../dev_support/bin/dev-server-lifecycle", __DIR__)
@@ -74,6 +77,70 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
     assert code == 124, output
     refute output =~ "QA_READY"
     assert File.exists?(fixture.compose_down_marker)
+  end
+
+  test "source manifest preserves real file permissions, size, hash and symlink targets" do
+    fixture = wrapper_fixture!(23, 0)
+    source = Path.join(fixture.root, "lib/fixture.ex")
+    File.chmod!(source, 0o640)
+    File.ln_s!("missing.ex", Path.join(fixture.root, "lib/link.ex"))
+
+    {output, code} = run_wrapper(fixture, "QA_COMPLETE")
+    assert code == 23, output
+
+    manifest = File.read!(Path.join(fixture.runtime_root, "source-after-start.tsv"))
+    bytes = File.read!(source)
+    sha = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+    assert manifest =~ "file\t640:#{byte_size(bytes)}\t#{sha}\tlib/fixture.ex\n"
+    assert manifest =~ "symlink\tmissing.ex\tlib/link.ex\n"
+  end
+
+  test "source inspection command failures abort before publishing readiness" do
+    for tool <- ["stat", "shasum", "readlink"] do
+      fixture = wrapper_fixture!(23, 0)
+      File.ln_s!("fixture.ex", Path.join(fixture.root, "lib/link.ex"))
+      write_executable!(Path.join(fixture.bin, tool), "#!/bin/bash\nexit 42\n")
+
+      {output, code} = run_wrapper(fixture, "QA_COMPLETE")
+
+      assert code != 0, tool
+      refute output =~ "QA_READY", tool
+    end
+  end
+
+  test "changes in source permissions, bytes or symlink targets reject startup" do
+    for mutation <- [
+          "chmod 600 lib/fixture.ex",
+          "printf changed > lib/fixture.ex",
+          "rm lib/link.ex; ln -s missing.ex lib/link.ex"
+        ] do
+      fixture = wrapper_fixture!(23, 0)
+      File.ln_s!("fixture.ex", Path.join(fixture.root, "lib/link.ex"))
+
+      {output, code} =
+        run_wrapper(fixture, "QA_COMPLETE", [{"FIXTURE_PREPARE_MUTATION", mutation}])
+
+      assert code != 0
+      assert output =~ "application source changed during build/start"
+      refute output =~ "QA_READY"
+    end
+  end
+
+  test "compiled BEAM hashing failure aborts before publishing readiness" do
+    fixture = wrapper_fixture!(23, 0)
+    real_shasum = System.find_executable("shasum")
+
+    write_executable!(Path.join(fixture.bin, "shasum"), """
+    #!/bin/bash
+    if [[ "$3" == *.beam ]]; then exit 42; fi
+    exec "#{real_shasum}" "$@"
+    """)
+
+    {output, code} = run_wrapper(fixture, "QA_COMPLETE")
+
+    assert code != 0
+    assert output =~ "compiled Pooler BEAM hashing failed"
+    refute output =~ "QA_READY"
   end
 
   test "owned compose overrides replace inherited wildcard database ports with loopback" do
@@ -187,6 +254,7 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
       shift 2
       if [[ " $* " == *" make "* ]]; then
         sleep #{prepare_sleep}
+        if [ -n "${FIXTURE_PREPARE_MUTATION:-}" ]; then bash -c "$FIXTURE_PREPARE_MUTATION"; fi
         mkdir -p "$MIX_BUILD_PATH/lib/codex_pooler/ebin"
         printf beam > "$MIX_BUILD_PATH/lib/codex_pooler/ebin/Elixir.Fixture.beam"
         exit 0

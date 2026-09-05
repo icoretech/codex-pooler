@@ -163,7 +163,11 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
       result = RequestReplay.cleanup_due()
       duration_us = System.monotonic_time(:microsecond) - started_at
       queries = drain_query_count(ref, 0)
-      IO.puts(Jason.encode!(%{cleanup: label, duration_us: duration_us, queries: queries}))
+
+      if System.get_env("CODEX_POOLER_TEST_DIAGNOSTICS") == "1" do
+        IO.puts(Jason.encode!(%{cleanup: label, duration_us: duration_us, queries: queries}))
+      end
+
       result
     after
       :telemetry.detach(handler)

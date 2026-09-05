@@ -199,6 +199,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     on_exit(fn -> Supervisor.stop(pid) end)
   end
 
+  @tag :unix_integration
   test "journal replacement is private, exact, and rejects symlink traversal", %{
     run_id: run_id,
     run_dir: run_dir
@@ -221,6 +222,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              Smoke.read_journal(run_id)
   end
 
+  @tag :unix_integration
   test "journal targeting is derived only from the run id", %{run_id: run_id, run_dir: run_dir} do
     journal = Smoke.new_journal(run_id, @owner_id, @labels)
     assert :ok = Smoke.validate_journal_targets(journal)
@@ -233,6 +235,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              Smoke.read_journal(run_id)
   end
 
+  @tag :unix_integration
   test "new and repeatedly recovered journal Pool slugs stay canonical and readable", %{
     run_id: run_id,
     run_dir: run_dir
@@ -670,6 +673,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              )
   end
 
+  @tag :unix_integration
   test "receipt publication strips forbidden owner and secret-bearing fields", %{
     run_id: run_id,
     receipt_path: receipt_path

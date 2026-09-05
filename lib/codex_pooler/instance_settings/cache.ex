@@ -67,7 +67,7 @@ defmodule CodexPooler.InstanceSettings.Cache do
   def restore_for_test(snapshot), do: GenServer.call(__MODULE__, {:restore, snapshot})
 
   @spec reset_for_test() :: :ok
-  def reset_for_test, do: restore_for_test(@cache_miss)
+  def reset_for_test, do: GenServer.call(__MODULE__, :reset_for_test)
 
   @impl true
   def init(opts) do
@@ -117,20 +117,14 @@ defmodule CodexPooler.InstanceSettings.Cache do
 
   # Restores the published entry verbatim so a caller can hand back exactly what
   # it captured, including a cold-fallback snapshot that `put/1` would otherwise
-  # relabel as database-backed.
+  # relabel as database-backed. Teardown leaves background DB work stopped;
+  # explicit reset and normal database publication resume reconciliation.
   def handle_call({:restore, snapshot}, _from, state) do
-    state = cancel_timers(state)
+    {:reply, :ok, restore_snapshot(state, snapshot)}
+  end
 
-    case snapshot do
-      {@cache_version, %Settings{}} -> :persistent_term.put(@cache_key, snapshot)
-      _missing_or_stale -> :persistent_term.erase(@cache_key)
-    end
-
-    restored_state =
-      new_state([], state.retry_generation, state.reconciliation_generation)
-      |> schedule_reconciliation()
-
-    {:reply, :ok, restored_state}
+  def handle_call(:reset_for_test, _from, state) do
+    {:reply, :ok, state |> restore_snapshot(@cache_miss) |> schedule_reconciliation()}
   end
 
   @impl true
@@ -181,6 +175,17 @@ defmodule CodexPooler.InstanceSettings.Cache do
     GenServer.call(__MODULE__, :current)
   catch
     :exit, _reason -> publish_cold_fallback()
+  end
+
+  defp restore_snapshot(state, snapshot) do
+    state = cancel_timers(state)
+
+    case snapshot do
+      {@cache_version, %Settings{}} -> :persistent_term.put(@cache_key, snapshot)
+      _missing_or_stale -> :persistent_term.erase(@cache_key)
+    end
+
+    new_state([], state.retry_generation, state.reconciliation_generation)
   end
 
   defp reload(state) do

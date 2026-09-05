@@ -1,5 +1,7 @@
 defmodule CodexPooler.MixTasks.TestFastMakeTest do
-  use ExUnit.Case, async: false
+  use CodexPooler.UnixIntegrationCase,
+    async: false,
+    tools: ~w(make ps epmd elixir /usr/bin/script /bin/sh)
 
   @moduletag :test_infrastructure
   @timeout_ms 15_000

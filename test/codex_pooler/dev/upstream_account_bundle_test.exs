@@ -544,6 +544,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     end
   end
 
+  @tag :unix_integration
   test "bundle files require an existing 0700 parent and are created exclusively as 0600" do
     root = private_tmp_dir!()
     secure_parent = Path.join(root, "secure")
@@ -575,6 +576,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
              UpstreamAccountBundle.write_bundle_file(missing_parent_path, "secret")
   end
 
+  @tag :unix_integration
   test "bundle reads reject insecure files, insecure parents, and symlinks" do
     root = private_tmp_dir!()
     secure_parent = Path.join(root, "secure")

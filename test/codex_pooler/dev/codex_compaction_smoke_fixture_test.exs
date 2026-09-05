@@ -22,6 +22,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     %{run_id: run_id, root: root}
   end
 
+  @tag :unix_integration
   test "journal and one-time secret are private, disjoint, and reject links", context do
     paths = Journal.paths(context.root, context.run_id)
     journal = Journal.new(context.run_id, "pool-id", "identity-id", "assignment-id", "model-id")
@@ -41,6 +42,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert {:error, :unsafe_file} = Journal.read_journal(paths, context.run_id)
   end
 
+  @tag :unix_integration
   test "journal reads require the current uid and descriptor-safe ownership", context do
     paths = Journal.paths(context.root, context.run_id)
     journal = Journal.prepared(context.run_id)
@@ -53,6 +55,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
              Journal.read_journal(paths, context.run_id, expected_uid: current_uid() + 1)
   end
 
+  @tag :unix_integration
   test "journal exists before provisioning and a pre-commit interruption rolls back all rows",
        context do
     options = Keyword.put(fixture_options(context), :interrupt_after, :pool)
@@ -70,6 +73,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     refute File.exists?(paths.root)
   end
 
+  @tag :unix_integration
   test "acquire provisions exact run resources and release is idempotent", context do
     options = fixture_options(context)
 
@@ -122,6 +126,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert {:ok, %{status: "absent"}} = CodexCompactionSmokeFixture.release(options)
   end
 
+  @tag :unix_integration
   test "release cancels gateway reconciliation for its exact graph and preserves foreign jobs",
        context do
     options = fixture_options(context)
@@ -142,6 +147,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(foreign_options)
   end
 
+  @tag :unix_integration
   test "executing reconciliation retains the journal and fails release", context do
     options = fixture_options(context)
     assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
@@ -157,6 +163,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
 
   for pending_state <- ["scheduled", "retryable"] do
     @pending_state pending_state
+    @tag :unix_integration
     test "release cancels #{@pending_state} reconciliation", context do
       options = fixture_options(context)
       assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
@@ -168,6 +175,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     end
   end
 
+  @tag :unix_integration
   test "release preserves reconciliation that does not match the complete owned graph", context do
     options = fixture_options(context)
     assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
@@ -182,6 +190,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert File.exists?(Journal.paths(context.root, context.run_id).journal)
   end
 
+  @tag :unix_integration
   test "status output retains safe lifecycle identifiers without filesystem paths", context do
     options = fixture_options(context)
     assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
@@ -199,6 +208,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     refute public_json(absent) =~ context.root
   end
 
+  @tag :unix_integration
   test "prepared journal recovers committed resources and cleanup retains no raw secret",
        context do
     options = Keyword.put(fixture_options(context), :interrupt_after, :provision)
@@ -294,6 +304,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
              ])
   end
 
+  @tag :unix_integration
   test "native tool continuation receipt is metadata-only", context do
     options = fixture_options(context)
     assert {:ok, _acquired} = CodexCompactionSmokeFixture.acquire(options)

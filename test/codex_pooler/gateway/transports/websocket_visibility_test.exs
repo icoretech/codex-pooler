@@ -25,18 +25,18 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
     short = measure_stream(1)
     long = measure_stream(1_000)
 
-    IO.puts("websocket visibility baseline #{inspect(%{short: short, long: long})}")
-    assert long.queries <= short.queries + 2
-    assert long.frames == 1_002
+    measurements = "websocket visibility measurements #{inspect(%{short: short, long: long})}"
+    assert long.queries <= short.queries + 2, measurements
+    assert long.frames == 1_002, measurements
   end
 
   test "owner delivery query count does not grow after first visibility" do
     short = measure_stream(1, :owner)
     long = measure_stream(1_000, :owner)
 
-    IO.puts("owner visibility measurements #{inspect(%{short: short, long: long})}")
-    assert long.queries <= short.queries + 2
-    assert long.frames == 1_002
+    measurements = "owner visibility measurements #{inspect(%{short: short, long: long})}"
+    assert long.queries <= short.queries + 2, measurements
+    assert long.frames == 1_002, measurements
   end
 
   test "rolled back visibility never becomes a reusable callback witness" do

@@ -1,5 +1,7 @@
 defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
-  use ExUnit.Case, async: false
+  use CodexPooler.UnixIntegrationCase,
+    async: false,
+    tools: ~w(make ps kill curl lsof perl /usr/bin/python3)
 
   @script Path.expand("../../../dev_support/bin/dev-server-lifecycle", __DIR__)
 
@@ -9,7 +11,12 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     {output, code} =
       System.cmd(
         "make",
-        ["-j4", "DEV_SERVER_LIFECYCLE=#{fixture.lifecycle_path}", "dev"],
+        [
+          "-j4",
+          "DEV_SERVER_LIFECYCLE=#{fixture.lifecycle_path}",
+          "POSTGRES_PORT=#{fixture.postgres_port}",
+          "dev"
+        ],
         cd: fixture.root,
         env: [
           {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"},
@@ -42,7 +49,12 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     {output, code} =
       System.cmd(
         "make",
-        ["-j4", "DEV_SERVER_LIFECYCLE=#{fixture.lifecycle_path}", "dev"],
+        [
+          "-j4",
+          "DEV_SERVER_LIFECYCLE=#{fixture.lifecycle_path}",
+          "POSTGRES_PORT=#{fixture.postgres_port}",
+          "dev"
+        ],
         cd: fixture.root,
         env: [
           {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"},
@@ -446,6 +458,12 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
   end
 
   defp parallel_make_fixture! do
+    {:ok, postgres_listener} =
+      :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
+
+    {:ok, postgres_port} = :inet.port(postgres_listener)
+    on_exit(fn -> :gen_tcp.close(postgres_listener) end)
+
     root = temp_dir!("parallel-make")
     File.cp!(Path.expand("../../../Makefile", __DIR__), Path.join(root, "Makefile"))
     bin_dir = Path.join(root, "bin")
@@ -506,6 +524,7 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
       bin_dir: bin_dir,
       event_log: event_log,
       lifecycle_path: lifecycle_path,
+      postgres_port: postgres_port,
       state_dir: state_dir,
       log_path: log_path
     }

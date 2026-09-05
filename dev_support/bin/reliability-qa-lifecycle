@@ -176,8 +176,13 @@ export CODEX_POOLER_DEV_POSTGRES_DB="$database"
 export DATABASE_URL="postgresql://${postgres_user}:${postgres_password}@127.0.0.1:${postgres_port}/${database}?sslmode=disable"
 export MIX_BUILD_PATH="$mix_build_path"
 
+stat_args=(-f '%Lp:%z')
+if stat -c '%a:%s' "$root/mix.exs" >/dev/null 2>&1; then
+  stat_args=(-c '%a:%s')
+fi
+
 source_manifest() {
-  local destination="$1"
+  local destination="$1" metadata digest target
   (
     cd "$root"
     git ls-files -z --cached --others --exclude-standard -- \
@@ -185,21 +190,25 @@ source_manifest() {
       while IFS= read -r -d '' path; do
         [ -e "$path" ] || [ -L "$path" ] || { printf 'absent\t%s\n' "$path"; continue; }
         if [ -L "$path" ]; then
-          printf 'symlink\t%s\t%s\n' "$(readlink "$path")" "$path"
+          target="$(readlink "$path")" || fail "source symlink inspection failed"
+          printf 'symlink\t%s\t%s\n' "$target" "$path"
         elif [ -f "$path" ]; then
-          printf 'file\t%s\t%s\t%s\n' "$(stat -f '%Lp:%z' "$path")" \
-            "$(shasum -a 256 "$path" | awk '{print $1}')" "$path"
+          metadata="$(stat "${stat_args[@]}" "$path")" || fail "source file inspection failed"
+          [[ "$metadata" =~ ^[0-7]{1,4}:[0-9]+$ ]] || fail "invalid source file metadata"
+          digest="$(shasum -a 256 "$path" | awk '{print $1}')" || fail "source hashing failed"
+          printf 'file\t%s\t%s\t%s\n' "$metadata" "$digest" "$path"
         fi
       done
   ) | LC_ALL=C sort > "$destination"
 }
 
 beam_manifest() {
-  local destination="$1" ebin="$mix_build_path/lib/codex_pooler/ebin"
+  local destination="$1" ebin="$mix_build_path/lib/codex_pooler/ebin" digest
   [ -d "$ebin" ] || fail "compiled Pooler BEAM directory is absent"
   find "$ebin" -type f -name '*.beam' -print0 |
     while IFS= read -r -d '' path; do
-      printf '%s\t%s\n' "$(shasum -a 256 "$path" | awk '{print $1}')" "${path#"$mix_build_path/"}"
+      digest="$(shasum -a 256 "$path" | awk '{print $1}')" || fail "compiled Pooler BEAM hashing failed"
+      printf '%s\t%s\n' "$digest" "${path#"$mix_build_path/"}"
     done | LC_ALL=C sort > "$destination"
   [ -s "$destination" ] || fail "compiled Pooler BEAM manifest is empty"
 }
