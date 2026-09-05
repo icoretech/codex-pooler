@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
 
   @max_candidate_bytes 16_384
+  @max_skipped_nesting 128
   @marker_suffix_bytes 64
   @usage_marker ~r/(?<!\\)"usage"\s*:/
   @service_tier_pattern ~r/(?<!\\)"service_tier"\s*:\s*"([^"\\]+)"/
@@ -11,10 +12,21 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
   @event_pattern ~r/(?:^|\n)event:\s*(response\.[^\r\n]+)/
   @event_prefix "event:"
 
+  @type sanitizer :: %{
+          required(:depth) => non_neg_integer(),
+          required(:escaped?) => boolean(),
+          required(:in_string?) => boolean(),
+          required(:key_position?) => boolean(),
+          required(:phase) =>
+            :normal | :after_attribution_key | :attribution_value | :skip | :invalid,
+          required(:skip_stack) => [integer()],
+          required(:string) => binary()
+        }
   @type candidate :: %{
           required(:buffer) => binary(),
           required(:event_prefix) => binary(),
           required(:event_type) => String.t() | nil,
+          required(:sanitizer) => sanitizer(),
           required(:service_tier) => String.t() | nil
         }
   @type t :: %{
@@ -79,12 +91,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
 
       :none ->
         {candidate_data, event_prefix} = split_event_prefix(scan)
+        {candidate, buffer} = append_candidate(candidate, candidate_data)
 
         inspect_candidate(%{
           state
           | candidate: %{
               candidate
-              | buffer: candidate.buffer <> candidate_data,
+              | buffer: buffer,
                 event_prefix: event_prefix
             }
         })
@@ -100,11 +113,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
         state = update_event_context(state, context)
 
         candidate = %{
-          buffer: binary_part(scan, offset, byte_size(scan) - offset),
+          buffer: "",
           event_prefix: "",
           event_type: state.event_type,
+          sanitizer: new_sanitizer(),
           service_tier: state.service_tier
         }
+
+        candidate_data = binary_part(scan, offset, byte_size(scan) - offset)
+        {candidate, buffer} = append_candidate(candidate, candidate_data)
+        candidate = %{candidate | buffer: buffer}
 
         inspect_candidate(%{state | candidate: candidate, marker_suffix: ""})
 
@@ -129,12 +147,188 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
     end
   end
 
+  defp bound_incomplete_candidate(
+         %{candidate: %{buffer: buffer, sanitizer: %{phase: :invalid}} = candidate} = state
+       ) do
+    %{state | candidate: %{candidate | buffer: suffix(buffer, @marker_suffix_bytes)}}
+  end
+
   defp bound_incomplete_candidate(%{candidate: %{buffer: buffer}} = state)
        when byte_size(buffer) > @max_candidate_bytes do
     %{state | candidate: nil, marker_suffix: suffix(buffer, @marker_suffix_bytes)}
   end
 
   defp bound_incomplete_candidate(state), do: state
+
+  defp append_candidate(candidate, data) do
+    {sanitizer, output} = sanitize_attribution(candidate.sanitizer, data)
+    {%{candidate | sanitizer: sanitizer}, candidate.buffer <> output}
+  end
+
+  defp new_sanitizer do
+    %{
+      depth: 0,
+      escaped?: false,
+      in_string?: false,
+      key_position?: false,
+      phase: :normal,
+      skip_stack: [],
+      string: ""
+    }
+  end
+
+  defp sanitize_attribution(sanitizer, data),
+    do: sanitize_attribution(sanitizer, data, [])
+
+  defp sanitize_attribution(sanitizer, "", output),
+    do: {sanitizer, output |> Enum.reverse() |> IO.iodata_to_binary()}
+
+  defp sanitize_attribution(%{phase: :invalid} = sanitizer, _data, output) do
+    sanitize_attribution(sanitizer, "", output)
+  end
+
+  defp sanitize_attribution(
+         %{phase: :after_attribution_key} = sanitizer,
+         <<byte, rest::binary>>,
+         output
+       ) do
+    cond do
+      byte in [32, 9, 10, 13] ->
+        sanitize_attribution(sanitizer, rest, [<<byte>> | output])
+
+      byte == ?: ->
+        sanitize_attribution(%{sanitizer | phase: :attribution_value}, rest, [":" | output])
+
+      true ->
+        sanitize_attribution(%{sanitizer | phase: :normal}, <<byte, rest::binary>>, output)
+    end
+  end
+
+  defp sanitize_attribution(
+         %{phase: :attribution_value} = sanitizer,
+         <<byte, rest::binary>>,
+         output
+       ) do
+    cond do
+      byte in [32, 9, 10, 13] ->
+        sanitize_attribution(sanitizer, rest, [<<byte>> | output])
+
+      byte == ?{ ->
+        sanitizer = %{sanitizer | phase: :skip, skip_stack: [?}], in_string?: false}
+        sanitize_attribution(sanitizer, rest, ["null" | output])
+
+      true ->
+        sanitize_attribution(%{sanitizer | phase: :normal}, <<byte, rest::binary>>, output)
+    end
+  end
+
+  defp sanitize_attribution(
+         %{phase: :skip, in_string?: true, escaped?: true} = sanitizer,
+         <<_byte, rest::binary>>,
+         output
+       ),
+       do: sanitize_attribution(%{sanitizer | escaped?: false}, rest, output)
+
+  defp sanitize_attribution(
+         %{phase: :skip, in_string?: true} = sanitizer,
+         <<byte, rest::binary>>,
+         output
+       ) do
+    sanitizer =
+      case byte do
+        ?\\ -> %{sanitizer | escaped?: true}
+        ?" -> %{sanitizer | in_string?: false}
+        _other -> sanitizer
+      end
+
+    sanitize_attribution(sanitizer, rest, output)
+  end
+
+  defp sanitize_attribution(
+         %{phase: :skip, skip_stack: stack} = sanitizer,
+         <<byte, rest::binary>>,
+         output
+       ) do
+    case {byte, stack} do
+      {?", _stack} ->
+        sanitize_attribution(%{sanitizer | in_string?: true}, rest, output)
+
+      {?{, _stack} ->
+        push_skipped_container(sanitizer, ?}, rest, output)
+
+      {?[, _stack} ->
+        push_skipped_container(sanitizer, ?], rest, output)
+
+      {closing, [closing]} ->
+        sanitize_attribution(%{sanitizer | phase: :normal, skip_stack: []}, rest, output)
+
+      {closing, [closing | remaining]} ->
+        sanitize_attribution(%{sanitizer | skip_stack: remaining}, rest, output)
+
+      {closing, _stack} when closing in [?}, ?]] ->
+        # Keep skipping malformed attribution so it cannot become valid aggregate usage.
+        sanitize_attribution(sanitizer, rest, output)
+
+      _other ->
+        sanitize_attribution(sanitizer, rest, output)
+    end
+  end
+
+  defp sanitize_attribution(
+         %{in_string?: true, escaped?: true} = sanitizer,
+         <<byte, rest::binary>>,
+         output
+       ) do
+    string = append_key_byte(sanitizer.string, byte)
+
+    sanitize_attribution(%{sanitizer | escaped?: false, string: string}, rest, [<<byte>> | output])
+  end
+
+  defp sanitize_attribution(%{in_string?: true} = sanitizer, <<byte, rest::binary>>, output) do
+    case byte do
+      ?\\ ->
+        sanitize_attribution(%{sanitizer | escaped?: true}, rest, ["\\" | output])
+
+      ?" ->
+        phase =
+          if sanitizer.key_position? and sanitizer.depth == 1 and
+               sanitizer.string == "attribution",
+             do: :after_attribution_key,
+             else: :normal
+
+        sanitizer = %{sanitizer | in_string?: false, phase: phase, string: ""}
+        sanitize_attribution(sanitizer, rest, ["\"" | output])
+
+      _other ->
+        string = append_key_byte(sanitizer.string, byte)
+        sanitize_attribution(%{sanitizer | string: string}, rest, [<<byte>> | output])
+    end
+  end
+
+  defp sanitize_attribution(%{phase: :normal} = sanitizer, <<byte, rest::binary>>, output) do
+    sanitizer =
+      case byte do
+        ?" -> %{sanitizer | in_string?: true, string: ""}
+        ?{ -> %{sanitizer | depth: sanitizer.depth + 1, key_position?: sanitizer.depth == 0}
+        ?} -> %{sanitizer | depth: max(sanitizer.depth - 1, 0), key_position?: false}
+        ?, -> %{sanitizer | key_position?: sanitizer.depth == 1}
+        byte when byte in [32, 9, 10, 13] -> sanitizer
+        _other -> %{sanitizer | key_position?: false}
+      end
+
+    sanitize_attribution(sanitizer, rest, [<<byte>> | output])
+  end
+
+  defp append_key_byte(string, byte) when byte_size(string) < 32, do: string <> <<byte>>
+  defp append_key_byte(string, _byte), do: string
+
+  defp push_skipped_container(%{skip_stack: stack} = sanitizer, closing, rest, output) do
+    if length(stack) < @max_skipped_nesting do
+      sanitize_attribution(%{sanitizer | skip_stack: [closing | stack]}, rest, output)
+    else
+      sanitize_attribution(%{sanitizer | phase: :invalid, skip_stack: []}, rest, output)
+    end
+  end
 
   defp maybe_accept_candidate(state, candidate, usage_object)
        when byte_size(usage_object) <= @max_candidate_bytes,
