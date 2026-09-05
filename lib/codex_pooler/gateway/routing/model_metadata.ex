@@ -615,7 +615,12 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
 
   @spec effective_context_window(metadata()) :: pos_integer() | nil
   def effective_context_window(metadata) when is_map(metadata) do
-    context_window = metadata["context_window"]
+    context_window =
+      case metadata["context_window"] do
+        nil -> metadata["max_context_window"]
+        context_window -> context_window
+      end
+
     percent = int_metadata(metadata, "effective_context_window_percent", 95)
 
     if is_integer(context_window) and context_window > 0 and percent in 1..100 do

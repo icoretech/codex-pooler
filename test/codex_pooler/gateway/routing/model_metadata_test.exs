@@ -5,6 +5,26 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataTest do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Routing.ModelMetadata
 
+  test "effective context follows native context precedence and rejects invalid limits" do
+    for {metadata, expected} <- [
+          {%{"max_context_window" => 200_000}, 190_000},
+          {%{"context_window" => nil, "max_context_window" => 200_000}, 190_000},
+          {%{"context_window" => 100_000, "max_context_window" => 200_000}, 95_000},
+          {%{"max_context_window" => 200_000, "effective_context_window_percent" => 90}, 180_000},
+          {%{"context_window" => 0, "max_context_window" => 200_000}, nil},
+          {%{"context_window" => "100000", "max_context_window" => 200_000}, nil},
+          {%{"context_window" => false, "max_context_window" => 200_000}, nil},
+          {%{"max_context_window" => 0}, nil},
+          {%{"max_context_window" => -1}, nil},
+          {%{"max_context_window" => "200000"}, nil},
+          {%{"max_context_window" => 200_000, "effective_context_window_percent" => 101}, nil},
+          {%{}, nil},
+          {nil, nil}
+        ] do
+      assert ModelMetadata.effective_context_window(metadata) == expected
+    end
+  end
+
   test "normalizes unsupported capability terms without raising" do
     assert ModelMetadata.normalize_capability_value(%{mode: "audio"}) == ""
     assert ModelMetadata.normalize_capability_value(["image"]) == ""

@@ -237,6 +237,84 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     refute Map.has_key?(model, "comp_hash")
   end
 
+  test "GET /v1/models resolves context from the selected native maximum when context is absent",
+       %{
+         conn: conn
+       } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{
+            "max_context_window" => 200_000,
+            "effective_context_window_percent" => 90
+          }
+        }
+      )
+
+    backend_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
+    assert %{"models" => [native_model]} = json_response(backend_conn, 200)
+    assert native_model["context_window"] == nil
+    assert native_model["max_context_window"] == 200_000
+
+    public_conn = conn |> auth(setup) |> get("/v1/models")
+    assert %{"data" => [public_model]} = json_response(public_conn, 200)
+    assert public_model["context_length"] == 180_000
+    refute Map.has_key?(public_model, "max_context_window")
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "catalogs preserve the native client schema across Full and Lite serving modes", %{
+    conn: conn
+  } do
+    # Codex 0.153.3 and 0.153.4 share this ModelsResponse/ModelInfo wire schema.
+    source = %{
+      "slug" => "gpt-test-model",
+      "display_name" => "Sample model",
+      "supported_reasoning_levels" => [%{"effort" => "medium", "description" => ""}],
+      "default_reasoning_level" => "medium",
+      "shell_type" => "unified_exec",
+      "visibility" => "list",
+      "supported_in_api" => true,
+      "priority" => 0,
+      "support_verbosity" => false,
+      "truncation_policy" => %{"mode" => "tokens", "limit" => 10_000},
+      "experimental_supported_tools" => [],
+      "model_messages" => %{"instructions_template" => ""},
+      "context_window" => 200_000,
+      "max_context_window" => 300_000,
+      "effective_context_window_percent" => 90,
+      "input_modalities" => ["text", "image"],
+      "supports_image_detail_original" => true,
+      "supports_reasoning_summary_parameter" => false,
+      "service_tiers" => [],
+      "use_responses_lite" => true
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream, model_metadata: %{"upstream_model" => source})
+
+    for mode <- ["full", "lite"] do
+      put_models_model_serving_mode!(setup, mode)
+      native_conn = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models")
+      assert %{"models" => [native]} = json_response(native_conn, 200)
+
+      expected = Map.put(source, "use_responses_lite", mode == "lite")
+      assert Map.take(native, Map.keys(source)) == expected
+
+      public_conn = conn |> recycle() |> auth(setup) |> get("/v1/models")
+      assert %{"data" => [public]} = json_response(public_conn, 200)
+      assert public["id"] == source["slug"]
+      assert public["context_length"] == 180_000
+      assert public["input_modalities"] == ["text", "image"]
+      refute Map.has_key?(public, "model_messages")
+      refute Map.has_key?(public, "use_responses_lite")
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   test "GET /v1/models exposes the long-context effective window", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
 
