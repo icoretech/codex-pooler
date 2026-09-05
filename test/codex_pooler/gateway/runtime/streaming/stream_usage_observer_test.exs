@@ -110,6 +110,187 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
     assert StreamUsageObserver.candidate_bytes(state) <= StreamUsageObserver.max_candidate_bytes()
   end
 
+  test "captures aggregate usage around attribution larger than observer and retained-body limits" do
+    for order <- [:attribution_first, :attribution_last] do
+      event = large_attribution_event(order)
+
+      state =
+        event
+        |> variable_chunks([1, 2, 7, 31, 257, 4_093])
+        |> Enum.reduce(StreamUsageObserver.new(), &StreamUsageObserver.observe(&2, &1))
+
+      retained =
+        RetainedBody.empty()
+        |> RetainedBody.append(event)
+        |> RetainedBody.read()
+
+      assert byte_size(event) > RetainedBody.max_bytes()
+      assert ResponseUsage.from_sse(retained)[:status] == "usage_unknown"
+
+      assert StreamUsageObserver.usage(state) == %{
+               @known_usage
+               | input_tokens: 2_414,
+                 cached_input_tokens: 1_337,
+                 output_tokens: 5,
+                 reasoning_tokens: 3,
+                 total_tokens: 2_419
+             }
+
+      assert StreamUsageObserver.candidate_bytes(state) == 0
+    end
+  end
+
+  test "skips braces and escaped quotes inside large attribution strings across chunk boundaries" do
+    escaped = String.duplicate(~s(value \\"quoted} { text), 5_000)
+    event = large_attribution_event(:attribution_first, escaped)
+
+    state =
+      event
+      |> variable_chunks([3, 1, 5, 2, 89])
+      |> Enum.reduce(StreamUsageObserver.new(), &StreamUsageObserver.observe(&2, &1))
+
+    assert StreamUsageObserver.usage(state).total_tokens == 2_419
+    assert StreamUsageObserver.usage(state).cached_input_tokens == 1_337
+  end
+
+  test "rejects valid attribution beyond nesting limit and recovers at the next event" do
+    nested_usage =
+      Jason.encode!(%{
+        "usage" => usage(100, 1, 101),
+        "tail" => String.duplicate("x", 20_000)
+      })
+
+    attribution =
+      String.duplicate(~s({"nested":), 130) <> nested_usage <> String.duplicate("}", 130)
+
+    event = large_attribution_event(:attribution_first, nil, 2_419, attribution)
+    {split_at, _length} = event |> :binary.matches(~s("usage":)) |> List.last()
+    <<first::binary-size(^split_at), second::binary>> = event
+
+    state =
+      StreamUsageObserver.new()
+      |> StreamUsageObserver.observe(first)
+      |> StreamUsageObserver.observe(second)
+
+    assert StreamUsageObserver.usage(state) == nil
+    assert StreamUsageObserver.candidate_bytes(state) <= StreamUsageObserver.max_candidate_bytes()
+
+    recovered =
+      StreamUsageObserver.observe(
+        state,
+        usage_event("response.completed", usage(16, 5, 21), "priority")
+      )
+
+    assert StreamUsageObserver.usage(recovered) == @known_usage
+  end
+
+  test "rejects malformed mixed-container overflow at every split and recovers" do
+    attribution =
+      "{" <>
+        String.duplicate(~s("nested":{), 128) <>
+        "0]" <> String.duplicate("}", 128)
+
+    malformed = large_attribution_event(:attribution_first, nil, 2_419, attribution)
+    valid = usage_event("response.completed", usage(16, 5, 21), "priority")
+
+    for split_at <- 0..byte_size(malformed) do
+      <<first::binary-size(^split_at), second::binary>> = malformed
+
+      state =
+        StreamUsageObserver.new()
+        |> StreamUsageObserver.observe(first)
+        |> StreamUsageObserver.observe(second)
+
+      assert StreamUsageObserver.usage(state) == nil
+
+      assert StreamUsageObserver.candidate_bytes(state) <=
+               StreamUsageObserver.max_candidate_bytes()
+
+      assert state
+             |> StreamUsageObserver.observe(valid)
+             |> StreamUsageObserver.usage() == @known_usage
+    end
+  end
+
+  test "bounds a large same-chunk prefix before invalid attribution and recovers" do
+    attribution =
+      String.duplicate(~s({"nested":), 129) <>
+        Jason.encode!(%{"usage" => usage(100, 1, 101)}) <>
+        String.duplicate("}", 129)
+
+    malformed =
+      large_attribution_event(:attribution_last, nil, 2_419, attribution)
+      |> String.replace(
+        ~s("input_tokens":2414),
+        ~s("padding":"#{String.duplicate("x", StreamUsageObserver.max_candidate_bytes())}","input_tokens":2414),
+        global: false
+      )
+
+    invalid_state = StreamUsageObserver.observe(StreamUsageObserver.new(), malformed)
+
+    assert StreamUsageObserver.usage(invalid_state) == nil
+    refute invalid_state.terminal?
+
+    assert StreamUsageObserver.candidate_bytes(invalid_state) <=
+             StreamUsageObserver.max_candidate_bytes()
+
+    valid = usage_event("response.completed", usage(16, 5, 21), "priority")
+
+    for split_at <- 0..byte_size("event:") do
+      <<first::binary-size(^split_at), second::binary>> = valid
+
+      recovered =
+        invalid_state
+        |> StreamUsageObserver.observe(first)
+        |> StreamUsageObserver.observe(second)
+
+      assert StreamUsageObserver.usage(recovered) == @known_usage
+      assert recovered.terminal?
+      assert StreamUsageObserver.candidate_bytes(recovered) == 0
+    end
+  end
+
+  test "captures oversized attribution across every attribution marker boundary" do
+    event = large_attribution_event(:attribution_first)
+    attribution_offset = marker_offset(event, ~s("attribution"))
+
+    for split_at <- attribution_offset..(attribution_offset + byte_size(~s("attribution"))) do
+      <<first::binary-size(^split_at), second::binary>> = event
+
+      state =
+        StreamUsageObserver.new()
+        |> StreamUsageObserver.observe(first)
+        |> StreamUsageObserver.observe(second)
+
+      assert StreamUsageObserver.usage(state).total_tokens == 2_419
+      assert StreamUsageObserver.candidate_bytes(state) == 0
+    end
+  end
+
+  test "rejects malformed large attribution and invalid aggregate totals" do
+    malformed =
+      large_attribution_event(:attribution_first)
+      |> String.replace(~s("input_tokens":2414), ~s("input_tokens" 2414), global: false)
+
+    invalid_total = large_attribution_event(:attribution_last, nil, 2_418)
+
+    negative =
+      large_attribution_event(:attribution_first)
+      |> String.replace(~s("input_tokens":2414), ~s("input_tokens":-1), global: false)
+
+    for event <- [malformed, invalid_total, negative] do
+      state =
+        event
+        |> variable_chunks([1, 127, 4_097])
+        |> Enum.reduce(StreamUsageObserver.new(), &StreamUsageObserver.observe(&2, &1))
+
+      assert StreamUsageObserver.usage(state) == nil
+
+      assert StreamUsageObserver.candidate_bytes(state) <=
+               StreamUsageObserver.max_candidate_bytes()
+    end
+  end
+
   test "abandons a truncated usage candidate when the next explicit event begins" do
     truncated =
       ~s(event: response.in_progress\ndata: {"type":"response.in_progress","usage":{"padding":") <>
@@ -305,6 +486,57 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
       "reasoning_tokens" => 0,
       "total_tokens" => total
     }
+  end
+
+  defp large_attribution_event(order, text \\ nil, total \\ 2_419, encoded_attribution \\ nil) do
+    encoded_attribution =
+      encoded_attribution ||
+        Jason.encode!(%{
+          "items" =>
+            Enum.map(1..400, fn index ->
+              %{
+                "id" => "item-#{index}",
+                "input_tokens" => index,
+                "metadata" => %{
+                  "text" => text || String.duplicate("attribution payload", 40),
+                  "nested" => [%{"brace" => "}"}, "{"]
+                }
+              }
+            end)
+        })
+
+    fields = [
+      ~s("input_tokens":2414),
+      ~s("input_tokens_details":{"cached_tokens":1337}),
+      ~s("output_tokens":5),
+      ~s("output_tokens_details":{"reasoning_tokens":3}),
+      ~s("total_tokens":#{total})
+    ]
+
+    usage_fields =
+      case order do
+        :attribution_first -> [~s("attribution":#{encoded_attribution}) | fields]
+        :attribution_last -> fields ++ [~s("attribution":#{encoded_attribution})]
+      end
+
+    payload =
+      ~s({"type":"response.completed","response":{"service_tier":"priority","usage":{) <>
+        Enum.join(usage_fields, ",") <> ~s(}}})
+
+    "event: response.completed\ndata: " <> payload <> "\n\n"
+  end
+
+  defp variable_chunks(binary, sizes), do: variable_chunks(binary, sizes, sizes, [])
+
+  defp variable_chunks("", _sizes, _all_sizes, chunks), do: Enum.reverse(chunks)
+
+  defp variable_chunks(binary, [], all_sizes, chunks),
+    do: variable_chunks(binary, all_sizes, all_sizes, chunks)
+
+  defp variable_chunks(binary, [size | sizes], all_sizes, chunks) do
+    size = min(size, byte_size(binary))
+    <<chunk::binary-size(^size), rest::binary>> = binary
+    variable_chunks(rest, sizes, all_sizes, [chunk | chunks])
   end
 
   defp sse_event(event, payload) do
