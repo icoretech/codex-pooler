@@ -9625,7 +9625,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     assert turn.status == "succeeded"
-    assert Repo.get!(CodexSession, state.codex_session.id).status == "interrupted"
+    assert Repo.get!(CodexSession, state.codex_session.id).status == "active"
+    assert request.response_status_code == 200
+    assert turn.error_code == nil
 
     refute log =~ "Postgrex.Protocol"
     refute log =~ "DBConnection"
@@ -12186,6 +12188,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     Gateway.interrupt_codex_session(session, %{
       reason: "client_disconnected",
+      request_id: reserved.request.correlation_id,
       reconnect_window_seconds: 300
     })
 
@@ -12233,6 +12236,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert {:error, {:interrupt_accounting_failed, %Ecto.NoResultsError{}}} =
              Gateway.interrupt_codex_session(session, %{
                reason: "client_disconnected",
+               request_id: reserved.request.correlation_id,
                reconnect_window_seconds: 300
              })
 
@@ -12279,6 +12283,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     Gateway.interrupt_codex_session(session, %{
       reason: "client_disconnected",
+      request_id: reserved.request.correlation_id,
       reconnect_window_seconds: 300
     })
 
@@ -12286,7 +12291,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Repo.get!(CodexTurn, turn.id).error_code == nil
     assert Repo.get!(Request, reserved.request.id).status == "succeeded"
     assert Repo.get!(Request, reserved.request.id).last_error_code == nil
-    assert Repo.get!(CodexSession, session.id).status == "interrupted"
+    assert Repo.get!(CodexSession, session.id).status == "active"
+
+    assert {:ok, reused_session} =
+             Gateway.start_codex_session(auth, %{
+               accepted_turn_state: "stable-completed-disconnect"
+             })
+
+    assert reused_session.id == session.id
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where:
+                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
   end
 
   test "websocket response task exits are reported as structured websocket errors" do
@@ -12728,6 +12748,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     Gateway.interrupt_codex_session(session, %{
       reason: "client_disconnected",
+      request_id: reserved.request.correlation_id,
       reconnect_window_seconds: 300
     })
 
@@ -12813,7 +12834,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         CodexResponsesSocket.terminate(:closed, %{
           tasks: MapSet.new([pid]),
           codex_session: session,
-          opts: %{reason: "client_disconnected", reconnect_window_seconds: 300}
+          opts: %{
+            reason: "client_disconnected",
+            request_id: reserved.request.correlation_id,
+            reconnect_window_seconds: 300
+          }
         })
       end)
 
@@ -12829,7 +12854,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Repo.get!(CodexTurn, turn.id).error_code == nil
     assert Repo.get!(Request, reserved.request.id).status == "succeeded"
     assert Repo.get!(Request, reserved.request.id).last_error_code == nil
-    assert Repo.get!(CodexSession, session.id).status == "interrupted"
+    assert Repo.get!(CodexSession, session.id).status == "active"
+
+    assert {:ok, reused_session} =
+             Gateway.start_codex_session(auth, %{accepted_turn_state: "task-drain"})
+
+    assert reused_session.id == session.id
 
     assert Repo.aggregate(
              from(entry in LedgerEntry,
@@ -12911,7 +12941,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           tasks: MapSet.new([task]),
           codex_session: session,
           upstream_websocket_session: upstream_websocket_session,
-          opts: %{reason: "client_disconnected", reconnect_window_seconds: 300}
+          opts: %{
+            reason: "client_disconnected",
+            request_id: reserved.request.correlation_id,
+            reconnect_window_seconds: 300
+          }
         })
       end)
 

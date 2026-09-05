@@ -571,22 +571,50 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   end
 
   defp interrupt_downstream_turn(:ok, state) do
-    state
-    |> Map.get(:codex_session)
-    |> Websocket.interrupt_detached_codex_turn(downstream_interrupt_opts(state))
-    |> log_interrupt_failure(state)
+    unless idle_without_cleanup_authority?(state) do
+      state
+      |> Map.get(:codex_session)
+      |> Websocket.interrupt_detached_codex_turn(downstream_interrupt_opts(state))
+      |> log_interrupt_failure(state)
+    end
+
+    :ok
   end
 
   defp interrupt_downstream_turn(_result, _state), do: :ok
 
   defp recover_leftovers({:error, reason}, state) when reason in @owner_recovery_reasons do
-    state
-    |> Map.get(:codex_session)
-    |> Websocket.recover_owner_lifecycle_leftovers(reason, lifecycle_recovery_opts(state, reason))
-    |> log_lifecycle_recovery_failure(state)
+    if idle_without_cleanup_authority?(state) do
+      {:ok, %{interrupted_turn_count: 0}}
+    else
+      state
+      |> Map.get(:codex_session)
+      |> Websocket.recover_owner_lifecycle_leftovers(
+        reason,
+        lifecycle_recovery_opts(state, reason)
+      )
+      |> log_lifecycle_recovery_failure(state)
+    end
   end
 
   defp recover_leftovers(_result, _state), do: :ok
+
+  defp idle_without_cleanup_authority?(state) do
+    Enum.all?(
+      [
+        :websocket_owner_cleanup_witness,
+        :websocket_owner_cleanup_task,
+        :websocket_owner_reconnect_turn_pid,
+        :websocket_owner_pending_handoff,
+        :public_response_task_pid
+      ],
+      &is_nil(Map.get(state, &1))
+    ) and Map.get(state, :websocket_owner_active_turn_reconnect?, false) != true and
+      MapSet.size(Map.get(state, :tasks, MapSet.new())) == 0 and
+      map_size(Map.get(state, :direct_cleanup_contexts, %{})) == 0 and
+      map_size(Map.get(state, :direct_cleanup_receipts, %{})) == 0 and
+      :queue.is_empty(Map.get(state, :queued_response_payloads, :queue.new()))
+  end
 
   defp lifecycle_recovery_opts(state, reason) do
     interrupt_reason = reason |> failure_reason() |> lifecycle_interrupt_reason()

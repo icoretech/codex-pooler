@@ -9,7 +9,9 @@ defmodule CodexPooler.RequestReplayFixtures do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.{RemoteReconnectControlV2, WebsocketOwnerSession}
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Repo
 
@@ -133,6 +135,138 @@ defmodule CodexPooler.RequestReplayFixtures do
       failure_reason: :client_disconnected,
       pre_visible_output: true
     }
+  end
+
+  def start_suspended_replay_owner(fixture) do
+    observer = self()
+    request_id = fixture.request.id
+
+    upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _pid, _request, _writer ->
+        send(observer, {:replay_owner_request_started, request_id})
+
+        receive do
+          :unexpected_replay_release -> {:error, :unexpected_send}
+        after
+          15_000 -> raise "replay owner suspension barrier timed out"
+        end
+      end,
+      close: fn pid -> Agent.stop(pid, :normal) end
+    }
+
+    assert {:ok, owner} =
+             WebsocketOwnerSession.start_owner(
+               codex_session_id: fixture.session.id,
+               owner_instance_id: fixture.session.owner_instance_id,
+               owner_lease_token: fixture.owner_lease_token,
+               owner_renewal_ms: 60_000,
+               handoff_absolute_timeout_ms: 60_000,
+               upstream: upstream
+             )
+
+    on_exit(fn -> stop_replay_owner(fixture.session.id) end)
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, %{
+               pid: observer,
+               correlation_id: Ecto.UUID.generate()
+             })
+
+    fixture.request
+    |> Ecto.Changeset.change(
+      request_metadata: %{
+        "websocket_owner_forwarding" => %{
+          "owner_instance_id" => fixture.session.owner_instance_id,
+          "downstream_epoch" => downstream.epoch
+        }
+      }
+    )
+    |> Repo.update!()
+
+    descriptor = %{
+      semantic_turn_key: fixture.semantic_digest,
+      replay_claim_digest: fixture.replay_claim_digest,
+      authorization_snapshot: replay_authorization(fixture),
+      request_id: fixture.request.id,
+      codex_turn_id: fixture.turn.id,
+      model_id: fixture.model.id,
+      endpoint: fixture.request.endpoint,
+      attempt_id: fixture.attempt.id,
+      replay_generation: 0
+    }
+
+    assert :ok =
+             WebsocketOwnerSession.prepare_next_replay_descriptor(owner, downstream, descriptor)
+
+    request = %UpstreamWebsocketSession.Request{
+      request_id: fixture.request.id,
+      attempt_id: fixture.attempt.id,
+      url: "http://127.0.0.1/unused",
+      headers: [],
+      payload: "{}",
+      timeouts: RequestOptions.timeout_config(%{}),
+      message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
+    }
+
+    submitter =
+      Task.async(fn -> WebsocketOwnerSession.submit_request(owner, downstream, request) end)
+
+    assert_receive {:replay_owner_request_started, ^request_id}, 15_000
+    assert :suspended = WebsocketOwnerSession.detach_downstream(owner, downstream)
+    assert Task.await(submitter, 15_000) == {:error, :client_disconnected}
+
+    assert %{suspended_replay: %{cleanup_witness: witness, lifecycle: armed}} =
+             :sys.get_state(owner)
+
+    assert witness.request_id == fixture.request.id
+    assert witness.attempt_id == fixture.attempt.id
+    {owner, armed}
+  end
+
+  def suspended_consume_input(fixture, owner, armed) do
+    control = %{
+      reserve_control(fixture, :crypto.strong_rand_bytes(32))
+      | action: :preflight,
+        provisional_token: nil,
+        replay_generation: nil,
+        authorization_binding: replay_authorization(fixture)
+    }
+
+    assert {:ok, :provisional, token, 1, generation, downstream} =
+             WebsocketOwnerSession.reconnect_control_v2(owner, control)
+
+    reserve = %{reserve_control(fixture, token) | downstream: downstream}
+
+    assert {:ok, :consume_reserved, timeout, receipt, digest} =
+             WebsocketOwnerSession.reconnect_control_v2(owner, reserve)
+
+    %{
+      auth: fixture.auth,
+      entitlement_id: armed.entitlement_id,
+      request_id: fixture.request.id,
+      codex_turn_id: fixture.turn.id,
+      eligible_attempt_id: fixture.attempt.id,
+      replay_generation: 1,
+      provisional_token: token,
+      owner_lease_token: fixture.owner_lease_token,
+      reserve_timeout_ms: timeout,
+      owner_forwarder_opts: [],
+      downstream_epoch: downstream.epoch,
+      owner_process_generation: generation,
+      reserve_receipt: receipt,
+      reserve_receipt_digest: digest
+    }
+  end
+
+  defp replay_authorization(fixture) do
+    Map.take(fixture.preflight, [
+      :api_key_id,
+      :api_key_runtime_epoch,
+      :pool_id,
+      :codex_session_id,
+      :model_identifier
+    ])
   end
 
   def consume_input(fixture, armed, token, timeout_ms \\ 5_000) do

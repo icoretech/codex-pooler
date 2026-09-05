@@ -100,7 +100,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           required(:first_compact_collection) =>
             NativeCompactionAdmission.FirstCompactCollection.t() | nil,
           required(:expected_connection_lifecycle) => map() | nil,
-          required(:forward_error_body?) => boolean()
+          required(:forward_error_body?) => boolean(),
+          required(:native_client_retry_observation) => ClientRetry.Observation.t() | nil,
+          required(:client_retry_dispatch_authority) => ClientRetry.DispatchAuthority.t() | nil
         }
 
   defmodule Request do

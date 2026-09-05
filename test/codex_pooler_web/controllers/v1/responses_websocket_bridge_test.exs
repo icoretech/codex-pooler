@@ -2593,6 +2593,24 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   @tag :rollout_drain_precontent_fallback
   test "a pre-content drain cut falls back to plain HTTP instead of owner_drained", %{conn: conn} do
+    log = capture_log(fn -> assert_precontent_drain_fallback(conn) end)
+
+    warnings =
+      log |> String.split("\n", trim: true) |> Enum.filter(&String.contains?(&1, "[warning]"))
+
+    assert length(warnings) == 2
+
+    Enum.each(warnings, fn warning ->
+      assert warning =~ "websocket owner exit persistence failed"
+      assert warning =~ "operation=interrupt_codex_session"
+      assert warning =~ "reason_class=stale_owner_cleanup"
+      assert warning =~ "owner_exit_reason=owner_drained"
+    end)
+
+    refute log =~ "[error]"
+  end
+
+  defp assert_precontent_drain_fallback(conn) do
     release_ref = make_ref()
 
     upstream =
@@ -2620,6 +2638,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
                    1_000
 
+    admitted_request = latest_request(setup.pool)
+    admitted_turn = Repo.get_by!(CodexTurn, request_id: admitted_request.id)
+    assert {:ok, original_owner} = WebsocketOwnerSession.lookup(admitted_turn.codex_session_id)
+    original_owner_monitor = Process.monitor(original_owner)
+
     harness = start_rollout_drain_harness()
     deadline = harness.deadline
 
@@ -2637,6 +2660,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     response = Task.await(request_task, 2_000)
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
     assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 2_000)
+
+    assert_receive {:DOWN, ^original_owner_monitor, :process, ^original_owner, _reason},
+                   @websocket_frame_timeout
 
     assert response.status == 200
     assert completed_id(response.resp_body) == "resp_drain_precontent_fallback"

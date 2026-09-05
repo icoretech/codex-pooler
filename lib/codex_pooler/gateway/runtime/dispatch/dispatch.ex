@@ -333,13 +333,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
 
         nil ->
           Accounting.create_attempt(context.reserved.request, context.assignment, attrs)
-
-        _invalid ->
-          {:error,
-           %{
-             code: :invalid_client_retry_dispatch_authority,
-             message: "client retry dispatch authority is invalid"
-           }}
       end
 
     case result do

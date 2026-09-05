@@ -174,10 +174,14 @@ defmodule CodexPooler.ReliabilityComposedFixture do
   end
 
   def cleanup!(setup) do
-    Repo.delete!(Repo.get!(CodexPooler.Pools.Pool, setup.pool.id))
+    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^setup.pool.id)
 
     Repo.delete_all(
       from i in UpstreamIdentity, where: i.id in ^[setup.identity.id, setup.sibling.id]
+    )
+
+    Repo.delete_all(
+      from pricing in CodexPooler.Catalog.PricingSnapshot, where: pricing.id == ^setup.pricing.id
     )
   end
 

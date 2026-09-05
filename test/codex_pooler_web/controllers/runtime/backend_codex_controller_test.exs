@@ -10713,7 +10713,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         {setup, first_state, second_state}
       end)
 
-    register_unboxed_pool_cleanup!(setup.pool)
+    register_unboxed_pool_cleanup!(setup)
     first_lock = lock_circuit_probe!(first_state)
     second_lock = lock_circuit_probe!(second_state)
 
@@ -10981,7 +10981,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         {setup, second, first_state}
       end)
 
-    register_unboxed_pool_cleanup!(setup.pool)
+    register_unboxed_pool_cleanup!(setup)
     first_lock = lock_circuit_probe!(first_state)
 
     :ok = CodexPooler.Events.subscribe_pool(setup.pool)

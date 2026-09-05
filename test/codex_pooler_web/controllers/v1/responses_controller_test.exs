@@ -6653,7 +6653,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     setup = unboxed_run(fn -> gateway_setup(upstream) end)
     unboxed_run(fn -> precreate_daily_rollups!(setup) end)
-    register_unboxed_pool_cleanup!(setup.pool)
+    register_unboxed_pool_cleanup!(setup)
     parent = self()
     barrier = make_ref()
     session_key = "v1-session-start-race-#{System.unique_integer([:positive])}"

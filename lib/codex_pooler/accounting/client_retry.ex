@@ -50,7 +50,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
             estimate: map(),
             link: RequestClientRetryLink.t(),
             correlation_id: String.t(),
-            dispatch_authority: DispatchAuthority.t()
+            dispatch_authority: CodexPooler.Accounting.ClientRetry.DispatchAuthority.t()
           }
   end
 

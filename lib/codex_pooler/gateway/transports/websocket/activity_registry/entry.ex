@@ -11,7 +11,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry.Entry do
           required(:status) => status(),
           required(:cancel_pid) => pid(),
           required(:ack_pid) => pid(),
-          optional(:cancel_reason) => :owner_drained
+          optional(:cancel_reason) => :owner_drained,
+          optional(:direct_ref) => reference(),
+          optional(:direct_parent) => pid(),
+          optional(:direct_cancelled?) => boolean(),
+          optional(:direct_cleanup) => %{
+            required(:context) => CodexPooler.Gateway.Websocket.DirectCleanup.t(),
+            required(:pending?) => boolean(),
+            required(:receipt) => CodexPooler.Gateway.Websocket.DirectCleanup.receipt() | nil,
+            required(:waiters) => [GenServer.from()],
+            optional(:consumed?) => boolean()
+          }
         }
 
   @spec new(reference(), kind(), pid(), reference()) :: t()

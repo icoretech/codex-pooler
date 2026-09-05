@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
@@ -16,11 +17,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   }
 
   alias CodexPooler.Gateway.Runtime.Service
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
 
   @raw_sentinel "synthetic-v2-terminal-private-message"
+  @detection_timeout_ms 15_000
 
   test "V2 native collector preserves valid identifiers and omits malformed optionals" do
     cases = [
@@ -72,7 +75,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
                Service.execute_websocket_response(
                  auth,
                  compact_payload(setup),
-                 RequestOptions.for_websocket(%{codex_session: session}),
+                 native_options(session, compact_payload(setup)),
                  fn frame -> send(self(), {:native_frame, frame}) end
                )
 
@@ -151,7 +154,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   end
 
   test "V2 plain pre-terminal interruption stays health-neutral and never retries" do
-    result = execute_failure(FakeUpstream.abrupt_close_mid_stream([]))
+    result = execute_failure(FakeUpstream.websocket_sse_then_close([]))
 
     assert result.error.code == "invalid_compaction_response"
 
@@ -159,6 +162,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
       diagnostics: {nil, nil, nil},
       health: :neutral
     )
+
+    assert_transport_failure(result, "peer_close_frame", "upstream_close")
   end
 
   test "V2 upstream idle timeout records its exact health failure and never retries" do
@@ -166,13 +171,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
     result =
       execute_failure(
-        FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref),
+        FakeUpstream.websocket_idle_timeout(notify: self(), release_ref: release_ref),
         receive_timeout: 100
       )
 
-    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid,
-                    ^release_ref},
-                   1_000
+    assert_receive {:fake_upstream_timeout_barrier, :websocket_idle, upstream_pid, ^release_ref},
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -182,6 +186,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
       diagnostics: {nil, nil, nil},
       health: :failed
     )
+
+    assert_transport_failure(result, "pooler_receive_timeout", "receive_timeout")
   end
 
   test "connection-bound compact suppresses retryable first-event replay" do
@@ -486,8 +492,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     {:ok, session} = Websocket.start_codex_session(auth, %{})
 
     request_options =
-      RequestOptions.for_websocket(%{
-        codex_session: session,
+      native_options(session, compact_payload(setup), %{
         request_id:
           seed_preferring_assignment(
             [setup.assignment.id, second.assignment.id],
@@ -527,6 +532,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     refute_received {:unexpected_native_frame, _frame}
     assert FakeUpstream.count(result.selected_upstream) == 1
     assert FakeUpstream.count(result.unselected_upstream) == 0
+    assert FakeUpstream.http_request_count(result.selected_upstream) == 0
+    assert FakeUpstream.websocket_connection_count(result.selected_upstream) == 1
 
     assert [request] =
              Repo.all(from(request in Request, where: request.pool_id == ^result.setup.pool.id))
@@ -576,6 +583,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert Map.get(metadata, "upstream_error_code") == upstream_code
     assert Map.get(metadata, "stream_terminal_type") == event_type
     assert Map.get(metadata, "upstream_error_param") == error_param
+  end
+
+  defp assert_transport_failure(result, source, phase) do
+    attempt =
+      Repo.one!(
+        from(attempt in Attempt,
+          where: attempt.pool_upstream_assignment_id == ^result.selected_assignment.id
+        )
+      )
+
+    assert %{
+             "termination_source" => ^source,
+             "phase" => ^phase,
+             "terminal_seen" => false
+           } = attempt.response_metadata["transport_failure"]
   end
 
   defp assert_health(selected_assignment, request, expected_code, :failed) do
@@ -633,11 +655,43 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
         "generate" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+            Jason.encode!(%{
+              "turn_id" => "native-compact-#{setup.pool.id}",
+              "window_id" => "native-window-#{setup.pool.id}",
+              "context_window_id" => setup.pool.id,
+              "window_number" => 1,
+              "request_kind" => "compaction",
+              "compaction" => %{
+                "trigger" => "auto",
+                "reason" => "context_limit",
+                "implementation" => "responses_compaction_v2",
+                "phase" => "pre_turn",
+                "strategy" => "memento"
+              }
+            })
         }
       }
       |> maybe_put_previous_response_id(anchor)
     )
+  end
+
+  defp native_options(session, payload, attrs \\ %{}) do
+    assert {:ok, %NativeCodexTurnMetadata{request_kind: :compaction} = metadata} =
+             NativeCodexTurnMetadata.parse(Jason.decode!(payload), session.id)
+
+    for digest <- [
+          metadata.semantic_turn_key,
+          metadata.window_id_digest,
+          metadata.context_window_id_digest
+        ] do
+      assert is_binary(digest) and byte_size(digest) == 32
+    end
+
+    owner = start_supervised!({UpstreamWebsocketSession, []}, id: make_ref())
+
+    attrs
+    |> Websocket.websocket_response_options(session, owner, true)
+    |> RequestOptions.put_payload_context(native_codex_turn_metadata: metadata)
   end
 
   defp ordinary_payload(setup, response_id) do

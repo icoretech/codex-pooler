@@ -12,6 +12,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
 
   @type provisioned :: %{
           required(:text) => Model.t(),
+          required(:alternate_text) => Model.t(),
           required(:audio) => Model.t(),
           required(:image) => Model.t()
         }

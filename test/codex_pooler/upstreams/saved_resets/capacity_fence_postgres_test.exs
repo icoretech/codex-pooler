@@ -12,11 +12,44 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.Schemas.EncryptedSecret
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
   @detection_budget 15_000
+
+  test "committed fixture cleanup removes its identity graph and preserves another fixture" do
+    fixture = committed_fixture!("closed", false)
+    other = committed_fixture!("closed", false)
+    on_exit(fn -> cleanup_fixture!(fixture) end)
+    on_exit(fn -> cleanup_fixture!(other) end)
+    identity_ids = [fixture.target_assignment.upstream_identity_id, fixture.sibling_identity_id]
+    other_ids = [other.target_assignment.upstream_identity_id, other.sibling_identity_id]
+
+    cleanup_fixture!(fixture)
+    cleanup_fixture!(fixture)
+
+    Sandbox.unboxed_run(Repo, fn ->
+      refute Repo.get(Pool, fixture.pool_id)
+      refute Repo.get(CodexPooler.Catalog.PricingSnapshot, fixture.pricing_id)
+      assert Repo.get!(CodexPooler.Catalog.PricingSnapshot, other.pricing_id)
+      refute Repo.exists?(from(identity in UpstreamIdentity, where: identity.id in ^identity_ids))
+
+      for schema <- [EncryptedSecret, AccountQuotaWindow] do
+        refute Repo.exists?(from(row in schema, where: row.upstream_identity_id in ^identity_ids))
+        assert Repo.exists?(from(row in schema, where: row.upstream_identity_id in ^other_ids))
+      end
+
+      assert Repo.get!(Pool, other.pool_id)
+
+      assert Repo.aggregate(
+               from(identity in UpstreamIdentity, where: identity.id in ^other_ids),
+               :count
+             ) ==
+               2
+    end)
+  end
 
   test "closed to failed-recovery open rereads current C and consumes once" do
     fixture = committed_fixture!("closed", true)
@@ -250,6 +283,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
         %{
           fake: fake,
           pool_id: setup.pool.id,
+          pricing_id: setup.pricing.id,
           circuit_id: circuit.id,
           sibling_identity_id: sibling.identity.id,
           target_assignment: setup.assignment,
@@ -644,6 +678,15 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
         %Pool{} = pool -> Repo.delete!(pool)
         nil -> :ok
       end
+
+      identity_ids = [fixture.target_assignment.upstream_identity_id, fixture.sibling_identity_id]
+      Repo.delete_all(from(identity in UpstreamIdentity, where: identity.id in ^identity_ids))
+
+      Repo.delete_all(
+        from(pricing in CodexPooler.Catalog.PricingSnapshot,
+          where: pricing.id == ^fixture.pricing_id
+        )
+      )
     end)
   end
 

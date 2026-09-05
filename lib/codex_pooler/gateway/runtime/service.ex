@@ -42,6 +42,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
+  alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
@@ -343,6 +344,36 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          visible_model_data,
          validation
        ) do
+    case DirectCleanup.begin(request_options) do
+      :ok ->
+        try do
+          do_execute_fresh_visible_model(
+            auth,
+            endpoint,
+            payload,
+            request_options,
+            model,
+            visible_model_data,
+            validation
+          )
+        after
+          DirectCleanup.ready(request_options)
+        end
+
+      {:error, :cancelled} ->
+        {:error, error(499, "client_disconnected", "request cancelled before admission")}
+    end
+  end
+
+  defp do_execute_fresh_visible_model(
+         auth,
+         endpoint,
+         payload,
+         request_options,
+         model,
+         visible_model_data,
+         validation
+       ) do
     case PreDispatch.prepare(
            auth,
            endpoint,
@@ -535,16 +566,22 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        ) do
     case result do
       {:ok, reserved, candidates, request_options, route_state} ->
-        dispatch_candidates(
-          auth,
-          endpoint,
-          payload,
-          model,
-          reserved,
-          candidates,
-          request_options,
-          route_state
-        )
+        case DirectCleanup.ready(request_options) do
+          :ok ->
+            dispatch_candidates(
+              auth,
+              endpoint,
+              payload,
+              model,
+              reserved,
+              candidates,
+              request_options,
+              route_state
+            )
+
+          {:error, :cancelled} ->
+            {:error, error(499, "client_disconnected", "request cancelled before dispatch")}
+        end
 
       {:error, %{code: "duplicate_turn"} = reason} ->
         clear_native_compaction_admission(request_options)
@@ -1452,9 +1489,6 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       _invalid -> {:error, invalid_runtime_admission_error()}
     end
   end
-
-  defp redeem_client_retry_runtime_admission(_request_options, _proof),
-    do: {:error, invalid_runtime_admission_error()}
 
   defp runtime_admission_proof({:prepared_websocket, _token, runtime_admission_proof}),
     do: runtime_admission_proof

@@ -4,6 +4,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   use GenServer
 
   alias __MODULE__.{Drain, Entry}
+  alias CodexPooler.Gateway.Websocket.DirectCleanup
+
+  @spec begin_direct_cleanup(DirectCleanup.t()) :: :ok | {:error, :cancelled}
+  def begin_direct_cleanup(context),
+    do: GenServer.call(context.registry, {:direct_begin, context})
+
+  @spec bind_direct_cleanup(DirectCleanup.t(), DirectCleanup.receipt()) :: :ok
+  def bind_direct_cleanup(context, receipt),
+    do: GenServer.call(context.registry, {:direct_bind, context, receipt})
+
+  @spec ready_direct_cleanup(DirectCleanup.t()) :: :ok | {:error, :cancelled}
+  def ready_direct_cleanup(context),
+    do: GenServer.call(context.registry, {:direct_ready, context})
+
+  @spec await_direct_cleanup(DirectCleanup.t()) :: {:ok, DirectCleanup.receipt()} | :none
+  def await_direct_cleanup(context),
+    do: GenServer.call(context.registry, {:direct_await, context}, 30_000)
 
   @type activity_kind :: Entry.kind()
   @type outcome :: :completed | :aborted | :failed
@@ -28,7 +45,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   @spec register(activity_kind(), pid(), keyword()) :: {:ok, token()}
   def register(kind, pid \\ self(), opts \\ [])
       when kind in [:direct, :proxy] and is_pid(pid) do
-    GenServer.call(server(opts), {:register, kind, pid})
+    GenServer.call(
+      server(opts),
+      {:register, kind, pid, Keyword.take(opts, [:direct_cleanup_ref, :direct_cleanup_parent])}
+    )
   end
 
   @spec admit(token(), keyword()) :: :ok | {:error, :owner_drained | :unknown_activity}
@@ -95,15 +115,100 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
 
   @impl GenServer
   def init(:ok) do
-    {:ok, %{activities: %{}, monitors: %{}, draining?: false, drain: nil}}
+    {:ok, %{activities: %{}, monitors: %{}, draining?: false, drain: nil, finished_direct: %{}}}
   end
 
   @impl GenServer
-  def handle_call({:register, kind, pid}, _from, state) do
+  def handle_call({:direct_begin, context}, {caller, _}, state) do
+    case direct_entry(state, context.task) do
+      {token, %{kind: :direct, status: :admitted, direct_ref: ref, direct_parent: parent} = entry}
+      when caller == context.task and ref == context.ref and parent == context.parent and
+             not is_map_key(entry, :direct_cancelled?) and not is_map_key(entry, :direct_cleanup) ->
+        cleanup = %{context: context, pending?: true, receipt: nil, waiters: []}
+        {:reply, :ok, put_in(state.activities[token], Map.put(entry, :direct_cleanup, cleanup))}
+
+      _ ->
+        {:reply, {:error, :cancelled}, state}
+    end
+  end
+
+  def handle_call({:direct_bind, context, receipt}, {caller, _}, state) do
+    case direct_entry(state, context.task) do
+      {token, %{direct_cleanup: %{context: ^context} = cleanup}} when caller == context.task ->
+        send(context.parent, {:direct_request_cleanup, context.task, context.ref, receipt})
+
+        {:reply, :ok,
+         put_in(state.activities[token].direct_cleanup, %{cleanup | receipt: receipt})}
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:direct_ready, context}, {caller, _}, state) do
+    case direct_entry(state, context.task) do
+      {token, %{direct_cleanup: %{context: ^context} = cleanup} = entry}
+      when caller == context.task ->
+        reply_direct_waiters(cleanup)
+
+        result =
+          if entry.status == :cancelling or cleanup.waiters != [],
+            do: {:error, :cancelled},
+            else: :ok
+
+        {:reply, result,
+         put_in(state.activities[token].direct_cleanup, %{cleanup | pending?: false, waiters: []})}
+
+      _ ->
+        {:reply, {:error, :cancelled}, state}
+    end
+  end
+
+  def handle_call({:direct_await, context}, from, state) do
+    case direct_entry(state, context.task) do
+      {token, %{direct_cleanup: %{context: ^context, pending?: true} = cleanup}} ->
+        {:noreply,
+         put_in(state.activities[token].direct_cleanup, %{
+           cleanup
+           | waiters: [from | cleanup.waiters]
+         })}
+
+      {token, %{direct_cleanup: %{context: ^context} = cleanup}} ->
+        {:reply, direct_receipt(cleanup),
+         put_in(state.activities[token].direct_cleanup, Map.put(cleanup, :consumed?, true))}
+
+      {token, %{direct_ref: ref, direct_parent: parent} = entry}
+      when entry.pid == context.task and ref == context.ref and parent == context.parent ->
+        {:reply, :none, put_in(state.activities[token], Map.put(entry, :direct_cancelled?, true))}
+
+      _ ->
+        case Map.get(state.finished_direct, context.ref) do
+          %{context: ^context} = completed ->
+            Process.demonitor(completed.monitor, [:flush])
+
+            {:reply, {:ok, completed.receipt},
+             %{state | finished_direct: Map.delete(state.finished_direct, context.ref)}}
+
+          _ ->
+            {:reply, :none, state}
+        end
+    end
+  end
+
+  def handle_call({:register, kind, pid, opts}, _from, state) do
     token = make_ref()
     monitor = Process.monitor(pid)
 
     entry = Entry.new(token, kind, pid, monitor)
+
+    entry =
+      case {Keyword.get(opts, :direct_cleanup_ref), Keyword.get(opts, :direct_cleanup_parent)} do
+        {ref, parent} when is_reference(ref) and is_pid(parent) ->
+          Map.merge(entry, %{direct_ref: ref, direct_parent: parent})
+
+        _ ->
+          entry
+      end
 
     state = %{
       state
@@ -237,7 +342,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
     case Map.pop(state.monitors, monitor) do
       {nil, _monitors} ->
-        {:noreply, state}
+        finished =
+          Map.reject(state.finished_direct, fn {_ref, completed} ->
+            completed.monitor == monitor
+          end)
+
+        {:noreply, %{state | finished_direct: finished}}
 
       {token, monitors} ->
         state = %{state | monitors: monitors}
@@ -257,6 +367,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
         state
 
       {entry, activities} ->
+        if cleanup = Map.get(entry, :direct_cleanup), do: reply_direct_waiters(cleanup)
+        state = retain_direct_cleanup(state, Map.get(entry, :direct_cleanup))
+
         if demonitor?, do: Process.demonitor(entry.monitor, [:flush])
         monitors = Map.delete(state.monitors, entry.monitor)
 
@@ -271,5 +384,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     end
   end
 
+  defp retain_direct_cleanup(state, %{consumed?: true}), do: state
+
+  defp retain_direct_cleanup(state, %{context: context, receipt: receipt})
+       when not is_nil(receipt) do
+    completed = %{context: context, receipt: receipt, monitor: Process.monitor(context.parent)}
+    %{state | finished_direct: Map.put(state.finished_direct, context.ref, completed)}
+  end
+
+  defp retain_direct_cleanup(state, _cleanup), do: state
+
   defp server(opts), do: Keyword.get(opts, :name, __MODULE__)
+
+  defp direct_entry(state, pid),
+    do: Enum.find(state.activities, fn {_token, entry} -> entry.pid == pid end)
+
+  defp direct_receipt(%{receipt: nil}), do: :none
+  defp direct_receipt(%{receipt: receipt}), do: {:ok, receipt}
+
+  defp reply_direct_waiters(cleanup),
+    do: Enum.each(cleanup.waiters, &GenServer.reply(&1, direct_receipt(cleanup)))
 end

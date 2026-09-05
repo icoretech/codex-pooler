@@ -801,16 +801,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
   @tag :replay_lock_order
   test "owner shutdown closes armed and consumed replay lifecycles before lease release" do
     armed_fixture = replay_fixture(owner?: true, reservation?: true)
-    assert {:ok, _armed} = RequestReplay.arm(arm_input(armed_fixture))
-
-    assert {:ok, armed_owner} =
-             WebsocketOwnerSession.start_owner(
-               codex_session_id: armed_fixture.session.id,
-               owner_lease_token: armed_fixture.owner_lease_token,
-               owner_instance_id: armed_fixture.session.owner_instance_id,
-               owner_renewal_ms: 60_000,
-               upstream: replay_owner_upstream()
-             )
+    {armed_owner, _armed} = start_suspended_replay_owner(armed_fixture)
 
     armed_owner_ref = Process.monitor(armed_owner)
     assert :ok = GenServer.stop(armed_owner, :normal, 15_000)
@@ -841,15 +832,11 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
            ) == "released"
 
     consumed_fixture = replay_fixture(owner?: true, reservation?: true)
-    assert {:ok, consumed_arm} = RequestReplay.arm(arm_input(consumed_fixture))
+    {consumed_owner, consumed_arm} = start_suspended_replay_owner(consumed_fixture)
 
     assert {:ok, consumed} =
              RequestReplay.consume(
-               consume_input(
-                 consumed_fixture,
-                 consumed_arm,
-                 :crypto.strong_rand_bytes(32)
-               )
+               suspended_consume_input(consumed_fixture, consumed_owner, consumed_arm)
              )
 
     stop_replay_owner(consumed_fixture.session.id)
@@ -1732,8 +1719,8 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
   @tag :replay_race
   test "consume ignores an arbitrary accepting pid and requires the persisted live owner" do
     fixture = replay_fixture(owner?: true, reservation?: true)
-    assert {:ok, armed} = RequestReplay.arm(arm_input(fixture))
-    input = consume_input(fixture, armed, :crypto.strong_rand_bytes(32))
+    {owner, armed} = start_suspended_replay_owner(fixture)
+    input = suspended_consume_input(fixture, owner, armed)
     stop_replay_owner(fixture.session.id)
     {:ok, forged_owner} = ForgedReserveOwner.start_link(input.reserve_receipt_digest)
 

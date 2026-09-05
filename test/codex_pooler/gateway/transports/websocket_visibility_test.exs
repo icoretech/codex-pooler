@@ -2,11 +2,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog
 
+  alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.RequestReplay
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{CodexTurn, SessionContinuity}
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexTurn, SessionContinuity}
+  alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -174,13 +177,19 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
 
     started = System.monotonic_time(:microsecond)
 
-    try do
-      result =
+    {result, owner} =
+      try do
         case topology do
-          :direct -> dispatch(upstream, fixture)
+          :direct -> {dispatch(upstream, fixture), nil}
           :owner -> dispatch_owner(upstream, fixture)
         end
+      catch
+        kind, reason ->
+          :telemetry.detach(handler)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
 
+    try do
       assert {:ok, _result} = result
 
       elapsed_us = System.monotonic_time(:microsecond) - started
@@ -194,6 +203,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
       }
     after
       :telemetry.detach(handler)
+      finish_measured_owner(owner, fixture)
     end
   end
 
@@ -229,22 +239,61 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
 
       :ok = WebsocketOwnerSession.prepare_next_replay_descriptor(owner, downstream, descriptor)
 
-      WebsocketOwnerSession.submit_request(owner, downstream, %UpstreamWebsocketSession.Request{
-        url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
-        headers: [],
-        payload: "{}",
-        timeouts:
-          RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
-        message_mapper: & &1,
-        effective_serving_mode: "full",
-        request_id: fixture.request.id,
-        attempt_id: fixture.attempt.id,
-        frame_observer:
-          WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(fixture))
-      })
-    after
-      GenServer.stop(owner, :normal, @detection_timeout_ms)
+      result =
+        WebsocketOwnerSession.submit_request(owner, downstream, %UpstreamWebsocketSession.Request{
+          url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+          headers: [],
+          payload: "{}",
+          timeouts:
+            RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
+          message_mapper: & &1,
+          effective_serving_mode: "full",
+          request_id: fixture.request.id,
+          attempt_id: fixture.attempt.id,
+          frame_observer:
+            WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(fixture))
+        })
+
+      {result, owner}
+    catch
+      kind, reason ->
+        GenServer.stop(owner, :normal, @detection_timeout_ms)
+        :erlang.raise(kind, reason, __STACKTRACE__)
     end
+  end
+
+  defp finish_measured_owner(nil, _fixture), do: :ok
+
+  defp finish_measured_owner(owner, fixture) do
+    log =
+      capture_log(fn ->
+        try do
+          assert {:ok, _} =
+                   AttemptSettlement.finalize_success(
+                     fixture.request,
+                     fixture.attempt,
+                     %{status: "usage_unknown", source: "fixture_cleanup"},
+                     %{response_status_code: 200}
+                   )
+        after
+          GenServer.stop(owner, :normal, @detection_timeout_ms)
+        end
+      end)
+
+    assert log == ""
+    assert Repo.reload!(fixture.request).status == "succeeded"
+
+    assert Repo.aggregate(
+             from(e in LedgerEntry,
+               where:
+                 e.request_id == ^fixture.request.id and e.entry_kind == "settlement" and
+                   e.amount_status == "recorded"
+             ),
+             :count
+           ) == 1
+
+    assert %{status: "released"} =
+             Repo.get_by!(BridgeOwnerLease, codex_session_id: fixture.session.id)
   end
 
   defp observation(fixture) do

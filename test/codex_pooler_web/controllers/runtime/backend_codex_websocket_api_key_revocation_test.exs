@@ -223,8 +223,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
   end
 
   defp register_committed_setup_cleanup!(setup) do
-    pool_id = setup.pool.id
-    on_exit(fn -> cleanup_unboxed_pool!(pool_id) end)
+    on_exit(fn -> cleanup_unboxed_pool!(setup) end)
   end
 
   defp request_count(setup) do
@@ -569,8 +568,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationDistribute
   end
 
   defp register_committed_setup_cleanup!(setup) do
-    pool_id = setup.pool.id
-    on_exit(fn -> cleanup_unboxed_pool!(pool_id) end)
+    on_exit(fn -> cleanup_unboxed_pool!(setup) end)
   end
 
   defp start_api_key_pause_peer! do

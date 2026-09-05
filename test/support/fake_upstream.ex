@@ -44,6 +44,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:timeout_after_sse_headers, pid() | nil, reference()}
           | {:timeout_mid_stream, String.t(), pid() | nil, reference()}
           | {:websocket_upgrade_timeout, pid() | nil, reference()}
+          | {:websocket_idle_timeout, pid(), reference()}
           | {:websocket_upgrade_error, non_neg_integer(), map(), [{String.t(), String.t()}],
              pid() | nil, reference() | nil}
 
@@ -389,6 +390,10 @@ defmodule CodexPooler.FakeUpstream do
   def websocket_upgrade_timeout(opts \\ []) when is_list(opts) do
     {:websocket_upgrade_timeout, Keyword.get(opts, :notify),
      Keyword.get(opts, :release_ref, make_ref())}
+  end
+
+  def websocket_idle_timeout(opts) when is_list(opts) do
+    {:websocket_idle_timeout, Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   def websocket_upgrade_error(payload, opts \\ []) when is_map(payload) and is_list(opts) do
@@ -1235,6 +1240,11 @@ defmodule CodexPooler.FakeUpstream do
       end
 
       messages_from_sse_chunk(first_chunk)
+    end
+
+    defp websocket_messages({:websocket_idle_timeout, notify, release_ref}, _request) do
+      send(notify, {:fake_upstream_timeout_barrier, :websocket_idle, self(), release_ref})
+      []
     end
 
     defp websocket_messages({:websocket_text, messages}, _request), do: messages

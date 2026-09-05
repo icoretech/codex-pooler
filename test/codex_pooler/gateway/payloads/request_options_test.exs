@@ -201,11 +201,19 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
         {:websocket_only, RequestOptions.for_websocket(base, payload)},
         {:collect_only,
          RequestOptions.put_transport(base, websocket_delivery_mode: :collect_compaction)},
-        {:full_history,
+        {:full_history_websocket_collect,
          full_history_base
          |> RequestOptions.for_websocket(%{"input" => [%{"type" => "compaction_trigger"}]})
          |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
-         |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)},
+         |> RequestOptions.put_transport(websocket_delivery_mode: :collect_full_history)},
+        {:http_full_history_collect,
+         full_history_base
+         |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+         |> RequestOptions.put_transport(websocket_delivery_mode: :collect_full_history)},
+        {:websocket_bridge_relay,
+         full_history_base
+         |> RequestOptions.for_websocket(%{"input" => [%{"type" => "compaction_trigger"}]})
+         |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)},
         {:incremental_websocket_collect,
          base
          |> RequestOptions.for_websocket(payload)
@@ -215,7 +223,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       for {name, options} <- cases do
         assert RequestOptions.connection_bound_compaction?(options) ==
-                 (name == :incremental_websocket_collect)
+                 name in [:incremental_websocket_collect, :full_history_websocket_collect]
       end
     end
 

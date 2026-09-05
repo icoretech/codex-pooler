@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
+  alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.RouteClass
 
   @type auth :: Access.auth_context()
@@ -128,6 +129,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
 
     %{
       endpoint: accounting_endpoint,
+      direct_cleanup_bind: direct_cleanup_bind(request_options.runtime.direct_cleanup),
       transport: transport.transport,
       correlation_id:
         authorized_correlation_id ||
@@ -155,6 +157,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
 
   defp durable_request_correlation_id(%RequestOptions{} = request_options, payload),
     do: RequestOptions.server_correlation_id(request_options, payload)
+
+  defp direct_cleanup_bind(nil), do: nil
+
+  defp direct_cleanup_bind(context),
+    do: fn request -> DirectCleanup.bind(context, request) end
 
   @spec reservation_snapshot_inputs(auth(), Model.t(), map(), String.t(), RequestOptions.t()) ::
           RouteState.reservation_snapshot_inputs()

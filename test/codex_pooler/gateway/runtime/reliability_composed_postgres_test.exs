@@ -12,6 +12,21 @@ defmodule CodexPooler.Gateway.Runtime.ReliabilityComposedPostgresTest do
 
   @detection_budget 15_000
 
+  test "composed cleanup removes its pricing while preserving another fixture" do
+    {:ok, fake} = FakeUpstream.start_link({:json, 200, %{"code" => "reset"}})
+
+    Sandbox.unboxed_run(Repo, fn ->
+      fixture = Fixture.fixture!(fake)
+      other = Fixture.fixture!(fake)
+      on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> Fixture.cleanup!(other) end) end)
+      Fixture.cleanup!(fixture)
+      refute Repo.get(CodexPooler.Catalog.PricingSnapshot, fixture.pricing.id)
+      assert Repo.get!(CodexPooler.Catalog.PricingSnapshot, other.pricing.id)
+      assert Repo.get!(UpstreamIdentity, other.identity.id)
+      Fixture.cleanup!(fixture)
+    end)
+  end
+
   test "capacity, credential lifecycle and retry authorization converge after their shared writer commits" do
     {:ok, fake} = FakeUpstream.start_link({:json, 200, %{"code" => "reset"}})
     setup = Sandbox.unboxed_run(Repo, fn -> Fixture.fixture!(fake) end)

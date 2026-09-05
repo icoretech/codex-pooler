@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Gateway.Websocket.DownstreamSession
   alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.InstanceSettings
@@ -231,6 +232,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> maybe_schedule_accepted_response_task_delivery(pid)
 
     {:ok, state}
+  end
+
+  def handle_info({:direct_request_cleanup, pid, ref, receipt}, state) do
+    {:ok, accept_direct_cleanup(state, pid, ref, receipt)}
   end
 
   def handle_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
@@ -465,6 +470,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp clean_pre_request_close_reason?(_reason), do: false
 
   defp log_interrupt_failure({:ok, _result}, _state), do: :ok
+  defp log_interrupt_failure(:ok, _state), do: :ok
 
   defp log_interrupt_failure({:error, reason}, state) do
     Logger.warning(
@@ -494,6 +500,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.put(:tasks, MapSet.new())
     |> Map.put(:task_monitors, %{})
+    |> Map.put(:direct_cleanup_contexts, %{})
+    |> Map.put(:direct_cleanup_receipts, %{})
     |> Map.put(:queued_response_payloads, :queue.new())
     |> Map.put(:public_response_task_pid, nil)
     |> Map.put(:public_response_stream_id, nil)
@@ -1191,13 +1199,35 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp start_response_task(parent, payload, state) do
+    direct_ref = make_ref()
+
     ResponseTask.start(
       parent,
       response_task_activity_kind(payload, state),
-      fn task_pid -> safe_run_response(parent, payload, state, task_pid) end,
-      fn task_pid, reason -> cancel_response_task_activity(state, task_pid, reason) end,
-      Map.get(state, :response_task_start_options, [])
+      fn task_pid ->
+        safe_run_response(
+          parent,
+          payload,
+          put_direct_context(state, task_pid, direct_ref, parent),
+          task_pid
+        )
+      end,
+      fn task_pid, reason ->
+        cancel_response_task_activity(
+          put_direct_context(state, task_pid, direct_ref, parent),
+          task_pid,
+          reason
+        )
+      end,
+      Keyword.put(
+        Map.get(state, :response_task_start_options, []),
+        :direct_cleanup_ref,
+        direct_ref
+      )
     )
+    |> case do
+      {:ok, pid} -> {:ok, pid, direct_ref}
+    end
   end
 
   defp prepare_and_dispatch_response(_payload, %{firewall_revoked?: true} = state),
@@ -2372,12 +2402,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           |> reset_native_owner_terminal_delivery()
 
         parent = self()
-        {:ok, pid} = start_response_task(parent, prepared, state)
+        {:ok, pid, direct_ref} = start_response_task(parent, prepared, state)
         _trace_enroll = NativeCompactionTrace.enroll(:response_task, pid)
         monitor = Process.monitor(pid)
 
         state
         |> track_response_task(pid, monitor)
+        |> put_direct_context(pid, direct_ref, parent)
         |> maybe_open_public_turn(prepared, pid)
 
       {:error, reason} ->
@@ -2512,7 +2543,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp start_owner_retarget_error_task(reason, prepared, state) do
     parent = self()
-    {:ok, pid} = start_response_task(parent, {:owner_retarget_error, reason}, state)
+    {:ok, pid, _direct_ref} = start_response_task(parent, {:owner_retarget_error, reason}, state)
     monitor = Process.monitor(pid)
 
     state
@@ -2806,6 +2837,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       receive do
         {:codex_response_done, pid, result} when is_map_key(monitors, pid) ->
           state = put_response_task_cleanup_result(state, pid, result)
+          await_response_task_cleanup_results(state, tasks, monitors, deadline)
+
+        {:direct_request_cleanup, pid, ref, receipt} when is_map_key(monitors, pid) ->
+          state = accept_direct_cleanup(state, pid, ref, receipt)
           await_response_task_cleanup_results(state, tasks, monitors, deadline)
 
         {:DOWN, ref, :process, pid, _reason}
@@ -3154,6 +3189,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp do_remove_tracked_response_task(state, pid) when is_pid(pid) do
+    if context = Map.get(Map.get(state, :direct_cleanup_contexts, %{}), pid) do
+      case DirectCleanup.cancel(context, "client_disconnected") do
+        :none -> :ok
+        result -> log_interrupt_failure(result, state)
+      end
+    end
+
     {monitor, state} = pop_task_monitor(state, pid)
 
     if monitor do
@@ -3162,7 +3204,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state
     |> Map.update(:tasks, MapSet.new(), &MapSet.delete(&1, pid))
+    |> clear_direct_cleanup(pid)
     |> DownstreamSession.clear_cleanup_witness(pid)
+  end
+
+  defp clear_direct_cleanup(state, pid) do
+    Enum.reduce([:direct_cleanup_contexts, :direct_cleanup_receipts], state, fn key, current ->
+      if Map.has_key?(current, key),
+        do: Map.update!(current, key, &Map.delete(&1, pid)),
+        else: current
+    end)
   end
 
   defp remove_tracked_response_task(state, pid, monitor)
@@ -3207,7 +3258,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp safe_run_response(parent, %PreparedWebsocketFrame{} = prepared, state, task_pid) do
     opts = response_task_opts(state, task_pid)
+
+    opts =
+      RequestOptions.put_runtime_context(opts,
+        direct_cleanup: Map.get(Map.get(state, :direct_cleanup_contexts, %{}), task_pid)
+      )
+
     prepared = put_prepared_runtime_options(prepared, opts)
+
+    prepared = %{
+      prepared
+      | request_options:
+          RequestOptions.put_runtime_context(prepared.request_options,
+            direct_cleanup: opts.runtime.direct_cleanup
+          )
+    }
 
     try do
       case run_prepared_response(parent, task_pid, state.auth, prepared) do
@@ -3324,14 +3389,28 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       :ok = Adapter.cancel_owner_turn(state, task_pid, :owner_drained)
       :await_worker
     else
-      opts =
-        state
-        |> response_task_opts(task_pid)
-        |> RequestOptions.put_runtime_context(interrupt_reason: "owner_drained")
+      cancel_direct_response_task(state, task_pid)
 
-      _result = Websocket.interrupt_codex_turn(Map.get(state, :codex_session), opts)
       :ok = Websocket.close_websocket_session(Map.get(state, :upstream_websocket_session))
       :kill_worker
+    end
+  end
+
+  defp cancel_direct_response_task(state, task_pid) do
+    case Map.get(Map.get(state, :direct_cleanup_contexts, %{}), task_pid) do
+      %DirectCleanup{} = context ->
+        case DirectCleanup.cancel(context, "owner_drained") do
+          :none -> :ok
+          result -> log_interrupt_failure(result, state)
+        end
+
+      nil ->
+        opts =
+          state
+          |> response_task_opts(task_pid)
+          |> RequestOptions.put_runtime_context(interrupt_reason: "owner_drained")
+
+        Websocket.interrupt_codex_turn(Map.get(state, :codex_session), opts)
     end
   end
 
@@ -3357,10 +3436,72 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp cleanup_websocket_session(_reason, state) do
-    state
-    |> Map.get(:codex_session)
-    |> Websocket.interrupt_codex_session(state.opts)
-    |> log_interrupt_failure(state)
+    contexts = Map.get(state, :direct_cleanup_contexts, %{})
+
+    if map_size(contexts) == 0 do
+      state
+      |> Map.get(:codex_session)
+      |> Websocket.interrupt_codex_session(state.opts)
+      |> log_interrupt_failure(state)
+    else
+      Enum.each(contexts, fn {pid, context} ->
+        result = cleanup_direct_response(state, pid, context)
+        log_interrupt_failure(result, state)
+      end)
+    end
+  end
+
+  defp cleanup_direct_response(state, pid, context) do
+    case DirectCleanup.cancel(context, "client_disconnected") do
+      :none ->
+        case Map.get(Map.get(state, :direct_cleanup_receipts, %{}), pid) do
+          nil -> :ok
+          receipt -> DirectCleanup.interrupt(receipt, "client_disconnected")
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp put_direct_context(state, pid, ref, parent) do
+    if not owner_forwarded_socket?(state) and
+         match?(%{id: id} when is_binary(id), Map.get(state, :codex_session)) do
+      context = %DirectCleanup{
+        registry: response_task_activity_registry(state),
+        task: pid,
+        ref: ref,
+        parent: parent,
+        session_id: state.codex_session.id,
+        before_ready:
+          Keyword.get(
+            Map.get(state, :response_task_start_options, []),
+            :before_direct_cleanup_ready
+          )
+      }
+
+      Map.update(state, :direct_cleanup_contexts, %{pid => context}, &Map.put(&1, pid, context))
+    else
+      state
+    end
+  end
+
+  defp accept_direct_cleanup(state, pid, ref, receipt) do
+    case Map.get(Map.get(state, :direct_cleanup_contexts, %{}), pid) do
+      %DirectCleanup{ref: ^ref, session_id: session_id} when session_id == receipt.session_id ->
+        if tracked_response_task?(state, pid),
+          do:
+            Map.update(
+              state,
+              :direct_cleanup_receipts,
+              %{pid => receipt},
+              &Map.put(&1, pid, receipt)
+            ),
+          else: state
+
+      _ ->
+        state
+    end
   end
 
   defp run_prepared_response(parent, task_pid, auth, prepared) do

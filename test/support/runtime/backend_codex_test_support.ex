@@ -337,12 +337,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     )
   end
 
-  def register_unboxed_pool_cleanup!(pool) do
-    pool_id = pool.id
-
+  def register_unboxed_pool_cleanup!(%{pool: _, pricing: _} = fixture) do
     on_exit(fn ->
       unboxed_run(fn ->
-        cleanup_unboxed_pool!(pool_id)
+        cleanup_unboxed_pool!(fixture)
       end)
     end)
   end
@@ -386,7 +384,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     end
   end
 
-  def cleanup_unboxed_pool!(pool_id) do
+  def cleanup_unboxed_pool!(%{pool: %{id: pool_id}, pricing: %{id: pricing_id}}) do
     request_ids =
       Repo.all(from(request in Request, where: request.pool_id == ^pool_id, select: request.id))
 
@@ -395,14 +393,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         from(assignment in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
           where: assignment.pool_id == ^pool_id,
           select: assignment.upstream_identity_id
-        )
-      )
-
-    model_refs =
-      Repo.all(
-        from(model in CodexPooler.Catalog.Model,
-          where: model.pool_id == ^pool_id,
-          select: model.upstream_model_id
         )
       )
 
@@ -461,9 +451,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     Repo.delete_all(
       from(snapshot in PricingSnapshot,
-        where:
-          snapshot.model_identifier in ^model_refs and
-            snapshot.price_version == "backend-codex-test-v1"
+        where: snapshot.id == ^pricing_id
       )
     )
 
@@ -534,8 +522,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         supports_streaming: true
       })
 
-    pricing_snapshot!(model)
-    Map.merge(key, %{identity: upstream.identity, assignment: upstream.assignment, model: model})
+    pricing = pricing_snapshot!(model)
+
+    Map.merge(key, %{
+      identity: upstream.identity,
+      assignment: upstream.assignment,
+      model: model,
+      pricing: pricing
+    })
   end
 
   defp default_codex_source(exposed_model_id, upstream_model_id, display_name) do

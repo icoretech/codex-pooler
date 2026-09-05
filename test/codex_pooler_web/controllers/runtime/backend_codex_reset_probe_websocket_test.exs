@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -284,6 +284,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     assert [response_task_pid] = MapSet.to_list(state.tasks)
     response_task_monitor = Process.monitor(response_task_pid)
 
+    assert Map.get(state, :websocket_owner_downstream) == nil
+
+    assert [active_request] =
+             Repo.all(from(r in Request, where: r.pool_id == ^fixture.setup.pool.id))
+
+    refute active_request.correlation_id == state.opts.request_id
+
     Process.exit(response_task_pid, :kill)
 
     assert_receive {:DOWN, ^response_task_monitor, :process, ^response_task_pid, :killed}, 1_000
@@ -297,6 +304,70 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       "client_disconnected",
       1
     )
+  end
+
+  test "coordinator death after reservation commit releases its exact reservation before dispatch" do
+    fixture = reset_probe_fixture(completed_stream("resp_reserved_cancelled"))
+    {:ok, auth} = Access.authenticate_authorization_header(fixture.setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{request_id: "pre-dispatch-cancel", accepted_turn_state: "pre-dispatch-cancel"}
+      })
+
+    parent = self()
+
+    state =
+      Map.put(state, :response_task_start_options,
+        before_direct_cleanup_ready: fn ->
+          send(parent, {:reservation_committed, self()})
+
+          receive do
+            :publish -> :ok
+          end
+        end
+      )
+
+    assert {:ok, state} =
+             CodexResponsesSocket.handle_in(
+               {reset_probe_payload(fixture.setup), [opcode: :text]},
+               state
+             )
+
+    assert_receive {:reservation_committed, task}, 15_000
+    assert [request] = Repo.all(from r in Request, where: r.pool_id == ^fixture.setup.pool.id)
+    assert request.status == "in_progress"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+    assert FakeUpstream.count(fixture.dispatch_upstream) == 0
+    monitor = Process.monitor(task)
+    Process.exit(task, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^task, :killed}, 15_000
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    assert %{status: "failed", last_error_code: "client_disconnected"} = Repo.reload!(request)
+
+    assert Repo.aggregate(
+             from(e in LedgerEntry,
+               where: e.request_id == ^request.id and e.entry_kind == "reservation"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(e in LedgerEntry,
+               where: e.request_id == ^request.id and e.entry_kind == "release"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(e in LedgerEntry,
+               where: e.request_id == ^request.id and e.entry_kind == "settlement"
+             ),
+             :count
+           ) == 0
+
+    assert FakeUpstream.count(fixture.dispatch_upstream) == 0
   end
 
   test "websocket completion released after the deadline cannot confirm the reset probe" do

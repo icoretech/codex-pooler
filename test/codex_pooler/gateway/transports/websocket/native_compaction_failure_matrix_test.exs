@@ -4,6 +4,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionFailureMatrix
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios, as: Scenarios
   alias Scenarios.{AccountingLifecycle, Context, Observed, Row}
 
+  test "forwarded timeout preserves its outcome and releases its owner without warnings",
+       context do
+    row = Enum.find(Scenarios.rows(), &(&1.id == :owner_timeout))
+
+    {observed, logs} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Scenarios.run!(row, Scenarios.context(context, row))
+      end)
+
+    assert_required_observables(observed, row.expected)
+    assert logs == ""
+  end
+
   test "registry is complete, unique, callable, and backed by real observations", context do
     rows = Scenarios.rows()
 

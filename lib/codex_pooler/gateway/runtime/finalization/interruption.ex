@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, Request, RequestReplayEntitlement}
+  alias CodexPooler.Accounting.RequestLogFacts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.SessionContinuity
@@ -30,6 +31,81 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   @turn_succeeded TurnStatus.succeeded_status()
   @turn_failed TurnStatus.failed_status()
   @turn_interrupted TurnStatus.interrupted_status()
+
+  @spec interrupt_direct_request(
+          CodexPooler.Gateway.Websocket.DirectCleanup.receipt(),
+          String.t()
+        ) :: :ok | {:error, term()}
+  def interrupt_direct_request(receipt, reason) do
+    Repo.transaction(fn ->
+      session = codex_session_for_update(receipt.session_id)
+      _key = Repo.one(from k in APIKey, where: k.id == ^receipt.api_key_id, lock: "FOR UPDATE")
+
+      _turn =
+        Repo.one(
+          from t in CodexTurn,
+            where:
+              t.codex_session_id == ^receipt.session_id and t.request_id == ^receipt.request_id,
+            lock: "FOR UPDATE"
+        )
+
+      request = request_for_update(receipt.request_id)
+
+      if direct_receipt_matches?(session, request, receipt) and
+           not replacement_turn_active?(receipt.session_id, receipt.request_id) do
+        interrupt_direct_locked(session, request, reason)
+      end
+    end)
+    |> case do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp direct_receipt_matches?(%CodexSession{} = session, %Request{} = request, receipt),
+    do:
+      request.correlation_id == receipt.correlation_id and
+        request.api_key_id == receipt.api_key_id and request.pool_id == session.pool_id
+
+  defp direct_receipt_matches?(_session, _request, _receipt), do: false
+
+  defp interrupt_direct_locked(session, request, reason) do
+    turn = Repo.get_by(CodexTurn, request_id: request.id)
+    attempt = latest_attempt_for_update(request.id)
+
+    case {request.status, turn, attempt} do
+      {"accepted", nil, _} ->
+        request
+        |> Ecto.Changeset.change(
+          status: "failed",
+          completed_at: now(),
+          response_status_code: 499,
+          last_error_code: reason,
+          usage_status: "usage_unknown"
+        )
+        |> Repo.update!()
+
+        RequestLogFacts.record_request_created!(request)
+
+      {"in_progress", %CodexTurn{} = turn, nil} ->
+        case Accounting.finalize_reservation_failure(request, %{
+               last_error_code: reason,
+               response_status_code: 499,
+               usage_status: "usage_unknown"
+             }) do
+          {:ok, _} -> complete_interrupted_turn!(turn, nil, @turn_interrupted, reason, now())
+          {:error, error} -> Repo.rollback(error)
+        end
+
+      _ ->
+        opts = RequestOptions.for_websocket(%{request_id: request.correlation_id, reason: reason})
+
+        case interrupt_codex_turn(session, opts) do
+          {:ok, _} -> :ok
+          {:error, error} -> Repo.rollback(error)
+        end
+    end
+  end
 
   @spec interrupt_codex_session(session_ref(), opts()) :: {:ok, term()} | {:error, term()}
   def interrupt_codex_session(%CodexSession{id: id}, opts), do: interrupt_codex_session(id, opts)

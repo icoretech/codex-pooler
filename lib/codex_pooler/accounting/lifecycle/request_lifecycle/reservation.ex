@@ -71,6 +71,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         |> Repo.insert!()
 
       RequestLogFacts.record_request_created!(request)
+      :ok = bind_direct_cleanup(opts, request)
       %{request: request}
     end)
     |> unwrap_transaction()
@@ -471,17 +472,28 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       admitted_at: context.timestamp
     }
 
-    case attr(context.opts, :turn_claim) do
-      %Request{} = turn_claim ->
-        update_claimed_request!(turn_claim, attrs)
+    request =
+      case attr(context.opts, :turn_claim) do
+        %Request{} = turn_claim ->
+          update_claimed_request!(turn_claim, attrs)
 
-      nil ->
-        request =
-          %Request{}
-          |> Ecto.Changeset.change(attrs)
-          |> Repo.insert!()
+        nil ->
+          request =
+            %Request{}
+            |> Ecto.Changeset.change(attrs)
+            |> Repo.insert!()
 
-        request
+          request
+      end
+
+    :ok = bind_direct_cleanup(context.opts, request)
+    request
+  end
+
+  defp bind_direct_cleanup(opts, request) do
+    case attr(opts, :direct_cleanup_bind) do
+      callback when is_function(callback, 1) -> callback.(request)
+      nil -> :ok
     end
   end
 

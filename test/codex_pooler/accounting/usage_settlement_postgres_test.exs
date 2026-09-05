@@ -21,8 +21,7 @@ defmodule CodexPooler.Accounting.UsageSettlementPostgresTest do
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
-        BackendCodexTestSupport.cleanup_unboxed_pool!(fixture.pool.id)
-        Repo.delete!(fixture.pricing)
+        BackendCodexTestSupport.cleanup_unboxed_pool!(fixture)
       end)
     end)
 

@@ -1,14 +1,18 @@
 defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
-  use ExUnit.Case, async: false
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.PoolerFixtures
 
   @moduletag capture_log: true
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
+  alias CodexPooler.Gateway.Persistence.BridgeOwnerLease
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, as: Admission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession, as: Owner
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1, as: Control
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession, as: Forwarded
+  alias CodexPooler.Gateway.Websocket
   alias Owner.Request
 
   test "late first collection cannot overwrite a replacement pending turn" do
@@ -136,12 +140,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
 
   test "forwarded delayed ordinary result preserves current pending and reserved admission" do
     with_owner(fn _direct, upstream ->
-      {:ok, owner} =
-        Forwarded.start_owner(
-          codex_session_id: Ecto.UUID.generate(),
-          owner_instance_id: Atom.to_string(node()),
-          owner_lease_token: Ecto.UUID.generate()
-        )
+      {owner, lease} = start_forwarded_owner!()
 
       try do
         {:ok, downstream} =
@@ -195,7 +194,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
                    )
                  )
       after
-        if Process.alive?(owner), do: GenServer.stop(owner, :normal, 15_000)
+        stop_forwarded_owner!(owner, lease)
       end
     end)
   end
@@ -335,12 +334,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
 
   test "forwarded first result authorizes once and acknowledges without closing owner" do
     with_owner(fn _direct, upstream ->
-      {:ok, owner} =
-        Forwarded.start_owner(
-          codex_session_id: Ecto.UUID.generate(),
-          owner_instance_id: Atom.to_string(node()),
-          owner_lease_token: Ecto.UUID.generate()
-        )
+      {owner, lease} = start_forwarded_owner!()
 
       try do
         {:ok, downstream} =
@@ -392,7 +386,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
         assert {:ok, %{phase: :pending_final}} =
                  Forwarded.admission_control(owner, control(:snapshot, downstream))
       after
-        if Process.alive?(owner), do: GenServer.stop(owner, :normal, 15_000)
+        stop_forwarded_owner!(owner, lease)
       end
     end)
   end
@@ -485,6 +479,31 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
     }
 
     {binding, result.ordinary_success_result}
+  end
+
+  defp start_forwarded_owner! do
+    %{raw_key: raw_key} = active_api_key_fixture()
+    assert {:ok, auth} = CodexPooler.Access.authenticate_api_key(raw_key)
+    assert {:ok, session} = Websocket.start_codex_session(auth, %{})
+    lease = Repo.get_by!(BridgeOwnerLease, codex_session_id: session.id)
+    assert lease.status == "active"
+    assert lease.lease_token == session.owner_lease_token
+
+    assert {:ok, owner} =
+             Forwarded.start_owner(
+               codex_session_id: session.id,
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token
+             )
+
+    {owner, lease}
+  end
+
+  defp stop_forwarded_owner!(owner, lease) do
+    monitor = Process.monitor(owner)
+    if Process.alive?(owner), do: GenServer.stop(owner, :normal, 15_000)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 15_000
+    assert %{status: "released", released_at: %DateTime{}} = Repo.reload!(lease)
   end
 
   defp with_owner(fun) do

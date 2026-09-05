@@ -74,9 +74,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           required(:status) => 200,
           required(:headers) => response_headers(),
           optional(:response_id) => String.t(),
+          optional(:ordinary_success_result) => OrdinarySuccessResult.t(),
+          optional(:first_compact_result) => FirstCompactResult.t(),
           optional(:upstream_websocket_connection) => upstream_websocket_connection(),
           optional(:websocket_frame_headers) => map(),
-          optional(:upstream_error_param) => String.t()
+          optional(:upstream_error_code) => String.t() | nil,
+          optional(:upstream_error_param) => String.t() | nil
         }
   @type request_failure :: %{
           required(:body) => binary(),
@@ -84,8 +87,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           required(:headers) => response_headers(),
           optional(:upstream_websocket_connection) => upstream_websocket_connection(),
           optional(:websocket_frame_headers) => map(),
-          optional(:upstream_error_param) => String.t(),
-          optional(:transport_failure) => TransportFailureReason.transport_failure_metadata()
+          optional(:upstream_error_param) => String.t() | nil,
+          optional(:transport_failure) => TransportFailureReason.transport_failure_metadata(),
+          optional(:native_client_retry_observation) => ClientRetry.Observation.t() | nil
         }
   @type request_result :: {:ok, request_success()} | {:error, request_failure()}
   @type send_result :: {:ok, :sent} | {:error, term()}
@@ -1817,13 +1821,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     terminal_discriminator = TerminalDiscriminator.classify(mapped_decoded)
 
+    collected_text =
+      if receive_state.delivery.mode == :collect_full_history, do: raw_text, else: mapped_text
+
     receive_state =
       raw_decoded
       |> maybe_put_terminal_upstream_error(receive_state)
       |> maybe_put_response_id(raw_decoded)
       |> put_websocket_frame_headers(raw_decoded)
       |> increment_text_frame_count()
-      |> append_receive_body(mapped_text)
+      |> append_receive_body(collected_text)
       |> put_terminal_discriminator(terminal_discriminator)
 
     case retryable_first_text_frame(raw_decoded, receive_state) do

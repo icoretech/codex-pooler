@@ -14,29 +14,54 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
   def start(parent, kind, run_callback, cancel_callback, opts \\ [])
       when is_pid(parent) and kind in [:direct, :proxy, :local_owner] and
              is_function(run_callback, 1) and is_function(cancel_callback, 2) do
-    Task.start(fn ->
-      sensitivity = NativeCompactionTrace.configure_process_sensitivity(:response_task)
-      _trace = NativeCompactionTrace.enroll(:response_task, self())
+    opts = Keyword.put(opts, :direct_cleanup_starter, self())
 
-      try do
-        case kind do
-          :local_owner ->
-            result = run_callback.(self())
+    result =
+      Task.start(fn ->
+        sensitivity = NativeCompactionTrace.configure_process_sensitivity(:response_task)
+        _trace = NativeCompactionTrace.enroll(:response_task, self())
 
-            run_before_local_completion_handoff(
-              Keyword.get(opts, :before_local_completion_handoff)
-            )
+        try do
+          case kind do
+            :local_owner ->
+              result = run_callback.(self())
 
-            complete_local_owner(parent, result)
+              run_before_local_completion_handoff(
+                Keyword.get(opts, :before_local_completion_handoff)
+              )
 
-          tracked_kind ->
-            run_tracked(parent, tracked_kind, run_callback, cancel_callback, opts)
+              complete_local_owner(parent, result)
+
+            tracked_kind ->
+              run_tracked(parent, tracked_kind, run_callback, cancel_callback, opts)
+          end
+        after
+          NativeCompactionTrace.restore_process_sensitivity(sensitivity)
         end
-      after
-        NativeCompactionTrace.restore_process_sensitivity(sensitivity)
-      end
-    end)
+      end)
+
+    await_direct_registration(result, kind, Keyword.get(opts, :direct_cleanup_ref))
   end
+
+  defp await_direct_registration({:ok, pid} = result, :direct, ref) when is_reference(ref) do
+    monitor = Process.monitor(pid)
+
+    receive do
+      {:direct_cleanup_registered, ^pid, ^ref} ->
+        Process.demonitor(monitor, [:flush])
+        result
+
+      {:DOWN, ^monitor, :process, ^pid, _reason} ->
+        result
+    after
+      15_000 ->
+        Process.demonitor(monitor, [:flush])
+        Process.exit(pid, :kill)
+        result
+    end
+  end
+
+  defp await_direct_registration(result, _kind, _ref), do: result
 
   @spec acknowledge_delivery(pid(), activity_token()) :: :ok
   def acknowledge_delivery(task_pid, token) when is_pid(task_pid) and is_reference(token) do
@@ -54,7 +79,20 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
   defp run_tracked(parent, kind, run_callback, cancel_callback, opts) do
     registry = Keyword.get(opts, :activity_registry, ActivityRegistry)
 
-    with {:ok, token} <- ActivityRegistry.register(kind, self(), name: registry) do
+    registration = [
+      name: registry,
+      direct_cleanup_ref: Keyword.get(opts, :direct_cleanup_ref),
+      direct_cleanup_parent: parent
+    ]
+
+    with {:ok, token} <- ActivityRegistry.register(kind, self(), registration) do
+      if kind == :direct and is_reference(Keyword.get(opts, :direct_cleanup_ref)),
+        do:
+          send(
+            Keyword.fetch!(opts, :direct_cleanup_starter),
+            {:direct_cleanup_registered, self(), Keyword.fetch!(opts, :direct_cleanup_ref)}
+          )
+
       case ActivityRegistry.admit(token, name: registry) do
         :ok ->
           run_admitted(parent, token, registry, run_callback, cancel_callback, opts)

@@ -314,6 +314,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
              QuotaWindows.list_quota_windows(fixture.identity),
              &(&1.source == "codex_rate_limit_event")
            )
+
+    finish_observation_fixture!(fixture, fixture.attempt)
   end
 
   @tag :replay_generation_race
@@ -358,6 +360,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     send(worker, {:release_owner_observation_request, release_ref})
     assert :ok = Task.await(submitter, @detection_timeout_ms)
+    finish_observation_fixture!(fixture, current.attempt)
+  end
+
+  defp finish_observation_fixture!(fixture, attempt) do
+    log =
+      capture_log(fn ->
+        assert {:ok, _} = Accounting.close_request_replay(fixture.request.id, :owner_shutdown)
+        cleanup_owner_session(fixture.session.id)
+      end)
+
+    assert log == ""
+
+    expected_code =
+      if attempt.replay_generation == 1,
+        do: "websocket_replay_owner_unavailable",
+        else: "websocket_replay_revoked"
+
+    assert %{status: "failed", last_error_code: ^expected_code} = Repo.reload!(fixture.request)
+
+    assert Repo.aggregate(
+             from(e in LedgerEntry,
+               where:
+                 e.request_id == ^fixture.request.id and e.entry_kind == "settlement" and
+                   e.amount_status == "recorded"
+             ),
+             :count
+           ) == 1
+
+    assert %{status: "released"} =
+             Repo.get_by!(BridgeOwnerLease, codex_session_id: fixture.session.id)
   end
 
   test "v1 owner preserves real upstream connection lifecycle metadata", %{auth: auth} do

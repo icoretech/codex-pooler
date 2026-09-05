@@ -13,12 +13,35 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
 
   @detection_budget 15_000
 
+  test "committed retry cleanup removes its identity and pricing without touching another fixture" do
+    Sandbox.unboxed_run(Repo, fn ->
+      fixture = committed_fixture()
+      other = committed_fixture()
+
+      on_exit(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          cleanup_fixture(fixture)
+          cleanup_fixture(other)
+        end)
+      end)
+
+      cleanup_fixture(fixture)
+
+      refute Repo.get(CodexPooler.Upstreams.Schemas.UpstreamIdentity, fixture.identity_id)
+      refute Repo.get(CodexPooler.Catalog.PricingSnapshot, fixture.pricing_id)
+      assert Repo.get!(Pool, other.pool_id)
+      assert Repo.get!(CodexPooler.Upstreams.Schemas.UpstreamIdentity, other.identity_id)
+      assert Repo.get!(CodexPooler.Catalog.PricingSnapshot, other.pricing_id)
+      cleanup_fixture(fixture)
+    end)
+  end
+
   test "two committed PostgreSQL backends race to one successor lifecycle" do
     fixture = Sandbox.unboxed_run(Repo, &committed_fixture/0)
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
-        fixture.pool_id |> then(&Repo.get!(Pool, &1)) |> Repo.delete!()
+        cleanup_fixture(fixture)
       end)
     end)
 
@@ -75,6 +98,20 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       successor_id = Repo.one!(from l in RequestClientRetryLink, select: l.successor_request_id)
       assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^successor_id), :count) == 0
     end)
+  end
+
+  defp cleanup_fixture(fixture) do
+    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+
+    Repo.delete_all(
+      from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
+        where: identity.id == ^fixture.identity_id
+    )
+
+    Repo.delete_all(
+      from pricing in CodexPooler.Catalog.PricingSnapshot,
+        where: pricing.id == ^fixture.pricing_id
+    )
   end
 
   defp committed_fixture do
@@ -143,6 +180,8 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
     %{
       auth: setup.auth,
       model: setup.model,
+      identity_id: setup.identity.id,
+      pricing_id: setup.pricing.id,
       payload: %{"model" => setup.model.exposed_model_id, "input" => []},
       pool_id: setup.pool.id,
       session_id: session.id,

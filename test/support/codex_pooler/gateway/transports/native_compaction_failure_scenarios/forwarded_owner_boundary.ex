@@ -4,6 +4,8 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
   import ExUnit.Assertions
   import ExUnit.CaptureLog, only: [with_log: 1]
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.BridgeOwnerLease
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.AccountingLifecycle
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Context
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Observed
@@ -16,6 +18,8 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
+  alias CodexPooler.Gateway.Websocket
+  alias CodexPooler.Repo
 
   @detection_timeout_ms 15_000
   @post_accounting_variants [
@@ -93,8 +97,23 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
 
   defp execute(:owner_timeout, context, accounting) do
     remote_node = :"codex_pooler@forwarded-provider-timeout.example"
-    session = accounting.resource.session
     remote_owner_instance_id = Atom.to_string(remote_node)
+
+    # The blocked node-client call has no owner turn. Give its idle owner a matching
+    # persisted lease instead of borrowing the independent accounting session's turn.
+    {:ok, session} =
+      Websocket.start_codex_session(
+        accounting.resource.fixture.auth,
+        RequestOptions.for_websocket(%{owner_instance_id: remote_owner_instance_id})
+      )
+
+    assert session.id != accounting.resource.session.id
+    assert session.owner_instance_id == remote_owner_instance_id
+
+    lease = Repo.get_by!(BridgeOwnerLease, codex_session_id: session.id)
+    assert lease.status == "active"
+    assert lease.owner_instance_id == remote_owner_instance_id
+    assert lease.lease_token == session.owner_lease_token
 
     fixture =
       start_accounted_owner(context, :owner_timeout,
@@ -112,7 +131,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
 
     assert {:error, :owner_forward_timeout} =
              WebsocketOwnerForwarder.submit_frame(
-               %{session | owner_instance_id: remote_owner_instance_id},
+               session,
                fixture.owner_lease_token,
                fixture.downstream,
                "forwarded-provider-timeout",
@@ -136,7 +155,12 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
                    @detection_timeout_ms
 
     assert {:ok, _status} = WebsocketOwnerSession.owner_status(fixture.owner)
-    observe_survivor(fixture)
+    observed = observe_survivor(fixture)
+    released_lease = Repo.get!(BridgeOwnerLease, lease.id)
+    assert released_lease.status == "released"
+    assert released_lease.metadata["release_reason"] == "owner_drained"
+    assert %DateTime{} = released_lease.released_at
+    observed
   end
 
   defp execute(:owner_crash, context, _accounting) do

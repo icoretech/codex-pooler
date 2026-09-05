@@ -767,9 +767,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         phase when phase in [:accounting_started_compact, :accounting_started_final] ->
           :accounting
 
-        phase when phase in [:consumed_compact, :consumed_final] ->
-          :consume
-
         :collected_unconfirmed ->
           :collect
 
@@ -1180,6 +1177,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     state =
       if DownstreamState.active_turn?(state) do
         terminate_predecessor_task(state.active_turn)
+        _result = Persistence.interrupt_codex_session(state, :owner_drained)
         reply_active_turn(state, {:error, :owner_drained})
         finish_active_turn(state, {:error, :owner_drained})
       else

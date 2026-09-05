@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
+  alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
@@ -169,7 +170,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       |> Map.put(:upstream_error_param, failure.upstream_error_param)
       |> Map.put(:collected_provider_failure, failure)
 
-    finalize_terminal_failure(context, finalization)
+    if native_full_history_compaction?(context.request_options) do
+      finalize_invalid_compaction(context, finalization, compact_ack_error())
+    else
+      finalize_terminal_failure(context, finalization)
+    end
   end
 
   defp validate_public_compaction_response(
@@ -206,9 +211,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
           request_options,
           Map.get(finalization, :websocket_frame_headers, %{}),
           Map.get(finalization, :upstream_websocket_connection)
-        ),
+        )
+        |> collected_compaction_diagnostics(finalization),
         started: finalization.started,
-        before_finalize: fn -> SideEffects.observe_websocket_response(context, finalization) end
+        before_finalize: fn ->
+          SideEffects.observe_websocket_response(context, finalization)
+
+          if native_full_history_compaction?(request_options) do
+            Streaming.record_health_failure(error.code, error.code, context)
+          else
+            :ok
+          end
+        end
       )
 
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
@@ -224,6 +238,27 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         {:error, gateway_error}
     end
   end
+
+  defp collected_compaction_diagnostics(metadata, %{collected_provider_failure: failure}) do
+    metadata
+    |> Map.put("upstream_error_code", failure.upstream_code)
+    |> Map.put("stream_terminal_type", failure.event_type)
+    |> Metadata.maybe_put_upstream_error_param(failure)
+  end
+
+  defp collected_compaction_diagnostics(metadata, _finalization), do: metadata
+
+  defp native_full_history_compaction?(%RequestOptions{
+         payload_context: %{
+           compaction_trigger_bridge?: true,
+           compaction_input_mode: :full_history,
+           compaction_result_mode: :native_websocket
+         },
+         transport: %{transport: "websocket", websocket_delivery_mode: :collect_full_history}
+       }),
+       do: true
+
+  defp native_full_history_compaction?(%RequestOptions{}), do: false
 
   defp completed_result(
          %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options,
@@ -972,7 +1007,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
            )
            |> maybe_put_before_finalize(fn ->
              SideEffects.observe_websocket_response(context, finalization)
-             Streaming.record_health_failure(code, code, context)
+
+             record_failed_health(context, reason, code)
            end)
          ) do
       {:stale_generation, finalized} ->
@@ -980,13 +1016,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
-        {:error, failed_error_response(endpoint, code, reason)}
+
+        if native_full_history_compaction?(context.request_options) do
+          {:error, compact_ack_error()}
+        else
+          {:error, failed_error_response(endpoint, code, reason)}
+        end
 
       {:error, gateway_error} = error ->
         emit_settlement_failure(error, transports)
         {:error, gateway_error}
     end
   end
+
+  defp record_failed_health(context, :upstream_websocket_closed_before_terminal = reason, code) do
+    if native_full_history_compaction?(context.request_options) do
+      DispatchLifecycle.neutral_completion(context)
+    else
+      Streaming.record_health_failure(reason, code, context)
+    end
+  end
+
+  defp record_failed_health(context, reason, code),
+    do: Streaming.record_health_failure(reason, code, context)
 
   defp emit_settlement_outcome({:ok, finalized}, outcome, transports) do
     if AttemptSettlement.first_settlement?(finalized) do

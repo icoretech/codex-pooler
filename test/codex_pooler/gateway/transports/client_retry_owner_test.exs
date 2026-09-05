@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.ClientRetryOwnerTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
@@ -39,14 +41,20 @@ defmodule CodexPooler.Gateway.Transports.ClientRetryOwnerTest do
       {:exception, :undef,
        [{module, :remote_submit_request_v5, args, [file: ~c"previous_release.ex", line: 1]}]}
 
-    assert :owner_unavailable =
-             WebsocketOwnerForwarder.normalize_remote_failure(
-               :error,
-               reason,
-               module,
-               :remote_submit_request_v5,
-               args
-             )
+    log =
+      capture_log(fn ->
+        assert :owner_unavailable =
+                 WebsocketOwnerForwarder.normalize_remote_failure(
+                   :error,
+                   reason,
+                   module,
+                   :remote_submit_request_v5,
+                   args
+                 )
+      end)
+
+    assert log =~
+             "event=owner_protocol_incompatible boundary=submit protocol=v5 canonical_error=owner_unavailable"
   end
 
   defp base_attrs do

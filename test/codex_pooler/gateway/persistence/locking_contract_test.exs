@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
@@ -145,20 +146,25 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
                  RequestOptions.for_websocket(%{})
                )
 
-      assert {:error, :stale_owner_cleanup} =
-               assert_for_update_lock(
-                 "L07",
-                 "Interruption.recover_owner_lifecycle_leftovers/3",
-                 "codex_sessions",
-                 session.id,
-                 fn ->
-                   Interruption.recover_owner_lifecycle_leftovers(
-                     session,
-                     :owner_crashed,
-                     request_options(reconnect_window_seconds: 300)
+      log =
+        capture_log(fn ->
+          assert {:error, :stale_owner_cleanup} =
+                   assert_for_update_lock(
+                     "L07",
+                     "Interruption.recover_owner_lifecycle_leftovers/3",
+                     "codex_sessions",
+                     session.id,
+                     fn ->
+                       Interruption.recover_owner_lifecycle_leftovers(
+                         session,
+                         :owner_crashed,
+                         request_options(reconnect_window_seconds: 300)
+                       )
+                     end
                    )
-                 end
-               )
+        end)
+
+      assert_owner_recovery_rejection(log)
     end
   end
 
@@ -267,21 +273,24 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
       %{session: session} = owner_session_fixture()
       missing_request_id = Ecto.UUID.generate()
 
-      {turn, result} =
-        without_foreign_key_checks(fn ->
-          turn = insert_dangling_turn!(session, missing_request_id)
+      {{turn, result}, log} =
+        with_log(fn ->
+          without_foreign_key_checks(fn ->
+            turn = insert_dangling_turn!(session, missing_request_id)
 
-          result =
-            Interruption.recover_owner_lifecycle_leftovers(
-              session,
-              :owner_crashed,
-              request_options(reconnect_window_seconds: 300)
-            )
+            result =
+              Interruption.recover_owner_lifecycle_leftovers(
+                session,
+                :owner_crashed,
+                request_options(reconnect_window_seconds: 300)
+              )
 
-          {turn, result}
+            {turn, result}
+          end)
         end)
 
       assert {:error, :stale_owner_cleanup} = result
+      assert_owner_recovery_rejection(log)
 
       assert %CodexTurn{status: "in_progress", error_code: nil} =
                Repo.get!(CodexTurn, turn.id)
@@ -293,6 +302,14 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
                  where: request.id == ^missing_request_id
              )
     end
+  end
+
+  defp assert_owner_recovery_rejection(log) do
+    assert log =~ "websocket owner lifecycle recovery failed"
+    assert log =~ "recovery_reason=owner_crashed"
+    assert log =~ "failure_reason=stale_owner_cleanup"
+    assert length(Regex.scan(~r/\[warning\]/, log)) == 1
+    refute log =~ "[error]"
   end
 
   defp auth_fixture do
