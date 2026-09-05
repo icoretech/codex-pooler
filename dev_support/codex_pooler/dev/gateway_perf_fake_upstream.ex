@@ -572,6 +572,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   defp request_observation(request_class, payload, connection, frame_ordinal) do
     input = Map.get(payload, "input")
     input_types = observation_input_types(input)
+    metadata = native_turn_metadata(payload)
 
     %{
       "requestClass" => request_class,
@@ -584,9 +585,63 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       "terminalCompactionTrigger" => List.last(input_types) == "compaction_trigger",
       "store" => Map.get(payload, "store") == true,
       "stream" => Map.get(payload, "stream") == true,
-      "compactPhase" => compact_phase(input_types)
+      "compactPhase" => compact_phase(input_types),
+      "requestKind" =>
+        metadata_enum(metadata, "request_kind", ~w(turn prewarm compaction memory)),
+      "windowId" => metadata_field_state(metadata, "window_id"),
+      "contextWindowId" => metadata_field_state(metadata, "context_window_id"),
+      "compactionMetadata" => metadata_field_state(metadata, "compaction"),
+      "toolResultContinuation" => tool_result_continuation?(input),
+      "logicalTurnFingerprint" => logical_turn_fingerprint(payload, metadata)
     }
   end
+
+  defp native_turn_metadata(%{"client_metadata" => %{"x-codex-turn-metadata" => value}})
+       when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, metadata} when is_map(metadata) -> metadata
+      _invalid -> nil
+    end
+  end
+
+  defp native_turn_metadata(_payload), do: nil
+
+  defp metadata_enum(metadata, key, allowed) when is_map(metadata) do
+    value = Map.get(metadata, key)
+    if value in allowed, do: value, else: "unknown"
+  end
+
+  defp metadata_enum(_metadata, _key, _allowed), do: "unknown"
+
+  defp metadata_field_state(metadata, key) when is_map(metadata) do
+    cond do
+      not Map.has_key?(metadata, key) -> "omitted"
+      is_nil(Map.get(metadata, key)) -> "null"
+      true -> "present"
+    end
+  end
+
+  defp metadata_field_state(_metadata, _key), do: "metadata_missing"
+
+  defp tool_result_continuation?(input) when is_list(input),
+    do: Enum.any?(input, &match?(%{"type" => "function_call_output"}, &1))
+
+  defp tool_result_continuation?(_input), do: false
+
+  defp logical_turn_fingerprint(payload, metadata) do
+    turn_id =
+      get_in(payload, ["client_metadata", "turn_id"]) || metadata_value(metadata, "turn_id")
+
+    if is_binary(turn_id) and String.trim(turn_id) != "" do
+      turn_id
+      |> :crypto.hash(:sha256)
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 16)
+    end
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata), do: Map.get(metadata, key)
+  defp metadata_value(_metadata, _key), do: nil
 
   defp connection_id(nil), do: nil
   defp connection_id(%{id: id}), do: id
@@ -637,19 +692,20 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     else
       ensure_wire_capture_store()
 
-      Agent.update(@wire_capture_store, fn captures ->
-        if map_size(captures) >= @wire_capture_max_correlators and
-             not Map.has_key?(captures, key) do
-          captures
-        else
-          Map.update(
-            captures,
-            key,
-            new_wire_capture(:websocket, keys, nil),
-            &merge_wire_capture(&1, :websocket, keys, nil)
-          )
-        end
-      end)
+      Agent.update(@wire_capture_store, &update_websocket_wire_capture(&1, key, keys))
+    end
+  end
+
+  defp update_websocket_wire_capture(captures, key, keys) do
+    if map_size(captures) >= @wire_capture_max_correlators and not Map.has_key?(captures, key) do
+      captures
+    else
+      Map.update(
+        captures,
+        key,
+        new_wire_capture(:websocket, keys, nil),
+        &merge_wire_capture(&1, :websocket, keys, nil)
+      )
     end
   end
 
@@ -964,7 +1020,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   defp stream_events(%{"name" => "native-compaction-v2-success"}, payload) do
     if terminal_compaction_trigger?(payload),
       do: native_compaction_success_events(),
-      else: ordinary_events()
+      else: app_server_ordinary_events()
   end
 
   defp stream_events(%{"name" => "native-compaction-terminal-failure"}, payload) do
@@ -985,10 +1041,9 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
 
   defp native_compaction_success_events do
     item = %{
+      "id" => "cmp_synthetic_native_local",
       "type" => "compaction",
-      "encrypted_content" => "synthetic-encrypted-compaction",
-      "id" => "cmp_native_local",
-      "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-native-local"}
+      "encrypted_content" => "synthetic-encrypted-compaction"
     }
 
     response = %{
@@ -1029,6 +1084,83 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     }
 
     [{1, "response.completed", %{"type" => "response.completed", "response" => response}}]
+  end
+
+  defp app_server_ordinary_events do
+    response_id = "resp_native_follow_up"
+    item_id = "msg_native_follow_up"
+    text = "ok"
+
+    message = %{
+      "id" => item_id,
+      "type" => "message",
+      "status" => "completed",
+      "role" => "assistant",
+      "content" => [output_text(text)]
+    }
+
+    response = %{
+      "id" => response_id,
+      "object" => "response",
+      "status" => "completed",
+      "output" => [message],
+      "usage" => %{
+        "input_tokens" => 1,
+        "input_tokens_details" => %{"cached_tokens" => 0},
+        "output_tokens" => 1,
+        "output_tokens_details" => %{"reasoning_tokens" => 0},
+        "total_tokens" => 2
+      }
+    }
+
+    [
+      %{
+        "type" => "response.created",
+        "response" => %{response | "status" => "in_progress", "output" => [], "usage" => nil}
+      },
+      %{
+        "type" => "response.output_item.added",
+        "output_index" => 0,
+        "item" => %{message | "status" => "in_progress", "content" => []}
+      },
+      %{
+        "type" => "response.content_part.added",
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "part" => output_text("")
+      },
+      %{
+        "type" => "response.output_text.delta",
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "delta" => text,
+        "logprobs" => []
+      },
+      %{
+        "type" => "response.output_text.done",
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "text" => text,
+        "logprobs" => []
+      },
+      %{
+        "type" => "response.content_part.done",
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "part" => output_text(text)
+      },
+      %{"type" => "response.output_item.done", "output_index" => 0, "item" => message},
+      %{"type" => "response.completed", "response" => response}
+    ]
+    |> Enum.with_index()
+    |> Enum.map(fn {payload, sequence} ->
+      payload = Map.put(payload, "sequence_number", sequence)
+      {sequence + 1, payload["type"], payload}
+    end)
   end
 
   defp terminal_compaction_trigger?(%{"input" => input}) when is_list(input),
@@ -1199,28 +1331,30 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
 
     @impl WebSock
     def handle_in({payload, [opcode: :text]}, %{profile: profile} = state) do
-      with {:ok, decoded} <- Jason.decode(payload) do
-        :ok = record_request_observation(state, decoded)
+      case Jason.decode(payload) do
+        {:ok, decoded} ->
+          :ok = record_request_observation(state, decoded)
 
-        # Websocket client metadata travels in the frame payload, not the handshake.
-        # Only its keys are recorded.
-        record_client_metadata(state, decoded)
+          # Websocket client metadata travels in the frame payload, not the handshake.
+          # Only its keys are recorded.
+          record_client_metadata(state, decoded)
 
-        case profile["http_status"] do
-          200 ->
-            push_profile(profile, decoded, state)
+          case profile["http_status"] do
+            200 ->
+              push_profile(profile, decoded, state)
 
-          status ->
-            {:push,
-             {:text,
-              Jason.encode!(%{
-                "type" => "error",
-                "status" => status,
-                "error" => %{"code" => "rate_limit_exceeded"}
-              })}, state}
-        end
-      else
-        {:error, _reason} -> {:stop, :invalid_json, state}
+            status ->
+              {:push,
+               {:text,
+                Jason.encode!(%{
+                  "type" => "error",
+                  "status" => status,
+                  "error" => %{"code" => "rate_limit_exceeded"}
+                })}, state}
+          end
+
+        {:error, _reason} ->
+          {:stop, :invalid_json, state}
       end
     end
 

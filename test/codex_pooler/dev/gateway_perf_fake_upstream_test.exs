@@ -316,10 +316,33 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
                "response.completed"
              ]
 
+    [compact_done, _completed] =
+      GatewayPerfFakeUpstream.stream_event_payloads(success, trigger)
+
+    assert compact_done["item"] == %{
+             "id" => "cmp_synthetic_native_local",
+             "type" => "compaction",
+             "encrypted_content" => "synthetic-encrypted-compaction"
+           }
+
     assert Enum.map(GatewayPerfFakeUpstream.stream_event_payloads(failure, trigger), & &1["type"]) ==
              [
                "response.failed"
              ]
+
+    assert Enum.map(
+             GatewayPerfFakeUpstream.stream_event_payloads(success, %{"input" => []}),
+             & &1["type"]
+           ) == [
+             "response.created",
+             "response.output_item.added",
+             "response.content_part.added",
+             "response.output_text.delta",
+             "response.output_text.done",
+             "response.content_part.done",
+             "response.output_item.done",
+             "response.completed"
+           ]
   end
 
   test "HTTP compaction observations are bounded, closed, and shape-only" do
@@ -352,7 +375,13 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
              "terminalCompactionTrigger" => true,
              "store" => false,
              "stream" => true,
-             "compactPhase" => "compact"
+             "compactPhase" => "compact",
+             "requestKind" => "unknown",
+             "windowId" => "metadata_missing",
+             "contextWindowId" => "metadata_missing",
+             "compactionMetadata" => "metadata_missing",
+             "toolResultContinuation" => false,
+             "logicalTurnFingerprint" => nil
            }
 
     encoded = Jason.encode!(observation)

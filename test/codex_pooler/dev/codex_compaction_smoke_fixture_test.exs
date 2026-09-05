@@ -7,6 +7,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.CodexCompactionSmokeFixture
   alias CodexPooler.Dev.CodexCompactionSmokeFixture.Journal
+  alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
+  alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
@@ -118,6 +120,66 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     refute File.exists?(paths.root)
 
     assert {:ok, %{status: "absent"}} = CodexCompactionSmokeFixture.release(options)
+  end
+
+  test "release cancels gateway reconciliation for its exact graph and preserves foreign jobs",
+       context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    foreign_context = %{context | run_id: context.run_id <> "-foreign"}
+    foreign_options = fixture_options(foreign_context)
+    assert {:ok, foreign} = CodexCompactionSmokeFixture.acquire(foreign_options)
+
+    owned_job = enqueue_gateway_reconciliation(acquired)
+    foreign_job = enqueue_gateway_reconciliation(foreign)
+    assert owned_job.state == "available"
+
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+    assert Repo.get!(Oban.Job, owned_job.id).state == "cancelled"
+    assert Repo.get!(Oban.Job, foreign_job.id).state == "available"
+    refute File.exists?(Journal.paths(context.root, context.run_id).root)
+    assert Repo.get!(Pool, foreign.pool_id).status == "active"
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(foreign_options)
+  end
+
+  test "executing reconciliation retains the journal and fails release", context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    job = enqueue_gateway_reconciliation(acquired)
+    job |> Ecto.Changeset.change(state: "executing") |> Repo.update!()
+
+    assert {:error, "fixture cleanup incomplete; metadata journal retained"} =
+             CodexCompactionSmokeFixture.release(options)
+
+    assert Repo.get!(Oban.Job, job.id).state == "executing"
+    assert File.exists?(Journal.paths(context.root, context.run_id).journal)
+  end
+
+  for pending_state <- ["scheduled", "retryable"] do
+    @pending_state pending_state
+    test "release cancels #{@pending_state} reconciliation", context do
+      options = fixture_options(context)
+      assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+      job = enqueue_gateway_reconciliation(acquired)
+      job |> Ecto.Changeset.change(state: @pending_state) |> Repo.update!()
+
+      assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+      assert Repo.get!(Oban.Job, job.id).state == "cancelled"
+    end
+  end
+
+  test "release preserves reconciliation that does not match the complete owned graph", context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    job = enqueue_gateway_reconciliation(acquired)
+    args = Map.put(job.args, "upstream_identity_id", Ecto.UUID.generate())
+    job |> Ecto.Changeset.change(args: args) |> Repo.update!()
+
+    assert {:error, "fixture cleanup incomplete; metadata journal retained"} =
+             CodexCompactionSmokeFixture.release(options)
+
+    assert Repo.get!(Oban.Job, job.id).state == "available"
+    assert File.exists?(Journal.paths(context.root, context.run_id).journal)
   end
 
   test "status output retains safe lifecycle identifiers without filesystem paths", context do
@@ -274,6 +336,18 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     refute encoded =~ context.root
     refute encoded =~ "pool_id"
     refute encoded =~ "identity_id"
+  end
+
+  defp enqueue_gateway_reconciliation(acquired) do
+    assignment = Repo.get!(PoolUpstreamAssignment, acquired.assignment_id)
+    assert :ok = SideEffects.maybe_enqueue_gateway_reconciliation(acquired.pool_id, assignment)
+
+    assert_enqueued(
+      worker: AccountReconciliationWorker,
+      args: %{pool_id: acquired.pool_id, pool_upstream_assignment_id: assignment.id}
+    )
+
+    Repo.one!(from job in Oban.Job, where: job.args["pool_id"] == ^acquired.pool_id)
   end
 
   defp fixture_options(context) do

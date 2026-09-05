@@ -1,0 +1,269 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: reliability-qa-lifecycle --root PATH --run-id ID [--port PORT]
+
+Starts one isolated managed Pooler QA environment, emits startup metadata and
+QA_READY, then reads one command from stdin:
+  QA_COMPLETE  stop and remove only the owned runtime resources, exit 0
+  QA_ABORT     stop and remove only the owned runtime resources, exit 1
+
+The complete prepare/start/QA/cleanup lifecycle is capped at 20 minutes.
+SMOKE_BASE_URL may supply the explicit loopback listener port; --port overrides it.
+RELIABILITY_QA_MIX_BUILD_PATH must name an existing absolute, non-symlinked,
+task-owned Mix build cache.
+EOF
+}
+
+fail() {
+  printf 'reliability-qa: %s\n' "$*" >&2
+  exit 1
+}
+
+root=""
+run_id=""
+requested_port=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --root) [ "$#" -ge 2 ] || fail "--root requires a value"; root="$2"; shift 2 ;;
+    --run-id) [ "$#" -ge 2 ] || fail "--run-id requires a value"; run_id="$2"; shift 2 ;;
+    --port) [ "$#" -ge 2 ] || fail "--port requires a value"; requested_port="$2"; shift 2 ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+done
+
+[ -n "$root" ] || fail "--root is required"
+[ -n "$run_id" ] || fail "--run-id is required"
+[[ "$run_id" =~ ^[a-z0-9][a-z0-9-]{7,47}$ ]] || fail "invalid run id"
+[ -d "$root" ] && [ -f "$root/mix.exs" ] && [ -f "$root/docker-compose.dev.yml" ] ||
+  fail "invalid Pooler root"
+[ ! -L "$root" ] || fail "Pooler root must not be a symlink"
+root="$(cd "$root" && pwd -P)"
+
+origin="${SMOKE_BASE_URL:-}"
+if [ -z "$requested_port" ]; then
+  [[ "$origin" =~ ^http://127\.0\.0\.1:([1-9][0-9]{0,4})/?$ ]] ||
+    fail "SMOKE_BASE_URL must be an explicit http://127.0.0.1:PORT origin"
+  requested_port="${BASH_REMATCH[1]}"
+fi
+[[ "$requested_port" =~ ^[1-9][0-9]{0,4}$ ]] || fail "invalid port"
+((10#$requested_port <= 65535)) || fail "invalid port"
+port="$((10#$requested_port))"
+origin="http://127.0.0.1:${port}"
+
+runtime_root="$root/tmp/reliability-qa/$run_id"
+state_dir="$runtime_root/dev-server"
+log_path="$runtime_root/dev-server.log"
+seed_log="$runtime_root/seed.log"
+prepare_log="$runtime_root/prepare.log"
+startup_json="$runtime_root/startup.json"
+cleanup_json="$runtime_root/cleanup.json"
+compose_file="$runtime_root/compose.override.yml"
+project="codex-pooler-relqa-${run_id}"
+volume="${project}-postgres"
+database="codex_pooler_relqa_${run_id//-/_}"
+database="${database:0:63}"
+postgres_user="postgres"
+postgres_password="relqa-${run_id}"
+postgres_port="${RELIABILITY_QA_POSTGRES_PORT:-}"
+mix_build_path="${RELIABILITY_QA_MIX_BUILD_PATH:-}"
+timeout_seconds="${RELIABILITY_QA_TIMEOUT_SECONDS:-1200}"
+
+[[ "$mix_build_path" = /* ]] && [ -d "$mix_build_path" ] && [ ! -L "$mix_build_path" ] ||
+  fail "RELIABILITY_QA_MIX_BUILD_PATH must be an existing absolute owned directory"
+[[ "$timeout_seconds" =~ ^[1-9][0-9]{0,3}$ ]] && ((10#$timeout_seconds <= 1200)) ||
+  fail "RELIABILITY_QA_TIMEOUT_SECONDS must be between 1 and 1200"
+
+if [ -z "$postgres_port" ]; then
+  postgres_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+fi
+[[ "$postgres_port" =~ ^[1-9][0-9]{0,4}$ ]] && ((10#$postgres_port <= 65535)) ||
+  fail "invalid PostgreSQL port"
+
+[ ! -e "$runtime_root" ] || fail "runtime root already exists"
+[ -z "$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)" ] ||
+  fail "refusing occupied Pooler port $port"
+[ -z "$(lsof -nP -tiTCP:"$postgres_port" -sTCP:LISTEN 2>/dev/null || true)" ] ||
+  fail "refusing occupied PostgreSQL port $postgres_port"
+[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$project")" ] ||
+  fail "foreign Compose project exists"
+[ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$project")" ] ||
+  fail "foreign Compose volume exists"
+
+first_failure=0
+cleanup_started=0
+watchdog_pid=""
+record_failure() {
+  local code="$1"
+  if [ "$first_failure" -eq 0 ] && [ "$code" -ne 0 ]; then first_failure="$code"; fi
+}
+cleanup() {
+  local exit_code="${1:-0}"
+  record_failure "$exit_code"
+  [ "$cleanup_started" -eq 0 ] || return "$first_failure"
+  cleanup_started=1
+  if [ -n "$watchdog_pid" ]; then kill -TERM "$watchdog_pid" >/dev/null 2>&1 || true; fi
+  set +e
+  DEV_SERVER_PORT="$port" DEV_SERVER_STATE_DIR="$state_dir" DEV_SERVER_LOG="$log_path" \
+    DEV_SERVER_LEGACY_PID="$runtime_root/dev-server.pid" DEV_SERVER_CWD="$root" \
+    "$root/dev_support/bin/dev-server-lifecycle" stop >/dev/null 2>&1
+  local stop_code=$?
+  local listener_clear=true
+  [ -z "$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)" ] || listener_clear=false
+  local compose_code=-1
+  if [ "$stop_code" -eq 0 ] && [ "$listener_clear" = true ]; then
+    COMPOSE_PROJECT_NAME="$project" POSTGRES_PORT="$postgres_port" \
+      docker compose -f "$root/docker-compose.dev.yml" -f "$compose_file" \
+        down -v --remove-orphans >/dev/null 2>&1
+    compose_code=$?
+  fi
+  record_failure "$stop_code"
+  if [ "$listener_clear" != true ]; then record_failure 70; fi
+  if [ "$compose_code" -gt 0 ]; then record_failure "$compose_code"; fi
+  printf '{"run_id":"%s","stop_exit":%d,"compose_exit":%d,"listener_clear":%s,"exit":%d}\n' \
+    "$run_id" "$stop_code" "$compose_code" "$listener_clear" "$first_failure" > "$cleanup_json"
+  chmod 600 "$cleanup_json"
+  if [ "$stop_code" -eq 0 ] && [ "$compose_code" -eq 0 ] && [ "$listener_clear" = true ]; then
+    cp "$cleanup_json" "$root/tmp/reliability-qa-${run_id}-cleanup.json"
+    find "$runtime_root" -depth -delete
+  fi
+  set -e
+  return "$first_failure"
+}
+
+on_signal() {
+  local code="$1"
+  if [ -e "$runtime_root/watchdog-timeout" ]; then code=124; fi
+  record_failure "$code"
+  cleanup "$code" || true
+  exit "$first_failure"
+}
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+trap 'rc=$?; code=$rc; if [ "$first_failure" -ne 0 ]; then code=$first_failure; fi; if [ "$cleanup_started" -eq 0 ]; then cleanup "$code" || true; fi' EXIT
+
+umask 077
+mkdir -p "$runtime_root"
+chmod 700 "$runtime_root"
+perl -e '$seconds = shift; $parent = shift; $marker = shift; sleep $seconds; open my $fh, ">", $marker or exit 1; close $fh; kill "TERM", $parent' \
+  "$timeout_seconds" "$$" "$runtime_root/watchdog-timeout" &
+watchdog_pid="$!"
+printf '%s\n' \
+  "services:" \
+  "  db:" \
+  "    restart: \"no\"" \
+  "    ports: !override" \
+  "      - \"127.0.0.1:${postgres_port}:5432\"" \
+  "    environment:" \
+  "      POSTGRES_DB: $database" \
+  "      POSTGRES_USER: $postgres_user" \
+  "      POSTGRES_PASSWORD: $postgres_password" \
+  "volumes:" \
+  "  codex-pooler-postgres:" \
+  "    name: $volume" \
+  "    labels:" \
+  "      com.docker.compose.project: $project" > "$compose_file"
+chmod 600 "$compose_file"
+
+export CODEX_POOLER_DEV_POSTGRES_USER="$postgres_user"
+export CODEX_POOLER_DEV_POSTGRES_PASSWORD="$postgres_password"
+export CODEX_POOLER_DEV_POSTGRES_HOST="127.0.0.1"
+export CODEX_POOLER_DEV_POSTGRES_PORT="$postgres_port"
+export CODEX_POOLER_DEV_POSTGRES_DB="$database"
+export DATABASE_URL="postgresql://${postgres_user}:${postgres_password}@127.0.0.1:${postgres_port}/${database}?sslmode=disable"
+export MIX_BUILD_PATH="$mix_build_path"
+
+source_manifest() {
+  local destination="$1"
+  (
+    cd "$root"
+    git ls-files -z --cached --others --exclude-standard -- \
+      mix.exs mix.lock mise.toml config lib dev_support priv assets |
+      while IFS= read -r -d '' path; do
+        [ -e "$path" ] || [ -L "$path" ] || { printf 'absent\t%s\n' "$path"; continue; }
+        if [ -L "$path" ]; then
+          printf 'symlink\t%s\t%s\n' "$(readlink "$path")" "$path"
+        elif [ -f "$path" ]; then
+          printf 'file\t%s\t%s\t%s\n' "$(stat -f '%Lp:%z' "$path")" \
+            "$(shasum -a 256 "$path" | awk '{print $1}')" "$path"
+        fi
+      done
+  ) | LC_ALL=C sort > "$destination"
+}
+
+beam_manifest() {
+  local destination="$1" ebin="$mix_build_path/lib/codex_pooler/ebin"
+  [ -d "$ebin" ] || fail "compiled Pooler BEAM directory is absent"
+  find "$ebin" -type f -name '*.beam' -print0 |
+    while IFS= read -r -d '' path; do
+      printf '%s\t%s\n' "$(shasum -a 256 "$path" | awk '{print $1}')" "${path#"$mix_build_path/"}"
+    done | LC_ALL=C sort > "$destination"
+  [ -s "$destination" ] || fail "compiled Pooler BEAM manifest is empty"
+}
+
+source_manifest "$runtime_root/source-before.tsv"
+
+make_args=(--no-print-directory "PORT=$port" "POSTGRES_PORT=$postgres_port" \
+  "DEV_POSTGRES_DB=$database" "DEV_POSTGRES_USER=$postgres_user" \
+  "DEV_POSTGRES_PASSWORD=$postgres_password" \
+  "DEV_SERVER_STATE_DIR=$state_dir" "DEV_LOG=$log_path" "DEV_SECRET_ENV=" \
+  "DEV_COMPOSE=COMPOSE_PROJECT_NAME=$project POSTGRES_PORT=$postgres_port docker compose -f $root/docker-compose.dev.yml -f $compose_file")
+
+(cd "$root" && mise x -- make "${make_args[@]}" dev-prepare > "$prepare_log" 2>&1)
+(cd "$root" && mise x -- mix dev.seed full > "$seed_log" 2>&1)
+
+DEV_SERVER_PORT="$port" DEV_SERVER_STATE_DIR="$state_dir" DEV_SERVER_LOG="$log_path" \
+  DEV_SERVER_LEGACY_PID="$runtime_root/dev-server.pid" DEV_SERVER_CWD="$root" \
+  DEV_SERVER_COMMAND="PORT=$port mix phx.server" DEV_SERVER_HEALTH_URL="$origin/healthz" \
+  "$root/dev_support/bin/dev-server-lifecycle" start
+
+curl -fsS "$origin/healthz" >/dev/null
+source_manifest "$runtime_root/source-after-start.tsv"
+cmp -s "$runtime_root/source-before.tsv" "$runtime_root/source-after-start.tsv" ||
+  fail "application source changed during build/start"
+beam_manifest "$runtime_root/beam-after-start.tsv"
+catalog_output="$(cd "$root" && mise x -- mix run -e 'IO.puts("CATALOG_COUNT=" <> Integer.to_string(CodexPooler.Repo.aggregate(CodexPooler.Catalog.PricingSnapshot, :count)))' 2>/dev/null)"
+catalog_count="$(printf '%s\n' "$catalog_output" | sed -n 's/^CATALOG_COUNT=//p' | tail -n 1)"
+[[ "$catalog_count" =~ ^[0-9]+$ ]] || fail "catalog source check failed"
+active_run="$(tr -d '\n' < "$state_dir/active")"
+receipt="$state_dir/$active_run.receipt"
+pid="$(awk -F '\t' '$1 == "pid" {print $2}' "$receipt")"
+start_signature="$(awk -F '\t' '$1 == "start_signature" {print $2}' "$receipt")"
+source_sha="$(cd "$root" && git rev-parse HEAD)"
+source_manifest_sha="$(shasum -a 256 "$runtime_root/source-after-start.tsv" | awk '{print $1}')"
+beam_manifest_sha="$(shasum -a 256 "$runtime_root/beam-after-start.tsv" | awk '{print $1}')"
+wrapper_sha="$(shasum -a 256 "$root/dev_support/bin/reliability-qa-lifecycle" | awk '{print $1}')"
+lifecycle_sha="$(shasum -a 256 "$root/dev_support/bin/dev-server-lifecycle" | awk '{print $1}')"
+config_sha="$(shasum -a 256 "$root/config/dev.exs" | awk '{print $1}')"
+makefile_sha="$(shasum -a 256 "$root/Makefile" | awk '{print $1}')"
+seed_source="dev_support/codex_pooler/dev/seeds/full.ex"
+seed_source_sha="$(shasum -a 256 "$root/$seed_source" | awk '{print $1}')"
+printf '{"run_id":"%s","origin":"%s","port":%d,"postgres_port":%d,"database":"%s","compose_project":"%s","volume":"%s","pid":%d,"start_signature":"%s","cwd":"%s","source_sha":"%s","source_manifest_sha256":"%s","beam_manifest_sha256":"%s","mix_build_path":"%s","wrapper_sha256":"%s","lifecycle_sha256":"%s","config_sha256":"%s","makefile_sha256":"%s","seed_profile":"full","seed_source":"%s","seed_source_sha256":"%s","catalog_count":%d,"evidence_dsn_sslmode":"disable"}\n' \
+  "$run_id" "$origin" "$port" "$postgres_port" "$database" "$project" "$volume" "$pid" \
+  "$start_signature" "$root" "$source_sha" "$source_manifest_sha" "$beam_manifest_sha" "$mix_build_path" \
+  "$wrapper_sha" "$lifecycle_sha" "$config_sha" "$makefile_sha" "$seed_source" "$seed_source_sha" \
+  "$catalog_count" > "$startup_json"
+chmod 600 "$startup_json"
+cp "$startup_json" "$root/tmp/reliability-qa-${run_id}-startup.json"
+cp "$runtime_root/source-after-start.tsv" "$root/tmp/reliability-qa-${run_id}-source.tsv"
+cp "$runtime_root/beam-after-start.tsv" "$root/tmp/reliability-qa-${run_id}-beam.tsv"
+cat "$startup_json"
+printf 'QA_READY\n'
+
+command=""
+command="${RELIABILITY_QA_COMMAND:-}"
+while [ -z "$command" ]; do IFS= read -r -t 1 command || true; done
+source_manifest "$runtime_root/source-before-cleanup.tsv"
+beam_manifest "$runtime_root/beam-before-cleanup.tsv"
+cmp -s "$runtime_root/source-after-start.tsv" "$runtime_root/source-before-cleanup.tsv" ||
+  record_failure 71
+cmp -s "$runtime_root/beam-after-start.tsv" "$runtime_root/beam-before-cleanup.tsv" ||
+  record_failure 72
+case "$command" in
+  QA_COMPLETE) cleanup 0 || true; trap - EXIT; exit "$first_failure" ;;
+  QA_ABORT) record_failure 1; cleanup 1 || true; trap - EXIT; exit "$first_failure" ;;
+  *) record_failure 1; fail "expected QA_COMPLETE or QA_ABORT" ;;
+esac

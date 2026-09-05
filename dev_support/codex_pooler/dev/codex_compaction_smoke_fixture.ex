@@ -214,6 +214,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
 
   defp cleanup(paths, journal) do
     Provisioner.cleanup!(journal)
+    cancel_pending_reconciliation(journal)
     require_postconditions(journal)
     Journal.remove_secret(paths)
     Journal.remove_all(paths)
@@ -221,6 +222,27 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   rescue
     _exception -> {:error, "fixture cleanup incomplete; metadata journal retained"}
   end
+
+  defp cancel_pending_reconciliation(%{
+         "pool_id" => pool_id,
+         "assignment_id" => assignment_id,
+         "identity_id" => identity_id
+       })
+       when is_binary(pool_id) and is_binary(assignment_id) and is_binary(identity_id) do
+    {:ok, _count} =
+      Oban.cancel_all_jobs(
+        from job in Oban.Job,
+          where: job.worker == "CodexPooler.Jobs.AccountReconciliationWorker",
+          where: job.args["pool_id"] == ^pool_id,
+          where: job.args["pool_upstream_assignment_id"] == ^assignment_id,
+          where: job.args["upstream_identity_id"] == ^identity_id,
+          where: job.state in ["available", "scheduled", "retryable"]
+      )
+
+    :ok
+  end
+
+  defp cancel_pending_reconciliation(_journal), do: :ok
 
   defp require_postconditions(journal) do
     pool_id = journal["pool_id"]

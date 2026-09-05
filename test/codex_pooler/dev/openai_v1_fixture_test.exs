@@ -67,7 +67,10 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert %RoutingSettings{allow_image_generation: true, v1_compatibility_enabled: true} =
              Repo.get(RoutingSettings, pool_id)
 
-    assert Repo.aggregate(from(model in Model, where: model.pool_id == ^pool_id), :count) == 3
+    assert Repo.aggregate(from(model in Model, where: model.pool_id == ^pool_id), :count) == 4
+
+    assert %Model{supports_responses: true, supports_streaming: true} =
+             Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-5.6-terra")
 
     assert %Model{
              supports_responses: true,
@@ -104,7 +107,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
                where: window.upstream_identity_id == ^identity_id
              ),
              :count
-           ) == 8
+           ) == 10
 
     assert {:ok, second} = OpenAIV1Fixture.acquire(context.options)
     assert second.leases == 2
@@ -182,6 +185,42 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     refute File.exists?(context.receipt_path)
     refute Repo.get_by(Pool, slug: @pool_slug)
     refute Repo.get_by(UpstreamIdentity, chatgpt_account_id: @account_id)
+  end
+
+  test "allows only explicitly authorized isolated QA databases in development" do
+    assert :ok =
+             OpenAIV1Fixture.validate_environment(
+               environment: :dev,
+               allow_isolated_dev_database: false,
+               repo_config: [database: "codex_pooler_dev"]
+             )
+
+    assert :ok =
+             OpenAIV1Fixture.validate_environment(
+               environment: :dev,
+               allow_isolated_dev_database: true,
+               repo_config: [database: "codex_pooler_relqa_fixture_12345678"]
+             )
+
+    for database <- [
+          "codex_pooler_relqa_short",
+          "codex_pooler_relqa_upper_CASE_12345678",
+          "other_database"
+        ] do
+      assert {:error, "OpenAI V1 fixture requires database codex_pooler_dev"} =
+               OpenAIV1Fixture.validate_environment(
+                 environment: :dev,
+                 allow_isolated_dev_database: false,
+                 repo_config: [database: database]
+               )
+    end
+
+    assert {:error, "OpenAI V1 fixture requires database codex_pooler_dev"} =
+             OpenAIV1Fixture.validate_environment(
+               environment: :dev,
+               allow_isolated_dev_database: true,
+               repo_config: [database: "other_database"]
+             )
   end
 
   test "refuses a second lease that targets another loopback origin", context do
@@ -262,6 +301,8 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
   end
 
   defp assert_reasoning_rejected(model, assignment, identity) do
+    assert %{} = get_in(model.metadata, ["source_assignment_models", assignment.id])
+
     assert {:error,
             %{
               status: 503,

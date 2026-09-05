@@ -368,6 +368,10 @@ stop_server() {
 
 status_server() {
   server_cwd="$(cd "$server_cwd" && pwd -P)"
+  if [ ! -e "$active_path" ] && [ ! -e "$legacy_pid_path" ]; then
+    printf 'dev-server: stopped\n'
+    return 0
+  fi
   load_active_receipt
 
   if stale_owned_receipt; then

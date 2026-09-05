@@ -20,6 +20,15 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
   def provision!(pool, assignment, identity) do
     models = %{
       text: upsert!(pool, assignment, text_attributes(assignment)),
+      alternate_text:
+        upsert!(
+          pool,
+          assignment,
+          model_attributes("gpt-5.6-terra", "GPT 5.6 Terra", true, true, true, true, assignment, [
+            "text",
+            "image"
+          ])
+        ),
       audio: upsert!(pool, assignment, audio_attributes(assignment)),
       image: upsert!(pool, assignment, image_attributes(assignment))
     }
