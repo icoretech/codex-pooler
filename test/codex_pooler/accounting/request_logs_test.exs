@@ -340,7 +340,8 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
              cached_input_cost_usd: nil
            } = SettlementPresentation.token_counts(settlement)
 
-    assert %{status: "unpriced", usd: nil} = SettlementPresentation.cost(settlement)
+    assert %{status: "unpriced", usd: nil, pricing_availability: "priced"} =
+             SettlementPresentation.cost(settlement)
   end
 
   test "voided and non-settlement ledger entries do not become latest facts" do

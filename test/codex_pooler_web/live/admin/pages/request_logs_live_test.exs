@@ -559,6 +559,94 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
   end
 
+  test "drawer separates measured usage, available rates and recorded diagnostics", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "usage-availability", name: "Usage availability"})
+
+    for {usage, pricing, classification} <- [
+          {"usage_known", "priced", "known"},
+          {"usage_unknown", "priced", "missing"},
+          {"usage_known", "unpriced_missing_model", "known"},
+          {"usage_unknown", "priced", nil}
+        ] do
+      observation = %{
+        "version" => 1,
+        "classification" => classification,
+        "marker_seen" => classification == "known",
+        "valid_object_seen" => classification == "known",
+        "candidate_count" => if(classification == "known", do: 1, else: 0)
+      }
+
+      %{request: request} =
+        request_log_fixture(pool, %{
+          status: "succeeded",
+          usage_status: usage,
+          input_tokens: 16,
+          cached_input_tokens: 4,
+          output_tokens: 5,
+          total_tokens: 21,
+          settled_cost_micros: 500_000,
+          settlement_details: %{
+            "pricing_status" => pricing,
+            "settled_cost_micros" => if(pricing == "priced", do: "500000")
+          },
+          request_metadata: %{
+            "usage_observation" => observation,
+            "prompt" => "synthetic private prompt must not appear"
+          }
+        })
+
+      {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+      render_click(element(view, "#request-log-#{request.id}-open-details"))
+      assert has_element?(view, "#request-log-detail-status", "Succeeded")
+      assert has_element?(view, "#request-log-detail-response-status", "200")
+
+      assert has_element?(
+               view,
+               "#request-log-detail-pricing-status",
+               if(pricing == "priced", do: "Available", else: "unpriced_missing_model")
+             )
+
+      if usage == "usage_known" do
+        assert has_element?(view, "#request-log-detail-token-counts", "21 tokens")
+        assert has_element?(view, "#request-log-detail-input-tokens", "16")
+        assert has_element?(view, "#request-log-detail-output-tokens", "5")
+        assert has_element?(view, "#request-log-detail-cached-input", "4")
+        assert has_element?(view, "#request-log-detail-usage-status", "Available")
+      else
+        assert has_element?(view, "#request-log-detail-usage-status", "Unavailable")
+        refute has_element?(view, "#request-log-row-#{request.id} [data-role='cost']")
+        refute has_element?(view, "#request-log-detail-input-tokens")
+        refute has_element?(view, "#request-log-detail-output-tokens")
+        refute has_element?(view, "#request-log-detail-cached-input")
+        refute has_element?(view, "#request-log-detail-cost", "$")
+      end
+
+      if usage == "usage_known" and pricing == "priced" do
+        assert has_element?(view, "#request-log-detail-cost", "$0.50")
+      else
+        refute has_element?(view, "#request-log-detail-cost", "$")
+      end
+
+      if classification do
+        assert has_element?(view, "#request-log-detail-usage-observation", classification)
+      else
+        refute has_element?(view, "#request-log-detail-usage-observation")
+      end
+
+      refute render(view) =~ "synthetic private prompt must not appear"
+
+      render_click(
+        element(view, "#request-log-detail-sidebar [aria-label='Close request details']")
+      )
+
+      assert_patch(view)
+    end
+  end
+
   test "filters by Pool and status without mixing Pool rows", %{conn: conn, scope: scope} do
     {:ok, first_pool} = Pools.create_pool(scope, %{slug: "logs-first", name: "Logs First"})
     {:ok, second_pool} = Pools.create_pool(scope, %{slug: "logs-second", name: "Logs Second"})

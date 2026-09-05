@@ -66,6 +66,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
              response
              |> Metadata.response_metadata(nil, request_options)
              |> Metadata.merge_stream_state_metadata(stream_state)
+             |> merge_usage_observation(stream_state)
              |> merge_upstream_websocket_connection(upstream_websocket_connection),
              started: started,
              before_finalize: fn ->
@@ -262,6 +263,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       response
       |> Metadata.response_metadata("stream_interrupted", context.request_options)
       |> Metadata.merge_stream_state_metadata(stream_state)
+      |> merge_usage_observation(stream_state)
       |> merge_upstream_websocket_connection(
         websocket_attempt_metadata.upstream_websocket_connection
       )
@@ -634,6 +636,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp stream_state_usage(%{usage_observer: %{} = usage_state}), do: usage_state
   defp stream_state_usage(_stream_state), do: StreamUsageObserver.new()
+
+  defp merge_usage_observation(metadata, %{usage_observer: %{} = observer}) do
+    observation =
+      observer
+      |> StreamUsageObserver.diagnostics()
+      |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+
+    Map.put(metadata, "usage_observation", observation)
+  end
+
+  defp merge_usage_observation(metadata, _stream_state), do: metadata
 
   @doc false
   @spec emit_stream_finalization(map(), String.t(), String.t()) :: :ok

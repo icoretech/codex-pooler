@@ -244,7 +244,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       )
 
     body = public_response_success_sse()
-    state = public_responses_stream_state(request_options, body)
+
+    state =
+      request_options
+      |> public_responses_stream_state(body)
+      |> Map.put(:usage_observer, StreamUsageObserver.observe(StreamUsageObserver.new(), body))
+
     response_context = %ResponseContext{context: context, response: sse_response()}
 
     assert {:ok, _finalized} =
@@ -252,6 +257,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^reserved.request.id))
     assert attempt.status == "succeeded"
+
+    assert attempt.response_metadata["usage_observation"] == %{
+             "version" => 1,
+             "classification" => "known",
+             "marker_seen" => true,
+             "valid_object_seen" => true,
+             "candidate_count" => 1
+           }
+
     assert %{"public_openai_responses_stream" => summary} = attempt.response_metadata
     assert summary["schema_version"] == 1
     assert summary["mode"] == "normalized"
@@ -1374,6 +1388,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert final_attempt.status == "failed"
     assert final_attempt.usage_status == "usage_known"
 
+    assert final_attempt.response_metadata["usage_observation"] == %{
+             "version" => 1,
+             "classification" => "known",
+             "marker_seen" => true,
+             "valid_object_seen" => true,
+             "candidate_count" => 1
+           }
+
     settlement =
       Repo.get_by!(CodexPooler.Accounting.LedgerEntry,
         request_id: reserved.request.id,
@@ -1385,6 +1407,55 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert settlement.input_tokens == 16
     assert settlement.output_tokens == 5
     assert settlement.total_tokens == 21
+  end
+
+  test "successful streams preserve unknown usage and bounded observation diagnostics" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_options = request_options(auth, payload(setup), setup)
+
+    for {body, classification, marker_seen} <- [
+          {"event: response.completed\ndata: {}\n\n", "missing", false},
+          {"event: response.completed\ndata: {\"usage\":null}\n\n", "null", true}
+        ] do
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, payload(setup), %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id: "usage-observation-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      context =
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        )
+
+      state = %{usage_observer: StreamUsageObserver.observe(StreamUsageObserver.new(), body)}
+      response_context = %ResponseContext{context: context, response: sse_response()}
+
+      assert {:ok, _finalized} =
+               Streaming.finalize_success(body, response_context, finalization_callbacks(), state)
+
+      final_attempt = Repo.get!(Attempt, attempt.id)
+      assert final_attempt.status == "succeeded"
+      assert final_attempt.usage_status == "usage_unknown"
+
+      assert %{
+               "version" => 1,
+               "classification" => ^classification,
+               "marker_seen" => ^marker_seen,
+               "valid_object_seen" => false,
+               "candidate_count" => count
+             } = final_attempt.response_metadata["usage_observation"]
+
+      assert is_integer(count) and count in 0..255
+    end
   end
 
   test "stream success omits public Responses summary metadata for unrelated streams" do
@@ -1423,6 +1494,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^reserved.request.id))
     refute Map.has_key?(attempt.response_metadata, "public_openai_responses_stream")
+    refute Map.has_key?(attempt.response_metadata, "usage_observation")
   end
 
   test "OpenAI stream collection propagates first-event finalization failures" do

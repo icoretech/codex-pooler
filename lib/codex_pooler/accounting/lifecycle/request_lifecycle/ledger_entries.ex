@@ -349,7 +349,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   defp decimal_string_or_nil(value), do: to_string(value)
 
   defp cached_input_cost_micros(
-         %{input_tokens: input_tokens, cached_input_tokens: cached_input_tokens},
+         %{
+           status: "usage_known",
+           input_tokens: input_tokens,
+           cached_input_tokens: cached_input_tokens
+         },
          %{snapshot: %{cached_input_token_micros: %Decimal{} = token_micros}}
        )
        when is_integer(input_tokens) and is_integer(cached_input_tokens) do
@@ -382,14 +386,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   defp cache_write_token_micros(_usage, _pricing), do: nil
 
   defp cache_write_cost_micros(
-         %{cache_write_tokens: tokens},
+         %{status: "usage_known", cache_write_tokens: tokens},
          %{status: "priced", snapshot: %{cache_write_token_micros: %Decimal{} = rate}}
        )
        when is_integer(tokens) and tokens >= 0 do
     tokens |> Decimal.new() |> Decimal.mult(rate) |> decimal_string_or_nil()
   end
 
-  defp cache_write_cost_micros(%{cache_write_tokens: 0}, _pricing), do: "0"
+  defp cache_write_cost_micros(%{status: "usage_known", cache_write_tokens: 0}, _pricing), do: "0"
 
   defp cache_write_cost_micros(_usage, _pricing), do: nil
 

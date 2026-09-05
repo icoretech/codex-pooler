@@ -16,6 +16,284 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
     service_tier: "priority"
   }
 
+  test "exact candidate object budget is independent of chunk placement" do
+    base = Jason.encode!(Map.put(usage(16, 5, 21), "padding", ""))
+
+    for size <- [16_383, 16_384, 16_385] do
+      object =
+        Jason.encode!(
+          Map.put(usage(16, 5, 21), "padding", String.duplicate("x", size - byte_size(base)))
+        )
+
+      prefix =
+        ~s(event: response.completed\ndata: {"type":"response.completed","service_tier":"priority","usage":)
+
+      stream = prefix <> object <> "}\n\n"
+
+      for split_at <- [
+            0,
+            byte_size(prefix),
+            byte_size(prefix) + size - 1,
+            byte_size(prefix) + size
+          ] do
+        <<first::binary-size(^split_at), second::binary>> = stream
+        state = StreamUsageObserver.observe(StreamUsageObserver.new(), first)
+        assert StreamUsageObserver.candidate_bytes(state) <= 16_384
+        state = StreamUsageObserver.observe(state, second)
+        assert StreamUsageObserver.usage(state) == @known_usage == size <= 16_384
+      end
+    end
+  end
+
+  test "event and tier context never retains oversized strings or source allocations" do
+    oversized = String.duplicate("x", 290_303)
+
+    frames = [
+      "event: response." <> oversized <> "\ndata: {}",
+      ~s(data: {"type":") <> oversized <> ~s(","service_tier":") <> oversized <> ~s("}),
+      ~s(data: {"type":"response.completed","service_tier":") <>
+        oversized <> ~s(","usage":) <> Jason.encode!(usage(16, 5, 21)) <> "}"
+    ]
+
+    for frame <- frames do
+      state = StreamUsageObserver.observe(StreamUsageObserver.new(), frame)
+
+      for {_key, value} <- state, is_binary(value) do
+        assert :binary.referenced_byte_size(value) <= 64
+      end
+
+      if measured = StreamUsageObserver.usage(state) do
+        assert measured.service_tier == nil
+        assert measured.total_tokens == 21
+      end
+    end
+
+    incomplete = ~s(data: {"padding":") <> oversized <> ~s(","usage":{"input_tokens":16)
+    state = StreamUsageObserver.observe(StreamUsageObserver.new(), incomplete)
+    assert StreamUsageObserver.candidate_bytes(state) > 0
+    assert :binary.referenced_byte_size(state.candidate.buffer) <= 16_384
+  end
+
+  test "data-only SSE boundaries reset tier and recover incomplete usage at every split" do
+    for newline <- ["\n", "\r\n", "\r"], prior_usage <- ["null}", ~s({"input_tokens":)] do
+      prior =
+        ~s(data: {"type":"response.created","service_tier":"flex","usage":) <>
+          prior_usage <> "\n\n"
+
+      terminal =
+        ~s(data: {"type":"response.completed","usage":) <>
+          Jason.encode!(usage(16, 5, 21)) <> ~s(,"service_tier":"priority"}\n\n)
+
+      stream = String.replace(prior <> terminal, "\n", newline)
+
+      for split_at <- 0..byte_size(stream) do
+        <<first::binary-size(^split_at), second::binary>> = stream
+
+        state =
+          StreamUsageObserver.new()
+          |> StreamUsageObserver.observe(first)
+          |> StreamUsageObserver.observe(second)
+
+        assert StreamUsageObserver.usage(state) == @known_usage
+      end
+    end
+  end
+
+  test "completes pending usage before a later event in the completing chunk" do
+    terminal = terminal_event_with_usage_before_tail(@known_usage, String.duplicate("x", 70_000))
+    split_at = marker_offset(terminal, ~s("usage")) + 20
+    <<first::binary-size(^split_at), completion::binary>> = terminal
+    later = sse_event("response.done", %{"type" => "response.done"})
+
+    state =
+      StreamUsageObserver.new()
+      |> StreamUsageObserver.observe(first)
+      |> StreamUsageObserver.observe(completion <> later)
+
+    assert StreamUsageObserver.usage(state) == @known_usage
+    assert :binary.referenced_byte_size(state.marker_suffix) <= 64
+  end
+
+  test "null and primitive usage cannot consume a following event usage object" do
+    terminal = terminal_event_with_usage_before_tail(@known_usage, String.duplicate("x", 70_000))
+
+    for invalid <- [nil, false, 3, "absent", []] do
+      prior = usage_event("response.created", invalid, "flex")
+      state = StreamUsageObserver.observe(StreamUsageObserver.new(), prior <> terminal)
+      assert StreamUsageObserver.usage(state) == @known_usage
+    end
+  end
+
+  test "recovers coalesced invalid candidates at every transport split with permitted line endings" do
+    for newline <- ["\n", "\r\n", "\r"], label <- ["data: ", "data:"] do
+      prior = usage_event("response.created", nil, "flex")
+      event = terminal_event_with_tier_after_usage(@known_usage)
+      stream = String.replace(prior <> prior <> event, "\n", newline)
+      stream = String.replace(stream, "data: ", label)
+
+      for split_at <- 0..byte_size(stream) do
+        <<first::binary-size(^split_at), second::binary>> = stream
+
+        state =
+          StreamUsageObserver.new()
+          |> StreamUsageObserver.observe(first)
+          |> StreamUsageObserver.observe(second)
+
+        assert StreamUsageObserver.usage(state) == @known_usage,
+               "usage lost for split #{split_at}, newline bytes #{byte_size(newline)}"
+
+        assert StreamUsageObserver.diagnostics(state).candidate_count == 3
+        assert StreamUsageObserver.candidate_bytes(state) <= 16_384
+      end
+    end
+  end
+
+  test "escaped strings and unrelated nested objects do not supply usage" do
+    payload = %{
+      "type" => "response.completed",
+      "note" => ~s(escaped \\"usage\\": {"input_tokens":500} and } {),
+      "nested" => %{"input_tokens" => 500, "output_tokens" => 1, "total_tokens" => 501}
+    }
+
+    state =
+      StreamUsageObserver.observe(
+        StreamUsageObserver.new(),
+        sse_event("response.completed", payload)
+      )
+
+    assert StreamUsageObserver.usage(state) == nil
+    assert StreamUsageObserver.diagnostics(state).classification == "missing"
+
+    measured = Map.put(usage(16, 5, 21), "note", ~s(escaped \\" } {))
+    event = usage_event("response.completed", measured, "priority")
+
+    for split_at <- 0..byte_size(event) do
+      <<first::binary-size(^split_at), second::binary>> = event
+
+      state =
+        StreamUsageObserver.new()
+        |> StreamUsageObserver.observe(first)
+        |> StreamUsageObserver.observe(second)
+
+      assert StreamUsageObserver.usage(state) == @known_usage
+    end
+  end
+
+  test "classifies observed failures with finite diagnostics and resets independently" do
+    cases = [
+      {"missing", sse_event("response.completed", %{"type" => "response.completed"})},
+      {"null", usage_event("response.completed", nil, "priority")},
+      {"malformed", usage_event("response.completed", false, "priority")},
+      {"malformed", usage_event("response.completed", %{"input_tokens" => nil}, "priority")},
+      {"candidate_limit",
+       usage_event(
+         "response.completed",
+         Map.put(usage(16, 5, 21), "padding", String.duplicate("x", 16_384)),
+         "priority"
+       )},
+      {"parser_discontinuity", ~s(event: response.completed\ndata: {"usage":{"input_tokens":)}
+    ]
+
+    for {classification, stream} <- cases do
+      state = StreamUsageObserver.observe(StreamUsageObserver.new(), stream)
+      assert StreamUsageObserver.usage(state) == nil
+      diagnostic = StreamUsageObserver.diagnostics(state)
+      assert diagnostic.classification == classification
+      assert diagnostic.marker_seen == (classification != "missing")
+      refute diagnostic.valid_object_seen
+      assert diagnostic.version == 1
+      assert diagnostic.candidate_count == if(classification == "missing", do: 0, else: 1)
+
+      assert StreamUsageObserver.diagnostics(StreamUsageObserver.reset(state)).classification ==
+               "missing"
+    end
+
+    repeated = String.duplicate(usage_event("response.created", nil, "flex"), 300)
+    state = StreamUsageObserver.observe(StreamUsageObserver.new(), repeated)
+    assert StreamUsageObserver.diagnostics(state).candidate_count == 255
+    assert StreamUsageObserver.diagnostics(state).classification == "null"
+  end
+
+  test "incomplete usage resumes at a real new event for every boundary split" do
+    for newline <- ["\n", "\r\n", "\r"] do
+      incomplete = ~s(event: response.created\ndata: {"usage":{"input_tokens":)
+      terminal = terminal_event_with_tier_after_usage(@known_usage)
+      stream = String.replace(incomplete <> "\n\n" <> terminal, "\n", newline)
+
+      for split_at <- 0..byte_size(stream) do
+        <<first::binary-size(^split_at), second::binary>> = stream
+
+        state =
+          StreamUsageObserver.new()
+          |> StreamUsageObserver.observe(first)
+          |> StreamUsageObserver.observe(second)
+
+        assert StreamUsageObserver.usage(state) == @known_usage
+        assert StreamUsageObserver.diagnostics(state).classification == "known"
+      end
+    end
+  end
+
+  test "blank and absent event labels use payload terminal type and owning service tier" do
+    for prefix <- ["", "event:\n", "event: \n"] do
+      event = terminal_event_with_tier_after_usage(@known_usage)
+      event = String.replace(event, "event: response.completed\n", prefix)
+
+      for split_at <- 0..byte_size(event) do
+        <<first::binary-size(^split_at), second::binary>> = event
+
+        state =
+          StreamUsageObserver.new()
+          |> StreamUsageObserver.observe(first)
+          |> StreamUsageObserver.observe(second)
+
+        state =
+          StreamUsageObserver.observe(
+            state,
+            usage_event("response.in_progress", usage(1, 1, 2), "flex")
+          )
+
+        assert StreamUsageObserver.usage(state) == @known_usage
+      end
+    end
+  end
+
+  test "invalid nested counters stay unknown and valid canonical precedence is unchanged" do
+    measured = %{
+      "input_tokens" => 16,
+      "input_tokens_details" => %{"cached_tokens" => 4},
+      "output_tokens" => 5,
+      "output_tokens_details" => %{"reasoning_tokens" => 2},
+      "reasoning_tokens" => 3,
+      "total_tokens" => 21
+    }
+
+    state =
+      StreamUsageObserver.observe(
+        StreamUsageObserver.new(),
+        usage_event("response.completed", measured, "priority")
+      )
+
+    assert StreamUsageObserver.usage(state) == %{
+             @known_usage
+             | cached_input_tokens: 4,
+               reasoning_tokens: 2
+           }
+
+    for value <- [nil, -1, 1.2, false, %{}, []] do
+      invalid = put_in(measured, ["input_tokens_details", "cached_tokens"], value)
+
+      state =
+        StreamUsageObserver.observe(
+          StreamUsageObserver.new(),
+          usage_event("response.completed", invalid, "priority")
+        )
+
+      assert StreamUsageObserver.usage(state) == nil
+      assert StreamUsageObserver.diagnostics(state).classification == "malformed"
+    end
+  end
+
   test "captures terminal usage before retained body truncation discards it" do
     event = terminal_event_with_usage_before_tail(@known_usage, String.duplicate("x", 70_000))
 
@@ -108,6 +386,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
 
     assert StreamUsageObserver.usage(state) == nil
     assert StreamUsageObserver.candidate_bytes(state) <= StreamUsageObserver.max_candidate_bytes()
+    assert :binary.referenced_byte_size(state.marker_suffix) <= 64
   end
 
   test "abandons a truncated usage candidate when the next explicit event begins" do

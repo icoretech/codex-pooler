@@ -27,7 +27,11 @@ defmodule CodexPooler.Accounting.RequestLogs.SettlementPresentation do
           required(:usage_status) => String.t() | nil
         }
 
-  @type cost :: %{required(:status) => String.t(), required(:usd) => Decimal.t() | nil}
+  @type cost :: %{
+          required(:status) => String.t(),
+          required(:usd) => Decimal.t() | nil,
+          required(:pricing_availability) => String.t()
+        }
 
   @usage_known "usage_known"
 
@@ -61,22 +65,25 @@ defmodule CodexPooler.Accounting.RequestLogs.SettlementPresentation do
   end
 
   @spec cost(nil | settlement_projection()) :: cost()
-  def cost(nil), do: %{status: "unavailable", usd: nil}
+  def cost(nil), do: %{status: "unavailable", usd: nil, pricing_availability: "unavailable"}
 
   def cost(settlement) do
     pricing_status = settlement.details && Map.get(settlement.details, "pricing_status")
     persisted_micros = settlement.details && Map.get(settlement.details, "settled_cost_micros")
 
-    cond do
-      not usage_known?(settlement) ->
-        %{status: unpriced_status(pricing_status), usd: nil}
+    actual =
+      cond do
+        not usage_known?(settlement) ->
+          %{status: unpriced_status(pricing_status), usd: nil}
 
-      is_binary(persisted_micros) ->
-        %{status: "priced", usd: decimal_micros_to_usd(settlement.settled_cost_micros)}
+        is_binary(persisted_micros) ->
+          %{status: "priced", usd: decimal_micros_to_usd(settlement.settled_cost_micros)}
 
-      true ->
-        %{status: unpriced_status(pricing_status), usd: nil}
-    end
+        true ->
+          %{status: unpriced_status(pricing_status), usd: nil}
+      end
+
+    Map.put(actual, :pricing_availability, pricing_status || "unavailable")
   end
 
   defp unpriced_status(status) when is_binary(status) do

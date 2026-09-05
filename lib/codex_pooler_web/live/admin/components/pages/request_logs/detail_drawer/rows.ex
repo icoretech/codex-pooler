@@ -145,12 +145,31 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
     [
       detail("request-log-detail-token-counts", "Tokens", format_token_counts(log.token_counts)),
       detail("request-log-detail-cost", "Cost", format_usage_cost(log.cost)),
-      detail("request-log-detail-usage-status", "Usage status", log.usage_status, mono: true),
+      detail(
+        "request-log-detail-usage-status",
+        "Measured usage",
+        measured_usage(log.usage_status)
+      ),
+      detail(
+        "request-log-detail-usage-observation",
+        "Usage observation",
+        metadata_section(log, "usage_observation")["classification"],
+        mono: true
+      ),
       detail(
         "request-log-detail-pricing-status",
-        "Pricing status",
-        cost_field(log.cost, :pricing_status),
-        mono: true
+        "Pricing availability",
+        pricing_availability(cost_field(log.cost, :pricing_availability))
+      ),
+      detail(
+        "request-log-detail-input-tokens",
+        "Input tokens",
+        token_field(log.token_counts, :input_tokens)
+      ),
+      detail(
+        "request-log-detail-output-tokens",
+        "Output tokens",
+        token_field(log.token_counts, :output_tokens)
       ),
       detail(
         "request-log-detail-cached-input",
@@ -177,6 +196,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
     ]
     |> present_rows()
   end
+
+  defp measured_usage("usage_known"), do: "Available"
+  defp measured_usage(_status), do: "Unavailable — no measured usage recorded"
+
+  defp pricing_availability("priced"), do: "Available"
+  defp pricing_availability(nil), do: "Unavailable"
+  defp pricing_availability(status), do: "Unavailable (#{status})"
 
   @spec compaction_bridge_rows(map()) :: [detail_row()]
   def compaction_bridge_rows(%{

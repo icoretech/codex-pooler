@@ -44,6 +44,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     ]
 
   alias CodexPooler.Access
+  alias CodexPooler.Access.DashboardSessions.Principal, as: DashboardPrincipal
+  alias CodexPooler.Accounting.Usage.Observatory
 
   alias CodexPooler.Accounting.{
     Attempt,
@@ -4451,6 +4453,299 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute inspect(telemetry_events) =~ sentinel
   end
 
+  for scenario <- [
+        :known_large,
+        :known_null_coalesced,
+        :known_primitive_coalesced,
+        :known_split_boundary,
+        :known_after_output,
+        :known_inside_output,
+        :known_crlf,
+        :known_no_event_label,
+        :known_data_no_space,
+        :known_service_tier_split,
+        :missing_large,
+        :null_large,
+        :malformed_large,
+        :candidate_limit_large
+      ] do
+    test "POST /v1/responses preserves measured usage through #{scenario}", %{conn: conn} do
+      scenario = unquote(scenario)
+      {chunks, classification} = measured_usage_chunks(scenario)
+      known? = classification == "known"
+      requested_tier = if known?, do: "auto", else: "flex"
+      upstream = start_upstream(FakeUpstream.sse_stream(chunks))
+
+      setup =
+        gateway_setup(upstream,
+          model_metadata: %{"upstream_model" => %{"service_tiers" => [%{"id" => "flex"}]}}
+        )
+
+      pricing =
+        pricing_snapshot!(setup.model, %{
+          config: pricing_config(%{"service_tier" => "flex"}),
+          input_token_micros: Decimal.new(25),
+          cached_input_token_micros: Decimal.new(5),
+          output_token_micros: Decimal.new(50),
+          reasoning_token_micros: Decimal.new(75)
+        })
+        |> Ecto.Changeset.change(request_base_micros: Decimal.new(3))
+        |> Repo.update!()
+
+      assert Repo.all(from(r in DailyRollup, where: r.pool_id == ^setup.pool.id)) == []
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic measured usage contract",
+          "service_tier" => requested_tier,
+          "stream" => true
+        })
+
+      assert conn.status == 200
+      assert FakeUpstream.count(upstream) == 1
+      assert conn.resp_body =~ "event: response.completed"
+      refute conn.resp_body =~ "event: response.failed"
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.transport == "http_sse"
+
+      assert request.request_metadata["openai_compatibility"]["source_endpoint"] ==
+               "/v1/responses"
+
+      assert request.requested_service_tier == requested_tier
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+      assert attempt.replay_generation == 0
+      assert attempt.upstream_status_code == 200
+
+      assert %{"terminal_kind" => "completed", "synthetic_terminal_sent" => false} =
+               attempt.response_metadata["public_openai_responses_stream"]
+
+      assert %{"version" => 1, "classification" => ^classification} =
+               attempt.response_metadata["usage_observation"]
+
+      entries = Repo.all(from(l in LedgerEntry, where: l.request_id == ^request.id))
+
+      assert Enum.sort(Enum.map(entries, & &1.entry_kind)) == [
+               "release",
+               "reservation",
+               "settlement"
+             ]
+
+      settlement = Enum.find(entries, &(&1.entry_kind == "settlement"))
+      reservation = Enum.find(entries, &(&1.entry_kind == "reservation"))
+      assert settlement.amount_status == "recorded"
+      assert is_binary(reservation.details["strategy"])
+      assert %Decimal{} = reservation.estimated_cost_micros
+      assert Decimal.equal?(settlement.estimated_cost_micros, reservation.estimated_cost_micros)
+      fact = Repo.get_by!(RequestLogFact, request_id: request.id)
+      assert fact.latest_settlement_entry_id == settlement.id
+
+      assert %{items: [log], total: 1} =
+               RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+      expected_status = if known?, do: "usage_known", else: "usage_unknown"
+      assert request.usage_status == expected_status
+      assert attempt.usage_status == expected_status
+      assert settlement.usage_status == expected_status
+      assert fact.latest_settlement_usage_status == expected_status
+      assert log.usage_status == expected_status
+
+      for {field, expected} <- [
+            input_tokens: 16,
+            cached_input_tokens: 4,
+            output_tokens: 5,
+            reasoning_tokens: 2,
+            total_tokens: 21,
+            cache_write_tokens: nil
+          ] do
+        actual = if known?, do: expected
+        assert Map.fetch!(fact, String.to_existing_atom("latest_#{field}")) == actual
+        assert Map.fetch!(log.token_counts, field) == actual
+        if known?, do: assert(Map.fetch!(settlement, field) == expected)
+      end
+
+      if known? do
+        assert request.actual_service_tier == "flex"
+        assert settlement.pricing_snapshot_id == pricing.id
+        assert settlement.details["pricing_status"] == "priced"
+        assert fact.latest_settlement_pricing_status == "priced"
+        assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(623))
+
+        assert Decimal.equal?(
+                 Decimal.new(settlement.details["settled_cost_micros"]),
+                 Decimal.new(623)
+               )
+
+        assert Decimal.equal?(
+                 Decimal.new(settlement.details["cached_input_cost_micros"]),
+                 Decimal.new(20)
+               )
+
+        assert Decimal.equal?(fact.latest_settled_cost_micros, Decimal.new(623))
+        assert Decimal.equal?(fact.latest_cached_input_cost_micros, Decimal.new(20))
+        assert Decimal.equal?(log.cost.usd, Decimal.new("0.000623"))
+        assert Decimal.equal?(log.token_counts.cached_input_cost_usd, Decimal.new("0.000020"))
+      else
+        assert settlement.details["pricing_status"] == "priced"
+        assert fact.latest_settlement_pricing_status == "priced"
+        assert settlement.details["settled_cost_micros"] == nil
+        assert settlement.details["cached_input_cost_micros"] == nil
+        assert settlement.details["cache_write_cost_micros"] == nil
+        assert fact.latest_settled_cost_micros == nil
+        assert fact.latest_cached_input_cost_micros == nil
+        assert log.cost.usd == nil
+        assert log.token_counts.cached_input_cost_usd == nil
+        assert log.token_counts.cache_write_cost_usd == nil
+      end
+
+      setup.api_key
+      |> Ecto.Changeset.change(dashboard_access: true)
+      |> Repo.update!()
+
+      principal =
+        DashboardPrincipal.new(%{
+          api_key_id: setup.api_key.id,
+          pool_id: setup.pool.id,
+          display_name: setup.api_key.display_name,
+          key_prefix: setup.api_key.key_prefix
+        })
+
+      assert {:ok, projection} =
+               Observatory.read(principal, "1h",
+                 as_of: DateTime.add(request.completed_at, 1, :second)
+               )
+
+      assert projection.totals.requests == %{total: 1, succeeded: 1, failed: 0, in_progress: 0}
+      assert projection.accounting.recorded_settlements == 1
+      assert projection.accounting.unknown_usage == if(known?, do: 0, else: 1)
+
+      assert projection.totals.tokens ==
+               if(known?,
+                 do: %{input: 16, cached_input: 4, output: 5, reasoning: 2, total: 21},
+                 else: %{input: 0, cached_input: 0, output: 0, reasoning: 0, total: 0}
+               )
+
+      assert projection.totals.cost.settled ==
+               if(known?,
+                 do: %{status: "settled", micros: 623},
+                 else: %{status: "unavailable", micros: 0}
+               )
+
+      if not known?, do: assert(projection.totals.cost.estimated.status == "estimated")
+
+      assert [daily] =
+               Repo.all(
+                 from(r in DailyRollup,
+                   where: r.pool_id == ^setup.pool.id and r.dimension_kind == "pool"
+                 )
+               )
+
+      assert [hourly] =
+               Repo.all(
+                 from(r in CodexPooler.Accounting.HourlyModelUsageRollup,
+                   where: r.pool_id == ^setup.pool.id
+                 )
+               )
+
+      for rollup <- [daily, hourly] do
+        assert rollup.request_count == 1
+        assert rollup.success_count == 1
+        assert rollup.failure_count == 0
+
+        for {field, expected} <- [
+              input_tokens: 16,
+              cached_input_tokens: 4,
+              output_tokens: 5,
+              reasoning_tokens: 2,
+              total_tokens: 21
+            ] do
+          assert Map.fetch!(rollup, field) == if(known?, do: expected, else: 0)
+        end
+
+        assert Decimal.equal?(
+                 rollup.settled_cost_micros,
+                 Decimal.new(if(known?, do: 623, else: 0))
+               )
+      end
+    end
+  end
+
+  defp measured_usage_chunks(scenario) do
+    usage =
+      ~s({"input_tokens":16,"input_tokens_details":{"cached_tokens":4},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":21})
+
+    padding = Jason.encode!(String.duplicate("x", 290_000))
+
+    output =
+      ~s("output":[{"type":"message","content":[{"type":"output_text","text":#{padding}}]}])
+
+    {classification, usage_field} = measured_usage_field(scenario, usage)
+    fields = measured_usage_fields(scenario, usage_field, output, padding)
+
+    terminal =
+      ~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_synthetic_usage_contract","status":"completed","service_tier":"flex",#{fields}}}\n\n)
+
+    {measured_usage_transport_chunks(scenario, terminal), classification}
+  end
+
+  defp measured_usage_field(:missing_large, _usage), do: {"missing", ""}
+  defp measured_usage_field(:null_large, _usage), do: {"null", ~s("usage":null,)}
+  defp measured_usage_field(:malformed_large, _usage), do: {"malformed", ~s("usage":17,)}
+
+  defp measured_usage_field(:candidate_limit_large, _usage) do
+    {"candidate_limit", ~s("usage":{"padding":#{Jason.encode!(String.duplicate("y", 20_000))}},)}
+  end
+
+  defp measured_usage_field(_scenario, usage), do: {"known", ~s("usage":#{usage},)}
+
+  defp measured_usage_fields(:known_after_output, usage, output, _padding),
+    do: output <> "," <> String.trim_trailing(usage, ",")
+
+  defp measured_usage_fields(:known_inside_output, usage, output, padding),
+    do: ~s("padding_before":#{padding},) <> usage <> output
+
+  defp measured_usage_fields(_scenario, usage, output, _padding), do: usage <> output
+
+  defp measured_usage_transport_chunks(scenario, terminal) do
+    progress = fn value ->
+      ~s(event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress","usage":#{value}}}\n\n)
+    end
+
+    case scenario do
+      :known_crlf ->
+        [String.replace(terminal, "\n", "\r\n")]
+
+      :known_no_event_label ->
+        [String.replace_prefix(terminal, "event: response.completed\n", "")]
+
+      :known_data_no_space ->
+        [String.replace(terminal, "data: ", "data:")]
+
+      :known_service_tier_split ->
+        split = elem(:binary.match(terminal, ~s("service_tier")), 0) + 17
+        <<first::binary-size(^split), rest::binary>> = terminal
+        [first, rest]
+
+      :known_null_coalesced ->
+        [progress.("null") <> terminal]
+
+      :known_primitive_coalesced ->
+        [progress.("17") <> terminal]
+
+      :known_split_boundary ->
+        split = elem(:binary.match(terminal, ~s("cached_tokens")), 0) + 5
+        <<first::binary-size(^split), rest::binary>> = terminal
+        [first, rest <> progress.("null")]
+
+      _ ->
+        [terminal]
+    end
+  end
+
   test "POST /v1/responses rejects unsafe reasoning effort before dispatch", %{conn: conn} do
     unsafe_effort = "synthetic freeform effort text"
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
@@ -7882,12 +8177,31 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            %{
              "type" => "response.output_text.delta",
              "delta" => "visible-before-abrupt-close",
-             "response" => %{"id" => "resp_visible_before_abrupt_close"}
+             "response" => %{
+               "id" => "resp_visible_before_abrupt_close",
+               "usage" => %{
+                 "input_tokens" => 16,
+                 "input_tokens_details" => %{"cached_tokens" => 4},
+                 "output_tokens" => 5,
+                 "output_tokens_details" => %{"reasoning_tokens" => 2},
+                 "total_tokens" => 21
+               }
+             }
            }}
         ])
       )
 
     setup = gateway_setup(upstream)
+
+    pricing =
+      pricing_snapshot!(setup.model, %{
+        input_token_micros: Decimal.new(25),
+        cached_input_token_micros: Decimal.new(5),
+        output_token_micros: Decimal.new(50),
+        reasoning_token_micros: Decimal.new(75)
+      })
+      |> Ecto.Changeset.change(request_base_micros: Decimal.new(3))
+      |> Repo.update!()
 
     conn =
       conn
@@ -7937,6 +8251,28 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
     assert attempt.network_error_code == "upstream_stream_error"
+    assert request.usage_status == "usage_known"
+    assert attempt.usage_status == "usage_known"
+    assert %{"classification" => "known"} = attempt.response_metadata["usage_observation"]
+
+    settlement =
+      Repo.get_by!(LedgerEntry,
+        request_id: request.id,
+        entry_kind: "settlement",
+        amount_status: "recorded"
+      )
+
+    assert settlement.input_tokens == 16
+    assert settlement.cached_input_tokens == 4
+    assert settlement.output_tokens == 5
+    assert settlement.reasoning_tokens == 2
+    assert settlement.total_tokens == 21
+    assert settlement.pricing_snapshot_id == pricing.id
+    assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(623))
+    fact = Repo.get_by!(RequestLogFact, request_id: request.id)
+    assert Decimal.equal?(fact.latest_settled_cost_micros, Decimal.new(623))
+    assert Decimal.equal?(fact.latest_cached_input_cost_micros, Decimal.new(20))
+    assert FakeUpstream.count(upstream) == 1
 
     assert %{
              "reason_class" => "upstream_stream_interrupted",
@@ -8167,7 +8503,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                 "content" => [%{"type" => "output_text", "text" => "buffered terminal text"}]
               }
             ],
-            "usage" => %{"input_tokens" => 7, "output_tokens" => 5, "total_tokens" => 12}
+            "usage" => %{
+              "input_tokens" => 16,
+              "input_tokens_details" => %{"cached_tokens" => 4},
+              "output_tokens" => 5,
+              "output_tokens_details" => %{"reasoning_tokens" => 2},
+              "total_tokens" => 21
+            }
           }
         })
       ]
@@ -8179,6 +8521,16 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     upstream = start_upstream(FakeUpstream.sse_stream([first, second], done: false))
     setup = gateway_setup(upstream)
+
+    pricing =
+      pricing_snapshot!(setup.model, %{
+        input_token_micros: Decimal.new(25),
+        cached_input_token_micros: Decimal.new(5),
+        output_token_micros: Decimal.new(50),
+        reasoning_token_micros: Decimal.new(75)
+      })
+      |> Ecto.Changeset.change(request_base_micros: Decimal.new(3))
+      |> Repo.update!()
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
@@ -8231,6 +8583,25 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert attempt.status == "succeeded"
     assert attempt.usage_status == "usage_known"
     assert is_nil(attempt.network_error_code)
+
+    settlement =
+      Repo.get_by!(LedgerEntry,
+        request_id: request.id,
+        entry_kind: "settlement",
+        amount_status: "recorded"
+      )
+
+    assert settlement.input_tokens == 16
+    assert settlement.cached_input_tokens == 4
+    assert settlement.output_tokens == 5
+    assert settlement.reasoning_tokens == 2
+    assert settlement.total_tokens == 21
+    assert settlement.pricing_snapshot_id == pricing.id
+    assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(623))
+    fact = Repo.get_by!(RequestLogFact, request_id: request.id)
+    assert Decimal.equal?(fact.latest_settled_cost_micros, Decimal.new(623))
+    assert Decimal.equal?(fact.latest_cached_input_cost_micros, Decimal.new(20))
+    assert FakeUpstream.count(upstream) == 1
 
     assert %{
              "finish_class" => "completed",

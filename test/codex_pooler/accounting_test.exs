@@ -255,6 +255,46 @@ defmodule CodexPooler.AccountingTest do
       assert result.request.last_error_code == "timeout_before_headers"
     end
 
+    for cache_write_tokens <- [0, 7] do
+      test "unknown usage cannot price cache-write component #{cache_write_tokens}" do
+        setup = accounting_setup(%{cache_write_token_micros: Decimal.new(11)})
+
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   %{"model" => setup.model.exposed_model_id},
+                   %{}
+                 )
+
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        assert {:ok, result} =
+                 Accounting.finalize_success(
+                   reserved.request,
+                   attempt,
+                   %{
+                     status: "usage_unknown",
+                     cache_write_tokens: unquote(cache_write_tokens)
+                   },
+                   %{response_status_code: 200}
+                 )
+
+        assert result.settlement.usage_status == "usage_unknown"
+        assert result.settlement.details["pricing_status"] == "priced"
+        assert result.settlement.cache_write_tokens == nil
+        assert result.settlement.details["cache_write_cost_micros"] == nil
+        assert result.settlement.details["cached_input_cost_micros"] == nil
+        assert result.settlement.details["settled_cost_micros"] == nil
+        assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(0))
+
+        assert Decimal.equal?(
+                 result.settlement.estimated_cost_micros,
+                 reserved.reservation.estimated_cost_micros
+               )
+      end
+    end
+
     test "healthy reservation settlement avoids duplicate ledger rereads" do
       setup = accounting_setup()
 
@@ -406,7 +446,15 @@ defmodule CodexPooler.AccountingTest do
     end
 
     test "late known usage replaces an unknown settlement and its projections" do
-      setup = accounting_setup()
+      setup =
+        accounting_setup(%{
+          input_token_micros: Decimal.new(25),
+          cached_input_token_micros: Decimal.new(5),
+          output_token_micros: Decimal.new(50),
+          reasoning_token_micros: Decimal.new(75),
+          request_base_micros: Decimal.new(3)
+        })
+
       first_timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       known_timestamp = DateTime.add(first_timestamp, 1, :second)
 
@@ -449,9 +497,11 @@ defmodule CodexPooler.AccountingTest do
         status: "usage_known",
         source: "late_owner_completion",
         recorded_at: known_timestamp,
-        input_tokens: 7,
-        output_tokens: 3,
-        total_tokens: 10
+        input_tokens: 16,
+        cached_input_tokens: 4,
+        output_tokens: 5,
+        reasoning_tokens: 2,
+        total_tokens: 21
       }
 
       assert {:ok, internal_reconciled} =
@@ -498,6 +548,19 @@ defmodule CodexPooler.AccountingTest do
                )
 
       assert repeated.settlement.id == reconciled.settlement.id
+      assert repeated.release.id == reconciled.release.id
+      assert Decimal.equal?(repeated.settlement.settled_cost_micros, Decimal.new(623))
+      assert repeated.settlement.pricing_snapshot_id == setup.pricing.id
+      assert repeated.settlement.cached_input_tokens == 4
+      assert repeated.settlement.reasoning_tokens == 2
+      assert repeated.settlement.cache_write_tokens == nil
+
+      assert Repo.aggregate(
+               from(l in LedgerEntry,
+                 where: l.request_id == ^reserved.request.id and l.entry_kind == "release"
+               ),
+               :count
+             ) == 1
 
       settlements =
         Repo.all(
@@ -550,7 +613,7 @@ defmodule CodexPooler.AccountingTest do
       assert daily_rollup.request_count == 1
       assert daily_rollup.success_count == 1
       assert daily_rollup.failure_count == 0
-      assert daily_rollup.total_tokens == 10
+      assert daily_rollup.total_tokens == 21
 
       assert [hourly_rollup] =
                Repo.all(
@@ -563,13 +626,27 @@ defmodule CodexPooler.AccountingTest do
       assert hourly_rollup.request_count == 1
       assert hourly_rollup.success_count == 1
       assert hourly_rollup.failure_count == 0
-      assert hourly_rollup.total_tokens == 10
+      assert hourly_rollup.total_tokens == 21
 
       fact = Repo.get_by!(RequestLogFact, request_id: reserved.request.id)
       assert fact.latest_attempt_status == "succeeded"
       assert fact.latest_settlement_entry_id == reconciled.settlement.id
       assert fact.latest_settlement_usage_status == "usage_known"
-      assert fact.latest_total_tokens == 10
+      assert fact.latest_total_tokens == 21
+      assert fact.latest_input_tokens == 16
+      assert fact.latest_cached_input_tokens == 4
+      assert fact.latest_output_tokens == 5
+      assert fact.latest_reasoning_tokens == 2
+      assert Decimal.equal?(fact.latest_settled_cost_micros, Decimal.new(623))
+      assert Decimal.equal?(fact.latest_cached_input_cost_micros, Decimal.new(20))
+
+      for rollup <- [daily_rollup, hourly_rollup] do
+        assert rollup.input_tokens == 16
+        assert rollup.cached_input_tokens == 4
+        assert rollup.output_tokens == 5
+        assert rollup.reasoning_tokens == 2
+        assert Decimal.equal?(rollup.settled_cost_micros, Decimal.new(623))
+      end
     end
 
     test "settlement replacement subtracts rollups atomically beside a racing settlement" do
