@@ -151,6 +151,17 @@ defmodule CodexPooler.Accounting do
           {:ok, Request.t()} | {:error, term()}
   defdelegate merge_request_metadata(request, metadata, opts \\ []), to: Metadata
 
+  @spec bind_websocket_owner(
+          auth(),
+          Request.t(),
+          Attempt.t(),
+          CodexPooler.Gateway.Payloads.RequestOptions.t()
+        ) ::
+          {:ok, Request.t()} | {:error, term()}
+  defdelegate bind_websocket_owner(auth, request, attempt, options),
+    to: CodexPooler.Accounting.WebsocketOwnerBinding,
+    as: :bind
+
   @spec latest_success_by_assignment_ids([Ecto.UUID.t()]) :: %{
           optional(Ecto.UUID.t()) => DateTime.t() | nil
         }

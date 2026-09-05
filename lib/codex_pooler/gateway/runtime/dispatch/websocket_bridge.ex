@@ -62,7 +62,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   failed before the first upstream event.
   """
   @spec open(PreparedContext.t()) ::
-          {:ok, PreparedContext.t(), Req.Response.t()} | {:fallback, term()}
+          {:ok, PreparedContext.t(), Req.Response.t()}
+          | {:fallback, term()}
+          | {:error, :owner_unavailable}
   def open(%PreparedContext{context: context} = prepared_context) do
     correlation_id = Ecto.UUID.generate()
     stream = WebsocketBridgeStream.start(correlation_id)
@@ -73,7 +75,20 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
              context.request_options,
              %{pid: stream.relay, correlation_id: correlation_id}
            ),
-         {:ok, ws_payload, bridged_options} <- bridge_payload(prepared_context, runtime) do
+         {:ok, ws_payload, bridged_options} <- bridge_payload(prepared_context, runtime),
+         {:bound, {:ok, request}} <-
+           {:bound,
+            Accounting.bind_websocket_owner(
+              context.auth,
+              context.reserved.request,
+              context.attempt,
+              bridged_options
+            )} do
+      prepared_context = %{
+        prepared_context
+        | context: %{context | reserved: %{context.reserved | request: request}}
+      }
+
       dispatch_request = bridge_dispatch_request(prepared_context, ws_payload, bridged_options)
 
       WebsocketBridgeStream.arm(
@@ -84,6 +99,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
 
       await_first_event(prepared_context, stream, bridged_options)
     else
+      {:bound, {:error, _reason}} ->
+        WebsocketBridgeStream.cancel(stream)
+        {:error, :owner_unavailable}
+
       {:error, reason} ->
         WebsocketBridgeStream.cancel(stream)
         {:fallback, reason}

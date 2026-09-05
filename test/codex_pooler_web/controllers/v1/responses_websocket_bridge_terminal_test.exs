@@ -505,6 +505,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     assert %CodexTurn{first_visible_output_at: %DateTime{}} =
              turn = await_committed_turn(setup.pool.id)
 
+    live_request = Repo.get!(Request, turn.request_id)
+
+    assert %{
+             "enabled" => true,
+             "owner_instance_id" => owner_instance_id,
+             "downstream_epoch" => epoch
+           } =
+             live_request.request_metadata["websocket_owner_forwarding"]
+
+    assert is_binary(owner_instance_id)
+    assert is_integer(epoch) and epoch > 0
+
     harness = start_rollout_drain_harness()
 
     drain_task =

@@ -51,6 +51,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       {:fallback, reason} ->
         WebsocketBridge.log_fallback(prepared_context, reason)
         dispatch_http(prepared_context, callbacks)
+
+      {:error, :owner_unavailable} ->
+        Finalization.Websocket.finalize_failed(prepared_context.context, %{
+          reason: :owner_unavailable,
+          body: "",
+          headers: [],
+          started: prepared_context.context.started
+        })
     end
   end
 
