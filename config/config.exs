@@ -21,6 +21,10 @@ config :codex_pooler,
        CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,
        mode: :off
 
+config :codex_pooler, CodexPooler.Upstreams.CodexClientIdentity,
+  # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
+  default_client_version: "0.153.3"
+
 jobs_schedule = [
   %{
     key: :catalog_sync,

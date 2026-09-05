@@ -1,7 +1,6 @@
 defmodule CodexPooler.Upstreams.CodexClientIdentityTest do
   use ExUnit.Case, async: false
 
-  alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.Upstreams.CodexClientIdentity
 
   setup do
@@ -14,22 +13,45 @@ defmodule CodexPooler.Upstreams.CodexClientIdentityTest do
     end)
   end
 
-  test "defaults to the released client that owns the native compatibility contract" do
+  test "defaults to one managed release pin and keeps its identity headers consistent" do
     Application.delete_env(:codex_pooler, CodexPooler.Catalog)
 
-    version =
-      CompatibilityMatrix.fixture!(:responses_chat)
-      |> get_in([:compaction_recovery_boundary, :harness_applicability, :codex, :version])
-      |> String.trim_leading("rust-v")
+    managed_version =
+      :codex_pooler
+      |> Application.fetch_env!(CodexClientIdentity)
+      |> Keyword.fetch!(:default_client_version)
 
-    assert CodexClientIdentity.version() == version
-    assert CodexClientIdentity.user_agent() == "codex_cli_rs/#{version}"
+    assert managed_version =~ ~r/\A\d+\.\d+\.\d+\z/
+    assert CodexClientIdentity.version() == managed_version
+    assert CodexClientIdentity.user_agent() == "codex_cli_rs/#{managed_version}"
 
     assert CodexClientIdentity.headers() == [
-             {"user-agent", "codex_cli_rs/#{version}"},
+             {"user-agent", "codex_cli_rs/#{managed_version}"},
              {"originator", "codex_cli_rs"},
-             {"version", version}
+             {"version", managed_version}
            ]
+  end
+
+  test "falls back to the managed release pin for invalid configured versions" do
+    Application.delete_env(:codex_pooler, CodexPooler.Catalog)
+
+    managed_version =
+      :codex_pooler
+      |> Application.fetch_env!(CodexClientIdentity)
+      |> Keyword.fetch!(:default_client_version)
+
+    for version <- [nil, "", "rust-v0.153.4", "not-a-version", 153, %{}] do
+      Application.put_env(:codex_pooler, CodexPooler.Catalog, codex_client_version: version)
+
+      assert CodexClientIdentity.version() == managed_version
+      assert CodexClientIdentity.user_agent() == "codex_cli_rs/#{managed_version}"
+
+      assert CodexClientIdentity.headers() == [
+               {"user-agent", "codex_cli_rs/#{managed_version}"},
+               {"originator", "codex_cli_rs"},
+               {"version", managed_version}
+             ]
+    end
   end
 
   test "uses one configured version for User-Agent and trusted identity headers" do

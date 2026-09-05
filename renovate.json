@@ -160,10 +160,10 @@
       "customType": "regex",
       "description": "Update Codex client version used for upstream identity and model discovery",
       "managerFilePatterns": [
-        "/(^|/)lib/codex_pooler/upstreams/codex_client_identity\\.ex$/"
+        "/(^|/)config/config\\.exs$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) extractVersion=(?<extractVersion>\\S+)\\s+@default_client_version \"(?<currentValue>[^\"]+)\""
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) extractVersion=(?<extractVersion>\\S+)\\s+default_client_version: \"(?<currentValue>[^\"]+)\""
       ],
       "versioningTemplate": "semver"
     },

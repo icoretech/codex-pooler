@@ -4,17 +4,21 @@ defmodule CodexPooler.Upstreams.CodexClientIdentity do
   """
 
   @originator "codex_cli_rs"
-  # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
-  @default_client_version "0.153.3"
+  @default_client_version Application.compile_env(:codex_pooler, __MODULE__)
+                          |> Keyword.fetch!(:default_client_version)
+  @version_pattern ~r/\A\d+\.\d+\.\d+\z/
 
   @type header :: {String.t(), String.t()}
 
   @spec version() :: String.t()
   def version do
-    :codex_pooler
-    |> Application.get_env(CodexPooler.Catalog, [])
-    |> Keyword.get(:codex_client_version, @default_client_version)
-    |> to_string()
+    case configured_version() do
+      version when is_binary(version) ->
+        if Regex.match?(@version_pattern, version), do: version, else: @default_client_version
+
+      _invalid ->
+        @default_client_version
+    end
   end
 
   @spec originator() :: String.t()
@@ -35,4 +39,17 @@ defmodule CodexPooler.Upstreams.CodexClientIdentity do
   end
 
   defp versioned_user_agent(version), do: "#{@originator}/#{version}"
+
+  defp configured_version do
+    case Application.get_env(:codex_pooler, CodexPooler.Catalog, []) do
+      config when is_list(config) ->
+        Enum.find_value(config, fn
+          {:codex_client_version, version} -> version
+          _entry -> nil
+        end)
+
+      _invalid_config ->
+        nil
+    end
+  end
 end
