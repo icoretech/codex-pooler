@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Context
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Observed
   alias CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.RuntimeBoundary
+  alias CodexPooler.Gateway.Transports.OrdinarySuccessTestSeed
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -306,6 +307,9 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
       close: fn pid -> if Process.alive?(pid), do: Agent.stop(pid) end
     }
 
+    {upstream, seed_url} =
+      OrdinarySuccessTestSeed.boundary(upstream)
+
     codex_session_id = Keyword.get(opts, :codex_session_id, scenario_id(context, variant))
 
     owner_lease_token =
@@ -341,12 +345,22 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
       })
 
     binding = forwarded_binding(owner_instance_id, owner_lease_token, downstream)
+
+    {binding, receipt} =
+      OrdinarySuccessTestSeed.request(
+        owner,
+        downstream,
+        binding,
+        seed_url
+      )
+
     now = System.system_time(:millisecond)
 
     assert {:ok, _pending} =
              WebsocketOwnerSession.admission_control(
                owner,
                control(:record_ordinary_success, downstream,
+                 first_compact_collection: receipt,
                  binding: binding,
                  expires_at_ms: now + 30_000
                )

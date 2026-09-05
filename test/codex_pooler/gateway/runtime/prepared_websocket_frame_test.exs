@@ -124,6 +124,13 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     assert {:ok, prepared} =
              Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
 
+    assert prepared.native_client_retry_witness.version == 1
+    assert prepared.native_client_retry_witness.digest == prepared.replay_claim_digest
+    assert prepared.native_client_retry_witness.auth_epoch == 3
+
+    assert prepared.request_options.native_client_retry_witness ==
+             prepared.native_client_retry_witness
+
     changed_epoch =
       update_in(prepared.request_options.runtime.api_key_runtime_epoch, fn _epoch -> 4 end)
 
@@ -147,6 +154,9 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
 
     changed_model = put_in(prepared.payload["model"], "gpt-tampered")
 
+    changed_retry_witness =
+      put_in(prepared.native_client_retry_witness.auth_epoch, 4)
+
     assert :ok = WebsocketCodec.validate_prepared_frame(prepared)
 
     for changed <- [
@@ -155,7 +165,8 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
           changed_session_pool,
           changed_session_key,
           changed_session_status,
-          changed_model
+          changed_model,
+          changed_retry_witness
         ] do
       assert {:error, :invalid} = WebsocketCodec.validate_prepared_frame(changed)
     end

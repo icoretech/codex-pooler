@@ -33,5 +33,8 @@ defmodule CodexPooler.Accounting.Request do
     field :service_tier, :string
     field :requested_service_tier, :string
     field :actual_service_tier, :string
+    field :native_client_retry_version, :integer
+    field :native_client_retry_digest, :binary
+    field :native_client_retry_auth_epoch, :integer
   end
 end

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounts.Scope
   alias CodexPooler.Dev.NativeCompactionAuthorizationObserver
   alias CodexPooler.Dev.NativeCompactionTrace
   alias CodexPooler.FakeUpstream
@@ -17,6 +18,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.NativeCompactionTraceTestExport
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -35,6 +37,396 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                                          __DIR__
                                        )
   @external_resource @incremental_compaction_fixture_path
+
+  for topology <- [:direct, :forwarded], flip? <- [false, true] do
+    @tag :queued_lite_compaction
+    @tag capture_log: true
+    test "#{topology} queued Lite compact #{if flip?, do: "rejects a current mode flip", else: "uses unresolved owner mode"}" do
+      queued_lite_compaction_case(unquote(topology), unquote(flip?))
+    end
+  end
+
+  defp queued_lite_compaction_case(topology, flip?) do
+    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    Application.put_env(
+      :codex_pooler,
+      :websocket_owner_forwarding_enabled,
+      topology == :forwarded
+    )
+
+    on_exit(fn ->
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+    end)
+
+    item = incremental_compaction_item("queued-lite")
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_completed_response("resp_queued_lite_seed"),
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{"type" => "response.output_item.done", "item" => item}),
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_queued_lite_compact",
+                 "status" => "completed",
+                 "output" => [item]
+               }
+             })
+           ])
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    %{user: user} = CodexPooler.AccountsFixtures.bootstrap_owner_fixture()
+    scope = Scope.for_user(user, ["instance_owner"])
+    {:ok, snapshot} = CodexPooler.Pools.model_serving_modes_snapshot(scope, setup.pool)
+
+    assert {:ok, changed} =
+             CodexPooler.Pools.update_model_serving_modes(
+               scope,
+               setup.pool,
+               [%{exposed_model_id: setup.model.exposed_model_id, mode: "lite"}],
+               snapshot.revision
+             )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = direct_socket(auth, "queued-lite-#{topology}-#{flip?}")
+    Process.put(:queued_lite_socket_state, state)
+    turn_id = "queued-lite-turn"
+    context_id = "00000000-0000-4000-8000-000000000871"
+
+    seed =
+      ordinary_payload(setup, %{
+        "client_metadata" => %{
+          "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_id, :turn)
+        }
+      })
+
+    try do
+      assert {:ok, state} = CodexResponsesSocket.handle_in({seed, [opcode: :text]}, state)
+      Process.put(:queued_lite_socket_state, state)
+      assert {:push, {:text, _created}, state} = receive_queued_lite_message(state)
+      assert {:push, {:text, terminal}, state} = receive_queued_lite_message(state)
+      Process.put(:queued_lite_socket_state, state)
+      assert %{"type" => "response.completed"} = Jason.decode!(terminal)
+      assert MapSet.size(state.tasks) == 1
+
+      assert is_nil(Adapter.response_options(state, true, nil).routing.model_serving_mode)
+
+      before_requests = Repo.aggregate(Request, :count)
+      before_attempts = Repo.aggregate(Attempt, :count)
+      handler_id = "queued-lite-reserved-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :gateway, :native_compaction, :authorization_transition],
+          fn _, _, metadata, _ ->
+            if metadata.transition == :compact_reserved do
+              if flip? do
+                {:ok, _} =
+                  CodexPooler.Pools.update_model_serving_modes(
+                    scope,
+                    setup.pool,
+                    [%{exposed_model_id: setup.model.exposed_model_id, mode: "full"}],
+                    changed.revision
+                  )
+              end
+
+              send(parent, {:queued_lite_reserved, flip?})
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      compact =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_queued_lite_seed",
+          "input" => [
+            %{"type" => "function_call_output", "call_id" => "synthetic-call", "output" => "ok"},
+            %{"type" => "compaction_trigger"}
+          ],
+          "stream" => true,
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_id, :compaction)
+          }
+        })
+
+      assert {:ok, queued} = CodexResponsesSocket.handle_in({compact, [opcode: :text]}, state)
+      Process.put(:queued_lite_socket_state, queued)
+      assert :queue.len(queued.queued_response_payloads) == 1
+      assert {:push, {:text, first}, next} = receive_queued_lite_message(queued)
+      Process.put(:queued_lite_socket_state, next)
+      assert Process.delete(:queued_lite_reserved) == flip?
+
+      if flip? do
+        assert %{"type" => "error"} = Jason.decode!(first)
+        assert FakeUpstream.count(upstream) == 1
+        assert Repo.aggregate(Request, :count) == before_requests
+        assert Repo.aggregate(Attempt, :count) == before_attempts
+      else
+        assert %{"type" => "response.output_item.done", "item" => ^item} = Jason.decode!(first)
+        assert {:push, {:text, done}, next} = receive_queued_lite_message(next)
+        Process.put(:queued_lite_socket_state, next)
+        assert %{"type" => "response.completed"} = Jason.decode!(done)
+        assert FakeUpstream.count(upstream) == 2
+        assert Repo.aggregate(Attempt, :count) == before_attempts + 1
+
+        compact_row =
+          Repo.one!(
+            from r in Request, where: r.endpoint == "/backend-api/codex/responses/compact"
+          )
+
+        assert compact_row.request_metadata["routing"]["model_serving_mode"] == "lite"
+      end
+
+      assert {:ok, done_state} =
+               complete_queued_lite_socket(Process.get(:queued_lite_socket_state))
+
+      Process.put(:queued_lite_socket_state, done_state)
+    after
+      final_state = Process.delete(:queued_lite_socket_state)
+      CodexResponsesSocket.terminate(:closed, final_state)
+      if topology == :forwarded, do: cleanup_trace_owner_sessions()
+    end
+  end
+
+  defp complete_queued_lite_socket(state) do
+    if MapSet.size(state.tasks) == 0, do: {:ok, state}, else: receive_socket_completion(state)
+  end
+
+  defp receive_queued_lite_message(state) do
+    receive do
+      {:queued_lite_reserved, flipped?} ->
+        Process.put(:queued_lite_reserved, flipped?)
+        receive_queued_lite_message(state)
+
+      message ->
+        case CodexResponsesSocket.handle_info(message, state) do
+          {:push, {:text, frame}, next} = result ->
+            if StreamProtocol.internal_control_event?(frame),
+              do: receive_queued_lite_message(next),
+              else: result
+
+          {:ok, next} ->
+            receive_queued_lite_message(next)
+        end
+    after
+      @detection_timeout_ms -> flunk("expected queued compact result")
+    end
+  end
+
+  test "forwarded final validates the submitted compaction item instead of the stored digest" do
+    enable_owner_forwarding_for_trace!()
+    turn = "final-digest-check"
+    context = "00000000-0000-4000-8000-000000000991"
+    item = incremental_compaction_item("final-digest-check")
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_completed_response("resp_final_digest_anchor"),
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{"type" => "response.output_item.done", "item" => item}),
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_final_digest_compact",
+                 "status" => "completed",
+                 "output" => [item]
+               }
+             })
+           ]),
+           websocket_completed_response("resp_forbidden_final")
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_websocket_connect!(
+        port,
+        setup,
+        "final-digest-upgrade",
+        "/backend-api/codex/responses"
+      )
+
+    try do
+      seed =
+        ordinary_payload(setup, %{
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => native_turn_metadata(turn, context, :turn)
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, seed)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+
+      compact =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_final_digest_anchor",
+          "input" => [
+            %{"type" => "function_call_output", "call_id" => "synthetic", "output" => "ok"},
+            %{"type" => "compaction_trigger"}
+          ],
+          "stream" => true,
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => native_turn_metadata(turn, context, :compaction)
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+
+      metadata =
+        native_turn_metadata(turn, "00000000-0000-4000-8000-000000000992", :turn)
+        |> Jason.decode!()
+        |> Map.merge(%{"window_id" => "final-window", "window_number" => 2})
+        |> Jason.encode!()
+
+      final =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{item | "encrypted_content" => "different-synthetic"}],
+          "stream" => true,
+          "client_metadata" => %{"x-codex-turn-metadata" => metadata}
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, final)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"type" => "error"} = Jason.decode!(frame)
+      assert FakeUpstream.count(upstream) == 2
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "forwarded prewarm between compact and final preserves the owning final capability" do
+    enable_owner_forwarding_for_trace!()
+    turn = "final-digest-check"
+    context = "00000000-0000-4000-8000-000000000991"
+    item = incremental_compaction_item("final-digest-check")
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_completed_response("resp_final_digest_anchor"),
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{"type" => "response.output_item.done", "item" => item}),
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_final_digest_compact",
+                 "status" => "completed",
+                 "output" => [item]
+               }
+             })
+           ]),
+           websocket_completed_response("resp_forbidden_final")
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_websocket_connect!(
+        port,
+        setup,
+        "final-digest-upgrade",
+        "/backend-api/codex/responses"
+      )
+
+    try do
+      seed =
+        ordinary_payload(setup, %{
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => native_turn_metadata(turn, context, :turn)
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, seed)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+
+      compact =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_final_digest_anchor",
+          "input" => [
+            %{"type" => "function_call_output", "call_id" => "synthetic", "output" => "ok"},
+            %{"type" => "compaction_trigger"}
+          ],
+          "stream" => true,
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => native_turn_metadata(turn, context, :compaction)
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+      {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
+
+      prewarm =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "generate" => false,
+          "input" => [],
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => Jason.encode!(%{"request_kind" => "prewarm"})
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, prewarm)
+      {conn, websocket, _prewarm_created} = public_websocket_receive_text!(conn, websocket, ref)
+      {conn, websocket, prewarm_completed} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"type" => "response.completed"} = Jason.decode!(prewarm_completed)
+      assert FakeUpstream.count(upstream) == 2
+
+      metadata =
+        native_turn_metadata(turn, "00000000-0000-4000-8000-000000000992", :turn)
+        |> Jason.decode!()
+        |> Map.merge(%{"window_id" => "final-window", "window_number" => 2})
+        |> Jason.encode!()
+
+      final =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{item | "encrypted_content" => "synthetic-incremental-final-digest-check"}],
+          "stream" => true,
+          "client_metadata" => %{"x-codex-turn-metadata" => metadata}
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, final)
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"type" => "response.created"} = Jason.decode!(frame)
+      {_conn, _websocket, terminal} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"type" => "response.completed"} = Jason.decode!(terminal)
+      assert FakeUpstream.count(upstream) == 3
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
 
   test "full trace records a real socket owner compact lifecycle without injected events" do
     assert_real_trace_fixture_has_no_manual_emits!()
@@ -318,9 +710,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert_admission_events(admission_events, ["proxy_websocket", "proxy_compact"])
 
         assert [compact_request] = FakeUpstream.requests(upstream)
-        assert compact_request.method == "POST"
-        assert FakeUpstream.http_request_count(upstream) == 1
-        refute Map.has_key?(compact_request, :websocket_connection_id)
+        assert compact_request.method == compact_expected(transport, :method)
+
+        assert FakeUpstream.http_request_count(upstream) ==
+                 compact_expected(transport, :http_count)
+
+        assert Map.has_key?(compact_request, :websocket_connection_id) ==
+                 compact_expected(transport, :websocket?)
+
         assert compact_request.path == "/backend-api/codex/responses"
         assert compact_request.json["store"] == false
         assert compact_request.json["model"] == setup.model.upstream_model_id
@@ -337,13 +734,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         refute Map.has_key?(compact_request.json, "generate")
         refute Map.has_key?(compact_request.json, "client_metadata")
 
-        assert header_values(compact_request.headers, "x-codex-turn-state") == [
-                 frame_turn_state
-               ]
+        assert_compact_turn_state_header(compact_request.headers, transport, frame_turn_state)
 
         assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
         assert request.endpoint == "/backend-api/codex/responses/compact"
-        assert request.transport == "http_compact_json"
+
+        assert request.transport ==
+                 compact_expected(transport, :transport)
+
         assert request.status == "succeeded"
         assert request.request_metadata["codex_session_id"]
 
@@ -357,7 +755,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
         assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
         assert attempt.request_id == request.id
-        assert attempt.transport == "http_compact_json"
+
+        assert attempt.transport == compact_expected(transport, :transport)
+
         assert attempt.status == "succeeded"
         assert attempt.pool_upstream_assignment_id == setup.assignment.id
         assert attempt.upstream_identity_id == setup.identity.id
@@ -366,7 +766,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
         assert turn.codex_session_id == request.request_metadata["codex_session_id"]
         assert turn.status == "succeeded"
-        assert turn.transport_kind == "http_json"
+        assert turn.transport_kind == compact_expected(transport, :turn_transport)
         assert turn.final_attempt_id == attempt.id
         assert turn.completed_at
 
@@ -1654,6 +2054,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         )
     })
   end
+
+  defp compact_expected(:sse, key),
+    do:
+      Map.fetch!(
+        %{
+          method: "WEBSOCKET",
+          http_count: 0,
+          websocket?: true,
+          transport: "websocket",
+          turn_transport: "websocket"
+        },
+        key
+      )
+
+  defp compact_expected(:buffered, key),
+    do:
+      Map.fetch!(
+        %{
+          method: "POST",
+          http_count: 1,
+          websocket?: false,
+          transport: "http_compact_json",
+          turn_transport: "http_json"
+        },
+        key
+      )
+
+  defp assert_compact_turn_state_header(headers, :buffered, frame_turn_state),
+    do: assert(header_values(headers, "x-codex-turn-state") == [frame_turn_state])
+
+  defp assert_compact_turn_state_header(headers, :sse, _frame_turn_state),
+    do: assert(header_values(headers, "x-codex-turn-state") == [])
 
   defp compact_payload(setup, turn_state, transport \\ :buffered) do
     client_metadata =

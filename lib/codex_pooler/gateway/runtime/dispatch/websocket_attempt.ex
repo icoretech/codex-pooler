@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   @moduledoc false
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -824,7 +825,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
 
   defp retry_suppressed?(context) do
     bound_reset_probe?(context) or
-      RequestOptions.connection_bound_compaction?(context.request_options)
+      RequestOptions.connection_bound_compaction?(context.request_options) or
+      match?(%ClientRetry.DispatchAuthority{}, context.client_retry_dispatch_authority)
   end
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)

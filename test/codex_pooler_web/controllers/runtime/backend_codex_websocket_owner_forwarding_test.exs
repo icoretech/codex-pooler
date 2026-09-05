@@ -31,6 +31,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   import Ecto.Query
   import ExUnit.CaptureLog
+  import CodexPooler.PoolerFixtures, only: [active_upstream_assignment_fixture: 2]
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -39,6 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounting.Attempt
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.RequestClientRetryLink
   alias CodexPooler.Accounting.RequestLifecycle.Reservation
   alias CodexPooler.Accounting.{RequestLogFact, RequestLogs}
   alias CodexPooler.Accounting.RequestReplayEntitlement
@@ -87,6 +89,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.WebsocketConnectionLogger
@@ -238,6 +241,161 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
       end
     end)
+  end
+
+  for order <- [:terminal_first, :result_first] do
+    test "completed-only owner arbitration settles once with #{order}" do
+      assert_completed_only_arbitration(unquote(order))
+    end
+  end
+
+  defp assert_completed_only_arbitration(order) do
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_completed_only_arbitration",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        }
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([terminal]))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, socket} = owner_socket(auth, "ws-completed-only-#{order}", "completed-only-#{order}")
+    {:ok, owner} = WebsocketOwnerSession.lookup(socket.codex_session.id)
+    parent = self()
+    barrier = make_ref()
+
+    :sys.install(
+      owner,
+      {fn debug_state, event, _name ->
+         case event do
+           {:noreply, %{active_turn: %{pending_result: result, terminal_forwarded?: forwarded}}}
+           when not is_nil(result) ->
+             send(parent, {:arbitration_pending, barrier, forwarded})
+
+           _ ->
+             :ok
+         end
+
+         debug_state
+       end, nil}
+    )
+
+    :sys.replace_state(owner, fn state ->
+      real_sender = state.callbacks.upstream_sender
+
+      sender = completed_only_arbitration_sender(real_sender, order, parent, barrier)
+
+      %{state | callbacks: %{state.callbacks | upstream_sender: sender}}
+    end)
+
+    {:ok, socket} =
+      CodexResponsesSocket.handle_in(
+        {websocket_payload(setup, "completed only"), [opcode: :text]},
+        socket
+      )
+
+    assert_receive {:arbitration_result, ^barrier, sender}, @handoff_detection_timeout_ms
+
+    socket =
+      case order do
+        :terminal_first ->
+          next = receive_completed_only_arbitration_terminal(socket, terminal)
+
+          assert :sys.get_state(owner).active_turn.terminal_forwarded?
+          send(sender, {:arbitration_release, barrier})
+          next
+
+        :result_first ->
+          assert_receive {:arbitration_frame, ^barrier, deliver}, @handoff_detection_timeout_ms
+          send(sender, {:arbitration_release, barrier})
+          assert_receive {:arbitration_pending, ^barrier, false}, @handoff_detection_timeout_ms
+          deliver.()
+
+          receive_completed_only_arbitration_terminal(socket, terminal)
+      end
+
+    assert {:ok, socket} = receive_owner_socket_complete(socket)
+    socket = drain_completed_only_arbitration(socket)
+    assert [request] = request_logs(setup.pool.id)
+    assert request.status == "succeeded"
+    assert request.response_status_code == 200
+    assert_forwarding_cardinality!(request, socket.codex_session.id, "succeeded")
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+    refute_received {:websocket_owner_frame, _, _, _, {:data, ^terminal}}
+    CodexResponsesSocket.terminate(:closed, socket)
+  end
+
+  defp completed_only_arbitration_sender(real_sender, order, parent, barrier) do
+    fn upstream_pid, payload, writer ->
+      observed_writer = completed_only_arbitration_writer(writer, order, parent, barrier)
+      result = real_sender.(upstream_pid, payload, observed_writer)
+      send(parent, {:arbitration_result, barrier, self()})
+
+      receive do
+        {:arbitration_release, ^barrier} -> result
+      after
+        @handoff_detection_timeout_ms -> {:error, :barrier_timeout}
+      end
+    end
+  end
+
+  defp completed_only_arbitration_writer(writer, order, parent, barrier) do
+    fn frame, discriminator ->
+      case {order, TerminalDiscriminator.terminal?(discriminator)} do
+        {:terminal_first, _} ->
+          writer.(frame, discriminator)
+
+        {:result_first, false} ->
+          writer.(frame, discriminator)
+
+        {:result_first, true} ->
+          hold_completed_only_arbitration_frame(parent, barrier, writer, frame, discriminator)
+      end
+    end
+  end
+
+  defp hold_completed_only_arbitration_frame(parent, barrier, writer, frame, discriminator) do
+    send(parent, {:arbitration_frame, barrier, fn -> writer.(frame, discriminator) end})
+  end
+
+  defp receive_completed_only_arbitration_terminal(socket, terminal) do
+    assert {:push, {:text, frame}, socket} = receive_owner_socket_raw_push(socket)
+
+    if frame == terminal do
+      socket
+    else
+      assert Jason.decode!(frame)["type"] == "codex.response.metadata"
+      receive_completed_only_arbitration_terminal(socket, terminal)
+    end
+  end
+
+  defp drain_completed_only_arbitration(socket) do
+    if MapSet.size(socket.tasks) == 0 do
+      socket
+    else
+      receive do
+        {:websocket_response_activity, _, _} = message ->
+          assert {:ok, socket} = CodexResponsesSocket.handle_info(message, socket)
+          drain_completed_only_arbitration(socket)
+
+        {:codex_response_done, _, result} = message ->
+          assert result == {:socket_response_result, :owner_completion_pending, :ok}
+          assert {:ok, socket} = CodexResponsesSocket.handle_info(message, socket)
+          drain_completed_only_arbitration(socket)
+
+        {:websocket_response_delivery_complete, _, _} = message ->
+          assert {:ok, socket} = CodexResponsesSocket.handle_info(message, socket)
+          drain_completed_only_arbitration(socket)
+      after
+        @handoff_detection_timeout_ms -> flunk("expected terminal arbitration task cleanup")
+      end
+    end
   end
 
   test "owner-forwarded native anchored compact uses V2 collect on the current connection" do
@@ -2111,6 +2269,203 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     stop_remote_owner!(remote_node, session.id, owner_pid)
   end
 
+  @tag :client_retry_owner_race
+  test "two proxy downstreams race one client retry through the real peer owner" do
+    ensure_test_distribution_started!()
+    assert :ok = Sandbox.mode(Repo, :auto)
+    on_exit(fn -> assert :ok = Sandbox.mode(Repo, :manual) end)
+
+    release_ref = make_ref()
+
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_client_retry_owner_race",
+          "status" => "completed",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        }
+      })
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_terminal_then_close_barrier(
+          terminal,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup.pool)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = start_bridge_peer!(:current, setup.identity, repo: :real)
+    session_header = "client-retry-owner-race-#{System.unique_integer([:positive])}"
+    {session, owner_pid} = start_remote_bridge_owner!(auth, session_header, remote_node, :real)
+
+    forwarder_opts = [
+      node_client: WebsocketOwnerForwarder.ERPCNodeClient,
+      app_node_names: [Atom.to_string(remote_node)]
+    ]
+
+    turn_state = Ecto.UUID.generate()
+
+    {:ok, first_state} =
+      owner_socket(auth, "client-retry-owner-a", turn_state,
+        session_header: session_header,
+        session_header_source: "x-session-id",
+        websocket_owner_forwarder_opts: forwarder_opts
+      )
+
+    {:ok, second_state} =
+      owner_socket(auth, "client-retry-owner-b", turn_state,
+        session_header: session_header,
+        session_header_source: "x-session-id",
+        websocket_owner_forwarder_opts: forwarder_opts
+      )
+
+    thread_id = Ecto.UUID.generate()
+
+    payload =
+      websocket_input_payload(
+        setup,
+        [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic retry input"}]
+          }
+        ],
+        %{
+          "client_metadata" => %{
+            "x-codex-turn-metadata" =>
+              Jason.encode!(%{
+                "session_id" => thread_id,
+                "thread_id" => thread_id,
+                "turn_id" => "client-retry-owner-race",
+                "request_kind" => "turn"
+              })
+          }
+        }
+      )
+
+    options =
+      Gateway.websocket_owner_response_options(
+        first_state.opts,
+        first_state.codex_session,
+        first_state.websocket_owner_lease_token,
+        first_state.websocket_owner_downstream
+      )
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+
+    {:ok, prepared} = Service.prepare_websocket_response(payload, options, fn _frame -> :ok end)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, %{request: predecessor}} =
+      Accounting.claim_websocket_turn(auth, setup.model, %{
+        endpoint: "/backend-api/codex/responses",
+        correlation_id: Ecto.UUID.generate(),
+        native_client_retry_witness: prepared.native_client_retry_witness
+      })
+
+    assert predecessor.native_client_retry_version == 1
+    assert predecessor.native_client_retry_digest == prepared.replay_claim_digest
+
+    predecessor_turn =
+      Repo.insert!(%CodexTurn{
+        codex_session_id: session.id,
+        request_id: predecessor.id,
+        turn_sequence: 1,
+        transport_kind: "websocket",
+        semantic_turn_digest: prepared.semantic_turn_key,
+        status: "failed",
+        error_code: "upstream_stream_error",
+        first_visible_output_at: now,
+        completed_at: now,
+        started_at: now,
+        created_at: now,
+        updated_at: now
+      })
+
+    predecessor_attempt =
+      CodexPooler.PoolerFixtures.attempt_fixture(predecessor, setup.assignment, %{
+        status: "failed",
+        completed_at: now,
+        network_error_code: "upstream_stream_error",
+        usage_status: "usage_unknown",
+        transport: "websocket",
+        replay_generation: 0,
+        response_metadata: %{
+          "transport_failure" => %{
+            "phase" => "receive",
+            "termination_source" => "peer_close_frame",
+            "transport_signal" => "tcp_closed"
+          },
+          "native_client_retry_observation" => %{
+            "version" => 1,
+            "authority_complete" => true,
+            "output_item_done_count" => 0,
+            "output_item_done_count_saturated" => false,
+            "partial_reasoning_seen" => true,
+            "first_visible_at" => DateTime.to_iso8601(now),
+            "terminal_seen" => false,
+            "terminal_candidate_seen" => false
+          }
+        }
+      })
+
+    Repo.update!(
+      Ecto.Changeset.change(predecessor,
+        status: "failed",
+        usage_status: "usage_unknown",
+        completed_at: now,
+        last_error_code: "upstream_stream_error"
+      )
+    )
+
+    Repo.update!(
+      Ecto.Changeset.change(predecessor_turn, final_attempt_id: predecessor_attempt.id)
+    )
+
+    assert {:ok, current_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, second_state)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
+                    ^release_ref},
+                   @handoff_detection_timeout_ms
+
+    loser_result = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, first_state)
+
+    assert {:push, {:text, loser_error}, _loser_state} = loser_result
+    assert Jason.decode!(loser_error)["error"]["code"] in ["duplicate_turn", "owner_busy"]
+
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+    assert {:push, {:text, _frame}, current_state} = receive_owner_socket_push(current_state)
+    assert {:ok, current_state} = receive_owner_socket_complete(current_state)
+    assert {:ok, _current_state} = receive_socket_done(current_state)
+
+    assert Repo.aggregate(RequestClientRetryLink, :count) == 1
+
+    successor_id = Repo.one!(from l in RequestClientRetryLink, select: l.successor_request_id)
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^successor_id), :count) == 1
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert node(owner_pid) == remote_node
+
+    {successor, _attempt, _turn, _settlement, _fact} =
+      await_forwarding_persistence!(successor_id, session.id, "succeeded")
+
+    assert successor.id == successor_id
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where:
+                 entry.request_id == ^successor_id and entry.entry_kind == "settlement" and
+                   entry.amount_status == "recorded"
+             ),
+             :count
+           ) == 1
+  end
+
   test "a paused key stops a remote-owner-shaped turn at reservation without dispatch or recovery" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
     setup = gateway_setup(upstream)
@@ -2747,6 +3102,92 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       "owner forwarded reset probe success",
       "resp_owner_reset_probe_success"
     ])
+  end
+
+  test "owner-forwarded request preserves sibling capacity and does not consume a reset" do
+    dispatch_upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "response" => %{"id" => "resp_owner_capacity_fence"}
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_owner_capacity_fence",
+               "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    usage_upstream = reset_probe_usage_upstream()
+    setup = gateway_setup(dispatch_upstream, quota?: false)
+    sibling = active_upstream_assignment_fixture(setup.pool, %{})
+    model = put_model_source_assignments!(setup.model, [setup.assignment, sibling.assignment])
+
+    identity =
+      setup.identity
+      |> UpstreamIdentity.changeset(%{
+        metadata: saved_reset_metadata(usage_upstream, 1),
+        saved_reset_auto_redeem_enabled: true,
+        saved_reset_auto_redeem_trigger_mode: "threshold",
+        saved_reset_auto_redeem_quota_threshold_percent: 95,
+        saved_reset_auto_redeem_min_blocked_minutes: 60,
+        saved_reset_auto_redeem_keep_credits: 0,
+        updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      })
+      |> Repo.update!()
+
+    put_owner_capacity_quota!(identity, "96")
+    put_owner_capacity_quota!(sibling.identity, "75")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-capacity-fence", "owner-capacity-fence")
+    remote_node = :"codex_pooler@remote-capacity-fence.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success},
+        capture_request_to: self()
+      )
+
+    remote_state = unpinned_remote_owner_state(state, remote_node, node_opts)
+    setup = %{setup | model: model}
+
+    try do
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "owner forwarded capacity fence"),
+                 owner_response_options(remote_state, node_opts),
+                 fn _data -> :ok end
+               )
+
+      assert {:push, {:text, created_frame}, remote_state} =
+               receive_owner_socket_push(remote_state)
+
+      assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+
+      assert {:push, {:text, completed_frame}, remote_state} =
+               receive_owner_socket_push(remote_state)
+
+      assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
+      assert {:ok, _state} = receive_owner_socket_complete(remote_state)
+      assert_remote_submit_request_v1!(remote_state, remote_node, :success)
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+
+    refute Enum.any?(
+             FakeUpstream.requests(usage_upstream),
+             &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
+           )
+
+    refute Map.has_key?(Repo.reload!(identity).metadata, "saved_reset_redemption")
+    assert FakeUpstream.count(dispatch_upstream) == 1
   end
 
   test "owner-forwarded reset probe terminal failure remains unconfirmed" do
@@ -10041,6 +10482,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     prime_weekly_exhausted_quota!(identity)
     identity
+  end
+
+  defp put_owner_capacity_quota!(identity, used_percent) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new(used_percent),
+                 reset_at: DateTime.add(now, 2, :hour),
+                 observed_at: now,
+                 last_sync_at: now,
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 freshness_state: "fresh"
+               }
+             ])
   end
 
   defp assert_reset_probe_usage_calls!(usage_upstream) do

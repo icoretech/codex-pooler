@@ -9,6 +9,63 @@ defmodule CodexPooler.Accounting.MetadataTest do
   import CodexPooler.AccountingTestSupport
 
   describe "sanitize_metadata/1" do
+    test "preserves only complete versioned usage observation diagnostics" do
+      for classification <- ~w(known missing null malformed candidate_limit parser_discontinuity),
+          count <- [0, 255] do
+        observation = %{
+          "version" => 1,
+          "classification" => classification,
+          "marker_seen" => true,
+          "valid_object_seen" => false,
+          "candidate_count" => count
+        }
+
+        assert Accounting.sanitize_metadata(%{"usage_observation" => observation}) == %{
+                 "usage_observation" => observation
+               }
+      end
+    end
+
+    test "rejects invalid usage observation envelopes without retaining arbitrary content" do
+      valid = %{
+        "version" => 1,
+        "classification" => "known",
+        "marker_seen" => true,
+        "valid_object_seen" => true,
+        "candidate_count" => 1
+      }
+
+      invalid = [
+        Map.put(valid, "version", 2),
+        Map.put(valid, "version", 1.0),
+        Map.put(valid, "classification", "unrecognized"),
+        Map.put(valid, "classification", %{"nested" => "discard"}),
+        Map.put(valid, "marker_seen", "true"),
+        Map.put(valid, "valid_object_seen", 1),
+        Map.put(valid, "candidate_count", -1),
+        Map.put(valid, "candidate_count", 256),
+        Map.put(valid, "candidate_count", 1.0),
+        Map.put(valid, "candidate_count", true),
+        Map.put(valid, "unknown", %{"nested" => "discard"}),
+        Map.delete(valid, "version"),
+        %{
+          version: 1,
+          classification: "known",
+          marker_seen: true,
+          valid_object_seen: true,
+          candidate_count: 1
+        },
+        [],
+        "discard",
+        1,
+        nil
+      ]
+
+      for observation <- invalid, key <- ["usage_observation", :usage_observation] do
+        assert Accounting.sanitize_metadata(%{key => observation}) == %{key => %{}}
+      end
+    end
+
     test "preserves bounded windowless quota decision state and candidate count" do
       metadata = %{
         "quota_decision" => %{

@@ -46,6 +46,21 @@ defmodule CodexPooler.Accounting do
   @spec claim_websocket_turn(auth(), model_ref(), map()) :: request_result()
   defdelegate claim_websocket_turn(auth, model_or_id, opts), to: RequestLifecycle
 
+  @spec claim_client_retry_successor(auth(), model_ref(), map(), map()) ::
+          {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
+  defdelegate claim_client_retry_successor(auth, model_or_id, payload, opts),
+    to: RequestLifecycle
+
+  @spec client_retry_preflight_snapshot(
+          CodexPooler.Gateway.Persistence.CodexSession.t(),
+          CodexPooler.Access.APIKey.t(),
+          Model.t(),
+          map()
+        ) :: :none | {:ok, map()} | {:error, atom()}
+  defdelegate client_retry_preflight_snapshot(session, api_key, model, input),
+    to: CodexPooler.Accounting.ClientRetry,
+    as: :preflight_snapshot
+
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   defdelegate record_denied_request(auth, model_or_id, opts \\ %{}), to: RequestLifecycle
 
@@ -144,6 +159,15 @@ defmodule CodexPooler.Accounting do
   @spec create_attempt(Request.t(), PoolUpstreamAssignment.t(), map()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
   defdelegate create_attempt(request, assignment, attrs \\ %{}), to: RequestLifecycle
+
+  @spec create_client_retry_dispatch_attempt(
+          Request.t(),
+          PoolUpstreamAssignment.t(),
+          CodexPooler.Accounting.ClientRetry.DispatchAuthority.t(),
+          map()
+        ) :: {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
+  defdelegate create_client_retry_dispatch_attempt(request, assignment, authority, attrs \\ %{}),
+    to: RequestLifecycle
 
   @spec record_retryable_attempt_failure(Attempt.t(), map()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}

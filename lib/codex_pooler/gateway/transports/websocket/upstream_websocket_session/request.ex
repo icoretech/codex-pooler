@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :native_codex_response_control,
     :native_compaction_capability,
     :first_compact_collection,
+    :native_compaction_metadata,
     :expected_connection_lifecycle,
     :forwarded_owner_send_handoff,
     :native_replay_binding,
@@ -28,6 +29,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :effective_serving_mode,
     :request_id,
     :attempt_id,
+    :native_client_retry_observation,
+    :client_retry_dispatch_authority,
     assignment_advertised?: false,
     connection_bound_continuation?: false,
     websocket_delivery_mode: :relay,
@@ -40,7 +43,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
              CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator.t() ->
                any())
           | nil
-  @type delivery_mode :: :relay | :collect_compaction
+  @type delivery_mode :: :relay | :collect_compaction | :collect_full_history
   @type effective_serving_mode :: String.t() | nil
   @type frame_observer ::
           (binary() -> any())
@@ -63,6 +66,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           native_codex_response_control: TurnSnapshot.t() | nil,
           native_compaction_capability: Capability.t() | nil,
           first_compact_collection: FirstCompactCollection.t() | nil,
+          native_compaction_metadata:
+            CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
           expected_connection_lifecycle:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.connection_lifecycle_state()
             | nil,
@@ -75,6 +80,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           effective_serving_mode: effective_serving_mode(),
           request_id: Ecto.UUID.t() | nil,
           attempt_id: Ecto.UUID.t() | nil,
+          native_client_retry_observation:
+            CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
+          client_retry_dispatch_authority:
+            CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil,
           assignment_advertised?: boolean(),
           connection_bound_continuation?: boolean(),
           websocket_delivery_mode: delivery_mode(),

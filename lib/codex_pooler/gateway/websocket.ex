@@ -3,7 +3,6 @@ defmodule CodexPooler.Gateway.Websocket do
 
   require Logger
 
-  alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
@@ -587,7 +586,15 @@ defmodule CodexPooler.Gateway.Websocket do
         ) :: :ok | {:error, :stale_owner | :owner_unavailable}
   def release_websocket_owner_lease(%CodexSession{} = session, owner_lease_token, reason)
       when is_binary(reason) do
-    SessionContinuity.release_owner_lease(session, owner_lease_token, reason)
+    Interruption.release_owner_cleanup_lease(
+      %{
+        codex_session_id: session.id,
+        owner_instance_id: session.owner_instance_id,
+        owner_lease_token: owner_lease_token
+      },
+      reason,
+      nil
+    )
   end
 
   def release_websocket_owner_lease(_session, _owner_lease_token, _reason),
@@ -955,28 +962,8 @@ defmodule CodexPooler.Gateway.Websocket do
   def recover_owner_lifecycle_leftovers(session, owner_reason, opts \\ %{}) do
     request_options = websocket_request_options(opts)
 
-    with :ok <- close_owner_request_replays(session, request_options) do
-      Interruption.recover_owner_lifecycle_leftovers(session, owner_reason, request_options)
-    end
+    Interruption.recover_owner_lifecycle_leftovers(session, owner_reason, request_options)
   end
-
-  defp close_owner_request_replays(
-         %CodexSession{id: session_id},
-         %RequestOptions{transport: %{websocket_owner: owner}}
-       )
-       when is_binary(owner.lease_token) do
-    case Accounting.close_request_replays_for_session(
-           session_id,
-           owner.lease_token,
-           :owner_shutdown
-         ) do
-      {:ok, :stale_owner} -> {:error, :stale_owner}
-      {:ok, _summary} -> :ok
-      {:error, reason} -> {:error, {:request_replay_close_failed, reason}}
-    end
-  end
-
-  defp close_owner_request_replays(_session, _request_options), do: :ok
 
   defp maybe_put_upstream_websocket_session(opts, upstream_websocket_session, true) do
     RequestOptions.put_transport(opts, upstream_websocket_session: upstream_websocket_session)

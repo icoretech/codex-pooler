@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @moduletag capture_log: true
 
+  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -179,15 +180,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    assert {:ok, %{terminal: "response.completed"}} =
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
              UpstreamWebsocketSession.request(
                session,
-               websocket_request(FakeUpstream.url(upstream))
+               ordinary_request(websocket_request(FakeUpstream.url(upstream)))
              )
 
-    binding = direct_admission_binding(lifecycle_state(session))
+    binding = direct_admission_binding(lifecycle_state(session), ordinary_receipt)
     now_ms = System.system_time(:millisecond)
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, now_ms + 30_000)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               now_ms + 30_000,
+               ordinary_receipt
+             )
 
     assert {:ok, capability} =
              UpstreamWebsocketSession.reserve_compaction(
@@ -274,16 +282,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert %{generation: 0} = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
 
-    assert {:ok, %{terminal: "response.completed"}} =
-             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
 
     assert_receive {:upstream_websocket_frame, _warmup_frame}, @detection_timeout_ms
 
     lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
-    binding = direct_admission_binding(lifecycle)
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
     expires_at_ms = System.system_time(:millisecond) + 30_000
 
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, expires_at_ms)
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               expires_at_ms,
+               ordinary_receipt
+             )
+
     control_ref = make_ref()
 
     assert {:ok, %Capability{} = capability} =
@@ -377,12 +395,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    assert {:ok, %{terminal: "response.completed"}} =
-             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
 
     lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
-    binding = direct_admission_binding(lifecycle)
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, 30_000)
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
+    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, 30_000, ordinary_receipt)
 
     assert {:error, :expired} =
              UpstreamWebsocketSession.reserve_compaction(
@@ -401,13 +422,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    assert {:ok, %{terminal: "response.completed"}} =
-             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
 
     lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
-    binding = direct_admission_binding(lifecycle)
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
     expires_at_ms = System.system_time(:millisecond) + 30_000
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, expires_at_ms)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               expires_at_ms,
+               ordinary_receipt
+             )
 
     assert {:ok, capability} =
              UpstreamWebsocketSession.reserve_compaction(
@@ -467,29 +498,65 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    assert {:ok, %{terminal: "response.completed"}} =
-             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
 
     lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
-    binding = direct_admission_binding(lifecycle)
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
     expires_at_ms = System.system_time(:millisecond) + 30_000
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, expires_at_ms)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               expires_at_ms,
+               ordinary_receipt
+             )
+
     assert :ok = UpstreamWebsocketSession.acknowledge_compact_finalization(session, :failure)
     assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
 
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, expires_at_ms)
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
+
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               expires_at_ms,
+               ordinary_receipt
+             )
+
     assert :ok = UpstreamWebsocketSession.invalidate_connection(session)
     assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
 
-    assert {:ok, %{terminal: "response.completed"}} =
-             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
 
     replacement_lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
     assert replacement_lifecycle.generation == lifecycle.generation + 1
     refute replacement_lifecycle == lifecycle
 
-    replacement_binding = direct_admission_binding(replacement_lifecycle)
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, replacement_binding, expires_at_ms)
+    replacement_binding = direct_admission_binding(replacement_lifecycle, ordinary_receipt)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               replacement_binding,
+               expires_at_ms,
+               ordinary_receipt
+             )
 
     Agent.update(peer.state, &%{&1 | response_mode: :hold})
 
@@ -522,13 +589,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:error, :invalid_input} =
              UpstreamWebsocketSession.reserve_compaction(session, :unknown, %{}, nil, -1)
 
-    assert {:ok, %{terminal: "response.completed"}} =
-             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
 
     lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
-    binding = direct_admission_binding(lifecycle)
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
     expires_at_ms = System.system_time(:millisecond) + 30_000
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, expires_at_ms)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               expires_at_ms,
+               ordinary_receipt
+             )
 
     assert {:ok, capability} =
              UpstreamWebsocketSession.reserve_compaction(
@@ -561,18 +638,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
   end
 
-  test "direct admission clears a reserved capability after a stale reserve attempt" do
+  test "direct admission preserves the current capability after a stale reserve attempt" do
     peer = start_raw_websocket_peer(response_mode: :terminal)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    assert {:ok, %{terminal: "response.completed"}} =
-             UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, self()))
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
 
     lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
-    binding = direct_admission_binding(lifecycle)
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
     now_ms = System.system_time(:millisecond)
-    assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, now_ms + 30_000)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               now_ms + 30_000,
+               ordinary_receipt
+             )
 
     assert {:ok, capability} =
              UpstreamWebsocketSession.reserve_compaction(
@@ -594,7 +681,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
                now_ms
              )
 
-    assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
+    assert :reserved_compact = UpstreamWebsocketSession.compaction_admission_phase(session)
+    refute_received {:raw_upstream_websocket_request, 1, 2}
+
+    assert :ok =
+             UpstreamWebsocketSession.mark_compaction_accounting_started(
+               session,
+               capability,
+               now_ms
+             )
 
     request = %{
       raw_websocket_request(peer.url, self())
@@ -602,10 +697,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         expected_connection_lifecycle: lifecycle
     }
 
-    assert {:error, %{reason: :native_compaction_capability_rejected}} =
+    assert {:ok, %{terminal: "response.completed", response_id: "resp_raw_ws_1_2"}} =
              UpstreamWebsocketSession.request(session, request)
 
-    refute_received {:raw_upstream_websocket_request, 1, 2}
+    assert :collected_unconfirmed = UpstreamWebsocketSession.compaction_admission_phase(session)
   end
 
   test "public admission APIs return bounded errors for every malformed call shape" do
@@ -1536,6 +1631,58 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert Process.alive?(session)
     assert lifecycle_state(session).generation == 1
     assert FakeUpstream.http_request_count(upstream) == 0
+  end
+
+  test "close after partial reasoning returns a complete metadata-only client retry observation" do
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close([
+          %{
+            "type" => "response.reasoning_summary_text.delta",
+            "delta" => "private reasoning fragment"
+          }
+        ])
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    handler_id = "t7-frame-query-count-#{System.unique_integer([:positive, :monotonic])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, _metadata, %{parent: parent, session: session} ->
+          if self() == session, do: send(parent, :t7_frame_sql_query)
+        end,
+        %{parent: parent, session: session}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | native_client_retry_observation: ClientRetry.new_observation()
+    }
+
+    assert {:error,
+            %{
+              reason: :upstream_websocket_closed_before_terminal,
+              native_client_retry_observation: observation
+            }} = UpstreamWebsocketSession.request(session, request)
+
+    assert {:ok, metadata} =
+             ClientRetry.final_observation_metadata(observation)
+
+    assert metadata["authority_complete"] == true
+    assert metadata["partial_reasoning_seen"] == true
+    assert metadata["output_item_done_count"] == 0
+    assert metadata["terminal_seen"] == false
+    assert metadata["terminal_candidate_seen"] == false
+    refute inspect(metadata) =~ "private reasoning fragment"
+    refute_received :t7_frame_sql_query
   end
 
   test "peer close after an arbitrary nonterminal event records only bounded protocol buckets" do
@@ -3466,6 +3613,62 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   @tag :collect_compaction
+  test "full-history collection rejects an anchor on a fresh connection without send" do
+    upstream = start_upstream(websocket_success_without_id())
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    request = websocket_request(FakeUpstream.url(upstream))
+
+    request = %{
+      request
+      | payload:
+          Jason.encode!(%{
+            "type" => "response.create",
+            "previous_response_id" => "resp_old",
+            "input" => [
+              %{"type" => "message", "role" => "user", "content" => "synthetic"},
+              %{"type" => "compaction_trigger"}
+            ]
+          }),
+        writer: nil,
+        websocket_delivery_mode: :collect_full_history,
+        effective_serving_mode: "full"
+    }
+
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, request)
+    assert result.terminal == "error"
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  @tag :collect_compaction
+  test "fresh full-history collection opens one connection and keeps anchored collection fenced" do
+    upstream = start_upstream(websocket_success_without_id())
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    request = websocket_request(FakeUpstream.url(upstream))
+
+    request = %{
+      request
+      | payload:
+          Jason.encode!(%{
+            "type" => "response.create",
+            "input" => [
+              %{"type" => "message", "role" => "user", "content" => "synthetic"},
+              %{"type" => "compaction_trigger"}
+            ]
+          }),
+        writer: nil,
+        websocket_delivery_mode: :collect_full_history,
+        effective_serving_mode: "full"
+    }
+
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, request)
+    assert result.terminal == "response.completed"
+    assert FakeUpstream.count(upstream) == 1
+    assert result.upstream_websocket_connection.reused == false
+  end
+
+  @tag :collect_compaction
   test "collect compaction retains frames without a writer on a reused matching-mode connection" do
     item =
       Jason.encode!(%{
@@ -3981,6 +4184,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     session
     |> :sys.get_state()
     |> lifecycle_from_state()
+  end
+
+  defp ordinary_request(%Request{} = request) do
+    payload = request.payload |> Jason.decode!() |> Map.put_new("model", "upstream-test-model")
+
+    %{
+      request
+      | payload: Jason.encode!(payload),
+        request_id: Ecto.UUID.generate(),
+        attempt_id: Ecto.UUID.generate(),
+        effective_serving_mode: "full"
+    }
+  end
+
+  defp direct_admission_binding(lifecycle, ordinary_receipt) do
+    %{
+      direct_admission_binding(lifecycle)
+      | previous_response_digest: ordinary_receipt.response_digest
+    }
   end
 
   defp direct_admission_binding(%{lifecycle_id: lifecycle_id, generation: generation}) do

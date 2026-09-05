@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   require Logger
 
+  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
@@ -19,16 +20,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Confirmation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.FirstCompactCollection
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.FirstCompactResult
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Direct
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.OrdinarySuccessResult
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState.Delivery
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
 
   @default_keepalive_interval_ms 25_000
@@ -123,18 +128,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   def connection_lifecycle_snapshot(_pid), do: {:error, :invalid_input}
 
-  @spec arm_compact(pid(), Binding.t(), non_neg_integer()) :: :ok | {:error, atom()}
-  def arm_compact(pid, %Binding{} = binding, expires_at_ms) when is_pid(pid) do
-    admission_call(pid, {:arm_compact, binding, expires_at_ms})
-  end
+  @spec compaction_reservation_snapshot(pid()) ::
+          {:ok,
+           %{lifecycle_id: Ecto.UUID.t(), generation: pos_integer(), serving_mode: :full | :lite}}
+          | {:error, atom()}
+  def compaction_reservation_snapshot(pid) when is_pid(pid),
+    do: admission_call(pid, :compaction_reservation_snapshot)
 
+  def compaction_reservation_snapshot(_pid), do: {:error, :invalid_input}
+
+  @spec arm_compact(pid(), Binding.t(), non_neg_integer()) :: :ok | {:error, atom()}
   def arm_compact(_pid, _binding, _expires_at_ms), do: {:error, :invalid_input}
 
-  @spec authorize_first_compact_collection(pid(), Binding.t(), reference()) ::
+  @spec arm_compact(pid(), Binding.t(), non_neg_integer(), OrdinarySuccessResult.t()) ::
+          :ok | {:error, atom()}
+  def arm_compact(pid, %Binding{} = binding, expires_at_ms, %OrdinarySuccessResult{} = receipt)
+      when is_pid(pid) and is_integer(expires_at_ms) and expires_at_ms >= 0 do
+    admission_call(pid, {:arm_compact, binding, expires_at_ms, receipt})
+  end
+
+  def arm_compact(_pid, _binding, _expires_at_ms, _receipt), do: {:error, :invalid_input}
+
+  @spec authorize_first_compact_collection(pid(), Binding.t(), FirstCompactResult.t()) ::
           {:ok, FirstCompactCollection.t()} | {:error, atom()}
-  def authorize_first_compact_collection(pid, %Binding{} = binding, control_ref)
-      when is_pid(pid) and is_reference(control_ref) do
-    admission_call(pid, {:authorize_first_compact_collection, binding, control_ref})
+  def authorize_first_compact_collection(
+        pid,
+        %Binding{} = binding,
+        %FirstCompactResult{} = result
+      )
+      when is_pid(pid) do
+    admission_call(pid, {:authorize_first_compact_collection, binding, result})
   end
 
   def authorize_first_compact_collection(_pid, _binding, _control_ref),
@@ -210,6 +233,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   def clear_compaction_admission(_pid), do: {:error, :invalid_input}
+
+  @spec clear_compaction_admission(pid(), Capability.t()) :: :ok | {:error, atom()}
+  def clear_compaction_admission(pid, %Capability{} = capability) when is_pid(pid),
+    do: admission_call(pid, {:clear_compaction_admission, capability})
+
+  def clear_compaction_admission(_pid, _capability), do: {:error, :invalid_input}
 
   @spec compaction_admission_phase(pid()) ::
           NativeCompactionAdmission.phase() | {:error, :unavailable}
@@ -350,35 +379,90 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {:reply, connection_lifecycle_state(state), state}
   end
 
-  def handle_call({:arm_compact, %Binding{} = binding, expires_at_ms}, _from, state) do
+  def handle_call(:compaction_reservation_snapshot, _from, state) do
     result =
-      with :ok <- validate_direct_binding(state, binding),
-           {:ok, admission} <- NativeCompactionAdmission.ordinary_success(binding),
-           do: NativeCompactionAdmission.arm_compact(admission, expires_at_ms)
+      with %{phase: phase, binding: %Binding{} = binding, expires_at_ms: expires}
+           when phase in [:pending_compact, :pending_final] and is_integer(expires) <-
+             admission_state(state),
+           true <- expires >= System.system_time(:millisecond),
+           :ok <- validate_direct_binding(state, binding),
+           true <- binding.serving_mode in [:full, :lite] do
+        {:ok, Map.take(binding, [:lifecycle_id, :generation, :serving_mode])}
+      else
+        _invalid -> {:error, :owner_unavailable}
+      end
 
-    reply_with_admission(result, state)
+    {:reply, result, state}
   end
 
   def handle_call(
-        {:authorize_first_compact_collection, %Binding{} = binding, control_ref},
+        {:arm_compact, %Binding{} = binding, expires_at_ms, %OrdinarySuccessResult{} = receipt},
         _from,
         state
       ) do
     result =
       with :ok <- validate_direct_binding(state, binding),
+           true <- Map.get(state, :ordinary_success_result) == receipt and receipt.owner == self(),
+           true <- OrdinarySuccessResult.binding_matches?(receipt, binding),
+           true <-
+             admission_state(state).phase in [
+               :cleared,
+               :ordinary_success,
+               :pending_compact,
+               :consumed_final
+             ],
+           {:ok, admission} <- NativeCompactionAdmission.ordinary_success(binding),
+           do: NativeCompactionAdmission.arm_compact(admission, expires_at_ms)
+
+    case result do
+      {:ok, admission} ->
+        {:reply, :ok,
+         state
+         |> Map.delete(:ordinary_success_result)
+         |> Map.delete(:first_compact_result)
+         |> put_admission(admission)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+
+      false ->
+        {:reply, {:error, :invalid_transition}, state}
+    end
+  end
+
+  def handle_call({:arm_compact, _binding, _expires}, _from, state),
+    do: {:reply, {:error, :invalid_input}, state}
+
+  def handle_call(
+        {:authorize_first_compact_collection, %Binding{} = binding,
+         %FirstCompactResult{} = receipt},
+        _from,
+        state
+      ) do
+    result =
+      with :ok <- validate_direct_binding(state, binding),
+           true <- Map.get(state, :first_compact_result) == receipt and receipt.owner == self(),
+           true <- FirstCompactResult.binding_matches?(receipt, binding),
+           true <- admission_state(state).phase in [:cleared, :ordinary_success, :pending_compact],
            {:ok, admission} <- NativeCompactionAdmission.ordinary_success(binding),
            do:
              NativeCompactionAdmission.authorize_first_compact_collection(
                admission,
-               control_ref
+               receipt.result_ref
              )
 
     case result do
       {:ok, admission, provenance} ->
-        {:reply, {:ok, provenance}, Map.put(state, :native_compaction_admission, admission)}
+        admission = %{admission | compaction_item_digest: receipt.item_digest}
+
+        {:reply, {:ok, provenance},
+         state |> Map.delete(:first_compact_result) |> put_admission(admission)}
 
       {:error, reason} ->
-        {:reply, {:error, reason}, clear_admission(state)}
+        {:reply, {:error, reason}, state}
+
+      false ->
+        {:reply, {:error, :invalid_transition}, state}
     end
   end
 
@@ -387,13 +471,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     case NativeCompactionAdmission.record_first_compact_collected(admission, provenance) do
       {:ok, admission} ->
-        {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
+        {:reply, :ok, put_admission(state, admission)}
 
       {:error, reason} ->
-        {:reply, {:error, reason}, clear_admission(state)}
+        {:reply, {:error, reason}, state}
 
       {:error, reason, admission} ->
-        {:reply, {:error, reason}, Map.put(state, :native_compaction_admission, admission)}
+        {:reply, {:error, reason},
+         if(admission_state(state).first_compact_collection == provenance,
+           do: put_admission(state, admission),
+           else: state
+         )}
     end
   end
 
@@ -408,9 +496,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
              now_ms
            ) do
       :ok = emit_reservation_observations(capability)
-      {:reply, {:ok, capability}, Map.put(state, :native_compaction_admission, admission)}
+      {:reply, {:ok, capability}, put_admission(state, admission)}
     else
-      {:error, reason} -> {:reply, {:error, reason}, clear_admission(state)}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -433,7 +521,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             upstream_pid: self()
           })
 
-        {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
+        {:reply, :ok, put_admission(state, admission)}
 
       {:error, reason} ->
         :ok =
@@ -444,7 +532,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             reason
           )
 
-        {:reply, {:error, reason}, clear_admission(state)}
+        {:reply, {:error, reason}, clear_rejected_capability(state, capability, reason)}
     end
   end
 
@@ -456,18 +544,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
            now_ms
          ) do
       {:ok, admission} ->
-        {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
+        {:reply, :ok, put_admission(state, admission)}
 
       {:error, :committed, admission} ->
-        {:reply, {:error, :committed}, Map.put(state, :native_compaction_admission, admission)}
+        {:reply, {:error, :committed}, put_admission(state, admission)}
 
       {:error, reason} ->
-        {:reply, {:error, reason}, clear_admission(state)}
+        {:reply, {:error, reason}, clear_rejected_capability(state, capability, reason)}
     end
   end
 
   def handle_call({:acknowledge_compact_finalization, :failure}, _from, state),
-    do: {:reply, :ok, clear_admission(state)}
+    do: {:reply, :ok, clear_admission(state, :compact_failure)}
 
   def handle_call(
         {:acknowledge_compact_finalization,
@@ -484,43 +572,48 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
            expires_at_ms
          ) do
       {:ok, admission} ->
-        :ok =
-          NativeCompactionAuthorizationObservation.emit_capability(
-            compact_capability,
-            :acknowledged
-          )
+        :ok = emit_compact_acknowledged(compact_capability)
 
-        _trace =
-          NativeCompactionTrace.emit_capability(:capability_acknowledged, compact_capability, %{
-            pid_role: :upstream_session,
-            upstream_pid: self()
-          })
-
-        {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
+        {:reply, :ok, put_admission(state, admission)}
 
       {:error, reason} ->
-        {:reply, {:error, reason}, clear_admission(state)}
+        {:reply, {:error, reason}, state}
 
       {:error, reason, admission} ->
-        {:reply, {:error, reason}, Map.put(state, :native_compaction_admission, admission)}
+        {:reply, {:error, reason},
+         if(admission_state(state).binding == confirmation.binding,
+           do: put_admission(state, admission),
+           else: state
+         )}
     end
   end
 
   def handle_call({:acknowledge_compact_finalization, _invalid}, _from, state),
-    do: {:reply, {:error, :invalid_input}, clear_admission(state)}
+    do: {:reply, {:error, :invalid_input}, clear_admission(state, :invalid_input)}
 
   def handle_call({:acknowledge_final_response, :success}, _from, state) do
     case NativeCompactionAdmission.clear_consumed(admission_state(state)) do
-      {:ok, _admission} -> {:reply, :ok, clear_admission(state)}
-      {:error, reason} -> {:reply, {:error, reason}, clear_admission(state)}
+      {:ok, _admission} -> {:reply, :ok, clear_admission(state, :final_success)}
+      {:error, reason} -> {:reply, {:error, reason}, clear_admission(state, reason)}
     end
   end
 
   def handle_call({:acknowledge_final_response, :failure}, _from, state),
-    do: {:reply, :ok, clear_admission(state)}
+    do: {:reply, :ok, clear_admission(state, :final_failure)}
 
   def handle_call(:clear_compaction_admission, _from, state),
     do: {:reply, :ok, clear_admission(state)}
+
+  def handle_call({:clear_compaction_admission, %Capability{} = capability}, _from, state) do
+    case NativeCompactionAdmission.clear_owned(admission_state(state), capability) do
+      {:ok, _cleared} ->
+        {:reply, :ok, clear_admission(state, :request_rejected)}
+
+      {:error, reason} ->
+        observe_admission(state, state, :reject, :stale_capability)
+        {:reply, {:error, reason}, state}
+    end
+  end
 
   def handle_call(:compaction_admission_phase, _from, state),
     do: {:reply, NativeCompactionAdmission.phase(admission_state(state)), state}
@@ -676,7 +769,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp reset_probe?(%Request{reset_probe: %ResetProbe{} = probe}), do: ResetProbe.bound?(probe)
   defp reset_probe?(%Request{}), do: false
 
-  defp collect_compaction?(%Request{websocket_delivery_mode: :collect_compaction}), do: true
+  defp collect_compaction?(%Request{websocket_delivery_mode: mode})
+       when mode in [:collect_compaction, :collect_full_history], do: true
+
   defp collect_compaction?(%Request{}), do: false
 
   defp reconnect_reused_connection?(false, %Request{}, _result_or_reason), do: false
@@ -734,6 +829,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       },
       request_caller_pid: request_caller_pid,
       request_caller_monitor: request_caller_monitor,
+      native_client_retry_observation: request.native_client_retry_observation,
       # Tolerant access: during a rolling deploy an owner-forwarded request may
       # have been built by a replica that predates this field. nil keeps the
       # pre-provenance classification semantics for that request instead of
@@ -825,6 +921,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
+  defp collect_connection_eligible?(
+         _state,
+         _key,
+         %Request{websocket_delivery_mode: :collect_full_history} = request,
+         _connection_usage
+       ) do
+    request.effective_serving_mode in ["full", "lite"] and
+      not request.connection_bound_continuation? and
+      WebsocketOwnerRequestV6.unanchored_full_history_payload?(request.payload)
+  end
+
   defp collect_connection_eligible?(state, key, request, connection_usage) do
     connection_use(connection_usage) == :reused and reusable_connection?(state, key) and
       Map.get(state, :last_successful_effective_serving_mode) == request.effective_serving_mode and
@@ -869,6 +976,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp send_request_payload(state, %Request{} = request, receive_state, connection_usage) do
+    state = state |> Map.delete(:first_compact_result) |> Map.delete(:ordinary_success_result)
+
     {state, receive_state} =
       begin_connection_request(state, receive_state, connection_usage)
 
@@ -887,6 +996,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          {:ok, state} <- send_text(state, request.payload),
          :ok <- trace_physical_send(:physical_send_finished, request, :ok) do
       {:ok, result, state} = await_sent_request(state, receive_state)
+      {result, state} = retain_first_compact_result(result, state, request)
+      {result, state} = retain_ordinary_success_result(result, state, request)
 
       state =
         state
@@ -915,6 +1026,47 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
+  defp retain_first_compact_result({:ok, result} = response, state, request) do
+    case FirstCompactResult.from_collection(request, result, connection_lifecycle_state(state)) do
+      {:ok, receipt} ->
+        {{:ok, Map.put(result, :first_compact_result, receipt)},
+         Map.put(state, :first_compact_result, receipt)}
+
+      :error ->
+        {response, state}
+    end
+  end
+
+  defp retain_first_compact_result(response, state, _request), do: {response, state}
+
+  defp retain_ordinary_success_result(result, state, request) do
+    case OrdinarySuccessResult.from_response(request, result, connection_lifecycle_state(state)) do
+      {:ok, receipt} ->
+        {:ok, response} = result
+
+        {{:ok, Map.put(response, :ordinary_success_result, receipt)},
+         Map.put(state, :ordinary_success_result, receipt)}
+
+      :error ->
+        {result, state}
+    end
+  end
+
+  defp emit_compact_acknowledged(%Capability{} = capability) do
+    :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :acknowledged)
+
+    _trace =
+      NativeCompactionTrace.emit_capability(:capability_acknowledged, capability, %{
+        pid_role: :upstream_session,
+        upstream_pid: self()
+      })
+
+    :ok
+  end
+
+  defp emit_compact_acknowledged(nil),
+    do: NativeCompactionAuthorizationObservation.emit(:compact_acknowledged, :direct)
+
   @type consumed_admission_phase ::
           :compact
           | :final
@@ -936,7 +1088,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
        ) do
     case NativeReplayAdmission.redeem(proof, binding) do
       {:ok, _redeemed} -> {:ok, state, :native_replay}
-      {:error, _reason} -> {:error, clear_admission(state)}
+      {:error, reason} -> {:error, clear_admission(state, reason)}
     end
   end
 
@@ -961,9 +1113,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           upstream_pid: self()
         })
 
-      {:ok, Map.put(state, :native_compaction_admission, admission), capability.phase}
+      {:ok, put_admission(state, admission), capability.phase}
     else
-      _rejected -> {:error, clear_admission(state)}
+      _rejected -> {:error, clear_admission(state, :stale_capability)}
     end
   end
 
@@ -980,7 +1132,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          FirstCompactCollection.valid?(provenance) do
       {:ok, state, {:first_full_history_compact, provenance}}
     else
-      {:error, clear_admission(state)}
+      {:error, clear_admission(state, :request_rejected)}
     end
   end
 
@@ -1002,7 +1154,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
            ) do
       {:ok, state, nil}
     else
-      _rejected -> {:error, clear_admission(state)}
+      _rejected -> {:error, clear_admission(state, :stale_capability)}
     end
   end
 
@@ -1016,7 +1168,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
        ),
        do: {:ok, state, nil}
 
-  defp consume_request_capability(state, %Request{}), do: {:error, clear_admission(state)}
+  defp consume_request_capability(state, %Request{}),
+    do: {:error, clear_admission(state, :invalid_input)}
 
   defp normalized_forwarded_serving_mode("full"), do: {:ok, :full}
   defp normalized_forwarded_serving_mode("lite"), do: {:ok, :lite}
@@ -1026,7 +1179,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp finalize_consumed_request(state, {:ok, _result}, :compact, _request) do
     case NativeCompactionAdmission.record_compact_collected(admission_state(state)) do
-      {:ok, admission} -> Map.put(state, :native_compaction_admission, admission)
+      {:ok, admission} -> put_admission(state, admission)
       {:error, _reason} -> clear_admission(state)
     end
   end
@@ -1054,9 +1207,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
            admission_state(state),
            provenance
          ) do
-      {:ok, admission} -> Map.put(state, :native_compaction_admission, admission)
+      {:ok, admission} -> put_admission(state, admission)
       {:error, _reason} -> clear_admission(state)
-      {:error, _reason, admission} -> Map.put(state, :native_compaction_admission, admission)
+      {:error, _reason, admission} -> put_admission(state, admission)
     end
   end
 
@@ -1378,7 +1531,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          transport_failure_metadata(:client_disconnected, state, receive_state,
            phase: :receive,
            termination_source: :request_caller_down
-         )
+         ),
+       native_client_retry_observation: final_client_retry_observation(receive_state)
      }}
   end
 
@@ -1432,7 +1586,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          transport_failure_metadata(reason, state, receive_state,
            phase: :receive,
            termination_source: :mint_transport_error
-         )
+         ),
+       native_client_retry_observation: final_client_retry_observation(receive_state)
      }}
   end
 
@@ -1516,7 +1671,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             transport_failure:
               transport_failure_metadata(reason, state, receive_state,
                 phase: failure_phase(reason)
-              )
+              ),
+            native_client_retry_observation: final_client_retry_observation(receive_state)
           }}, state}
     end
   end
@@ -1677,6 +1833,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
       :error ->
         receive_state = maybe_mark_downstream_output_started(receive_state, raw_decoded)
+        receive_state = observe_native_client_retry(receive_state, raw_decoded)
         observe_frame(receive_state, raw_text, raw_decoded)
         receive_state = maybe_write_native_metadata(state, receive_state)
 
@@ -1812,9 +1969,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp maybe_mark_downstream_output_started(
-         %ReceiveState{delivery: %Delivery{mode: :collect_compaction}} = receive_state,
+         %ReceiveState{delivery: %Delivery{mode: mode}} = receive_state,
          _decoded
-       ),
+       )
+       when mode in [:collect_compaction, :collect_full_history],
        do: receive_state
 
   defp maybe_mark_downstream_output_started(%ReceiveState{} = receive_state, decoded) do
@@ -1934,6 +2092,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp receive_body(%ReceiveState{body: body}), do: websocket_body(body)
+
+  defp observe_native_client_retry(
+         %ReceiveState{native_client_retry_observation: nil} = receive_state,
+         _decoded
+       ),
+       do: receive_state
+
+  defp observe_native_client_retry(
+         %ReceiveState{native_client_retry_observation: observation} = receive_state,
+         decoded
+       ) do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %{
+      receive_state
+      | native_client_retry_observation:
+          ClientRetry.observe_frame(observation, decoded, observed_at)
+    }
+  end
+
+  defp final_client_retry_observation(%ReceiveState{native_client_retry_observation: nil}),
+    do: nil
+
+  defp final_client_retry_observation(%ReceiveState{
+         native_client_retry_observation: observation
+       }),
+       do: ClientRetry.complete_without_terminal(observation)
 
   defp observe_frame(%ReceiveState{frame_observer: observer}, text, decoded) do
     case observer_arity(observer) do
@@ -2141,7 +2326,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     state
     |> cancel_keepalive()
     |> cancel_pong_deadline()
-    |> clear_admission()
+    |> clear_admission(:connection_closed)
     |> disconnected_state()
   end
 
@@ -2149,7 +2334,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     state
     |> cancel_keepalive()
     |> cancel_pong_deadline()
-    |> clear_admission()
+    |> clear_admission(:connection_closed)
     |> disconnected_state()
   end
 
@@ -2176,7 +2361,80 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     Map.get(state, :native_compaction_admission, %NativeCompactionAdmission{phase: :cleared})
   end
 
-  defp clear_admission(state), do: Map.delete(state, :native_compaction_admission)
+  defp put_admission(state, admission) do
+    next = Map.put(state, :native_compaction_admission, admission)
+
+    operation =
+      case admission.phase do
+        phase when phase in [:reserved_compact, :reserved_final] ->
+          :reserve
+
+        phase when phase in [:accounting_started_compact, :accounting_started_final] ->
+          :accounting
+
+        phase when phase in [:consumed_compact, :consumed_final] ->
+          :consume
+
+        :collected_unconfirmed ->
+          :collect
+
+        :pending_final ->
+          :confirm
+
+        :cleared ->
+          :clear
+
+        _ ->
+          :ordinary_success
+      end
+
+    observation = observe_admission(state, next, operation, :success)
+
+    if admission.phase == :cleared,
+      do: Map.put(next, :native_compaction_last_clear, observation),
+      else: next
+  end
+
+  defp clear_rejected_capability(state, capability, reason) do
+    if NativeCompactionAdmission.owns_capability?(admission_state(state), capability) do
+      clear_admission(state, reason)
+    else
+      observe_admission(state, state, :reject, :stale_capability)
+      state
+    end
+  end
+
+  defp clear_admission(state, reason \\ :request_rejected) do
+    next =
+      state
+      |> Map.delete(:native_compaction_admission)
+      |> Map.delete(:first_compact_result)
+      |> Map.delete(:ordinary_success_result)
+
+    observation = observe_admission(state, next, :clear, reason)
+    Map.put(next, :native_compaction_last_clear, observation)
+  end
+
+  defp observe_admission(before_state, after_state, operation, reason) do
+    observation =
+      NativeCompactionLifecycleObservation.observe(
+        Map.get(before_state, :native_compaction_admission),
+        Map.get(after_state, :native_compaction_admission),
+        operation,
+        reason,
+        :direct
+      )
+
+    Logger.debug(fn -> "native compaction lifecycle " <> inspect(observation) end)
+
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :native_compaction, :lifecycle],
+      %{count: 1},
+      observation
+    )
+
+    observation
+  end
 
   defp put_trace_sensitivity(state, sensitivity) do
     if sensitivity == :sensitive,
@@ -2217,14 +2475,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp validate_direct_binding(_state, %Binding{}), do: {:error, :binding_mismatch}
-
-  defp reply_with_admission({:ok, admission}, state) do
-    {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
-  end
-
-  defp reply_with_admission({:error, reason}, state) do
-    {:reply, {:error, reason}, clear_admission(state)}
-  end
 
   defp status_reason_class(%module{}) when is_atom(module), do: {:exception, module}
   defp status_reason_class(reason) when is_atom(reason), do: {:reason, reason}

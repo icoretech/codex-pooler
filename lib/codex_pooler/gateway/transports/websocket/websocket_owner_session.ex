@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   use GenServer
 
+  require Elixir.Logger
+
   alias CodexPooler.Accounting.RequestReplayEntitlement
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
@@ -14,8 +16,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedSendWitnessV1
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.OrdinarySuccessResult
   alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
@@ -29,6 +33,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Websocket.OwnerCleanup
 
   defmodule ForwardedSendWitnessState do
     @moduledoc false
@@ -52,7 +57,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   @handoff_absolute_timeout_ms 5_000
   @terminal_result_types ["response.completed", "response.failed", "response.incomplete", "error"]
 
+  # The one-shot collection result belongs to this existing owner lifecycle.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
+    :first_compact_result,
+    :ordinary_success_result,
     :codex_session_id,
     :owner_lease_token,
     :owner_instance_id,
@@ -64,6 +73,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :upstream_pid,
     :callbacks,
     :active_turn,
+    :termination_cleanup_witness,
     :terminal_winner_detach,
     :pending_handoff,
     :suspended_replay,
@@ -437,7 +447,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          :ok <- require_admission_downstream(state, control.downstream) do
       execute_admission_control(state, control)
     else
-      {:error, reason} -> {:error, reason, clear_native_compaction_admission(state)}
+      {:error, reason} ->
+        observe_admission(state, state, :reject, reason)
+        {:error, reason, state}
     end
   end
 
@@ -452,19 +464,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          action: :record_ordinary_success,
          binding: binding,
          expires_at_ms: expires_at_ms,
+         first_compact_collection: %OrdinarySuccessResult{} = receipt,
          downstream: downstream
        }) do
     with :ok <- require_forwarded_binding(state, downstream, binding),
+         true <- state.ordinary_success_result == receipt and receipt.owner == self(),
+         true <- OrdinarySuccessResult.binding_matches?(receipt, binding),
+         true <- is_nil(state.active_turn),
+         true <-
+           is_nil(state.native_compaction_admission) or
+             state.native_compaction_admission.phase in [
+               :cleared,
+               :ordinary_success,
+               :pending_compact,
+               :consumed_final
+             ],
+         true <-
+           UpstreamWebsocketSession.connection_lifecycle_snapshot(state.upstream_pid) ==
+             receipt.lifecycle,
          {:ok, admission} <- NativeCompactionAdmission.ordinary_success(binding),
          {:ok, admission} <- NativeCompactionAdmission.arm_compact(admission, expires_at_ms) do
       {:ok, admission,
        %{
          state
          | native_compaction_admission: admission,
+           first_compact_result: nil,
+           ordinary_success_result: nil,
            native_compaction_admission_downstream: stable_downstream(downstream)
        }}
     else
-      {:error, reason} -> {:error, reason, clear_native_compaction_admission(state)}
+      {:error, reason} -> {:error, reason, state}
+      false -> {:error, :invalid_transition, state}
     end
   end
 
@@ -482,9 +512,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
              control.now_ms
            ) do
       :ok = emit_reservation_observations(capability)
-      {:ok, capability, %{state | native_compaction_admission: next}}
+      {:ok, capability, put_admission(state, next)}
     else
-      {:error, reason} -> {:error, reason, clear_native_compaction_admission(state)}
+      {:error, reason} -> {:error, reason, state}
     end
   end
 
@@ -492,9 +522,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          action: :authorize_first_compact_collection,
          binding: binding,
          control_ref: control_ref,
+         first_compact_collection: %NativeCompactionAdmission.FirstCompactResult{} = receipt,
          downstream: downstream
        }) do
     with :ok <- require_forwarded_binding(state, downstream, binding),
+         true <- state.first_compact_result == receipt and receipt.owner == self(),
+         true <- receipt.result_ref == control_ref,
+         true <- NativeCompactionAdmission.FirstCompactResult.binding_matches?(receipt, binding),
+         true <- is_nil(state.active_turn),
+         true <-
+           is_nil(state.native_compaction_admission) or
+             state.native_compaction_admission.phase in [
+               :cleared,
+               :ordinary_success,
+               :pending_compact
+             ],
+         true <-
+           UpstreamWebsocketSession.connection_lifecycle_snapshot(state.upstream_pid) == %{
+             lifecycle_id: binding.lifecycle_id,
+             generation: binding.generation
+           },
          {:ok, admission} <- NativeCompactionAdmission.ordinary_success(binding),
          {:ok, admission, provenance} <-
            NativeCompactionAdmission.authorize_first_compact_collection(
@@ -504,11 +551,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:ok, provenance,
        %{
          state
-         | native_compaction_admission: admission,
+         | native_compaction_admission: %{admission | compaction_item_digest: receipt.item_digest},
+           first_compact_result: nil,
            native_compaction_admission_downstream: stable_downstream(downstream)
        }}
     else
-      {:error, reason} -> {:error, reason, clear_native_compaction_admission(state)}
+      {:error, reason} -> {:error, reason, state}
+      false -> {:error, :invalid_transition, state}
     end
   end
 
@@ -520,9 +569,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            admission,
            control.first_compact_collection
          ) do
-      {:ok, next} -> {:ok, next, %{state | native_compaction_admission: next}}
-      {:error, reason} -> {:error, reason, clear_native_compaction_admission(state)}
-      {:error, reason, next} -> {:error, reason, %{state | native_compaction_admission: next}}
+      {:ok, next} ->
+        {:ok, next, put_admission(state, next)}
+
+      {:error, reason} ->
+        {:error, reason, state}
+
+      {:error, reason, next} ->
+        {:error, reason,
+         if(admission.first_compact_collection == control.first_compact_collection,
+           do: put_admission(state, next),
+           else: state
+         )}
     end
   end
 
@@ -548,7 +606,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
             owner_pid: self()
           })
 
-        {:ok, next, %{state | native_compaction_admission: next}}
+        {:ok, next, put_admission(state, next)}
 
       {:error, reason} ->
         :ok =
@@ -559,7 +617,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
             reason
           )
 
-        {:error, reason, clear_native_compaction_admission(state)}
+        {:error, reason, clear_rejected_capability(state, control.capability, reason)}
     end
   end
 
@@ -589,13 +647,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            control.now_ms
          ) do
       {:ok, next} ->
-        {:ok, next, %{state | native_compaction_admission: next}}
+        {:ok, next, put_admission(state, next)}
 
       {:error, :committed, next} ->
         {:error, :committed, put_admission(state, next)}
 
       {:error, reason} ->
-        {:error, reason, clear_native_compaction_admission(state)}
+        {:error, reason, clear_rejected_capability(state, control.capability, reason)}
     end
   end
 
@@ -612,30 +670,41 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            control.expires_at_ms
          ) do
       {:ok, next} ->
-        :ok =
-          NativeCompactionAuthorizationObservation.emit_capability(
-            compact_capability,
-            :acknowledged
-          )
+        :ok = emit_compact_acknowledged(compact_capability)
 
-        _trace =
-          NativeCompactionTrace.emit_capability(:capability_acknowledged, compact_capability, %{
-            pid_role: :owner_session,
-            owner_pid: self()
-          })
-
-        {:ok, next, %{state | native_compaction_admission: next}}
+        {:ok, next, put_admission(state, next)}
 
       {:error, reason, next} ->
-        {:error, reason, put_admission(state, next)}
+        {:error, reason,
+         if(owns_confirmation?(admission, control.confirmation),
+           do: put_admission(state, next),
+           else: state
+         )}
 
       {:error, reason} ->
-        {:error, reason, clear_native_compaction_admission(state)}
+        {:error, reason, state}
     end
   end
 
   defp execute_admission_control(state, %{action: :finalization_ack, success?: false}) do
     {:ok, nil, clear_native_compaction_admission(state)}
+  end
+
+  defp execute_admission_control(state, %{
+         action: :clear,
+         capability: %NativeCompactionAdmission.Capability{} = capability
+       }) do
+    case NativeCompactionAdmission.clear_owned(
+           state.native_compaction_admission || %NativeCompactionAdmission{phase: :cleared},
+           capability
+         ) do
+      {:ok, _cleared} ->
+        {:ok, nil, clear_native_compaction_admission(state)}
+
+      {:error, reason} ->
+        observe_admission(state, state, :reject, :stale_capability)
+        {:error, reason, state}
+    end
   end
 
   defp execute_admission_control(state, %{action: :clear}) do
@@ -687,8 +756,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp stable_downstream(downstream), do: Map.take(downstream, @restore_downstream_keys)
 
-  defp put_admission(state, %NativeCompactionAdmission{} = admission),
-    do: %{state | native_compaction_admission: admission}
+  defp put_admission(state, %NativeCompactionAdmission{} = admission) do
+    next = %{state | native_compaction_admission: admission}
+
+    operation =
+      case admission.phase do
+        phase when phase in [:reserved_compact, :reserved_final] ->
+          :reserve
+
+        phase when phase in [:accounting_started_compact, :accounting_started_final] ->
+          :accounting
+
+        phase when phase in [:consumed_compact, :consumed_final] ->
+          :consume
+
+        :collected_unconfirmed ->
+          :collect
+
+        :pending_final ->
+          :confirm
+
+        :cleared ->
+          :clear
+
+        _ ->
+          :ordinary_success
+      end
+
+    observation = observe_admission(state, next, operation, :success)
+
+    if admission.phase == :cleared,
+      do: remember_last_clear(next, observation),
+      else: next
+  end
 
   defp emit_reservation_observations(%NativeCompactionAdmission.Capability{} = capability) do
     # One successful owner reserve operation proves both issuance and the
@@ -713,13 +813,60 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp emit_final_completed(_state), do: :ok
 
-  defp clear_native_compaction_admission(state) do
-    %{
+  defp clear_rejected_capability(state, capability, reason) do
+    if NativeCompactionAdmission.owns_capability?(state.native_compaction_admission, capability),
+      do: clear_native_compaction_admission(state, reason),
+      else: state
+  end
+
+  defp owns_confirmation?(%{capability: %{control_ref: ref}}, %{source_control_ref: ref}),
+    do: true
+
+  defp owns_confirmation?(%{first_compact_collection: %{control_ref: ref}}, %{
+         source_control_ref: ref
+       }),
+       do: true
+
+  defp owns_confirmation?(_admission, _confirmation), do: false
+
+  defp clear_native_compaction_admission(state, reason \\ :request_rejected) do
+    next = %{
       state
       | native_compaction_admission: nil,
+        first_compact_result: nil,
+        ordinary_success_result: nil,
         native_compaction_admission_downstream: nil,
         forwarded_send_witness: nil
     }
+
+    observation = observe_admission(state, next, :clear, reason)
+    remember_last_clear(next, observation)
+  end
+
+  defp remember_last_clear(state, observation) do
+    Process.put({__MODULE__, :native_compaction_last_clear}, observation)
+    state
+  end
+
+  defp observe_admission(before_state, after_state, operation, reason) do
+    observation =
+      NativeCompactionLifecycleObservation.observe(
+        before_state.native_compaction_admission,
+        after_state.native_compaction_admission,
+        operation,
+        reason,
+        :forwarded
+      )
+
+    Elixir.Logger.debug(fn -> "native compaction lifecycle " <> inspect(observation) end)
+
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :native_compaction, :lifecycle],
+      %{count: 1},
+      observation
+    )
+
+    observation
   end
 
   defp issue_forwarded_send_witness_now(
@@ -753,7 +900,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            }
        }}
     else
-      {:error, reason} -> {:error, reason, clear_native_compaction_admission(state)}
+      {:error, reason} -> {:error, reason, clear_native_compaction_admission(state, reason)}
     end
   end
 
@@ -1023,10 +1170,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call(:drain, _from, state) do
+    state = %{
+      state
+      | termination_cleanup_witness: OwnerCleanup.from_owner_state(state)
+    }
+
     state = state |> clear_native_compaction_admission() |> fail_pending_handoff(:owner_drained)
 
     state =
       if DownstreamState.active_turn?(state) do
+        terminate_predecessor_task(state.active_turn)
+        reply_active_turn(state, {:error, :owner_drained})
         finish_active_turn(state, {:error, :owner_drained})
       else
         _result = send_owner_error(state, state.downstream, :owner_drained)
@@ -1378,6 +1532,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {descriptor, state} =
         take_next_turn_descriptor(state, active_turn_downstream, upstream_payload)
 
+      cleanup_witness =
+        OwnerCleanup.capture(
+          state,
+          if(is_struct(upstream_payload), do: Map.from_struct(upstream_payload), else: %{}),
+          active_turn_downstream,
+          cleanup_replay_generation(upstream_payload, descriptor)
+        )
+
+      if cleanup_witness do
+        send(active_turn_downstream.pid, {
+          :websocket_owner_cleanup_witness,
+          active_turn_downstream.correlation_id,
+          active_turn_downstream.epoch,
+          Map.get(active_turn_downstream, :owner_turn_id),
+          cleanup_witness
+        })
+      end
+
       active_turn = %{
         ref: ref,
         task_pid: task.pid,
@@ -1393,15 +1565,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         collect?: collect_request?(upstream_payload),
         submission_observed?: submission_notification?,
         descriptor: descriptor,
+        cleanup_witness: cleanup_witness,
         visible_output?: false,
         upstream_pid: state.upstream_pid,
         admission_phase: admission_phase,
+        first_compact_request_identity:
+          NativeCompactionAdmission.FirstCompactResult.request_identity(upstream_payload),
+        ordinary_request_identity: ordinary_request_identity(upstream_payload),
         task_settled?: false,
         submitter_exited?: false,
         reply_sent?: false
       }
 
-      {:noreply, %{state | active_turn: active_turn}}
+      {:noreply,
+       %{
+         state
+         | active_turn: active_turn,
+           first_compact_result: nil,
+           ordinary_success_result: nil
+       }}
     else
       {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -1725,6 +1907,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_info({ref, result}, %{active_turn: %{task_ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
     state = put_in(state.active_turn.task_ref, nil)
+    {result, state} = retain_first_compact_result(result, state)
+    {result, state} = retain_ordinary_success_result(result, state)
     state = settle_owner_admission_transport(state, result)
 
     if Process.alive?(state.upstream_pid) do
@@ -2045,12 +2229,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     owner_exit_cause = owner_exit_cause(reason, state)
     Logger.owner_terminated(reason, owner_exit_reason, owner_exit_cause, state)
 
-    case Persistence.interrupt_codex_session(state, owner_exit_reason) do
-      :ok -> Persistence.release_owner_lease(state, owner_exit_reason, owner_exit_cause)
-      {:error, _reason} -> :ok
+    try do
+      state = OwnerCleanup.resolve_owner_state(state)
+
+      case Persistence.interrupt_codex_session(state, owner_exit_reason) do
+        :ok -> Persistence.release_owner_lease(state, owner_exit_reason, owner_exit_cause)
+        {:error, _reason} -> :ok
+      end
+    after
+      close_upstream(state.callbacks.upstream_closer, state.upstream_pid)
     end
 
-    close_upstream(state.callbacks.upstream_closer, state.upstream_pid)
     :ok
   end
 
@@ -2447,6 +2636,93 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp settle_owner_admission_transport(state, _result), do: state
 
+  defp retain_first_compact_result(
+         {:ok,
+          %{first_compact_result: %NativeCompactionAdmission.FirstCompactResult{} = receipt} =
+            result},
+         %{active_turn: active_turn} = state
+       ) do
+    receipt_module = NativeCompactionAdmission.FirstCompactResult
+
+    if receipt.owner == state.upstream_pid and
+         not is_nil(active_turn.first_compact_request_identity) and
+         receipt_module.identity(receipt) == active_turn.first_compact_request_identity do
+      topology =
+        WebsocketOwnerAdmissionControlV1.forwarded_topology(
+          state.owner_instance_id,
+          state.owner_lease_token,
+          active_turn.downstream.epoch
+        )
+
+      receipt = %{
+        receipt
+        | owner: self(),
+          result_ref: make_ref(),
+          binding: %{receipt.binding | topology: topology}
+      }
+
+      {{:ok, Map.put(result, :first_compact_result, receipt)},
+       %{state | first_compact_result: receipt}}
+    else
+      {{:ok, Map.delete(result, :first_compact_result)}, state}
+    end
+  end
+
+  defp retain_first_compact_result(result, state), do: {result, state}
+
+  defp retain_ordinary_success_result(
+         {:ok, %{ordinary_success_result: %OrdinarySuccessResult{} = receipt} = result},
+         %{active_turn: active} = state
+       ) do
+    if receipt.owner == state.upstream_pid and
+         {receipt.request_id, receipt.attempt_id} == active.ordinary_request_identity do
+      topology =
+        WebsocketOwnerAdmissionControlV1.forwarded_topology(
+          state.owner_instance_id,
+          state.owner_lease_token,
+          active.downstream.epoch
+        )
+
+      receipt = %{receipt | owner: self(), result_ref: make_ref(), topology: topology}
+
+      {{:ok, Map.put(result, :ordinary_success_result, receipt)},
+       %{state | ordinary_success_result: receipt}}
+    else
+      {{:ok, Map.delete(result, :ordinary_success_result)}, state}
+    end
+  end
+
+  defp retain_ordinary_success_result(result, state), do: {result, state}
+
+  defp ordinary_request_identity(%{request_id: request_id, attempt_id: attempt_id}),
+    do: {request_id, attempt_id}
+
+  defp ordinary_request_identity(_payload), do: nil
+
+  defp cleanup_replay_generation(
+         %{native_replay_binding: %NativeReplayAdmission.Binding{replay_generation: generation}},
+         _descriptor
+       ),
+       do: generation
+
+  defp cleanup_replay_generation(_request, %{replay_generation: generation}), do: generation
+  defp cleanup_replay_generation(_request, _descriptor), do: 0
+
+  defp emit_compact_acknowledged(%NativeCompactionAdmission.Capability{} = capability) do
+    :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :acknowledged)
+
+    _trace =
+      NativeCompactionTrace.emit_capability(:capability_acknowledged, capability, %{
+        pid_role: :owner_session,
+        owner_pid: self()
+      })
+
+    :ok
+  end
+
+  defp emit_compact_acknowledged(nil),
+    do: NativeCompactionAuthorizationObservation.emit(:compact_acknowledged, :forwarded)
+
   defp successful_upstream_result?(:ok), do: true
   defp successful_upstream_result?({:ok, _result}), do: true
   defp successful_upstream_result?(_result), do: false
@@ -2537,7 +2813,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp reply_or_retire(state, reply), do: {:reply, reply, state}
 
   defp retire_current_upstream(state, reason) do
-    state = %{state | draining?: true, retire_after_active_turn?: true}
+    state = %{
+      state
+      | draining?: true,
+        retire_after_active_turn?: true,
+        termination_cleanup_witness: OwnerCleanup.from_owner_state(state)
+    }
 
     case state.active_turn do
       %{output_commit_probe: probe} when is_map(probe) ->
@@ -3089,6 +3370,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
           suspended =
             suspended
+            |> Map.put(:cleanup_downstream_epoch, suspended.downstream.epoch)
             |> Map.put(:provisional_status, :consume_reserved)
             |> Map.put(:consume_binding, token_reference(suspended))
             |> Map.put(:reserve_timeout_ms, reserve_timeout_ms)
@@ -3550,6 +3832,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     state =
       state |> DownstreamState.demonitor_downstream() |> DownstreamState.cancel_idle_shutdown()
 
+    state = put_in(state.suspended_replay[:cleanup_downstream_epoch], downstream.epoch)
+
     monitor = Process.monitor(downstream.pid)
     downstream = Map.put(downstream, :active_turn_reconnect?, true)
 
@@ -3638,6 +3922,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         clear_active_turn_resources(suspending.active_turn)
 
         suspended = %{
+          cleanup_witness: OwnerCleanup.from_owner_state(suspending),
           semantic_turn_digest: descriptor.semantic_turn_digest,
           replay_claim_digest: descriptor.replay_claim_digest,
           authorization_snapshot: descriptor.authorization_snapshot,
@@ -3782,9 +4067,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp output_commit_probe_required?(_state, _result), do: false
 
   defp collect_request?(%UpstreamWebsocketSession.Request{
-         websocket_delivery_mode: :collect_compaction,
+         websocket_delivery_mode: mode,
          writer: nil
-       }),
+       })
+       when mode in [:collect_compaction, :collect_full_history],
        do: true
 
   defp collect_request?(_request), do: false

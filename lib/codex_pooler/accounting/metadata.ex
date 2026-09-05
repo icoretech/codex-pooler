@@ -330,6 +330,11 @@ defmodule CodexPooler.Accounting.Metadata do
        when key in [:native_replay_preparation, "native_replay_preparation"],
        do: ReplayPreparation.sanitize(value)
 
+  defp sanitize_value(value, key) when key in [:usage_observation, "usage_observation"],
+    do: sanitize_usage_observation(value)
+
+  # Reason: metadata dispatch deliberately preserves separate safe projections.
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp sanitize_value(value, key) when is_map(value) do
     normalized = normalize_key(key)
 
@@ -339,6 +344,9 @@ defmodule CodexPooler.Accounting.Metadata do
 
       normalized == "public_openai_responses_stream" ->
         sanitize_public_openai_responses_stream_map(value)
+
+      normalized == "native_client_retry_observation" ->
+        sanitize_native_client_retry_observation(value)
 
       normalized == "transport_failure" ->
         sanitize_transport_failure_map(value)
@@ -397,6 +405,23 @@ defmodule CodexPooler.Accounting.Metadata do
     end)
   end
 
+  defp sanitize_usage_observation(
+         %{
+           "version" => 1,
+           "classification" => classification,
+           "marker_seen" => marker_seen,
+           "valid_object_seen" => valid_object_seen,
+           "candidate_count" => candidate_count
+         } = value
+       )
+       when map_size(value) == 5 and
+              classification in ~w(known missing null malformed candidate_limit parser_discontinuity) and
+              is_boolean(marker_seen) and is_boolean(valid_object_seen) and
+              is_integer(candidate_count) and candidate_count in 0..255,
+       do: value
+
+  defp sanitize_usage_observation(_value), do: %{}
+
   defp sanitize_payload_compression_map(value) when is_map(value),
     do: RequestCompressionMetadata.sanitize_map(value)
 
@@ -426,6 +451,35 @@ defmodule CodexPooler.Accounting.Metadata do
 
       {child_key, child_value}, sanitized ->
         Map.put(sanitized, child_key, sanitize_value(child_value, child_key))
+    end)
+  end
+
+  defp sanitize_native_client_retry_observation(value) do
+    value
+    |> Map.take(
+      ~w(version authority_complete output_item_done_count output_item_done_count_saturated partial_reasoning_seen first_visible_at terminal_seen terminal_candidate_seen)
+    )
+    |> Enum.reduce(%{}, fn
+      {"version", 1}, sanitized ->
+        Map.put(sanitized, "version", 1)
+
+      {"output_item_done_count", count}, sanitized
+      when is_integer(count) and count in 0..65_535 ->
+        Map.put(sanitized, "output_item_done_count", count)
+
+      {key, value}, sanitized
+      when key in ~w(authority_complete output_item_done_count_saturated partial_reasoning_seen terminal_seen terminal_candidate_seen) and
+             is_boolean(value) ->
+        Map.put(sanitized, key, value)
+
+      {"first_visible_at", value}, sanitized when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, _timestamp, 0} -> Map.put(sanitized, "first_visible_at", value)
+          _invalid -> sanitized
+        end
+
+      {_key, _value}, sanitized ->
+        sanitized
     end)
   end
 

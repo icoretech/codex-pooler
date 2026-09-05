@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   }
 
   alias CodexPooler.Gateway.Websocket
+  alias CodexPooler.Gateway.Websocket.OwnerCleanup
 
   @type socket_state :: map()
   @type monitor_result ::
@@ -38,6 +39,8 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
         } = runtime
       ) do
     state
+    |> Map.delete(:websocket_owner_cleanup_witness)
+    |> Map.delete(:websocket_owner_cleanup_task)
     |> Map.put(:codex_session, session)
     |> Map.put(:websocket_owner_lease_token, owner_lease_token)
     |> Map.put(:websocket_owner_downstream, downstream)
@@ -47,6 +50,38 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     )
     |> put_monitor(session)
   end
+
+  @spec accept_cleanup_witness(term(), socket_state()) :: socket_state()
+  def accept_cleanup_witness(
+        {:websocket_owner_cleanup_witness, correlation, epoch, task, %OwnerCleanup{} = witness},
+        %{
+          codex_session: %{id: session_id, owner_instance_id: owner},
+          websocket_owner_lease_token: lease,
+          websocket_owner_downstream: %{correlation_id: correlation, epoch: epoch},
+          tasks: tasks
+        } = state
+      ) do
+    if MapSet.member?(tasks, task) and witness.session_id == session_id and
+         witness.owner_instance_id == owner and witness.owner_lease_token == lease and
+         witness.downstream_epoch == epoch do
+      state
+      |> Map.put(:websocket_owner_cleanup_witness, witness)
+      |> Map.put(:websocket_owner_cleanup_task, task)
+    else
+      state
+    end
+  end
+
+  def accept_cleanup_witness(_message, state), do: state
+
+  @spec clear_cleanup_witness(socket_state(), pid()) :: socket_state()
+  def clear_cleanup_witness(%{websocket_owner_cleanup_task: task} = state, task) do
+    state
+    |> Map.delete(:websocket_owner_cleanup_witness)
+    |> Map.delete(:websocket_owner_cleanup_task)
+  end
+
+  def clear_cleanup_witness(state, _task), do: state
 
   @spec handle_monitor_down(socket_state(), pid(), term()) :: monitor_result()
   def handle_monitor_down(state, owner_pid, reason) when is_pid(owner_pid) do
@@ -559,15 +594,6 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     put_lifecycle_recovery_opts(state, interrupt_reason)
   end
 
-  defp put_lifecycle_recovery_opts(%{opts: %RequestOptions{} = opts}, interrupt_reason) do
-    opts
-    |> RequestOptions.put_runtime_context(interrupt_reason: interrupt_reason)
-    |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
-    |> RequestOptions.put_transport(
-      websocket_owner_lease_token: opts.transport.websocket_owner.lease_token
-    )
-  end
-
   defp put_lifecycle_recovery_opts(state, interrupt_reason) do
     state
     |> Map.get(:opts, %{})
@@ -577,6 +603,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     |> RequestOptions.put_transport(
       websocket_owner_lease_token: Map.get(state, :websocket_owner_lease_token)
     )
+    |> OwnerCleanup.put_options(Map.get(state, :websocket_owner_cleanup_witness))
   end
 
   defp lifecycle_interrupt_reason(reason)
@@ -590,18 +617,8 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   defp lifecycle_interrupt_reason(_reason), do: "owner_unavailable"
 
-  defp downstream_interrupt_opts(%{opts: %RequestOptions{} = opts}) do
-    opts
-    |> RequestOptions.put_runtime_context(interrupt_reason: "client_disconnected")
-    |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
-  end
-
   defp downstream_interrupt_opts(state) do
-    state
-    |> Map.get(:opts, %{})
-    |> RequestOptions.for_websocket()
-    |> RequestOptions.put_runtime_context(interrupt_reason: "client_disconnected")
-    |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
+    put_lifecycle_recovery_opts(state, "client_disconnected")
   end
 
   defp release_lease(reason, state) do

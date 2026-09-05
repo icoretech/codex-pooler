@@ -117,7 +117,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       assignment_advertised?:
         ModelMetadata.assignment_source?(context.model, context.assignment.id),
       native_codex_response_control: native_codex_response_control(context),
-      request_options: context.request_options
+      request_options: context.request_options,
+      client_retry_dispatch_authority: context.client_retry_dispatch_authority
     }
   end
 

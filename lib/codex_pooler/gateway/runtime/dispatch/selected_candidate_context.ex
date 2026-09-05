@@ -33,7 +33,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
     :routing_circuit_admission,
     :attempt,
     :started,
-    :auth_refresh_retry_attempted?
+    :auth_refresh_retry_attempted?,
+    :client_retry_dispatch_authority
   ]
 
   @type t :: %__MODULE__{
@@ -56,7 +57,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
           routing_circuit_admission: CircuitState.admission() | nil,
           attempt: Attempt.t() | nil,
           started: integer() | nil,
-          auth_refresh_retry_attempted?: boolean() | nil
+          auth_refresh_retry_attempted?: boolean() | nil,
+          client_retry_dispatch_authority:
+            CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil
         }
 
   @spec from_dispatch_context(Context.t() | t(), RoutingSelection.t(), boolean()) :: t()
@@ -77,7 +80,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
       allow_retry?: allow_retry?,
       routing_attempt_metadata: selection.attempt_metadata,
       route_class: selection.route_class,
-      routing_circuit_admission: selection.circuit_admission
+      routing_circuit_admission: selection.circuit_admission,
+      client_retry_dispatch_authority: context.client_retry_dispatch_authority
     }
   end
 end

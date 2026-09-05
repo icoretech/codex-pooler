@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   Conversion helpers for Codex public websocket frames and upstream stream data.
   """
 
+  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
@@ -447,7 +448,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       })
       when is_binary(semantic) and byte_size(semantic) == 32 and
              is_binary(replay) and byte_size(replay) == 32 do
-    ordinary_native_tool_continuation?(payload, options) or replay_request_kind?(payload)
+    ordinary_native_tool_continuation?(payload, options) or replay_request_kind?(payload, options)
   end
 
   def replay_eligible?(%PreparedWebsocketFrame{}), do: false
@@ -530,15 +531,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       prepared.turn_claim_key,
       prepared.replay_claim_digest,
       prepared.native_replay_binding,
+      prepared.native_client_retry_witness,
       prepared.request_options.continuity.request_claim_key,
       prepared.request_options.continuity.replay_claim_digest,
       prepared_session_authorization(prepared.request_options),
       prepared.request_options.runtime.api_key_runtime_epoch,
+      prepared.request_options.native_client_retry_witness,
       prepared.request_options.runtime.replay_authorization_binding,
       prepared.request_options.runtime.replay_lifecycle_binding,
       prepared.request_options.runtime.replay_generation,
       prepared.request_options.native_compaction_admission,
       prepared.request_options.native_compaction_reservation,
+      prepared.request_options.transport.websocket_delivery_mode,
       validation_claim,
       capability_server,
       capability_reference,
@@ -572,6 +576,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       payload,
       request_options.transport.transport,
       request_options.transport.upstream_endpoint,
+      request_options.transport.websocket_delivery_mode,
       request_options.payload_context,
       request_options.native_compaction_admission,
       request_options.native_compaction_reservation,
@@ -882,11 +887,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
             replay_claim_digest: replay_claim_digest
           )
 
+        {request_options, witness} =
+          case ClientRetry.original_witness(
+                 replay_claim_digest,
+                 request_options.runtime.api_key_runtime_epoch
+               ) do
+            {:ok, witness} ->
+              {RequestOptions.put_native_client_retry_witness(request_options, witness), witness}
+
+            {:error, :invalid_witness} ->
+              {request_options, nil}
+          end
+
         {:ok,
          %{
            prepared
            | request_options: request_options,
-             replay_claim_digest: replay_claim_digest
+             replay_claim_digest: replay_claim_digest,
+             native_client_retry_witness: witness
          }}
 
       {:error, _reason} = error ->
@@ -945,14 +963,28 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp canonical_metadata_map(_metadata), do: %{}
 
-  defp replay_request_kind?(%{"client_metadata" => %{@canonical_metadata_key => metadata}}) do
+  defp replay_request_kind?(
+         %{"client_metadata" => %{@canonical_metadata_key => metadata}},
+         %RequestOptions{} = options
+       ) do
     case canonical_metadata_map(metadata) do
-      %{"request_kind" => kind} when kind in ["turn", "compaction"] -> true
-      _other -> false
+      %{"request_kind" => kind} when kind in ["turn", "compaction"] ->
+        not valid_final_compaction_admission?(options)
+
+      _other ->
+        false
     end
   end
 
-  defp replay_request_kind?(_payload), do: false
+  defp replay_request_kind?(_payload, %RequestOptions{}), do: false
+
+  defp valid_final_compaction_admission?(%RequestOptions{
+         native_compaction_admission:
+           %RequestOptions.NativeCompactionAdmission{capability: %{phase: :final}} = admission
+       }),
+       do: RequestOptions.NativeCompactionAdmission.valid?(admission)
+
+  defp valid_final_compaction_admission?(%RequestOptions{}), do: false
 
   defp namespace_restoring_writer(
          push_frame,
@@ -1178,7 +1210,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         request_options =
           coerced.request_options
           |> RequestOptions.retarget("/backend-api/codex/responses/compact", compact_payload)
-          |> put_native_compaction_transport()
+          |> put_native_compaction_transport(result_transport)
           |> RequestOptions.put_payload_context(
             compaction_trigger_bridge?: true,
             compaction_result_transport: result_transport,
@@ -1208,7 +1240,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   defp put_native_compaction_transport(
          %RequestOptions{
            payload_context: %{compaction_input_mode: :incremental}
-         } = request_options
+         } = request_options,
+         _result_transport
        ) do
     RequestOptions.put_transport(request_options,
       transport: "websocket",
@@ -1219,13 +1252,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     )
   end
 
-  defp put_native_compaction_transport(%RequestOptions{} = request_options) do
-    RequestOptions.put_transport(request_options,
-      transport: "http_compact_json",
-      upstream_endpoint: "/backend-api/codex/responses",
-      route_class: RouteClass.proxy_compact(),
-      websocket_writer: nil
-    )
+  defp put_native_compaction_transport(%RequestOptions{} = request_options, result_transport) do
+    if result_transport == :sse do
+      RequestOptions.put_transport(request_options,
+        transport: "websocket",
+        upstream_endpoint: "/backend-api/codex/responses",
+        route_class: RouteClass.proxy_compact(),
+        websocket_writer: nil,
+        websocket_delivery_mode: :collect_full_history
+      )
+    else
+      RequestOptions.put_transport(request_options,
+        transport: "http_compact_json",
+        upstream_endpoint: "/backend-api/codex/responses",
+        route_class: RouteClass.proxy_compact(),
+        websocket_writer: nil
+      )
+    end
   end
 
   defp validated_native_compaction_turn_state(payload) do

@@ -61,6 +61,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     end
   end
 
+  @spec previous_response_session_id(auth(), String.t(), DateTime.t()) :: Ecto.UUID.t() | nil
+  defdelegate previous_response_session_id(auth, previous_response_id, now), to: Aliases
+
   @spec previous_response_assignment_id(auth(), String.t(), DateTime.t()) ::
           Ecto.UUID.t() | nil
   defdelegate previous_response_assignment_id(auth, previous_response_id, now), to: Aliases

@@ -18,6 +18,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
 
+  # The receive state mirrors the finite websocket protocol phases; adding the
+  # client-retry observation keeps one request-local accumulator and avoids SQL.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :writer,
     :timeouts,
@@ -35,6 +38,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     :connection_idle_bucket,
     :request_caller_pid,
     :request_caller_monitor,
+    :native_client_retry_observation,
     delivery: %Delivery{},
     assignment_advertised?: false,
     native_metadata_emitted?: false,
@@ -73,6 +77,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           connection_idle_bucket: atom() | nil,
           request_caller_pid: pid() | nil,
           request_caller_monitor: reference() | nil,
+          native_client_retry_observation:
+            CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
           assignment_advertised?: boolean(),
           native_metadata_emitted?: boolean(),
           downstream_output_started?: boolean(),

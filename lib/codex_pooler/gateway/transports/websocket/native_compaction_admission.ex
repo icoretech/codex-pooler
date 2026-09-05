@@ -43,7 +43,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       :serving_mode,
       :topology,
       :lifecycle_id,
-      :generation
+      :generation,
+      standalone_resolved_anchor?: false
     ]
 
     @type t :: %__MODULE__{
@@ -56,7 +57,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
             serving_mode: atom(),
             topology: Topology.Direct.t() | Topology.Forwarded.t(),
             lifecycle_id: Ecto.UUID.t(),
-            generation: pos_integer()
+            generation: pos_integer(),
+            standalone_resolved_anchor?: boolean()
           }
   end
 
@@ -188,6 +190,109 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
     end
   end
 
+  defmodule FirstCompactResult do
+    @moduledoc false
+
+    alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
+    alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
+    alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
+
+    @enforce_keys [
+      :owner,
+      :result_ref,
+      :request_id,
+      :attempt_id,
+      :binding,
+      :model_digest,
+      :item_digest
+    ]
+    defstruct @enforce_keys
+
+    @type t :: %__MODULE__{
+            owner: pid(),
+            result_ref: reference(),
+            request_id: Ecto.UUID.t(),
+            attempt_id: Ecto.UUID.t(),
+            binding: Binding.t(),
+            model_digest: <<_::256>>,
+            item_digest: <<_::256>>
+          }
+
+    @spec from_collection(map(), map(), map()) :: {:ok, t()} | :error
+    def from_collection(request, result, lifecycle) do
+      with %{
+             websocket_delivery_mode: :collect_full_history,
+             native_compaction_metadata:
+               %NativeCodexTurnMetadata{request_kind: :compaction} = metadata
+           } <- request,
+           {:ok, request_id} <- Ecto.UUID.cast(request.request_id),
+           {:ok, attempt_id} <- Ecto.UUID.cast(request.attempt_id),
+           {:ok, %{"model" => model}} when is_binary(model) <- Jason.decode(request.payload),
+           {:ok, %{compaction_item: item}} <-
+             CompactionResultCollector.collect_websocket_body(result.body),
+           {:ok, serving_mode} <- mode(request.effective_serving_mode),
+           binding = %Binding{
+             semantic_turn_key: metadata.semantic_turn_key,
+             window_digest: metadata.window_id_digest,
+             context_digest: metadata.context_window_id_digest,
+             window_number: metadata.window_number,
+             serving_mode: serving_mode,
+             topology: %Topology.Direct{},
+             lifecycle_id: lifecycle.lifecycle_id,
+             generation: lifecycle.generation
+           },
+           {:ok, _} <- NativeCompactionAdmission.ordinary_success(binding) do
+        {:ok,
+         %__MODULE__{
+           owner: self(),
+           result_ref: make_ref(),
+           request_id: request_id,
+           attempt_id: attempt_id,
+           binding: binding,
+           model_digest: model_digest(model),
+           item_digest: NativeCodexTurnMetadata.compaction_item_digest(item)
+         }}
+      else
+        _invalid -> :error
+      end
+    end
+
+    @spec model_digest(binary()) :: <<_::256>>
+    def model_digest(model), do: :crypto.hash(:sha256, ["native_compact_model:v1", 0, model])
+
+    @spec binding_matches?(t(), Binding.t()) :: boolean()
+    def binding_matches?(%__MODULE__{binding: expected}, %Binding{} = presented),
+      do: expected == presented
+
+    @spec request_identity(map()) :: tuple() | nil
+    def request_identity(
+          %{native_compaction_metadata: %NativeCodexTurnMetadata{} = metadata} = request
+        ) do
+      with {:ok, %{"model" => model}} when is_binary(model) <- Jason.decode(request.payload),
+           {:ok, mode} <- mode(request.effective_serving_mode) do
+        {request.request_id, request.attempt_id, metadata.semantic_turn_key,
+         metadata.window_id_digest, metadata.context_window_id_digest, metadata.window_number,
+         mode, model_digest(model)}
+      else
+        _invalid -> nil
+      end
+    end
+
+    def request_identity(_request), do: nil
+
+    @spec identity(t()) :: tuple()
+    def identity(%__MODULE__{} = receipt) do
+      binding = receipt.binding
+
+      {receipt.request_id, receipt.attempt_id, binding.semantic_turn_key, binding.window_digest,
+       binding.context_digest, binding.window_number, binding.serving_mode, receipt.model_digest}
+    end
+
+    defp mode("full"), do: {:ok, :full}
+    defp mode("lite"), do: {:ok, :lite}
+    defp mode(_mode), do: :error
+  end
+
   @enforce_keys [:phase]
   defstruct [
     :phase,
@@ -311,10 +416,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
         end
 
       {:error, :invalid_transition} ->
-        if state.phase in [:accounting_started_compact, :accounting_started_final] do
-          {:error, :committed, cleared()}
-        else
-          {:error, :invalid_transition}
+        cond do
+          state.phase not in [:accounting_started_compact, :accounting_started_final] ->
+            {:error, :invalid_transition}
+
+          owns_capability?(state, capability) ->
+            {:error, :committed, cleared()}
+
+          true ->
+            {:error, :capability_mismatch}
         end
     end
   end
@@ -409,20 +519,45 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
         {:error, :binding_mismatch, cleared()}
 
       true ->
-        {:ok,
-         %{
-           state
-           | phase: :pending_final,
-             binding: binding,
-             capability: nil,
-             expires_at_ms: expires_at_ms,
-             compaction_item_digest: compaction_item_digest
-         }}
+        complete_compact_confirmation(
+          state,
+          original_binding,
+          binding,
+          compaction_item_digest,
+          expires_at_ms
+        )
     end
   end
 
   def confirm_compact(%__MODULE__{}, _digest, _binding, _expires_at_ms),
     do: {:error, :invalid_transition}
+
+  defp complete_compact_confirmation(
+         _state,
+         %Binding{standalone_resolved_anchor?: true},
+         _binding,
+         _digest,
+         _expires
+       ),
+       do: {:ok, cleared()}
+
+  defp complete_compact_confirmation(
+         state,
+         _original,
+         binding,
+         compaction_item_digest,
+         expires_at_ms
+       ) do
+    {:ok,
+     %{
+       state
+       | phase: :pending_final,
+         binding: binding,
+         capability: nil,
+         expires_at_ms: expires_at_ms,
+         compaction_item_digest: compaction_item_digest
+     }}
+  end
 
   defp confirm_first_compact(
          %__MODULE__{
@@ -436,6 +571,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
          compaction_item_digest
        ) do
     if provenance.binding == original_binding and
+         (is_nil(state.compaction_item_digest) or
+            state.compaction_item_digest == compaction_item_digest) and
          compact_confirmation_binding_match?(
            original_binding,
            binding,
@@ -474,6 +611,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
   @spec clear(t()) :: t()
   def clear(%__MODULE__{}), do: cleared()
 
+  @spec clear_owned(t(), Capability.t()) :: {:ok, t()} | {:error, :capability_mismatch}
+  def clear_owned(
+        %__MODULE__{capability: %Capability{} = expected, binding: binding},
+        %Capability{} = capability
+      ) do
+    if Map.delete(expected, :token) == Map.delete(capability, :token) and
+         CapabilityToken.match?(expected.token, capability.token) and
+         binding == capability.binding do
+      {:ok, cleared()}
+    else
+      {:error, :capability_mismatch}
+    end
+  end
+
+  def clear_owned(%__MODULE__{}, %Capability{}), do: {:error, :capability_mismatch}
+
+  @spec owns_capability?(t(), Capability.t()) :: boolean()
+  def owns_capability?(
+        %__MODULE__{capability: %Capability{} = expected, binding: binding},
+        %Capability{} = capability
+      ) do
+    Map.delete(expected, :token) == Map.delete(capability, :token) and
+      CapabilityToken.match?(expected.token, capability.token) and binding == capability.binding
+  end
+
+  def owns_capability?(_state, _capability), do: false
+
   @spec expire(t(), non_neg_integer()) :: {:active, t()} | {:expired, t()}
   def expire(%__MODULE__{expires_at_ms: expires_at_ms}, now_ms)
       when is_integer(expires_at_ms) and is_integer(now_ms) and now_ms > expires_at_ms do
@@ -500,6 +664,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
 
   defp valid_binding_identity?(binding) do
     valid_window_number?(binding.window_number) and is_atom(binding.serving_mode) and
+      is_boolean(binding.standalone_resolved_anchor?) and
       valid_topology?(binding.topology) and
       match?({:ok, _uuid}, Ecto.UUID.cast(binding.lifecycle_id)) and
       is_integer(binding.generation) and binding.generation > 0
@@ -528,7 +693,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
   end
 
   defp reservation_binding_match?(:compact, original, candidate) do
-    immutable_binding_match?(original, candidate) and
+    compact_identity_match?(original, candidate) and
       original.window_digest == candidate.window_digest and
       original.context_digest == candidate.context_digest and
       original.window_number == candidate.window_number and
@@ -544,6 +709,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       digest_match?(state_compaction_item_digest(original), candidate.compaction_item_digest) and
       previous_response_compatible?(original, candidate)
   end
+
+  defp compact_identity_match?(original, %Binding{standalone_resolved_anchor?: true} = candidate) do
+    digest_match?(original.previous_response_digest, candidate.previous_response_digest) and
+      immutable_binding_match?(
+        %{original | semantic_turn_key: candidate.semantic_turn_key},
+        candidate
+      )
+  end
+
+  defp compact_identity_match?(original, candidate),
+    do: immutable_binding_match?(original, candidate)
 
   defp compact_confirmation_binding_match?(original, candidate, compaction_item_digest) do
     immutable_binding_match?(original, candidate) and
@@ -616,6 +792,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
   defp consumed_phase(:final), do: :consumed_final
 
   defp cleared, do: %__MODULE__{phase: :cleared}
+end
+
+defimpl Inspect,
+  for: CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.FirstCompactResult do
+  def inspect(_result, _opts), do: "#NativeCompactionAdmission.FirstCompactResult<redacted>"
 end
 
 defimpl Inspect,

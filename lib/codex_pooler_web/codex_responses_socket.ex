@@ -9,12 +9,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata}
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, WebsocketOwnerContract}
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
@@ -23,6 +25,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.Gateway.Websocket.DownstreamSession
   alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Cache, as: InstanceSettingsCache
@@ -181,6 +184,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         state
       ) do
     handle_owner_handoff_message(message, state)
+  end
+
+  def handle_info(
+        {:websocket_owner_cleanup_witness, _correlation, _epoch, _task, _witness} = message,
+        state
+      ) do
+    {:ok, DownstreamSession.accept_cleanup_witness(message, state)}
   end
 
   def handle_info(
@@ -1384,7 +1394,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         reserve_known_native_compaction_phase(prepared, metadata, phase, state)
 
       nil ->
-        authorize_first_full_history_compact(prepared, metadata, state)
+        {:ok, prepared}
     end
   end
 
@@ -1449,97 +1459,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp authorize_first_full_history_compact(
-         %PreparedWebsocketFrame{
-           request_options:
-             %RequestOptions{
-               payload_context: %{
-                 compaction_input_mode: :full_history,
-                 compaction_result_transport: :buffered
-               }
-             } = options
-         } = prepared,
-         %NativeCodexTurnMetadata{request_kind: :compaction} = metadata,
-         state
-       ) do
-    control_ref = make_ref()
-
-    if owner_forwarded_socket?(state) do
-      owner = options.transport.websocket_owner
-      downstream = Map.take(owner.downstream, [:pid, :epoch, :correlation_id])
-
-      with {:ok, snapshot} <- owner_admission_control(:snapshot, downstream),
-           {:ok, %NativeCompactionAdmission{binding: previous_binding}} <-
-             WebsocketOwnerForwarder.admission_control(
-               owner.session,
-               owner.lease_token,
-               snapshot,
-               owner.forwarder_opts
-             ),
-           %NativeCompactionAdmission.Binding{} = previous_binding <- previous_binding,
-           binding =
-             native_compaction_binding(
-               metadata,
-               prepared,
-               :compact,
-               %{
-                 lifecycle_id: previous_binding.lifecycle_id,
-                 generation: previous_binding.generation
-               },
-               previous_binding.topology
-             ),
-           {:ok, control} <-
-             owner_admission_control(:authorize_first_compact_collection, downstream,
-               binding: binding,
-               control_ref: control_ref
-             ),
-           {:ok, %NativeCompactionAdmission.FirstCompactCollection{} = provenance} <-
-             WebsocketOwnerForwarder.admission_control(
-               owner.session,
-               owner.lease_token,
-               control,
-               owner.forwarder_opts
-             ) do
-        {:ok,
-         %{
-           prepared
-           | request_options: RequestOptions.put_first_compact_collection(options, provenance)
-         }}
-      else
-        _failure -> {:error, :owner_unavailable}
-      end
-    else
-      owner = Map.get(state, :upstream_websocket_session)
-
-      with lifecycle when is_map(lifecycle) <-
-             UpstreamWebsocketSession.connection_lifecycle_snapshot(owner),
-           binding =
-             native_compaction_binding(
-               metadata,
-               prepared,
-               :compact,
-               lifecycle,
-               %NativeCompactionAdmission.Topology.Direct{}
-             ),
-           {:ok, provenance} <-
-             UpstreamWebsocketSession.authorize_first_compact_collection(
-               owner,
-               binding,
-               control_ref
-             ) do
-        {:ok,
-         %{
-           prepared
-           | request_options: RequestOptions.put_first_compact_collection(options, provenance)
-         }}
-      else
-        _failure -> {:error, :owner_unavailable}
-      end
-    end
-  end
-
-  defp authorize_first_full_history_compact(prepared, _metadata, _state), do: {:ok, prepared}
-
   defp canonical_native_turn_metadata?(%{
          "client_metadata" => %{"x-codex-turn-metadata" => _metadata}
        }),
@@ -1570,6 +1489,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp native_compaction_phase(%NativeCodexTurnMetadata{}, _payload, %RequestOptions{}), do: nil
 
   defp reserve_owner_capability(prepared, metadata, phase, control_ref, state) do
+    prepared = put_standalone_compact_authority(prepared, metadata, state)
+
     if owner_forwarded_socket?(state) do
       reserve_forwarded_owner_capability(prepared, metadata, phase, control_ref)
     else
@@ -1577,18 +1498,61 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  defp put_standalone_compact_authority(
+         prepared,
+         %NativeCodexTurnMetadata{
+           request_kind: :compaction,
+           compaction: %NativeCodexTurnMetadata.Compaction{
+             trigger: :manual,
+             phase: :standalone_turn,
+             implementation: :responses_compaction_v2
+           }
+         },
+         state
+       ) do
+    options = prepared.request_options
+    anchor = Map.get(prepared.payload, "previous_response_id")
+    session = options.continuity.codex_session
+
+    resolved =
+      if is_binary(anchor),
+        do:
+          SessionContinuity.previous_response_session_id(
+            state.auth,
+            anchor,
+            DateTime.utc_now()
+          )
+
+    valid =
+      not is_nil(resolved) and not is_nil(session) and
+        resolved == session.id
+
+    %{
+      prepared
+      | request_options: %{
+          options
+          | extra: Map.put(options.extra, :standalone_compact_resolved_anchor?, valid)
+        }
+    }
+  end
+
+  defp put_standalone_compact_authority(prepared, _metadata, _state), do: prepared
+
   defp reserve_direct_owner_capability(prepared, metadata, phase, control_ref, state) do
     owner = Map.get(state, :upstream_websocket_session)
 
-    with lifecycle when is_map(lifecycle) <-
-           UpstreamWebsocketSession.connection_lifecycle_snapshot(owner),
+    with {:ok, snapshot} <- UpstreamWebsocketSession.compaction_reservation_snapshot(owner),
+         lifecycle = Map.take(snapshot, [:lifecycle_id, :generation]),
          binding =
            native_compaction_binding(
              metadata,
              prepared,
              phase,
              lifecycle,
-             %NativeCompactionAdmission.Topology.Direct{}
+             %NativeCompactionAdmission.Topology.Direct{},
+             prepared_serving_mode(prepared, snapshot.serving_mode),
+             prepared_anchor_digest(prepared),
+             final_compaction_item_digest(prepared.payload, phase)
            ),
          {:ok, capability} <-
            UpstreamWebsocketSession.reserve_compaction(
@@ -1634,9 +1598,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
              phase,
              lifecycle,
              topology,
-             previous_binding.serving_mode,
-             previous_binding.previous_response_digest,
-             previous_binding.compaction_item_digest
+             prepared_serving_mode(prepared, previous_binding.serving_mode),
+             prepared_anchor_digest(prepared),
+             final_compaction_item_digest(prepared.payload, phase)
            ),
          {:ok, reserve_control} <-
            owner_admission_control(:reserve, downstream,
@@ -1686,39 +1650,35 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp native_compaction_binding(
          metadata,
          prepared,
-         phase,
+         _phase,
          lifecycle,
          topology,
-         serving_mode \\ nil,
-         previous_response_digest \\ :from_prepared,
-         compaction_item_digest \\ :from_prepared
+         serving_mode,
+         previous_response_digest,
+         compaction_item_digest
        ) do
     %NativeCompactionAdmission.Binding{
       semantic_turn_key: metadata.semantic_turn_key,
       window_digest: metadata.window_id_digest,
       context_digest: metadata.context_window_id_digest,
       window_number: metadata.window_number,
-      compaction_item_digest:
-        if(compaction_item_digest == :from_prepared,
-          do: final_compaction_item_digest(prepared.payload, phase),
-          else: compaction_item_digest
-        ),
-      previous_response_digest:
-        if(previous_response_digest == :from_prepared,
-          do: previous_response_digest(prepared.request_options),
-          else: previous_response_digest
-        ),
-      serving_mode: serving_mode || prepared_serving_mode(prepared),
+      compaction_item_digest: compaction_item_digest,
+      previous_response_digest: previous_response_digest,
+      serving_mode: serving_mode,
       topology: topology,
       lifecycle_id: lifecycle.lifecycle_id,
-      generation: lifecycle.generation
+      generation: lifecycle.generation,
+      standalone_resolved_anchor?:
+        Map.get(prepared.request_options.extra, :standalone_compact_resolved_anchor?, false)
     }
   end
 
-  defp prepared_serving_mode(prepared) do
-    prepared.request_options
-    |> RequestOptions.model_serving_mode()
-    |> String.to_existing_atom()
+  defp prepared_serving_mode(prepared, pending_owner_mode) do
+    case prepared.request_options.routing.model_serving_mode do
+      nil -> pending_owner_mode
+      "full" -> :full
+      "lite" -> :lite
+    end
   end
 
   defp final_compaction_item_digest(%{"input" => input}, :final) when is_list(input) do
@@ -1743,11 +1703,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp final_compaction_item_digest(_payload, _phase), do: nil
 
-  defp previous_response_digest(%RequestOptions{continuity: %{previous_response_id: value}})
-       when is_binary(value),
-       do: NativeCodexTurnMetadata.response_id_digest(value)
-
-  defp previous_response_digest(%RequestOptions{}), do: nil
+  defp prepared_anchor_digest(prepared) do
+    case Map.get(prepared.payload, "previous_response_id") do
+      value when is_binary(value) -> NativeCodexTurnMetadata.response_id_digest(value)
+      _ -> nil
+    end
+  end
 
   defp put_owner_capability(prepared, capability, owner, lifecycle) do
     with {:ok, admission} <-
@@ -1873,19 +1834,31 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp active_lifecycle_binding(_intent), do: nil
 
   defp apply_replay_preflight_result(
-         {:ok, :fresh_dispatch, _binding},
+         {:ok, :fresh_dispatch, binding},
          prepared,
          state,
          intent,
          _ref
        ) do
-    case WebsocketCodec.attach_replay_intent(
-           prepared,
-           intent.authorization_binding,
-           intent.lifecycle || %{replay_generation: 0}
-         ) do
-      {:ok, resealed} -> {:ok, start_or_queue_prepared_response(resealed, state)}
-      {:error, _reason} -> reject_owner_preflight(:owner_busy, state)
+    if fresh_owner_binding?(binding, state) do
+      lifecycle =
+        (intent.lifecycle || %{replay_generation: 0})
+        |> Map.merge(%{
+          owner_idle_validated?: true,
+          owner_lease_token: state.websocket_owner_lease_token,
+          owner_instance_id: state.codex_session.owner_instance_id
+        })
+
+      case WebsocketCodec.attach_replay_intent(
+             prepared,
+             intent.authorization_binding,
+             lifecycle
+           ) do
+        {:ok, resealed} -> {:ok, start_or_queue_prepared_response(resealed, state)}
+        {:error, _reason} -> reject_owner_preflight(:owner_busy, state)
+      end
+    else
+      reject_owner_preflight(:owner_busy, state)
     end
   end
 
@@ -1934,6 +1907,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp apply_replay_preflight_result(_result, _prepared, state, _intent, _ref),
     do: reject_prepared_response(public_replay_error(:owner_busy), state)
+
+  defp fresh_owner_binding?(binding, state) when is_map(binding) do
+    binding == Map.take(state.websocket_owner_downstream, [:pid, :epoch, :correlation_id]) and
+      is_binary(state.codex_session.owner_instance_id) and
+      state.codex_session.owner_instance_id != ""
+  end
+
+  defp fresh_owner_binding?(_binding, _state), do: false
 
   defp consume_suspended_replay(
          prepared,
@@ -2117,6 +2098,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp reject_prepared_response(reason, state) do
+    :telemetry.execute([:codex_pooler, :gateway, :native_compaction, :rejection], %{count: 1}, %{
+      reason: DiagnosticTaxonomy.identifier(reason)
+    })
+
     if identity_error?(reason), do: log_reconnect_disposition(state, :identity_rejected)
 
     rejected_state = clear_public_response_context(state)
@@ -3098,6 +3083,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state
     |> Map.update(:tasks, MapSet.new(), &MapSet.delete(&1, pid))
+    |> DownstreamSession.clear_cleanup_witness(pid)
   end
 
   defp remove_tracked_response_task(state, pid, monitor)

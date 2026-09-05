@@ -1,11 +1,15 @@
 defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   @moduledoc false
 
+  # The atomic successor transaction intentionally nests validation and writes.
+  # credo:disable-for-this-file Credo.Check.Refactor.Nesting
+
   import Ecto.Query
 
   alias CodexPooler.Access
 
   alias CodexPooler.Accounting.{
+    ClientRetry,
     Metadata,
     PricingResolution,
     Request,
@@ -15,6 +19,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
   alias CodexPooler.Repo
 
   @usage_pending "usage_pending"
@@ -26,6 +31,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           map()
         ) :: {:ok, map()} | {:error, Metadata.accounting_error()}
   def claim_websocket_turn(%{pool: pool, api_key: api_key}, %Model{} = model, opts) do
+    if ClientRetry.reserved_successor_claim?(attr(opts, :correlation_id)) do
+      {:error, Metadata.accounting_error(:duplicate_request, "request was already recorded")}
+    else
+      do_claim_websocket_turn(pool, api_key, model, opts)
+    end
+  end
+
+  defp do_claim_websocket_turn(pool, api_key, model, opts) do
     timestamp = now(opts)
     captured_epoch = runtime_revocation_epoch(api_key, opts)
     maybe_test_runtime_authorization_barrier(:claim, :before)
@@ -52,6 +65,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           admitted_at: timestamp,
           retry_count: 0
         }
+        |> Ecto.Changeset.change(
+          ClientRetry.request_attrs(attr(opts, :native_client_retry_witness))
+        )
         |> Repo.insert!()
 
       RequestLogFacts.record_request_created!(request)
@@ -67,6 +83,161 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       end
   end
 
+  @spec claim_client_retry_successor(CodexPooler.Access.auth_context(), Model.t(), map(), map()) ::
+          {:ok, ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
+  # One transaction intentionally owns every successor side effect.
+  # credo:disable-for-next-line Credo.Check.Refactor.Nesting
+  def claim_client_retry_successor(
+        %{pool: pool, api_key: api_key} = auth,
+        %Model{} = model,
+        payload,
+        %{codex_session: %CodexSession{} = session} = opts
+      ) do
+    captured_epoch = runtime_revocation_epoch(api_key, opts)
+
+    Repo.transaction(fn ->
+      session = SessionContinuity.lock_codex_session_for_turn(session)
+      api_key = authorize_runtime_turn!(api_key, captured_epoch)
+      authorize_client_retry_model!(api_key, model)
+
+      input = %{
+        endpoint: attr(opts, :endpoint) || "/backend-api/codex/responses",
+        requested_model: attr(opts, :requested_model) || model.exposed_model_id,
+        runtime_revocation_epoch: captured_epoch,
+        semantic_turn_digest: attr(opts, :semantic_turn_digest),
+        replay_claim_digest: attr(opts, :replay_claim_digest),
+        anchor_present?: attr(opts, :anchor_present?) == true,
+        after_locks: attr(opts, :after_locks),
+        owner_idle_validated?: attr(opts, :owner_idle_validated?) == true,
+        owner_lease_token: attr(opts, :owner_lease_token),
+        owner_instance_id: attr(opts, :owner_instance_id)
+      }
+
+      with {:ok, predecessor} <-
+             ClientRetry.lock_eligible_predecessor!(session, api_key, model, input),
+           {:ok, correlation_id} <- ClientRetry.deterministic_successor_claim(predecessor.request) do
+        auth = %{auth | api_key: api_key}
+        timestamp = predecessor.db_now
+        requested_model = input.requested_model
+        pricing = PricingResolution.lookup(model, requested_model, payload, opts, timestamp)
+        effective_model = ReservationPolicy.effective_model(model, requested_model, opts)
+
+        policy =
+          ReservationPolicy.policy_for_update(
+            api_key,
+            effective_model,
+            nil
+          )
+
+        {:ok, estimate} =
+          PricingResolution.reservation_estimate(
+            payload,
+            pricing.snapshot,
+            policy,
+            attr(opts, :reservation_estimate)
+          )
+
+        case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate, timestamp) do
+          :ok -> :ok
+          {:error, _reason} -> Repo.rollback(:authorization_changed)
+        end
+
+        context = %{
+          pool: pool,
+          api_key: api_key,
+          model: model,
+          payload: payload,
+          requested_model: requested_model,
+          endpoint: input.endpoint,
+          transport: "websocket",
+          correlation_id: correlation_id,
+          auth: auth,
+          pricing: pricing,
+          estimate: estimate,
+          opts: Map.put(opts, :turn_claim, nil),
+          timestamp: timestamp
+        }
+
+        request = insert_reserved_request!(context)
+        RequestLogFacts.record_request_created!(request)
+
+        reservation =
+          request
+          |> LedgerEntries.reservation_attrs(auth, api_key, pricing, estimate, timestamp)
+          |> LedgerEntries.create_or_get!()
+
+        turn =
+          ClientRetry.insert_successor_turn!(
+            session,
+            request,
+            input.semantic_turn_digest,
+            timestamp
+          )
+
+        maybe_test_client_retry_storage_failure!(opts)
+        link = ClientRetry.insert_link!(predecessor.request, request, timestamp)
+        dispatch_authority = ClientRetry.dispatch_authority(predecessor.request, request, link)
+
+        %ClientRetry.SuccessorClaim{
+          predecessor_request_id: predecessor.request.id,
+          request: request,
+          codex_turn: turn,
+          reservation: reservation,
+          pricing_snapshot: pricing.snapshot,
+          pricing_status: pricing.status,
+          pricing_service_tier: pricing.service_tier,
+          estimate: estimate,
+          link: link,
+          correlation_id: correlation_id,
+          dispatch_authority: dispatch_authority
+        }
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, claim} -> {:ok, claim}
+      {:error, reason} -> {:error, normalize_retry_claim_error(reason)}
+    end
+  rescue
+    error in Ecto.ConstraintError ->
+      if error.constraint in [
+           "requests_correlation_id_uq",
+           "request_client_retry_links_predecessor_request_id_uq"
+         ],
+         do: {:error, :successor_claimed},
+         else: reraise(error, __STACKTRACE__)
+  end
+
+  def claim_client_retry_successor(_auth, _model, _payload, _opts),
+    do: {:error, :authorization_changed}
+
+  defp normalize_retry_claim_error(%Ecto.Changeset{}), do: :successor_claimed
+  defp normalize_retry_claim_error(reason) when is_map(reason), do: :authorization_changed
+  defp normalize_retry_claim_error(reason), do: reason
+
+  defp authorize_client_retry_model!(api_key, %Model{status: "active"} = model) do
+    with {:ok, policy} <- Access.normalize_api_key_policy(api_key),
+         {:ok, _policy} <-
+           Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
+      :ok
+    else
+      _error -> Repo.rollback(:authorization_changed)
+    end
+  end
+
+  defp authorize_client_retry_model!(_api_key, _model),
+    do: Repo.rollback(:authorization_changed)
+
+  if Mix.env() == :test do
+    defp maybe_test_client_retry_storage_failure!(%{force_client_retry_storage_failure: true}),
+      do: Repo.rollback(:storage_failure)
+
+    defp maybe_test_client_retry_storage_failure!(_opts), do: :ok
+  else
+    defp maybe_test_client_retry_storage_failure!(_opts), do: :ok
+  end
+
   @spec reserve_for_model(CodexPooler.Access.auth_context(), Model.t(), map(), map()) ::
           {:ok, map()} | {:error, Metadata.accounting_error()}
   def reserve_for_model(%{pool: pool, api_key: api_key} = auth, %Model{} = model, payload, opts) do
@@ -79,6 +250,46 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     effective_model = ReservationPolicy.effective_model(model, requested_model, opts)
     captured_epoch = runtime_revocation_epoch(api_key, opts)
 
+    if ClientRetry.reserved_successor_claim?(correlation_id) do
+      {:error, Metadata.accounting_error(:duplicate_request, "request was already recorded")}
+    else
+      do_reserve_for_model(
+        auth,
+        pool,
+        api_key,
+        model,
+        payload,
+        opts,
+        timestamp,
+        requested_model,
+        endpoint,
+        transport,
+        correlation_id,
+        pricing,
+        effective_model,
+        captured_epoch
+      )
+    end
+  end
+
+  # Existing reservation inputs stay explicit at the private handoff.
+  # credo:disable-for-next-line Credo.Check.Refactor.FunctionArity
+  defp do_reserve_for_model(
+         auth,
+         pool,
+         api_key,
+         model,
+         payload,
+         opts,
+         timestamp,
+         requested_model,
+         endpoint,
+         transport,
+         correlation_id,
+         pricing,
+         effective_model,
+         captured_epoch
+       ) do
     Repo.transaction(fn ->
       api_key = authorize_runtime_turn!(api_key, captured_epoch)
       auth = Map.put(auth, :api_key, api_key)

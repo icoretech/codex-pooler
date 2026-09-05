@@ -615,6 +615,55 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmissionTest
     end
   end
 
+  test "standalone compact rebinds only semantic turn with a resolved matching anchor" do
+    for binding <- [direct_binding(), forwarded_binding()] do
+      {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+      {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, @now + 100)
+
+      candidate =
+        Map.put(%{binding | semantic_turn_key: <<99::256>>}, :standalone_resolved_anchor?, true)
+
+      assert {:ok, reserved, _} =
+               NativeCompactionAdmission.reserve(pending, :compact, candidate, make_ref(), @now)
+
+      assert reserved.binding.semantic_turn_key == <<99::256>>
+
+      {:ok, accounting} =
+        NativeCompactionAdmission.mark_accounting_started(reserved, reserved.capability, @now)
+
+      {:ok, consumed} = NativeCompactionAdmission.consume(accounting, reserved.capability, @now)
+      {:ok, collected} = NativeCompactionAdmission.record_compact_collected(consumed)
+      digest = <<96::256>>
+
+      confirmation = %Confirmation{
+        source_phase: :compact,
+        source_control_ref: reserved.capability.control_ref,
+        binding: %{candidate | compaction_item_digest: digest}
+      }
+
+      assert {:ok, finished} =
+               NativeCompactionAdmission.confirm_compact(
+                 collected,
+                 digest,
+                 confirmation,
+                 @now + 100
+               )
+
+      assert finished.phase == :cleared
+
+      for invalid <- [
+            Map.put(candidate, :standalone_resolved_anchor?, false),
+            %{candidate | previous_response_digest: nil},
+            %{candidate | previous_response_digest: <<98::256>>},
+            %{candidate | generation: 2},
+            %{candidate | window_digest: <<97::256>>}
+          ] do
+        assert {:error, :binding_mismatch} =
+                 NativeCompactionAdmission.reserve(pending, :compact, invalid, make_ref(), @now)
+      end
+    end
+  end
+
   defp direct_binding(overrides \\ []) do
     defaults = [
       semantic_turn_key: <<10::256>>,

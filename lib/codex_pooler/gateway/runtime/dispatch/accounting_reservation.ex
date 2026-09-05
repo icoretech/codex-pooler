@@ -136,6 +136,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
       runtime_revocation_epoch: request_options.runtime.api_key_runtime_epoch,
+      native_client_retry_witness: request_options.native_client_retry_witness,
       api_key_policy: request_options.routing.api_key_policy,
       request_metadata:
         request_metadata_attrs(auth, payload, accounting_endpoint, request_options, route_state)

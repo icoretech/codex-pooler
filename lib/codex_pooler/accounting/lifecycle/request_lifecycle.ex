@@ -10,6 +10,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   alias CodexPooler.Accounting.{
     Attempt,
+    ClientRetry,
     LedgerEntry,
     Metadata,
     PricingResolution,
@@ -94,6 +95,25 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       {:error,
        Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
+  @spec claim_client_retry_successor(auth(), model_ref(), map(), map()) ::
+          {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
+  def claim_client_retry_successor(
+        %{pool: _pool, api_key: _api_key} = auth,
+        model_or_id,
+        payload,
+        opts
+      )
+      when is_map(payload) and is_map(opts) do
+    case normalize_model(model_or_id) do
+      %Model{} = model -> Reservation.claim_client_retry_successor(auth, model, payload, opts)
+      nil -> {:error, :authorization_changed}
+      {:error, _reason} -> {:error, :authorization_changed}
+    end
+  end
+
+  def claim_client_retry_successor(_auth, _model_or_id, _payload, _opts),
+    do: {:error, :authorization_changed}
+
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   def record_denied_request(auth, model_or_id, opts \\ %{})
 
@@ -129,49 +149,73 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
       ensure_request_dispatchable!(request)
       ensure_no_request_replay!(request.id)
-
-      model = attempt_model(request, attrs)
-      pricing_snapshot = attempt_pricing_snapshot(request, model, attrs)
-
-      attempt_number =
-        Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count, :id) + 1
-
-      attempt_changes =
-        %Attempt{
-          id: Map.get(attrs, :id),
-          request_id: request.id,
-          attempt_number: attempt_number,
-          pool_upstream_assignment_id: assignment.id,
-          upstream_identity_id: assignment.upstream_identity_id,
-          pricing_snapshot_id: pricing_snapshot && pricing_snapshot.id,
-          model_id: request.model_id,
-          upstream_model_id: (model && model.upstream_model_id) || request.requested_model,
-          transport: request.transport,
-          status: Map.get(attrs, :status, "in_progress"),
-          started_at: timestamp,
-          retryable: Map.get(attrs, :retryable, false),
-          usage_status: Map.get(attrs, :usage_status, @usage_pending),
-          response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :response_metadata, %{}))
-        }
-
-      ReferenceLocks.lock_and_validate!(assignment.upstream_identity_id, assignment.id)
-
-      case Repo.insert(attempt_changes,
-             on_conflict: {:replace, [:id]},
-             conflict_target: :id,
-             returning: true
-           ) do
-        {:ok, attempt} ->
-          IdentitySnapshot.persist_request_identity_snapshot(request, assignment, attrs)
-          RequestLogFacts.record_attempt_written!(attempt)
-          attempt
-
-        {:error, changeset} ->
-          Repo.rollback(changeset)
-      end
+      insert_attempt!(request, assignment, attrs, timestamp)
     end)
     |> unwrap_transaction()
   end
+
+  @spec create_client_retry_dispatch_attempt(
+          Request.t(),
+          PoolUpstreamAssignment.t(),
+          ClientRetry.DispatchAuthority.t(),
+          map()
+        ) :: {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
+  def create_client_retry_dispatch_attempt(request, assignment, authority, attrs \\ %{})
+
+  def create_client_retry_dispatch_attempt(
+        %Request{} = request,
+        %PoolUpstreamAssignment{} = assignment,
+        %ClientRetry.DispatchAuthority{} = authority,
+        attrs
+      ) do
+    timestamp = now(attrs)
+
+    Repo.transaction(fn ->
+      request =
+        Repo.one!(
+          from locked_request in Request,
+            where: locked_request.id == ^request.id,
+            lock: "FOR UPDATE"
+        )
+
+      ensure_request_dispatchable!(request)
+
+      case ClientRetry.validate_dispatch_authority(request, authority) do
+        :ok ->
+          :ok
+
+        {:error, :invalid_client_retry_dispatch_authority} ->
+          Repo.rollback(
+            Metadata.accounting_error(
+              :invalid_client_retry_dispatch_authority,
+              "client retry dispatch authority is invalid"
+            )
+          )
+      end
+
+      ensure_no_request_replay!(request.id)
+
+      if Repo.exists?(from attempt in Attempt, where: attempt.request_id == ^request.id) do
+        Repo.rollback(
+          Metadata.accounting_error(
+            :client_retry_dispatch_claimed,
+            "client retry dispatch attempt was already claimed"
+          )
+        )
+      end
+
+      insert_attempt!(request, assignment, Map.put(attrs, :replay_generation, 0), timestamp)
+    end)
+    |> unwrap_transaction()
+  end
+
+  def create_client_retry_dispatch_attempt(_request, _assignment, _authority, _attrs),
+    do:
+      {:error,
+       Metadata.accounting_error(
+         :invalid_client_retry_dispatch_authority,
+         "client retry dispatch authority is invalid"
+       )}
 
   @spec record_retryable_attempt_failure(Attempt.t(), map()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
@@ -1005,6 +1049,48 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     do: Repo.get(Model, model_id)
 
   defp attempt_model(_request, _attrs), do: nil
+
+  defp insert_attempt!(request, assignment, attrs, timestamp) do
+    model = attempt_model(request, attrs)
+    pricing_snapshot = attempt_pricing_snapshot(request, model, attrs)
+
+    attempt_number =
+      Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count, :id) + 1
+
+    attempt_changes = %Attempt{
+      id: Map.get(attrs, :id),
+      request_id: request.id,
+      attempt_number: attempt_number,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      pricing_snapshot_id: pricing_snapshot && pricing_snapshot.id,
+      model_id: request.model_id,
+      upstream_model_id: (model && model.upstream_model_id) || request.requested_model,
+      transport: request.transport,
+      status: Map.get(attrs, :status, "in_progress"),
+      started_at: timestamp,
+      retryable: Map.get(attrs, :retryable, false),
+      usage_status: Map.get(attrs, :usage_status, @usage_pending),
+      response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :response_metadata, %{})),
+      replay_generation: Map.get(attrs, :replay_generation, 0)
+    }
+
+    ReferenceLocks.lock_and_validate!(assignment.upstream_identity_id, assignment.id)
+
+    case Repo.insert(attempt_changes,
+           on_conflict: {:replace, [:id]},
+           conflict_target: :id,
+           returning: true
+         ) do
+      {:ok, attempt} ->
+        IdentitySnapshot.persist_request_identity_snapshot(request, assignment, attrs)
+        RequestLogFacts.record_attempt_written!(attempt)
+        attempt
+
+      {:error, changeset} ->
+        Repo.rollback(changeset)
+    end
+  end
 
   defp attempt_pricing_snapshot(_request, _model, %{pricing_snapshot: pricing_snapshot}),
     do: pricing_snapshot

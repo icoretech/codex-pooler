@@ -18,7 +18,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
     :request_options,
     :route_state,
     :route_plan,
-    :route_class
+    :route_class,
+    :client_retry_dispatch_authority
   ]
 
   @type t :: %__MODULE__{
@@ -31,7 +32,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
           request_options: RequestOptions.t(),
           route_state: RouteState.t(),
           route_plan: BridgeRing.route_plan(),
-          route_class: String.t()
+          route_class: String.t(),
+          client_retry_dispatch_authority:
+            CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil
         }
 
   @type input :: %{
@@ -75,7 +78,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
            request_options: request_options,
            route_state: input.route_state,
            route_plan: route_plan,
-           route_class: request_options.transport.route_class
+           route_class: request_options.transport.route_class,
+           client_retry_dispatch_authority: Map.get(input.reserved, :dispatch_authority)
          }}
 
       {:error, reason} ->

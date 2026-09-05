@@ -189,9 +189,8 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
             websocket_owner_lease_token: candidate.owner_lease_token
           )
 
-        case Interruption.recover_owner_lifecycle_leftovers(
-               candidate.session_id,
-               :owner_unavailable,
+        case Interruption.recover_expired_owner_lifecycle(
+               candidate,
                opts
              ) do
           {:ok, _result} -> :recovered

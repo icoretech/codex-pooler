@@ -30,7 +30,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
           websocket_owner_submission_observer: (-> any()) | nil,
           route_class: String.t() | nil,
           upstream_websocket_bridge?: boolean(),
-          websocket_delivery_mode: :relay | :collect_compaction
+          websocket_delivery_mode: :relay | :collect_compaction | :collect_full_history
         }
 
   @spec build(map() | keyword(), String.t(), map()) :: t()
@@ -122,7 +122,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
 
   defp normalize_websocket_delivery_mode(updates) do
     case Map.fetch(updates, :websocket_delivery_mode) do
-      {:ok, mode} when mode in [:relay, :collect_compaction] -> updates
+      {:ok, mode} when mode in [:relay, :collect_compaction, :collect_full_history] -> updates
       {:ok, _invalid} -> Map.delete(updates, :websocket_delivery_mode)
       :error -> updates
     end

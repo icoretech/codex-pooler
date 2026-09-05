@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
   @moduledoc false
 
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.OrdinarySuccessResult
   alias NativeCompactionAdmission.{Binding, Capability, Confirmation}
   alias NativeCompactionAdmission.Topology.Forwarded
 
@@ -61,7 +62,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
           success?: boolean() | nil,
           compaction_item_digest: <<_::256>> | nil,
           confirmation: Confirmation.t() | nil,
-          first_compact_collection: NativeCompactionAdmission.FirstCompactCollection.t() | nil,
+          first_compact_collection:
+            NativeCompactionAdmission.FirstCompactCollection.t()
+            | NativeCompactionAdmission.FirstCompactResult.t()
+            | OrdinarySuccessResult.t()
+            | nil,
           expires_at_ms: non_neg_integer() | nil,
           now_ms: non_neg_integer() | nil
         }
@@ -138,6 +143,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
 
   defp validate_action(%__MODULE__{action: :record_ordinary_success} = control) do
     with :ok <- require_binding(control.binding),
+         :ok <- require_ordinary_success_result(control.first_compact_collection),
          :ok <- require_non_neg_integer(control.expires_at_ms, :expires_at_ms) do
       require_nil(
         control,
@@ -149,7 +155,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
           :success?,
           :compaction_item_digest,
           :confirmation,
-          :first_compact_collection,
           :now_ms
         ]
       )
@@ -178,7 +183,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
 
   defp validate_action(%__MODULE__{action: :authorize_first_compact_collection} = control) do
     with :ok <- require_binding(control.binding),
-         :ok <- require_reference(control.control_ref, :control_ref) do
+         :ok <- require_reference(control.control_ref, :control_ref),
+         :ok <- require_first_compact_result(control.first_compact_collection) do
       require_nil(
         control,
         [
@@ -188,7 +194,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
           :success?,
           :compaction_item_digest,
           :confirmation,
-          :first_compact_collection,
           :expires_at_ms,
           :now_ms
         ]
@@ -296,6 +301,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
   defp validate_action(%__MODULE__{action: :finalization_ack}),
     do: {:error, {:invalid_field, :success?}}
 
+  defp validate_action(%__MODULE__{action: :clear, capability: %Capability{}} = control),
+    do: require_nil(control, @fields -- [:version, :action, :downstream, :capability])
+
   defp validate_action(%__MODULE__{action: :clear} = control),
     do: require_nil(control, @fields -- [:version, :action, :downstream])
 
@@ -317,6 +325,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionContro
     do: :ok
 
   defp require_first_compact_collection(_value),
+    do: {:error, {:invalid_field, :first_compact_collection}}
+
+  defp require_first_compact_result(%NativeCompactionAdmission.FirstCompactResult{}), do: :ok
+
+  defp require_first_compact_result(_value),
+    do: {:error, {:invalid_field, :first_compact_collection}}
+
+  defp require_ordinary_success_result(%OrdinarySuccessResult{}), do: :ok
+
+  defp require_ordinary_success_result(_value),
     do: {:error, {:invalid_field, :first_compact_collection}}
 
   defp require_reference(value, _field) when is_reference(value), do: :ok

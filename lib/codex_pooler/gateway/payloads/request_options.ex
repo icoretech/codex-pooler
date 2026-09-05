@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias __MODULE__.TimeoutConfig
   alias __MODULE__.Transport
   alias __MODULE__.UsageAuthentication
+  alias CodexPooler.Accounting.ClientRetry.OriginalWitness
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
@@ -48,6 +49,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
             file_bridge: nil,
             native_compaction_admission: nil,
             native_compaction_reservation: nil,
+            native_client_retry_witness: nil,
             first_compact_collection: nil,
             extra: %{}
 
@@ -64,6 +66,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
           file_bridge: FileBridgeContext.t(),
           native_compaction_admission: NativeCompactionAdmissionContext.t() | nil,
           native_compaction_reservation: map() | nil,
+          native_client_retry_witness: OriginalWitness.t() | nil,
           first_compact_collection: NativeCompactionAdmission.FirstCompactCollection.t() | nil,
           extra: map()
         }
@@ -618,11 +621,19 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   @spec clear_native_compaction_admission(t()) :: :ok | {:error, atom()}
   def clear_native_compaction_admission(%__MODULE__{} = options) do
     case native_compaction_admission(options) do
-      {:ok, _capability, {:direct, owner}, _lifecycle} ->
-        UpstreamWebsocketSession.clear_compaction_admission(owner)
+      {:ok, capability, {:direct, owner}, _lifecycle} ->
+        UpstreamWebsocketSession.clear_compaction_admission(owner, capability)
 
-      {:ok, _capability, {:forwarded, session, lease_token, downstream, opts}, _lifecycle} ->
-        forwarded_admission_action(session, lease_token, downstream, opts, :clear, nil, nil)
+      {:ok, capability, {:forwarded, session, lease_token, downstream, opts}, _lifecycle} ->
+        forwarded_admission_action(
+          session,
+          lease_token,
+          downstream,
+          opts,
+          :clear,
+          capability,
+          nil
+        )
 
       :none ->
         :ok
@@ -739,14 +750,14 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   @spec connection_bound_compaction?(t()) :: boolean()
   def connection_bound_compaction?(%__MODULE__{
         payload_context: %{
-          compaction_trigger_bridge?: true,
-          compaction_input_mode: :incremental
+          compaction_trigger_bridge?: true
         },
         transport: %{
           transport: "websocket",
-          websocket_delivery_mode: :collect_compaction
+          websocket_delivery_mode: mode
         }
-      }),
+      })
+      when mode in [:collect_compaction, :collect_full_history],
       do: true
 
   def connection_bound_compaction?(%__MODULE__{}), do: false
@@ -765,6 +776,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   def put_runtime_context(%__MODULE__{} = options, updates) when is_list(updates) do
     %{options | runtime: RuntimeContext.update(options.runtime, updates)}
   end
+
+  @spec put_native_client_retry_witness(t(), OriginalWitness.t()) :: t()
+  def put_native_client_retry_witness(%__MODULE__{} = options, %OriginalWitness{} = witness),
+    do: %{options | native_client_retry_witness: witness}
 
   @spec capture_api_key_runtime_epoch(t(), CodexPooler.Access.auth_context()) :: t()
   def capture_api_key_runtime_epoch(

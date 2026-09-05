@@ -19,6 +19,66 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                                                  )
   @external_resource @remote_compaction_v2_incremental_fixture_path
 
+  test "prepared seal rejects changing the full-history delivery discriminator" do
+    payload = %{
+      "type" => "response.create",
+      "model" => "gpt-example",
+      "input" => [],
+      "turn_id" => Ecto.UUID.generate()
+    }
+
+    assert {:ok, prepared} =
+             WebsocketCodec.prepare_frame(
+               Jason.encode!(payload),
+               direct_responses_options(payload),
+               fn _ -> :ok end
+             )
+
+    assert WebsocketCodec.valid_prepared_frame?(prepared)
+
+    forged =
+      put_in(prepared.request_options.transport.websocket_delivery_mode, :collect_full_history)
+
+    refute WebsocketCodec.valid_prepared_frame?(forged)
+  end
+
+  test "full-history native V2 compact selects connection-bound collection" do
+    payload =
+      native_compaction_trigger_payload(%{
+        "x-codex-turn-metadata" =>
+          Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+      })
+
+    assert {:ok, prepared} =
+             WebsocketCodec.prepare_frame(
+               Jason.encode!(payload),
+               direct_responses_options(payload),
+               fn _ -> :ok end
+             )
+
+    assert prepared.request_options.transport.transport == "websocket"
+    assert RequestOptions.connection_bound_compaction?(prepared.request_options)
+  end
+
+  test "sealed prepared compact preserves its anchor before continuity hydration" do
+    payload = %{
+      "type" => "response.create",
+      "model" => "gpt-example",
+      "previous_response_id" => "resp_synthetic_anchor",
+      "input" => [%{"type" => "compaction_trigger"}],
+      "stream" => true
+    }
+
+    options = direct_responses_options(payload)
+    assert is_nil(options.continuity.previous_response_id)
+
+    assert {:ok, prepared} =
+             WebsocketCodec.prepare_frame(Jason.encode!(payload), options, fn _ -> :ok end)
+
+    assert prepared.payload["previous_response_id"] == "resp_synthetic_anchor"
+    assert is_nil(prepared.request_options.continuity.previous_response_id)
+  end
+
   describe "decode_payload/1" do
     test "accepts response.create through the generic object contract" do
       payload = Jason.encode!(%{"type" => "response.create", "model" => "gpt-example"})
@@ -34,6 +94,58 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   end
 
   describe "prepare_frame/3" do
+    test "final compaction item bypasses retry preflight on an owner websocket" do
+      turn_metadata =
+        Jason.encode!(%{
+          "turn_id" => Ecto.UUID.generate(),
+          "window_id" => "window-final",
+          "context_window_id" => Ecto.UUID.generate(),
+          "window_number" => 2,
+          "request_kind" => "turn"
+        })
+
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [%{"type" => "compaction", "encrypted_content" => "synthetic"}],
+        "stream" => true,
+        "generate" => true,
+        "client_metadata" => %{"x-codex-turn-metadata" => turn_metadata}
+      }
+
+      options =
+        %{
+          transport: "websocket",
+          websocket_owner_forwarding_enabled?: true,
+          codex_session: %CodexPooler.Gateway.Persistence.CodexSession{
+            id: Ecto.UUID.generate()
+          }
+        }
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.put_runtime_context(api_key_runtime_epoch: 0)
+
+      assert {:ok, prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(payload),
+                 options,
+                 fn _frame -> :ok end
+               )
+
+      assert WebsocketCodec.replay_eligible?(prepared)
+
+      final_admission = final_admission(prepared)
+
+      prepared = %{
+        prepared
+        | request_options: %{
+            prepared.request_options
+            | native_compaction_admission: final_admission
+          }
+      }
+
+      refute WebsocketCodec.replay_eligible?(prepared)
+    end
+
     test "rejects malformed native input and tools before sealing" do
       for {updates, param} <- [
             {%{"input" => "synthetic scalar input"}, "input"},
@@ -808,7 +920,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       refute coerced.request_options.payload_context.compaction_trigger_bridge?
     end
 
-    test "bridges valid terminal native compaction triggers through canonical compact HTTP" do
+    test "bridges terminal native compaction through the selected streaming or buffered transport" do
       for {client_metadata, result_transport} <- [
             {v2_client_metadata(), :sse},
             {%{"x-codex-turn-metadata" => Jason.encode!(%{"compaction" => %{}})}, :buffered},
@@ -844,7 +956,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         assert coerced.payload == expected_payload
 
         assert is_function(coerced.result_adapter, 1)
-        assert coerced.request_options.transport.transport == "http_compact_json"
+
+        assert coerced.request_options.transport.transport ==
+                 if(result_transport == :sse, do: "websocket", else: "http_compact_json")
 
         assert coerced.request_options.transport.upstream_endpoint ==
                  "/backend-api/codex/responses"
@@ -1749,6 +1863,38 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
     {:ok, _reserved, capability} =
       NativeCompactionAdmission.reserve(pending, :compact, binding, make_ref(), 0)
+
+    {:ok, admission} =
+      RequestOptions.NativeCompactionAdmission.new(
+        capability,
+        {:direct, self()},
+        %{lifecycle_id: binding.lifecycle_id, generation: binding.generation}
+      )
+
+    admission
+  end
+
+  defp final_admission(%PreparedWebsocketFrame{} = prepared) do
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: prepared.semantic_turn_key,
+      window_digest: <<2::256>>,
+      context_digest: <<3::256>>,
+      window_number: 2,
+      compaction_item_digest: <<4::256>>,
+      previous_response_digest: nil,
+      serving_mode: :full,
+      topology: %NativeCompactionAdmission.Topology.Direct{},
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+
+    capability = %NativeCompactionAdmission.Capability{
+      phase: :final,
+      binding: binding,
+      control_ref: make_ref(),
+      token: :crypto.strong_rand_bytes(32),
+      expires_at_ms: System.system_time(:millisecond) + 30_000
+    }
 
     {:ok, admission} =
       RequestOptions.NativeCompactionAdmission.new(

@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
   """
 
   alias __MODULE__.Capability
+  alias CodexPooler.Accounting.ClientRetry.OriginalWitness
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
@@ -49,6 +50,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
     :turn_claim_key,
     :replay_claim_digest,
     :native_replay_binding,
+    :native_client_retry_witness,
     :result_adapter,
     :provenance
   ]
@@ -63,6 +65,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
           replay_claim_digest: <<_::256>> | nil,
           native_replay_binding:
             CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding.t() | nil,
+          native_client_retry_witness: OriginalWitness.t() | nil,
           result_adapter: (gateway_call_result() -> gateway_call_result()) | nil,
           provenance:
             %{

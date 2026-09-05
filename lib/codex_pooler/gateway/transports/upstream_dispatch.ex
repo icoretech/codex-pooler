@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   require Logger
 
+  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.OperationalSettings
 
   alias CodexPooler.Gateway.Payloads.{
@@ -32,6 +33,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV4
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV5
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
@@ -81,7 +84,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
           required(:assignment_advertised?) => boolean(),
           required(:connection_bound_continuation?) => boolean(),
-          required(:websocket_delivery_mode) => :relay | :collect_compaction,
+          required(:websocket_delivery_mode) =>
+            :relay | :collect_compaction | :collect_full_history,
+          required(:native_compaction_metadata) =>
+            CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
           required(:effective_serving_mode) => String.t(),
           required(:request_id) => Ecto.UUID.t() | nil,
           required(:attempt_id) => Ecto.UUID.t() | nil,
@@ -119,7 +125,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       :writer,
       :assignment_advertised?,
       :native_codex_response_control,
-      :request_options
+      :request_options,
+      :client_retry_dispatch_authority
     ]
 
     @type t :: %__MODULE__{
@@ -134,7 +141,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             writer: Transport.websocket_writer(),
             assignment_advertised?: boolean(),
             native_codex_response_control: TurnSnapshot.t() | nil,
-            request_options: RequestOptions.t()
+            request_options: RequestOptions.t(),
+            client_retry_dispatch_authority: ClientRetry.DispatchAuthority.t() | nil
           }
   end
 
@@ -442,7 +450,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         writer: writer,
         assignment_advertised?: assignment_advertised?,
         native_codex_response_control: native_codex_response_control,
-        request_options: %RequestOptions{} = request_options
+        request_options: %RequestOptions{} = request_options,
+        client_retry_dispatch_authority: client_retry_dispatch_authority
       }) do
     headers =
       websocket_headers(
@@ -470,7 +479,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       connection_bound_continuation?: connection_bound_continuation?(request_options),
       websocket_delivery_mode:
         if(collect_compaction_result?(request_options),
-          do: :collect_compaction,
+          do: request_options.transport.websocket_delivery_mode,
           else: :relay
         ),
       effective_serving_mode: RequestOptions.model_serving_mode(request_options),
@@ -481,41 +490,92 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       native_replay_proof: request_options.runtime.native_replay_proof,
       provisional_token: request_options.runtime.replay_provisional_token,
       first_compact_collection: request_options.first_compact_collection,
+      native_compaction_metadata:
+        if(request_options.transport.websocket_delivery_mode == :collect_full_history,
+          do: request_options.payload_context.native_codex_turn_metadata
+        ),
       expected_connection_lifecycle: native_compaction_lifecycle(request_options),
-      forward_error_body?: false
+      forward_error_body?: false,
+      native_client_retry_observation: native_client_retry_observation(request_options),
+      client_retry_dispatch_authority: client_retry_dispatch_authority
     }
 
+    with :ok <- validate_client_retry_dispatch(request_data) do
+      dispatch_validated_websocket_request(
+        request_data,
+        request_options,
+        identity,
+        request,
+        attempt,
+        writer
+      )
+    end
+  end
+
+  defp dispatch_validated_websocket_request(
+         request_data,
+         request_options,
+         identity,
+         request,
+         attempt,
+         writer
+       ) do
     case owner_transport(request_options) do
       {:ok, session, owner_lease_token, downstream, forwarder_opts} ->
-        case maybe_prepare_replay_descriptor(
-               session,
-               owner_lease_token,
-               downstream,
-               request_options,
-               request,
-               attempt,
-               forwarder_opts
-             ) do
-          :ok ->
-            request_data
-            |> owner_websocket_request(request_options)
-            |> submit_owner_websocket_request(
-              session,
-              owner_lease_token,
-              downstream,
-              owner_request_forwarder_opts(forwarder_opts, request_options),
-              request_options
-            )
-            |> owner_request_result(identity, request, attempt, request_options)
-
-          {:error, reason} ->
-            owner_request_result({:error, reason}, identity, request, attempt, request_options)
-        end
+        dispatch_owner_websocket_request(
+          request_data,
+          request_options,
+          identity,
+          request,
+          attempt,
+          session,
+          owner_lease_token,
+          downstream,
+          forwarder_opts
+        )
 
       :local ->
         request_data
         |> direct_websocket_request_data(writer, request_options)
         |> direct_websocket_request(request_options, identity, request, attempt)
+
+      {:error, reason} ->
+        owner_request_result({:error, reason}, identity, request, attempt, request_options)
+    end
+  end
+
+  # credo:disable-for-next-line Credo.Check.Refactor.FunctionArity
+  defp dispatch_owner_websocket_request(
+         request_data,
+         request_options,
+         identity,
+         request,
+         attempt,
+         session,
+         owner_lease_token,
+         downstream,
+         forwarder_opts
+       ) do
+    case maybe_prepare_replay_descriptor(
+           session,
+           owner_lease_token,
+           downstream,
+           request_options,
+           request,
+           attempt,
+           forwarder_opts
+         ) do
+      :ok ->
+        request_data
+        |> owner_websocket_request(request_options)
+        |> submit_owner_websocket_request(
+          session,
+          owner_lease_token,
+          downstream,
+          owner_request_forwarder_opts(forwarder_opts, request_options),
+          request_options
+        )
+        |> owner_request_result(identity, request, attempt, request_options)
 
       {:error, reason} ->
         owner_request_result({:error, reason}, identity, request, attempt, request_options)
@@ -729,6 +789,28 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp owner_request_envelope(attrs, request_data, request_options) do
     admission = RequestOptions.native_compaction_admission(request_options)
 
+    case request_data.client_retry_dispatch_authority do
+      %ClientRetry.DispatchAuthority{} = authority ->
+        attrs
+        |> Map.merge(%{version: 5, client_retry_dispatch_authority: authority})
+        |> WebsocketOwnerRequestV5.new()
+
+      nil ->
+        owner_request_envelope_without_client_retry(
+          attrs,
+          request_data,
+          request_options,
+          admission
+        )
+    end
+  end
+
+  defp owner_request_envelope_without_client_retry(
+         attrs,
+         request_data,
+         request_options,
+         admission
+       ) do
     case request_options.runtime do
       %{
         native_replay_binding: %NativeReplayAdmission.Binding{} = binding,
@@ -752,6 +834,18 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
+  defp validate_client_retry_dispatch(%{
+         request_id: request_id,
+         attempt_id: attempt_id,
+         client_retry_dispatch_authority: %ClientRetry.DispatchAuthority{} = authority
+       }) do
+    ClientRetry.validate_dispatch_attempt(request_id, attempt_id, authority)
+  end
+
+  defp validate_client_retry_dispatch(%{client_retry_dispatch_authority: nil}), do: :ok
+
+  defp validate_client_retry_dispatch(_request_data), do: {:error, :stale_owner}
+
   defp owner_request_envelope_without_replay(attrs, request_data, request_options, admission) do
     case {request_data.websocket_delivery_mode, admission} do
       {delivery_mode,
@@ -764,6 +858,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           capability,
           nil
         )
+
+      {:collect_full_history, :none} ->
+        attrs
+        |> Map.merge(%{
+          version: 6,
+          websocket_delivery_mode: :collect_full_history,
+          native_compaction_metadata: request_data.native_compaction_metadata,
+          effective_serving_mode: String.to_existing_atom(request_data.effective_serving_mode)
+        })
+        |> WebsocketOwnerRequestV6.new()
 
       {:collect_compaction, _no_owner_capability} ->
         owner_collect_envelope(attrs, request_data, request_options)
@@ -1296,6 +1400,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       attempt_id: if(is_map(attempt), do: Map.get(attempt, :id)),
       mode: RequestOptions.model_serving_mode(request_options)
     }
+  end
+
+  defp native_client_retry_observation(%RequestOptions{native_client_retry_witness: nil}),
+    do: nil
+
+  defp native_client_retry_observation(%RequestOptions{}) do
+    ClientRetry.new_observation()
   end
 
   defp multi_agent_round_request_id(%{id: id}, _request_options) when is_binary(id), do: id

@@ -35,11 +35,11 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
   @spec run(variant(), Context.t()) :: Observed.t()
   def run(:pre_commit_cancellation, %Context{} = context) do
     with_session(context, success_mode(), fn session, upstream ->
-      :sys.replace_state(session, &%{&1 | generation: 1})
-      binding = arm_direct!(session)
+      binding = arm_direct_after_warmup!(session, upstream)
+      baseline = FakeUpstream.count(upstream)
       capability = reserve!(session, :compact, binding)
       :ok = UpstreamWebsocketSession.cancel_compaction_reservation(session, capability, now_ms())
-      observe(session, upstream, 0, zero_accounting(), %{boundary: :pre_accounting_cancel})
+      observe(session, upstream, baseline, zero_accounting(), %{boundary: :pre_accounting_cancel})
     end)
   end
 
@@ -303,17 +303,20 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
   end
 
   defp arm_direct_after_warmup!(session, upstream) do
-    {:ok, _result} = UpstreamWebsocketSession.request(session, request(upstream))
-    arm_direct!(session)
+    {:ok, %{terminal: "response.completed", ordinary_success_result: receipt}} =
+      UpstreamWebsocketSession.request(session, request(upstream))
+
+    arm_direct!(session, receipt)
   end
 
-  defp arm_direct!(session) do
+  defp arm_direct!(session, receipt) do
     binding =
       session
       |> UpstreamWebsocketSession.connection_lifecycle_snapshot()
       |> direct_admission_binding()
+      |> Map.put(:previous_response_digest, receipt.response_digest)
 
-    :ok = UpstreamWebsocketSession.arm_compact(session, binding, now_ms() + 30_000)
+    :ok = UpstreamWebsocketSession.arm_compact(session, binding, now_ms() + 30_000, receipt)
     binding
   end
 
@@ -378,7 +381,10 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
     %Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [],
-      payload: "{}",
+      payload: Jason.encode!(%{"model" => "gpt-test"}),
+      request_id: Ecto.UUID.generate(),
+      attempt_id: Ecto.UUID.generate(),
+      effective_serving_mode: "full",
       timeouts: %{connect_timeout_ms: 5_000, receive_timeout_ms: 5_000},
       writer: fn _frame -> :ok end,
       message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1,
@@ -469,7 +475,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
   defp completed_frame do
     Jason.encode!(%{
       "type" => "response.completed",
-      "response" => %{"status" => "completed"}
+      "response" => %{"id" => "resp_direct_boundary", "status" => "completed"}
     })
   end
 

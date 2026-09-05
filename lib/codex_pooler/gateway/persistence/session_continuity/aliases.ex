@@ -89,6 +89,26 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     )
   end
 
+  @spec previous_response_session_id(map(), String.t(), DateTime.t()) :: Ecto.UUID.t() | nil
+  def previous_response_session_id(auth, previous_response_id, now) do
+    alias_hash = alias_hash(previous_response_id)
+
+    Repo.one(
+      from session in CodexSession,
+        join: alias_record in BridgeSessionAlias,
+        on: alias_record.codex_session_id == session.id,
+        where:
+          alias_record.pool_id == ^auth.pool.id and alias_record.api_key_id == ^auth.api_key.id and
+            alias_record.alias_kind == "previous_response_id" and
+            alias_record.alias_hash == ^alias_hash and
+            alias_record.status == ^@alias_active and alias_record.expires_at > ^now and
+            session.status in ^@session_reconnectable_statuses,
+        order_by: [desc: alias_record.last_seen_at, desc: alias_record.updated_at],
+        limit: 1,
+        select: session.id
+    )
+  end
+
   @spec register!(CodexSession.t(), map(), RequestOptions.t(), DateTime.t()) :: :ok
   def register!(%CodexSession{} = session, auth, %RequestOptions{} = opts, now) do
     expires_at = DateTime.add(now, expired_alias_ttl_seconds(), :second)

@@ -400,11 +400,23 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Runtim
 
   defp reserved_admission_input(fixture, correlation_id) do
     owner = start_owner!()
-    :ok = connect_owner!(owner)
+    result = connect_owner!(owner)
     lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(owner)
-    binding = direct_binding(lifecycle)
+
+    binding = %{
+      direct_binding(lifecycle)
+      | previous_response_digest: result.ordinary_success_result.response_digest
+    }
+
     now_ms = System.system_time(:millisecond)
-    :ok = UpstreamWebsocketSession.arm_compact(owner, binding, now_ms + 30_000)
+
+    :ok =
+      UpstreamWebsocketSession.arm_compact(
+        owner,
+        binding,
+        now_ms + 30_000,
+        result.ordinary_success_result
+      )
 
     {:ok, capability} =
       UpstreamWebsocketSession.reserve_compaction(owner, :compact, binding, make_ref(), now_ms)
@@ -493,24 +505,27 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Runtim
         FakeUpstream.websocket_text_frames([
           Jason.encode!(%{
             "type" => "response.completed",
-            "response" => %{"status" => "completed"}
+            "response" => %{"status" => "completed", "id" => "resp_runtime_seed"}
           })
         ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
 
-    {:ok, _result} =
+    {:ok, result} =
       UpstreamWebsocketSession.request(owner, %WebsocketRequest{
         url: FakeUpstream.url(upstream) <> @endpoint,
         headers: [],
-        payload: "{}",
+        payload: Jason.encode!(%{"model" => "sample-model"}),
+        request_id: Ecto.UUID.generate(),
+        attempt_id: Ecto.UUID.generate(),
+        effective_serving_mode: "full",
         timeouts: %{connect_timeout_ms: 5_000, receive_timeout_ms: 5_000},
         writer: fn _frame -> :ok end,
         message_mapper: & &1
       })
 
-    :ok
+    result
   end
 
   defp start_activity_registry! do
