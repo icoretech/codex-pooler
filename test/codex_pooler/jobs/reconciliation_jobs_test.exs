@@ -28,6 +28,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.TokenRefresh
+  alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota
@@ -6815,6 +6816,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
     rejected_identity = Repo.get!(UpstreamIdentity, identity.id)
     initial_epoch = rejected_identity.metadata["credential_epoch"]
+    replacement_expires_at = DateTime.add(DateTime.utc_now(), 1, :day)
 
     assert {:ok, %{identity: linked_identity, assignment: linked_assignment}} =
              TokenLinking.link_tokens(
@@ -6823,10 +6825,14 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                %{
                  chatgpt_account_id: identity.chatgpt_account_id,
                  account_label: identity.account_label,
-                 token: "relinked-access-token"
+                 token: "relinked-access-token",
+                 access_token_expires_at: replacement_expires_at
                },
                target_identity_id: identity.id
              )
+
+    assert %{state: :known, source: :explicit, deadline: ^replacement_expires_at} =
+             TokenRefreshMetadata.project_access_token_expiry(linked_identity.metadata)
 
     %{
       source_pool: source_pool,
