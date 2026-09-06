@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.7.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.15...codex-pooler-v0.7.0) (2026-09-06)
+
+
+### Bug Fixes
+
+* **accounting:** preserve streamed usage and validate collected outcomes ([6418b94](https://github.com/icoretech/codex-pooler/commit/6418b94373acf270163c84954aed4fc276fd1401))
+* **accounting:** retain measured usage across SSE event boundaries ([350a5ce](https://github.com/icoretech/codex-pooler/commit/350a5ce17f89ad84d9300c32750489d68fd9c806))
+* **admin:** align compact cockpit labels with their icons ([bd55e0f](https://github.com/icoretech/codex-pooler/commit/bd55e0fdc877a2072d822cea0fef888c281eefed))
+* **admin:** wrap upstream expiry details on narrow screens ([ed828f9](https://github.com/icoretech/codex-pooler/commit/ed828f92e4e8612d379093d43281a9f784d0250e))
+* **api:** distinguish key budget denial from invalid authentication ([3957d54](https://github.com/icoretech/codex-pooler/commit/3957d547384a284a943bb6927ccbee07574696d9))
+* **audio:** validate transcription results before settlement ([bb37e56](https://github.com/icoretech/codex-pooler/commit/bb37e56ed8dbb34731ed9ce7a6a9d61f769c6a84))
+* **auth:** preserve complete invite results after token publication ([980d226](https://github.com/icoretech/codex-pooler/commit/980d226f10ba8ebc9ca75ba2bd5c38d2a13d8610))
+* **catalog:** derive public context length from the native maximum ([c45275c](https://github.com/icoretech/codex-pooler/commit/c45275ca8af767934b98a6540c8c6dc2b0f1d235))
+* **catalog:** separate managed client identity from compatibility fixtures ([d92b7b3](https://github.com/icoretech/codex-pooler/commit/d92b7b36ce4616a551ea4a9fb825595cf2ba8a7c))
+* **deps:** update dependency @astrojs/starlight to v0.42.0 ([#340](https://github.com/icoretech/codex-pooler/issues/340)) ([692d7f2](https://github.com/icoretech/codex-pooler/commit/692d7f275ef74f98bb1f7ed251f658f2f569fa33))
+* **deps:** update dependency astro to v7.3.1 ([#342](https://github.com/icoretech/codex-pooler/issues/342)) ([77d0c17](https://github.com/icoretech/codex-pooler/commit/77d0c17a4bc27e2dec162fe79b897b7da919b980))
+* **deps:** update dependency daisyui to v5.7.28 ([#335](https://github.com/icoretech/codex-pooler/issues/335)) ([7ab5765](https://github.com/icoretech/codex-pooler/commit/7ab5765c7e4c914032452abba507977600a6f772))
+* **deps:** upgrade Mint to bound HTTP response parsing ([7dac0ea](https://github.com/icoretech/codex-pooler/commit/7dac0eadda1e13db15c2fd421143684b9478097c))
+* **dev:** hash logical turn identifiers with SHA256 argument order ([fc09321](https://github.com/icoretech/codex-pooler/commit/fc0932121e9838d83db79dc7ad6eb88adf371a3d))
+* **docs:** register the English locale catalog for Starlight ([bcbf67c](https://github.com/icoretech/codex-pooler/commit/bcbf67c17c364781be8129fc60b55c54af21e327))
+* **gateway:** bind websocket owners before HTTP stream bridge dispatch ([b25149e](https://github.com/icoretech/codex-pooler/commit/b25149e625436de5a9149fbe30e4a36e65ec12cd))
+* **images:** allow generated image tools on Lite serving hosts ([e22dd31](https://github.com/icoretech/codex-pooler/commit/e22dd31866e70635244dac2a11e12b48ba4a6649))
+* **images:** dispatch standard image requests through native routes ([e7fe0c9](https://github.com/icoretech/codex-pooler/commit/e7fe0c9eb9d1f309fec43dfbb16fc90a2b55c18e))
+* **images:** prefer listed media hosts by catalog priority ([151a99c](https://github.com/icoretech/codex-pooler/commit/151a99c6266b7334bfbdfaac9f89a8ac5d1a0cb4))
+* **migrations:** acquire replay table locks as a bounded group ([949cdf7](https://github.com/icoretech/codex-pooler/commit/949cdf780e835311e6713fe88d58ca47317cb69d))
+* **quotas:** preserve optional routing and future observation contracts ([c578df6](https://github.com/icoretech/codex-pooler/commit/c578df66d558e1b9eeb5642a2be07fa0523c97a1))
+* **quotas:** retain and revalidate explicit account permission ([23fc52a](https://github.com/icoretech/codex-pooler/commit/23fc52a236b239630eec23390b76fcb9ecc45fe0))
+* **quotas:** retain fresh credit balances across source changes ([5ebbff8](https://github.com/icoretech/codex-pooler/commit/5ebbff815057610c36f71aaa8a5b0e1ec58535c7))
+* **quotas:** retain optional meter identity across label changes ([7b24408](https://github.com/icoretech/codex-pooler/commit/7b244085020928cd4d446efd95c8450cce66a3a1))
+* **quotas:** veto threshold resets with current compatible sibling capacity ([51ab46f](https://github.com/icoretech/codex-pooler/commit/51ab46f894429cf3e80adfafb39b0df8a024585d))
+* **streaming:** retain delivered native SSE completion ([b7bdec0](https://github.com/icoretech/codex-pooler/commit/b7bdec0a8328048c198053c5278a4cda027e2785))
+* **test:** isolate Unix harnesses and stop post-sandbox cache timers ([003bf1b](https://github.com/icoretech/codex-pooler/commit/003bf1b3b9f55fc695adb1a34adc33bbe838912e))
+* **types:** allow absent account availability snapshots ([41f1364](https://github.com/icoretech/codex-pooler/commit/41f13640a3bd2ff423dac0e4ab054390aec3be70))
+* **upstreams:** bind access token expiry to credential epochs ([c2b8cff](https://github.com/icoretech/codex-pooler/commit/c2b8cfff0fbcac9a29726e8eb840406148323726))
+* **upstreams:** recover legacy token expiry during reconciliation ([d33a474](https://github.com/icoretech/codex-pooler/commit/d33a47406d7e45eb3c3e691ab1c8ca1f4cbe5aff))
+* **upstreams:** validate lifecycle epochs before preserving credential expiry ([2e2656c](https://github.com/icoretech/codex-pooler/commit/2e2656c113e55efd0361b7e8fa5baeb12c9082af))
+* **websocket:** bind cancellation and drain to admitted request lifecycles ([9ebf2cb](https://github.com/icoretech/codex-pooler/commit/9ebf2cb0b7aa50ba1017d4ab2bce572875544324))
+* **websocket:** fence client retry successors and owner cleanup ([06350d1](https://github.com/icoretech/codex-pooler/commit/06350d1fc831dde8669d43b40855064fe115d25e))
+* **websocket:** preserve bounded native admission diagnostics ([dcb7d12](https://github.com/icoretech/codex-pooler/commit/dcb7d125261ec3965bbbdc3f8edb43c8c34a17bb))
+* **websocket:** preserve completed delivery when a successful proxy task closes ([5134546](https://github.com/icoretech/codex-pooler/commit/5134546bdb06acb0111f3f42d5b5f9068efa6feb))
+* **websocket:** preserve fragmented upgrades and bound native replay ([0ca577c](https://github.com/icoretech/codex-pooler/commit/0ca577cec21f74a11b6edf5c86a8d227aaf5b502))
+* **websocket:** reject explicit unsupported frame types before native fallback ([ab57690](https://github.com/icoretech/codex-pooler/commit/ab57690d4aa227db53ba7d11b84e0a9f54335b3b))
+* **websocket:** release unsent owner admissions before retry ([03f38f5](https://github.com/icoretech/codex-pooler/commit/03f38f5ca8a14c1c3c1d1b591e47ed2409345590))
+
+
+### Performance Improvements
+
+* **admin:** count attempts after selecting recent cockpit events ([f25010c](https://github.com/icoretech/codex-pooler/commit/f25010c1ffe0ff9e6605bbc755374160d7f8590c))
+
+
+### Miscellaneous Chores
+
+* release 0.7.0 ([33b5482](https://github.com/icoretech/codex-pooler/commit/33b5482ce5975ffd9d42f821ada2de6ba2d28f38))
+
 ## [0.6.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.14...codex-pooler-v0.6.15) (2026-09-03)
 
 
