@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.7.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.1...codex-pooler-v0.7.2) (2026-09-06)
+
+
+### Bug Fixes
+
+* **alerts:** separate lifetime delivery receipts from job retry limits ([b882c4c](https://github.com/icoretech/codex-pooler/commit/b882c4ca5d072e63dbe29726a68754f4059603c3))
+* **catalog:** finalize malformed discovery sources as failures ([ed3fc2d](https://github.com/icoretech/codex-pooler/commit/ed3fc2d756dae888d221ce7cc8c1833b41f0ed2b))
+* **catalog:** validate model fields and advertised modalities ([f219467](https://github.com/icoretech/codex-pooler/commit/f21946725745cc94b45fead2880d8ace5012636c))
+* **chat:** preserve compute units in completion usage ([f5376d7](https://github.com/icoretech/codex-pooler/commit/f5376d77a660664502a9d2ab33fc45ffbc7651b1))
+* **clustering:** compare pod IP addresses independently of IPv6 spelling ([b5a0b70](https://github.com/icoretech/codex-pooler/commit/b5a0b703e238b70647d26736514fef3c27e7c892))
+* **compression:** avoid parsing grouped search matches twice ([1fdc65d](https://github.com/icoretech/codex-pooler/commit/1fdc65dec5bb4ab1e89fcf305cfbf33004709fb6))
+* **files:** reject invalid JSON metadata field types ([ee4c737](https://github.com/icoretech/codex-pooler/commit/ee4c7374085255f098f00184822df471309cc89c))
+* **images:** reject unsupported model fidelity options ([10b3fb4](https://github.com/icoretech/codex-pooler/commit/10b3fb4b812f2f60115aae4e16776d8d37ca6c99))
+* **media:** preserve image masks and validate transcription options ([a30f570](https://github.com/icoretech/codex-pooler/commit/a30f570f714420e1ad411a48f80b9e919a2ad019))
+* **pricing:** count canonical rows after service tier alias coalescing ([ff74755](https://github.com/icoretech/codex-pooler/commit/ff7475574261e2b51bc0c4673ef4c83049b99b02))
+* **pricing:** reject malformed import URLs before dispatch ([a1f9554](https://github.com/icoretech/codex-pooler/commit/a1f95547c4048905bf7d726e20e80da2972c0afa))
+* **quotas:** compare convergence reset timestamps as instants ([f947004](https://github.com/icoretech/codex-pooler/commit/f9470048b3d73dc1d026177c6c35abfd8233d2bf))
+* **quotas:** ignore malformed percentages and rate limit containers ([bf646c4](https://github.com/icoretech/codex-pooler/commit/bf646c4d711148d71bfb3867db77e51b3ebf03dd))
+* **quotas:** reject invalid relative reset durations ([d0a7b69](https://github.com/icoretech/codex-pooler/commit/d0a7b69f6fb1cf20ca6006dc57e0f66b55b616e3))
+* **websocket:** read ownership diagnostics from normalized transport context ([750f3a9](https://github.com/icoretech/codex-pooler/commit/750f3a9be5a12445400eb94056a6817a51b06643))
+
+
+### Tests
+
+* **accounting:** cover reservation policies file logs and processed acknowledgements ([b9a9e58](https://github.com/icoretech/codex-pooler/commit/b9a9e5865f4fd59acc57beb22dadf445bf3ec69f))
+* **catalog:** verify repeated sync and canonical pricing cardinality ([bde17ea](https://github.com/icoretech/codex-pooler/commit/bde17eae2d158e73367402b77559d37fca15b25b))
+* **compression:** cover scanner tokenizer and fail-open boundaries ([aa50f27](https://github.com/icoretech/codex-pooler/commit/aa50f279d1007990d6b5cdd7ef70f2a880bf861f))
+* **coverage:** exclude development support from Six reports ([d0c5f69](https://github.com/icoretech/codex-pooler/commit/d0c5f69149c223e016a7b3834c863281be532a24))
+* **images:** cover GPT Image 2 edit options in Full and Lite ([20b7935](https://github.com/icoretech/codex-pooler/commit/20b793598eb1a3de5a29d7eeab1f2cc1053b228d))
+* **quotas:** cover window classification and weekly normalization ([292ba5d](https://github.com/icoretech/codex-pooler/commit/292ba5d2480dfc914452b6fe66e7167f4666d420))
+* **runtime:** cover lifecycle transitions and scoped account visibility ([b41b6a7](https://github.com/icoretech/codex-pooler/commit/b41b6a76c9b2a59604a52ec6be6357bb0a5205a7))
+* **runtime:** cover upload cleanup authorization and quota refresh boundaries ([51f4a6e](https://github.com/icoretech/codex-pooler/commit/51f4a6e2a22a922e3cde598a6f086cde19b4c916))
+* **websocket:** await distributed node shutdown by deadline ([059d01e](https://github.com/icoretech/codex-pooler/commit/059d01e1c7e1939b4dd5dafc609b13462bf02794))
+* **websocket:** bind owner fixtures and assert teardown diagnostics ([4d9a409](https://github.com/icoretech/codex-pooler/commit/4d9a40922ad5abcde45737a3dd8320abff8f5f2c))
+* **websocket:** observe caller monitor completion after drain ([0abcabb](https://github.com/icoretech/codex-pooler/commit/0abcabba4fe1d9ca3f95c3ab5a8b1b67ddeda729))
+
+
+### Miscellaneous Chores
+
+* **deps:** lock file maintenance ([69863df](https://github.com/icoretech/codex-pooler/commit/69863dffdafb03faaff2af30040f73720700fb14))
+* **deps:** merge Dialyxir 1.4.8 update ([6ce44ee](https://github.com/icoretech/codex-pooler/commit/6ce44ee3b662afdd538d64eee5fb688f99f9a001))
+* **deps:** merge documentation lockfile refresh ([eacbf2e](https://github.com/icoretech/codex-pooler/commit/eacbf2e51989e15ecbba5e2d99db16e80bfaf131))
+* **deps:** update dependency dialyxir to v1.4.8 ([e8347ed](https://github.com/icoretech/codex-pooler/commit/e8347ed799b6ea2cff2734a42e2a58476b421334))
+* **release:** include test and chore commits in release notes ([7bfcd22](https://github.com/icoretech/codex-pooler/commit/7bfcd22f85b829096be175972aa27dbfca07d393))
+* update gitignore ([8bf04c3](https://github.com/icoretech/codex-pooler/commit/8bf04c378d2b2a8f2b10c0cd9d5701853728ea13))
+
 ## [0.7.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.0...codex-pooler-v0.7.1) (2026-09-06)
 
 
