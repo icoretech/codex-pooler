@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.0...codex-pooler-v0.7.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* **compat:** accept flat custom tool definitions in chat requests ([34532e0](https://github.com/icoretech/codex-pooler/commit/34532e060f03cff6ca5a2623c34db105940a2d1f))
+* **compat:** normalize Responses-shaped chat requests and tool completion signals ([8def847](https://github.com/icoretech/codex-pooler/commit/8def847026f9a270afe55e64e042d0af01760d0c))
+* **compat:** preserve chat tool replay and flat custom call streams ([7ce21db](https://github.com/icoretech/codex-pooler/commit/7ce21dbe07ed00aca4bd92356af3c9dc5b3df661))
+* **websocket:** recognize tool continuations after historical compaction ([4ea2c02](https://github.com/icoretech/codex-pooler/commit/4ea2c02943704bc9aff1ed70b72c6eeade6dde92))
+* **websocket:** wait for durable finalization before owner drain ([e0ccec5](https://github.com/icoretech/codex-pooler/commit/e0ccec5911fcc292acacbdce434138fe397b71d7))
+
 ## [0.7.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.15...codex-pooler-v0.7.0) (2026-09-06)
 
 
