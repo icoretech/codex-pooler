@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationProjection
   alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.RelativeTime
@@ -42,6 +43,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @type reset_display_state :: :countdown | :static | :unconfirmed | :absent
 
   @type quota_limit_row :: %{
+          optional(:observation_group) => String.t(),
+          optional(:observations) => [QuotaObservations.observation()],
           required(:key) => atom() | String.t(),
           required(:label) => String.t(),
           required(:percent) => Decimal.t() | nil,
@@ -213,6 +216,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     windows
     |> quota_limit_rows(datetime_preferences, snapshot_at)
     |> Enum.map(&put_account_credit_balance(&1, windows, snapshot_at, credit_balance))
+  end
+
+  @spec quota_limit_rows(
+          [Quota.AccountQuotaWindow.t()],
+          DateTimeDisplay.preferences(),
+          DateTime.t(),
+          CodexPooler.Upstreams.Quota.CreditBalanceStore.snapshot() | nil,
+          [Quota.AccountQuotaWindow.t()]
+        ) :: [quota_limit_row()]
+  def quota_limit_rows(windows, preferences, snapshot_at, credit_balance, raw_windows) do
+    windows
+    |> quota_limit_rows(preferences, snapshot_at, credit_balance)
+    |> QuotaObservations.attach(raw_windows, preferences, snapshot_at)
   end
 
   defp put_account_credit_balance(%{key: key} = row, windows, snapshot_at, credit_balance)
@@ -509,6 +525,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       key: key,
       label: label,
       percent: remaining_percent,
+      observation_group: QuotaObservations.group_key(window),
+      observations: [QuotaObservations.project(window, datetime_preferences, snapshot_at)],
       percent_value: quota_percent_value(remaining_percent),
       percent_label: quota_percent_label(remaining_percent),
       count_label: count_label,

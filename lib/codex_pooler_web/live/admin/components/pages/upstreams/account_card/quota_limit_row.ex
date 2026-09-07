@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
 
   use CodexPoolerWeb, :html
 
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservationsDialog
+
   attr :id, :string, required: true
   attr :limit, :map, required: true
 
@@ -13,8 +15,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
       data-role="upstream-limit-chart"
       data-evidence-state={quota_limit_evidence_state(@limit)}
       data-meter-state={quota_limit_meter_state(@limit)}
-      class="grid min-w-0 gap-1.5"
+      class="relative grid min-w-0 gap-1.5"
     >
+      <button
+        :if={Map.get(@limit, :observations, []) != []}
+        id={"#{@id}-observations-open"}
+        type="button"
+        class={[
+          "absolute -inset-x-2 -inset-y-1.5 z-10 cursor-pointer rounded border border-transparent transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+          observation_trigger_tone(@limit)
+        ]}
+        aria-label={"Show #{@limit.label} quota observations"}
+        aria-haspopup="dialog"
+        aria-controls={"#{@id}-observations-dialog"}
+        phx-click={QuotaObservationsDialog.open("#{@id}-observations-dialog")}
+      ><span class="sr-only">Show quota observations</span></button>
       <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
         <span data-role="upstream-limit-title" class="min-w-0 truncate font-medium text-base-content">
           {@limit.label}
@@ -65,6 +80,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         </span>
       </div>
     </div>
+    <QuotaObservationsDialog.dialog
+      :if={Map.get(@limit, :observations, []) != []}
+      id={"#{@id}-observations-dialog"}
+      limit={@limit}
+    />
     """
   end
 
@@ -114,6 +134,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
   end
 
   defp quota_limit_percent_class(_limit), do: "tabular-nums font-medium text-base-content/50"
+
+  defp observation_trigger_tone(%{percent: %Decimal{} = percent}) do
+    cond do
+      Decimal.compare(percent, Decimal.new(70)) != :lt ->
+        "hover:border-success/25 hover:bg-success/5 focus-visible:outline-success"
+
+      Decimal.compare(percent, Decimal.new(30)) != :lt ->
+        "hover:border-warning/25 hover:bg-warning/5 focus-visible:outline-warning"
+
+      true ->
+        "hover:border-error/25 hover:bg-error/5 focus-visible:outline-error"
+    end
+  end
+
+  defp observation_trigger_tone(_limit),
+    do: "hover:border-base-content/25 hover:bg-base-content/5 focus-visible:outline-base-content"
 
   defp quota_limit_progress_class(%{percent: %Decimal{} = percent} = limit) do
     tone_class =

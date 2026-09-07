@@ -843,6 +843,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   Fixed account rows and fresh or unknown-freshness additional rows remain
   visible. The compact row shows no freshness or history copy, reset status, or
   unconfirmed reset.
+- **Observation details:** a quota with retained evidence has a full-row button overlay whose hover/focus tint matches its progress tone. Opening it shows a `sm:max-w-xl` modal with at most five source widgets in newest-first order, always retaining the selected observation. Only the selected bar is colored; other bars are gray, with selection also announced to assistive technology. Each widget shows source, remaining percentage, observation date on the left and freshness on the right. No separate displayed-value summary, selected badge, used percentage or reset date is rendered. The dialog uses the saved-reset header/panel/footer tokens, an accessible title, focus containment, Escape/backdrop dismissal and focus restoration. These observations never replace the compact meter, countdown, freshness policy or routing selection; raw provider identifiers and payloads remain hidden.
 - **Tones:** percent ≥ 70 → `progress-success`/`text-success`; ≥ 30 →
   warning; below → error. Unreported remains `progress-neutral` with muted
   text and adds `admin-static-unknown-progress`; it is never presented as a

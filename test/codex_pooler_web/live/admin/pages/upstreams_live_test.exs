@@ -3855,7 +3855,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     limit_row_ids =
       Enum.reject(
         limit_ids,
-        &(String.ends_with?(&1, "-progress") or String.ends_with?(&1, "-reset"))
+        &(String.ends_with?(&1, "-progress") or String.ends_with?(&1, "-reset") or
+            String.contains?(&1, "-observations-"))
       )
 
     assert length(limit_row_ids) == 4

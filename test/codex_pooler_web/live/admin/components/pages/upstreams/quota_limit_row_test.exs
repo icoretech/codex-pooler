@@ -8,6 +8,51 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow
   alias CodexPoolerWeb.DateTimeDisplay
 
+  test "opens observations without changing the compact meter and renders a closed accessible dialog" do
+    now = ~U[2026-09-07 12:00:00Z]
+
+    [limit] =
+      QuotaProjection.quota_limit_rows(
+        [private_meter_window(now, "private-demo", "25")],
+        DateTimeDisplay.preferences_for_user(nil),
+        now
+      )
+      |> Enum.filter(&is_binary(&1.key))
+
+    html = render_quota_row(limit)
+    document = LazyHTML.from_fragment(html)
+
+    assert LazyHTML.query(
+             document,
+             "#quota-row-observations-open[aria-haspopup='dialog'][phx-click]"
+           ) != []
+
+    assert LazyHTML.query(
+             document,
+             "#quota-row-observations-dialog:not([open])[aria-modal='true']"
+           ) != []
+
+    assert LazyHTML.query(document, "#quota-row-observations-dialog [data-selected='true']")
+           |> LazyHTML.text() =~ "Usage API"
+
+    assert LazyHTML.query(document, "#quota-row-progress[value='75']") != []
+
+    refute html =~ "Displayed remaining"
+
+    assert LazyHTML.query(document, "[data-role='quota-observation-progress'][value='75.0']") !=
+             []
+
+    assert LazyHTML.query(document, "#quota-row-observations-open.hover\\:border-success\\/25") !=
+             []
+
+    assert LazyHTML.query(document, "[data-selected='true'] [aria-label*='selected for display']") !=
+             []
+
+    assert LazyHTML.query(document, "[data-selected='true'] .badge") |> Enum.empty?()
+    refute html =~ "private-demo"
+    refute html =~ "sources differ"
+  end
+
   test "keeps the existing quota-meter ids, determinate value, threshold tone, stripes, and reset hook" do
     html =
       render_component(&QuotaLimitRow.quota_limit_row/1, %{

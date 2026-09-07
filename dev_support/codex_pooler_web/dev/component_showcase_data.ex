@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
   @moduledoc false
 
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPoolerWeb.Dev.QuotaObservationsFixture
   alias CodexPoolerWeb.Observatory.Presentation
 
   def primitive_variants do
@@ -218,6 +219,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
         true
       )
     ]
+    |> List.update_at(0, &Map.merge(&1, QuotaObservationsFixture.limit()))
   end
 
   def saved_resets do
