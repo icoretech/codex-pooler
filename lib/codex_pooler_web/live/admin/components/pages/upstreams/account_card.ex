@@ -963,6 +963,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp reported_quota_limits(_quota_limits), do: []
 
+  defp reported_quota_limit?(%{source_disagreement: true}), do: true
+  defp reported_quota_limit?(%{reset_disagreement: true}), do: true
   defp reported_quota_limit?(%{percent: %Decimal{}}), do: true
 
   defp reported_quota_limit?(%{reset_label: reset_label}) when is_binary(reset_label),

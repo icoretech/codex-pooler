@@ -32,6 +32,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         )} remaining
         ({Map.get(@limit, :selected_source)}).
       </p>
+      <p
+        :if={Map.get(@limit, :reset_disagreement, false)}
+        class="text-xs text-warning"
+        data-role="quota-reset-disagreement"
+      >
+        Reset reports differ; no single reset is confirmed.
+      </p>
       <progress
         id={"#{@id}-progress"}
         data-role="upstream-limit-progress"
@@ -80,7 +87,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
       </div>
       <details
         :if={Map.get(@limit, :observations, []) != []}
-        open={Map.get(@limit, :source_disagreement, false)}
+        open={
+          Map.get(@limit, :source_disagreement, false) or Map.get(@limit, :reset_disagreement, false)
+        }
         class="text-[11px]"
         data-role="quota-source-observations"
       >

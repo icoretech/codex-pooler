@@ -146,8 +146,20 @@ defmodule CodexPooler.Upstreams.Reconciliation.CreditBalanceReconciliationTest d
     render_click(cockpit_view, "refresh_data")
     refute has_element?(list_view, "#upstream-account-#{identity.id}-limit-weekly-count")
     refute has_element?(cockpit_view, "#upstream-quota-limit-weekly-count")
-    assert has_element?(list_view, "#upstream-account-#{identity.id}-limit-weekly-reset")
-    assert has_element?(cockpit_view, "#upstream-quota-limit-weekly-reset")
+    # Distinct unelapsed provider resets and usage reports remain visible after
+    # credit counts disappear; neither parent may hide the uncertain quota row.
+    refute has_element?(list_view, "#upstream-account-#{identity.id}-limit-weekly-reset")
+    refute has_element?(cockpit_view, "#upstream-quota-limit-weekly-reset")
+
+    for {view, selector} <- [
+          {list_view, "#upstream-account-#{identity.id}-limit-weekly"},
+          {cockpit_view, "#upstream-quota-limit-weekly"}
+        ] do
+      assert has_element?(view, "#{selector} [data-role='quota-source-disagreement']")
+      assert has_element?(view, "#{selector} [data-role='quota-reset-disagreement']")
+      assert has_element?(view, "#{selector} [data-source='codex_usage_api']")
+      assert has_element?(view, "#{selector} [data-source='codex_rate_limit_event']")
+    end
 
     for malformed <- [nil, "invalid", %{"version" => 99}] do
       changed

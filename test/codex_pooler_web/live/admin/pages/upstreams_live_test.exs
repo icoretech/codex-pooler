@@ -8807,7 +8807,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     [assignment] = account.assignments
     assert assignment.quota_priming_status == Keyword.fetch!(opts, :priming_status)
     assert assignment.quota_priming_label == Keyword.fetch!(opts, :priming_label)
-    assert Enum.map(account.quota_limits, & &1.label) == ["5h", "30d", "Weekly"]
+    assert Enum.map(account.quota_limits, & &1.label) == ["5h", "30d", "Account Weekly"]
   end
 
   defp runtime_secret(label),

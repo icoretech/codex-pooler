@@ -32,14 +32,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
 
   defp attach_row(row, groups, as_of) do
     windows = Map.get(groups, Map.get(row, :evidence_key), [])
-    disagreement? = disagreement?(windows, as_of)
+    disagreement? = disagreement?(windows, as_of, :usage)
+    reset_disagreement? = disagreement?(windows, as_of, :reset)
 
     row
     |> Map.put(:observations, observations(windows, as_of))
     |> Map.put(:source_disagreement, disagreement?)
+    |> Map.put(:reset_disagreement, reset_disagreement?)
     |> Map.put(:selected_percent_label, row.percent_label)
     |> Map.update!(:label, &scope_label(row.key, &1))
     |> mark_disagreement(disagreement?)
+    |> mark_reset_disagreement(reset_disagreement?)
   end
 
   defp scope_label(:weekly, label), do: "Account #{label}"
@@ -53,7 +56,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
       percent: nil,
       percent_value: 0,
       percent_label: "sources differ",
-      meter_state: :unknown,
+      meter_state: :unknown
+    })
+  end
+
+  defp mark_reset_disagreement(row, false), do: row
+
+  defp mark_reset_disagreement(row, true) do
+    Map.merge(row, %{
       reset_at: nil,
       reset_label: nil,
       reset_title: nil,
@@ -79,7 +89,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     end)
   end
 
-  defp disagreement?(windows, as_of) do
+  defp disagreement?(windows, as_of, dimension) do
     current =
       Enum.filter(windows, fn window ->
         not Evidence.expired?(window, as_of) and match?(%Decimal{}, window.used_percent)
@@ -89,11 +99,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     |> Enum.any?(fn left ->
       Enum.any?(current, fn right ->
         left.source != right.source and
-          (not Decimal.equal?(left.used_percent, right.used_percent) or
-             left.reset_at != right.reset_at)
+          different_report?(left, right, dimension)
       end)
     end)
   end
+
+  defp different_report?(left, right, :usage),
+    do: not Decimal.equal?(left.used_percent, right.used_percent)
+
+  defp different_report?(left, right, :reset), do: left.reset_at != right.reset_at
 
   defp descriptor(window) do
     [

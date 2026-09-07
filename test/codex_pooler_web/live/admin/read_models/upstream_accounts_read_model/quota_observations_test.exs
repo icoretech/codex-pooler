@@ -111,7 +111,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
 
   test "reset disagreement alone remains visible and missing reset is explicit" do
     header = window(source: "codex_response_headers", reset_at: @old_reset)
-    assert weekly([window(), header]).source_disagreement
+    reset_only = weekly([window(), header])
+    assert reset_only.reset_disagreement
+    refute reset_only.source_disagreement
+    assert reset_only.percent_label == "94%"
     row = weekly([window(reset_at: nil)])
     assert hd(row.observations).reset_at == "not reported"
   end
@@ -129,7 +132,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
     legacy =
       window(source: "codex_response_headers", window_kind: "primary", reset_at: @old_reset)
 
-    assert weekly([window(), legacy]).source_disagreement
+    assert weekly([window(), legacy]).reset_disagreement
   end
 
   test "usage parser retains normal_model_slug as metadata and separate additional scopes" do
