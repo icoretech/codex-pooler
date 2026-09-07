@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.7.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.2...codex-pooler-v0.7.3) (2026-09-07)
+
+
+### Features
+
+* **admin:** expand retained quota evidence with stable reading snapshots ([3d823e7](https://github.com/icoretech/codex-pooler/commit/3d823e717866ff66863b458c508b81a1f041ea10))
+* **admin:** show retained quota source observations in dialogs ([3b021a7](https://github.com/icoretech/codex-pooler/commit/3b021a71337303b924bb8f8024e40deeb74e3a54))
+
+
+### Bug Fixes
+
+* **deps:** repair Renovate replacements and unblock Codex updates ([436e629](https://github.com/icoretech/codex-pooler/commit/436e629695b415abb5431e82c49d6a38cd673213))
+
+
+### Tests
+
+* **websocket:** wait for cleanup waiter registration before coordinator exit ([1c38a47](https://github.com/icoretech/codex-pooler/commit/1c38a475ce6b0cb30499d7ea08d9e10e3419cdf0))
+
+
+### Miscellaneous Chores
+
+* **deps:** update ghcr.io/icoretech/codex-docker docker tag to v0.153.4 ([806f9bb](https://github.com/icoretech/codex-pooler/commit/806f9bbfb99220de810f1b9f35dd083e48b542ba))
+* **deps:** update helm release codex-pooler to v0.7.16 ([063e88d](https://github.com/icoretech/codex-pooler/commit/063e88d6858c401181908dbe7357b8a1b458bebd))
+* **runtime:** upgrade to Erlang OTP 29 and Elixir 1.20.4 ([e69c07e](https://github.com/icoretech/codex-pooler/commit/e69c07ed09364ab61adf0628c65a59f80f3010bf))
+
 ## [0.7.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.1...codex-pooler-v0.7.2) (2026-09-06)
 
 
