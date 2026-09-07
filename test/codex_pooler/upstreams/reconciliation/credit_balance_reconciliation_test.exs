@@ -68,7 +68,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.CreditBalanceReconciliationTest d
         used_percent: Decimal.new(30),
         source: "codex_rate_limit_event",
         source_precision: "observed",
-        reset_at: DateTime.add(now, 86_400),
+        # Keep this distinct from the usage reset beyond presentation tolerance.
+        reset_at: DateTime.add(now, 93_600),
         observed_at: DateTime.utc_now(),
         freshness_state: "fresh"
       })

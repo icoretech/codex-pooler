@@ -11,6 +11,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.WindowSelector
 
+  # Presentation tolerance for timestamp rounding and collection delay. This
+  # does not identify quota cycles or change source timestamps/routing policy.
+  @reset_display_tolerance_seconds 60
+
   def key(%AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window),
     do: key(%{window | window_kind: "secondary"})
 
@@ -104,10 +108,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     end)
   end
 
-  defp different_report?(left, right, :usage),
-    do: not Decimal.equal?(left.used_percent, right.used_percent)
+  defp different_report?(left, right, :usage) do
+    # Usage can grow between samples. A decrease before either reported window
+    # ends is uncertain, even if the newer source reports a later reset.
+    case observation_order(left.observed_at, right.observed_at) do
+      :lt -> Decimal.compare(left.used_percent, right.used_percent) == :gt
+      :gt -> Decimal.compare(right.used_percent, left.used_percent) == :gt
+      _same_or_unknown -> not Decimal.equal?(left.used_percent, right.used_percent)
+    end
+  end
 
-  defp different_report?(left, right, :reset), do: left.reset_at != right.reset_at
+  defp different_report?(
+         %{reset_at: %DateTime{} = left},
+         %{reset_at: %DateTime{} = right},
+         :reset
+       ),
+       do: abs(DateTime.diff(left, right, :second)) > @reset_display_tolerance_seconds
+
+  defp different_report?(_left, _right, :reset), do: false
+
+  defp observation_order(%DateTime{} = left, %DateTime{} = right),
+    do: DateTime.compare(left, right)
+
+  defp observation_order(_left, _right), do: :unknown
 
   defp descriptor(window) do
     [

@@ -92,6 +92,62 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
     assert length(row.observations) == 2
   end
 
+  test "ordinary chronological usage growth preserves the selected meter" do
+    older =
+      window(
+        source: "codex_response_headers",
+        used_percent: Decimal.new(5),
+        observed_at: DateTime.add(@now, -300)
+      )
+
+    for raw <- [[older, window()], [window(), older]] do
+      row = weekly(raw)
+      refute row.source_disagreement
+      assert row.percent_label == row.selected_percent_label
+      assert row.percent_label == "94%"
+      assert length(row.observations) == 2
+    end
+  end
+
+  test "chronological usage decrease stays uncertain while both windows remain open" do
+    older =
+      window(
+        source: "codex_response_headers",
+        used_percent: Decimal.new(6),
+        observed_at: DateTime.add(@now, -300)
+      )
+
+    newer = window(used_percent: Decimal.new(5))
+
+    for raw <- [[older, newer], [newer, older]] do
+      row = weekly(raw)
+      assert row.source_disagreement
+      assert row.percent_label == "sources differ"
+      refute row.reset_disagreement
+    end
+  end
+
+  test "reset presentation tolerates up to one minute of timestamp drift" do
+    for seconds <- [1, 60] do
+      header =
+        window(source: "codex_response_headers", reset_at: DateTime.add(@new_reset, seconds))
+
+      row = weekly([window(), header])
+      refute row.reset_disagreement
+      refute row.source_disagreement
+      assert row.reset_at != nil
+      assert length(row.observations) == 2
+    end
+
+    header = window(source: "codex_response_headers", reset_at: DateTime.add(@new_reset, 61))
+    assert weekly([window(), header]).reset_disagreement
+
+    missing = window(source: "codex_response_headers", reset_at: nil)
+    row = weekly([window(), missing])
+    refute row.reset_disagreement
+    assert Enum.any?(row.observations, &(&1.reset_at == "not reported"))
+  end
+
   test "missing, unknown, zero and exhausted remain distinct" do
     assert weekly([]).percent_label == "not reported"
     assert weekly([window(used_percent: nil)]).percent_label == "not reported"
@@ -119,8 +175,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
     assert hd(row.observations).reset_at == "not reported"
   end
 
-  test "fresh versus exhausted and all stale disagreements retain evidence states" do
+  test "equal observation times with different usage stay uncertain, including all stale reports" do
     header = window(source: "codex_response_headers", used_percent: Decimal.new(100))
+    assert header.observed_at == window().observed_at
     assert weekly([window(), header]).source_disagreement
     old = DateTime.add(@now, -901)
     row = weekly([window(observed_at: old), %{header | observed_at: old}])
