@@ -437,6 +437,15 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       ]
     end
     |> Enum.reject(&is_nil/1)
+    |> Enum.map(fn attrs ->
+      # Keep the provider's descriptor without changing the routing identity.
+      Map.update!(attrs, :metadata, fn metadata ->
+        Map.merge(
+          metadata,
+          compact_metadata(%{"normal_model_slug" => present_string(limit["normal_model_slug"])})
+        )
+      end)
+    end)
   end
 
   defp additional_limit_evidence(_limit, _observed_at, _validation), do: []

@@ -269,7 +269,7 @@ defmodule CodexPooler.Dev.SeedsTest do
     quota_labels = upstream_accounts |> Enum.flat_map(& &1.quota_limits) |> Enum.map(& &1.label)
 
     assert "5h" in quota_labels
-    assert "Weekly" in quota_labels
+    assert "Account Weekly" in quota_labels
     refute Enum.any?(quota_labels, &String.contains?(String.downcase(&1), "account primary"))
     refute Enum.any?(quota_labels, &String.contains?(String.downcase(&1), "account 5h"))
 

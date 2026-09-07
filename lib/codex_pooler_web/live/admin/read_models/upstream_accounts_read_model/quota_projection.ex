@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationProjection
   alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.RelativeTime
@@ -213,6 +214,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     windows
     |> quota_limit_rows(datetime_preferences, snapshot_at)
     |> Enum.map(&put_account_credit_balance(&1, windows, snapshot_at, credit_balance))
+  end
+
+  @doc "Projects raw observations separately from the unchanged routing selection."
+  def quota_limit_rows(windows, datetime_preferences, snapshot_at, credit_balance, raw_windows) do
+    windows
+    |> quota_limit_rows(datetime_preferences, snapshot_at, credit_balance)
+    |> QuotaObservations.attach(raw_windows, snapshot_at)
   end
 
   defp put_account_credit_balance(%{key: key} = row, windows, snapshot_at, credit_balance)
@@ -507,6 +515,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
     %{
       key: key,
+      evidence_key: QuotaObservations.key(window),
+      selected_source: window.source,
       label: label,
       percent: remaining_percent,
       percent_value: quota_percent_value(remaining_percent),

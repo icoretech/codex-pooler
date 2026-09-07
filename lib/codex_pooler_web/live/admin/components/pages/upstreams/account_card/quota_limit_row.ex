@@ -21,6 +21,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         </span>
         <span class={[quota_limit_percent_class(@limit), "shrink-0"]}>{@limit.percent_label}</span>
       </div>
+      <p
+        :if={Map.get(@limit, :source_disagreement, false)}
+        data-role="quota-source-disagreement"
+        class="text-xs text-warning"
+      >
+        Sources disagree; remaining quota is uncertain. Routing currently selects {Map.get(
+          @limit,
+          :selected_percent_label
+        )} remaining
+        ({Map.get(@limit, :selected_source)}).
+      </p>
       <progress
         id={"#{@id}-progress"}
         data-role="upstream-limit-progress"
@@ -64,6 +75,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
           <span data-role="relative-countdown-value">{strip_in_prefix(@limit.reset_label)}</span>
         </span>
       </div>
+      <div class="text-[11px] text-base-content/60" data-role="quota-evidence-age">
+        {Map.get(@limit, :freshness_label)} · {Map.get(@limit, :observed_label)}
+      </div>
+      <details
+        :if={Map.get(@limit, :observations, []) != []}
+        open={Map.get(@limit, :source_disagreement, false)}
+        class="text-[11px]"
+        data-role="quota-source-observations"
+      >
+        <summary class="cursor-pointer">Source observations (UTC)</summary>
+        <ul class="mt-1 grid gap-2">
+          <li
+            :for={observation <- Map.get(@limit, :observations, [])}
+            class="break-words"
+            data-source={observation.source}
+            data-freshness={observation.freshness}
+          >
+            <div>
+              {observation.source}: {observation.used} used / {observation.remaining} remaining
+            </div>
+            <div>
+              {observation.freshness}{if observation.elapsed, do: "; window elapsed", else: ""}
+            </div>
+            <div>Observed {observation.observed_at}; reset {observation.reset_at}</div>
+            <div :if={observation.descriptor != ""}>{observation.descriptor}</div>
+          </li>
+        </ul>
+      </details>
     </div>
     """
   end

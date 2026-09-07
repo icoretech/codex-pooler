@@ -76,16 +76,10 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     end
   end
 
-  # A fresh sibling whose reset lies a full margin beyond a STALE row's reset
-  # proves the provider started a new cycle after that row was last observed:
-  # rows still describing the ended cycle must not compete for selection, or
-  # their pessimistic pressure keeps winning the merge and masks the restart
-  # from operators and routing alike (observed live: a stale rate-limit-event
-  # row at 94 percent from the ended cycle displayed as 6 percent remaining
-  # while the account was genuinely unused). Fresh rows are never rejected —
-  # same-cycle resets legitimately drift up to the window's own duration across
-  # provider surfaces — and groups without any fresh reset-bearing row are left
-  # untouched, so an all-stale exhausted group keeps its fail-closed pessimism.
+  # Compatibility heuristic for routing selection, not proof of a new cycle:
+  # provider resets can disagree while both are still in the future. Preserve
+  # the existing routing decision here; the operator UI separately projects raw
+  # evidence and exposes these disagreements without claiming either is truth.
   @prior_cycle_margin_seconds 60 * 60
 
   defp reject_prior_cycle_windows(candidates, as_of) do

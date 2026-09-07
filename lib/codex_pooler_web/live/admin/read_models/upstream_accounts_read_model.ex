@@ -464,7 +464,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           quota_windows,
           datetime_preferences,
           snapshot_at,
-          quota_snapshot.credit_balance
+          quota_snapshot.credit_balance,
+          raw_quota_windows
         ),
       identity_observability: identity_observability
     }
