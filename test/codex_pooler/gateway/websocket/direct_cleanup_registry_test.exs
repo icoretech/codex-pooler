@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupRegistryTest do
     send(task, {:begin, self()})
     assert_receive {:began, :ok}
     waiter = Task.async(fn -> ActivityRegistry.await_direct_cleanup(context) end)
-    :sys.get_state(context.registry)
+    await_registered_waiter(context, waiter.pid)
     assert Task.yield(waiter, 0) == nil
     receipt = receipt(context)
     send(task, {:bind, receipt, self()})
@@ -38,6 +38,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupRegistryTest do
     send(task, {:bind, receipt, self()})
     assert_receive :bound
     waiter = Task.async(fn -> ActivityRegistry.await_direct_cleanup(context) end)
+    await_registered_waiter(context, waiter.pid)
     Process.exit(task, :kill)
     assert {:ok, ^receipt} = Task.await(waiter)
     assert {:ok, ^receipt} = ActivityRegistry.await_direct_cleanup(context)
@@ -169,4 +170,31 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupRegistryTest do
       end
     end
   end
+
+  defp await_registered_waiter(context, pid) do
+    await_registered_waiter(context, pid, System.monotonic_time(:millisecond) + 15_000)
+  end
+
+  defp await_registered_waiter(context, pid, deadline) do
+    registered? =
+      context.registry
+      |> :sys.get_state()
+      |> Map.fetch!(:activities)
+      |> Enum.any?(fn {_token, entry} -> registered_waiter?(entry, context, pid) end)
+
+    unless registered? do
+      assert System.monotonic_time(:millisecond) < deadline,
+             "direct cleanup waiter was not registered"
+
+      receive do
+      after
+        10 -> await_registered_waiter(context, pid, deadline)
+      end
+    end
+  end
+
+  defp registered_waiter?(%{direct_cleanup: %{context: context, waiters: waiters}}, context, pid),
+    do: Enum.any?(waiters, fn {waiter, _tag} -> waiter == pid end)
+
+  defp registered_waiter?(_entry, _context, _pid), do: false
 end
