@@ -1,30 +1,46 @@
 ---
-title: Aider
+title: Aider on Codex Pooler
+sidebar:
+  label: Aider
 description: Configure Aider with Codex Pooler's narrow OpenAI-compatible /v1 surface and a Pool API key.
 ---
 
-Aider uses the OpenAI-compatible route with the `openai/` model prefix. Put the stable route settings in `.aider.conf.yml`; Aider loads this file from your home directory, then the git repo root, then the current directory, with later files taking priority. Use `--config <filename>` only when you want one explicit config file.
+Aider uses the OpenAI-compatible route with the `openai/` model prefix.
+
+## Before you start
+
+- Aider installed and ready to use.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
+
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+
+## Configure the connection
+
+Put the stable route settings in `.aider.conf.yml`; Aider loads this file from your home directory, then the git repo root, then the current directory, with later files taking priority. Use `--config <filename>` only when you want one explicit config file.
+
+Set `CODEX_POOLER_API_KEY` to your Pool API key. Keep the key out of the YAML file. Export it in the shell, or put it in a gitignored `.env` file that Aider can load:
+
+```bash
+export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+```
 
 For a deployed instance, use:
 
-```yaml
-# ~/.aider.conf.yml or <repo>/.aider.conf.yml
+```yaml title=".aider.conf.yml" frame="code"
 model: openai/gpt-5.6-terra
 openai-api-base: https://codex-pooler.example.com/v1
 ```
 
-For local setup, use:
+For local setup, change `openai-api-base` to `http://localhost:4000/v1`.
 
-```yaml
-# ~/.aider.conf.yml or <repo>/.aider.conf.yml
-model: openai/gpt-5.6-terra
-openai-api-base: http://localhost:4000/v1
-```
+## Choose a model
+
+Keep the `openai/` prefix when selecting a model available to your Pool.
 
 Aider's `.aider.conf.yml` route settings do not carry context or output limits. If your installed Aider version does not recognize `gpt-5.6-terra`, use Aider's separate model metadata JSON file for model behavior and limits instead of adding unsupported context fields to the main config.
 
-```jsonc
-// .aider.model.metadata.json
+```jsonc title=".aider.model.metadata.json" frame="code"
 {
   "openai/gpt-5.6-luna": {
     "max_tokens": 828400,
@@ -71,11 +87,7 @@ Aider's `.aider.conf.yml` route settings do not carry context or output limits. 
 
 When the Pool's `/v1/models` entry provides `context_length`, use that per-model effective value as the authoritative `max_tokens` value. The `828400` values above are long-profile examples for models whose selected Pool catalog source reports an 872000-token raw ceiling; the explicit 700400 input and 128000 output limits add up to that window. Provider accounts can temporarily report different ceilings for the same model, and a selected 272000-token profile exposes `258400`, so replace all three related limits together when the endpoint reports a different value.
 
-Keep the Pool API key out of the YAML file. Export it in the shell, or put it in a gitignored `.env` file that Aider can load:
-
-```bash
-export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
-```
+## Verify the connection
 
 Check Aider from a repository with a real file edit. The command should only need the one-off prompt when the config file is present:
 
@@ -92,4 +104,11 @@ aider \
 
 The check is only useful if `aider-ok.txt` exists with the expected content; a text reply alone does not prove Aider can edit through the configured model path.
 
+In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+## Compatibility notes
+
 The Pool API key authenticates `/v1` model requests. Do not use an operator MCP token as the OpenAI API key.
+
+
+For shared route support and limits, see [OpenAI-compatible SDKs](/clients/openai-compatible/).

@@ -1,11 +1,22 @@
 ---
-title: OMP
+title: OMP on Codex Pooler
+sidebar:
+  label: OMP
 description: Configure Oh My Pi (OMP) with Codex Pooler's narrow OpenAI-compatible /v1 Responses surface and a Pool API key.
 ---
 
 Oh My Pi (OMP) should use Codex Pooler through a custom provider in `~/.omp/agent/models.yml`. Point that provider at the narrow OpenAI-compatible `/v1` surface, keep the Pool API key in the environment, and choose `openai-responses` so OMP sends agent turns through the Responses route.
 
-## Install
+## Before you start
+
+- OMP installed and ready to use.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
+- Bun available for the installation command below.
+
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+
+### Install
 
 Use the current npm package through Bun:
 
@@ -13,11 +24,19 @@ Use the current npm package through Bun:
 bun install -g @oh-my-pi/pi-coding-agent
 ```
 
-## Provider shape
+<a id="provider-shape"></a>
 
-For a deployed instance, add:
+## Configure the connection
 
-```yaml
+Set the Pool API key in the shell that starts the client:
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
+```
+
+For a deployed instance, add the provider to `~/.omp/agent/models.yml`:
+
+```yaml title="~/.omp/agent/models.yml" frame="code"
 providers:
   codex-pooler:
     baseUrl: https://codex-pooler.example.com/v1
@@ -77,23 +96,17 @@ For local setup, change `baseUrl` to `http://localhost:4000/v1`, `remoteCompacti
 
 `apiKey: CODEX_POOLER_API_KEY` makes OMP resolve that environment variable at runtime. `authHeader: true` makes OMP send the Pool API key as `Authorization: Bearer ...`. Define only model ids your assigned Pool can serve.
 
-Keep `remoteCompaction` under the `codex-pooler` provider. Its `endpoint` is the direct backend compact endpoint, while `v2Endpoint` is the normal backend Responses endpoint used for streaming compaction. Normal OMP model traffic stays on the narrow OpenAI-compatible `/v1` Responses route. Do not use `compaction.remoteEndpoint` for provider-native Responses compaction: OMP reserves that setting for generic summary services that accept `{systemPrompt, prompt}` JSON or an OpenAI-compatible chat-completions summary request. In this setup, `omp config get compaction.remoteEndpoint` should remain `(not set)`; remote capability comes from the provider-level `remoteCompaction` block in `models.yml`.
-
-Both V2 switches are required. Set provider-level `remoteCompaction.v2StreamingEnabled: true` in `models.yml` to make the model V2-capable, and keep global `compaction.remoteStreamingV2Enabled: true` in `config.yml` to allow OMP to select that capability. OMP sends a normal backend Responses request with a terminal `compaction_trigger` to `remoteCompaction.v2Endpoint`. If V2 is unavailable or fails, OMP can use the configured direct compact endpoint before falling back to its local compaction behavior.
+## Choose a model
 
 Current OMP derives an effort thinking surface, including `xhigh`, for custom `openai-responses` models that set `reasoning: true`. Add an explicit `thinking` block only when you want to override the inferred effort list, wire mapping, or per-model default level.
 
 OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept `contextTokens`. The `828400` values above are long-profile examples for models whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` instead. Use each model's `/v1/models.context_length` as the authoritative `contextWindow`, with an independent 128000-token output budget. For the long-profile example, `compaction.thresholdPercent: 95` starts automatic compaction at 786980 tokens; `reserveTokens: 128000` configures the prompt-fit and recovery reserve and does not replace that percentage trigger.
 
-For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist handoff material to disk. Those settings reduce context-overflow risk, but they cannot repair an OMP client bug that skips its own mid-run compaction check. If an OMP plan appears to restart work after a very large turn, upgrade OMP when a newer release is available and restart or resume the session before treating it as a Codex Pooler routing issue.
-
-`compat.streamIdleTimeoutMs: 300000` keeps long OpenAI Responses reasoning turns from being aborted by OMP's semantic-progress idle watchdog while Codex Pooler and the upstream account are still working. Existing OMP sessions need to be restarted or resumed after this config change. As an environment-only override, set `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=300000` before launching `omp`.
-
-## Default model roles
+### Default model roles
 
 If you want plain `omp`, `--smol`, `--slow`, `--plan`, task, vision, advisor, commit, designer, and lightweight background paths to start on Codex Pooler, add the defaults to `~/.omp/agent/config.yml`:
 
-```yaml
+```yaml title="~/.omp/agent/config.yml" frame="code"
 startup:
   setupWizard: false
 defaultThinkingLevel: xhigh
@@ -126,12 +139,13 @@ compaction:
 
 `startup.setupWizard: false` keeps OMP from opening the initial setup flow after the provider and roles are already configured.
 
-## Connection Check
+<a id="connection-check"></a>
+
+## Verify the connection
 
 Run a one-shot prompt from the repository you want OMP to inspect:
 
 ```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
 omp --model codex-pooler/gpt-5.6-terra:xhigh \
   --no-session \
   --tools bash \
@@ -140,11 +154,29 @@ omp --model codex-pooler/gpt-5.6-terra:xhigh \
 
 `--no-session` keeps the check ephemeral. For normal interactive use, omit that flag if you want OMP to reuse session state.
 
-## Pi relationship
+In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+## Advanced configuration
+
+### Remote compaction
+
+Keep `remoteCompaction` under the `codex-pooler` provider. Its `endpoint` is the direct backend compact endpoint, while `v2Endpoint` is the normal backend Responses endpoint used for streaming compaction. Normal OMP model traffic stays on the narrow OpenAI-compatible `/v1` Responses route. Do not use `compaction.remoteEndpoint` for provider-native Responses compaction: OMP reserves that setting for generic summary services that accept `{systemPrompt, prompt}` JSON or an OpenAI-compatible chat-completions summary request. In this setup, `omp config get compaction.remoteEndpoint` should remain `(not set)`; remote capability comes from the provider-level `remoteCompaction` block in `models.yml`.
+
+Both V2 switches are required. Set provider-level `remoteCompaction.v2StreamingEnabled: true` in `models.yml` to make the model V2-capable, and keep global `compaction.remoteStreamingV2Enabled: true` in `config.yml` to allow OMP to select that capability. OMP sends a normal backend Responses request with a terminal `compaction_trigger` to `remoteCompaction.v2Endpoint`. If V2 is unavailable or fails, OMP can use the configured direct compact endpoint before falling back to its local compaction behavior.
+
+## Troubleshooting
+
+For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist handoff material to disk. Those settings reduce context-overflow risk, but they cannot repair an OMP client bug that skips its own mid-run compaction check. If an OMP plan appears to restart work after a very large turn, upgrade OMP when a newer release is available and restart or resume the session before treating it as a Codex Pooler routing issue.
+
+`compat.streamIdleTimeoutMs: 300000` keeps long OpenAI Responses reasoning turns from being aborted by OMP's semantic-progress idle watchdog while Codex Pooler and the upstream account are still working. Existing OMP sessions need to be restarted or resumed after this config change. As an environment-only override, set `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=300000` before launching `omp`.
+
+## Compatibility notes
+
+### Pi relationship
 
 OMP is a Pi fork, but it is not configured from Pi's files. Pi uses the `pi` binary and `~/.pi/agent/models.json`; OMP uses the `omp` binary, `~/.omp/agent/models.yml`, and `modelRoles` in `~/.omp/agent/config.yml`.
 
-## MCP boundary
+### MCP boundary
 
 OMP model requests use Codex Pooler's narrow OpenAI-compatible `/v1` support for selected SDK routes. Codex Pooler doesn't provide full OpenAI API parity.
 

@@ -4,13 +4,13 @@
   <strong>面向团队、Agent 和个人的完整自托管 Codex 网关。支持：</strong><br>
   <br>
   <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode"><img src=".github/assets/opencode-favicon.png" alt="OpenCode" width="24" height="24"></a>
-  <a href="https://docs.codex-pooler.com/clients/codex-cli/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/pi/" title="Pi"><img src=".github/assets/pi-favicon.png" alt="Pi" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/omp/" title="OMP"><img src=".github/assets/omp-favicon.png" alt="OMP" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/cursor/" title="Cursor"><img src=".github/assets/cursor-favicon.png" alt="Cursor" width="24" height="24"></a>
-  <a href="https://docs.codex-pooler.com/clients/kilo/" title="Kilo"><img src=".github/assets/kilo-favicon.png" alt="Kilo" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/kilo-code/" title="Kilo Code"><img src=".github/assets/kilo-favicon.png" alt="Kilo Code" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/trae/" title="Trae"><img src=".github/assets/trae-favicon.png" alt="Trae" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/aider/" title="Aider"><img src=".github/assets/aider-favicon.png" alt="Aider" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/continue/" title="Continue"><img src=".github/assets/continue-favicon.png" alt="Continue" width="24" height="24"></a>
@@ -1062,10 +1062,10 @@ Cursor BYOK 需要有效的 **Pro 或更高订阅**。请求会经过 Cursor 的
 </details>
 
 <details>
-<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo logo" width="16" height="16"> Kilo <code>~/.config/kilo/kilo.jsonc</code></summary>
+<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
 
 Kilo Code 应使用一个具名 OpenAI 兼容 provider，其 base URL 结束于 Codex Pooler
-的 `/v1` 接口。Kilo 会自己追加 `/chat/completions`，所以不要在
+的 `/v1` 接口。Kilo Code 会自己追加 `/chat/completions`，所以不要在
 `baseURL` 中写 `/v1/chat/completions`。从 npm 安装当前 CLI：
 
 ```bash
@@ -1160,18 +1160,18 @@ npm install -g @kilocode/cli@latest
 }
 ```
 
-Kilo 使用 OpenCode 风格的 `limit.{context,input,output}` 字段，但它会把推理
+Kilo Code 使用 OpenCode 风格的 `limit.{context,input,output}` 字段，但它会把推理
 tokens 纳入溢出计算，并使用 `compaction.threshold_percent` 进行预检压缩。上面的
 `828400` 是 long-profile 示例；选中的 272000-token profile 会公布 `258400`。请按
 每个模型的 `/v1/models.context_length` 设置 `limit.context` 和 `limit.input`。
 在 long-profile 示例中，`compaction.reserved: 41420` 和
 `threshold_percent: 95` 会在 786980 tokens 时触发。`limit.input`
-是本地预压缩边界，不是输入和输出同时可用的总预算。对 GPT-5 OpenAI 兼容模型，Kilo
+是本地预压缩边界，不是输入和输出同时可用的总预算。对 GPT-5 OpenAI 兼容模型，Kilo Code
 会抑制发出的 max-token 请求字段，以避免不兼容的 `max_tokens`，因此即使
 `limit.output` 不会被转发，它仍对本地上下文计算和 UI 很重要。
 
 只定义你分配到的 Pool 能服务的模型 id。对于已部署实例，把 `baseURL` 改为
-`https://codex-pooler.example.com/v1`。如果添加 Kilo 权限，请使用 Kilo 的对象
+`https://codex-pooler.example.com/v1`。如果添加 Kilo Code 权限，请使用 Kilo Code 的对象
 形式，例如 `"permission": {"bash": "allow"}`；不要设置 `"permission": "ask"`，
 那不是有效配置结构。
 
@@ -1192,7 +1192,7 @@ kilo run \
 ```
 
 `--pure` 会把外部插件排除在检查外。`--auto` 只用于可信、隔离的自动化场景，
-其中 Kilo 可以不提示就运行已批准的工具。Codex Pooler 模型使用不需要 MCP。
+其中 Kilo Code 可以不提示就运行已批准的工具。Codex Pooler 模型使用不需要 MCP。
 如果需要运营者元数据，请用支持 MCP 的独立 host 和运营者 MCP 令牌。
 
 </details>
@@ -1370,7 +1370,7 @@ Aider 能通过配置好的模型路径进行编辑。
 
 Continue 可以通过设置 `provider: openai`、把 `apiBase` 指向 `/v1`、并把 Pool
 API 密钥作为 Continue secret，来把 Codex Pooler 用作 OpenAI 兼容 provider。
-对于 `gpt-5*` 模型，Continue 默认使用 Responses API。
+基础 URL 保持为 `/v1`；请求端点由安装的 Continue 版本选择。
 
 本地 Continue 配置放在 macOS/Linux 的 `~/.continue/config.yaml`，或 Windows
 的 `%USERPROFILE%\.continue\config.yaml`。在 IDE extension 中，打开 Continue
@@ -1400,6 +1400,54 @@ models:
     capabilities:
       - tool_use
       - image_input
+  - name: GPT-5.6 Luna via Codex Pooler
+    provider: openai
+    model: gpt-5.6-luna
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
+  - name: GPT-5.6 Sol via Codex Pooler
+    provider: openai
+    model: gpt-5.6-sol
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
+  - name: GPT-6 Astra via Codex Pooler
+    provider: openai
+    model: gpt-6-astra
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcpServers:
@@ -1412,7 +1460,9 @@ mcpServers:
         Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
 ```
 
-对于已部署实例，把 `apiBase` 改为 `https://codex-pooler.example.com/v1`；如果
+此配置在 Continue 的模型选择器中定义 Terra、Luna、Sol 和 Astra。只保留 Pool 可用的模型，并分别确认每个模型的上下文限制。
+
+对于已部署实例，把每个模型的 `apiBase` 改为 `https://codex-pooler.example.com/v1`；如果
 保留可选的运营者 MCP 附加项，把 MCP `url` 改为
 `https://codex-pooler.example.com/mcp`。
 

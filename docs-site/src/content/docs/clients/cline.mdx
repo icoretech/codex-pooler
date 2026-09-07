@@ -1,9 +1,23 @@
 ---
-title: Cline
+title: Cline on Codex Pooler
+sidebar:
+  label: Cline
 description: Configure Cline with Codex Pooler's narrow OpenAI-compatible /v1 surface and optional operator MCP metadata access.
 ---
 
 Cline CLI accepts `openai` as shorthand for its OpenAI-compatible provider and stores it as `openai-compatible`. Configure it with the Pool API key, the Codex Pooler `/v1` base URL, and the model id that your assigned Pool can serve.
+
+## Before you start
+
+- Cline CLI installed and ready to use.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
+
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+
+## Configure the connection
+
+Run the following command in a shell with `CODEX_POOLER_API_KEY` set to your Pool API key:
 
 ```bash
 cline auth \
@@ -15,7 +29,13 @@ cline auth \
 
 For local setup, change `--baseurl` to `http://localhost:4000/v1`.
 
+## Choose a model
+
+Use `--modelid` above to select a model available to your Pool.
+
 Cline's user-facing model metadata names are `contextWindow`, `maxInputTokens`, and `maxTokens`. A long-profile example uses `contextWindow: 828400`, `maxInputTokens: 700400`, and `maxTokens: 128000` for a model whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400`, so use `/v1/models.context_length` as the authoritative `contextWindow` and adjust the input budget rather than configuring a raw ceiling. In the long-profile example, Cline applies its fixed 90% compaction ratio to the explicit input limit and starts compaction at 630360 tokens. `maxTokens` remains a separate response cap.
+
+## Verify the connection
 
 Check the headless CLI path after saving auth:
 
@@ -27,9 +47,13 @@ cline --provider openai \
   'Reply with exactly: cline ok'
 ```
 
+In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+## Operator MCP (optional)
+
 For optional operator MCP in Cline CLI, add the remote server to `~/.cline/mcp.json`. Codex Pooler does not require this for model use. The VS Code extension opens its own MCP settings JSON from the Cline MCP Servers panel; use the same `mcpServers` shape there.
 
-```json
+```json title="~/.cline/mcp.json" frame="code"
 {
   "mcpServers": {
     "codex_pooler": {
@@ -47,3 +71,7 @@ For optional operator MCP in Cline CLI, add the remote server to `~/.cline/mcp.j
 For local MCP setup, change the MCP `url` to `http://localhost:4000/mcp`.
 
 Use a Pool API key for `/v1` model requests and an operator MCP token for `/mcp`. Do not reuse the Pool API key for MCP.
+
+## Compatibility notes
+
+This client uses Codex Pooler's narrow OpenAI-compatible `/v1` surface. For shared route support and limits, see [OpenAI-compatible SDKs](/clients/openai-compatible/).

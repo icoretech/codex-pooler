@@ -40,6 +40,8 @@ const removePrivateMarkdownAssets = () => ({
 export default defineConfig({
   site: siteUrl,
   redirects: {
+    "/clients/kilo/": "/clients/kilo-code/",
+    "/clients/codex-cli/": "/clients/codex-cli-desktop/",
     "/reference/endpoint-routing/": "/reference/runtime-routes/",
   },
   integrations: [

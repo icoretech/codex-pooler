@@ -1,11 +1,23 @@
 ---
-title: OpenHands
+title: OpenHands on Codex Pooler
+sidebar:
+  label: OpenHands
 description: Configure OpenHands CLI with Codex Pooler's narrow OpenAI-compatible /v1 surface, OpenHands CLI config directory, a Pool API key, and env override mode.
 ---
 
 OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the Pool API key in the environment, point OpenHands at the `/v1` base URL, and pass `--override-with-envs` so the environment values win for the run without persisting Pool settings.
 
-## Config/state directory
+## Before you start
+
+- OpenHands CLI installed, or `uv` available for the one-shot command below.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
+
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+
+## Configure the connection
+
+### Config/state directory
 
 OpenHands CLI stores local state under `~/.openhands/`, created on first run. Current OpenHands CLI docs list these files:
 
@@ -18,45 +30,45 @@ OpenHands CLI stores local state under `~/.openhands/`, created on first run. Cu
 
 On Windows, OpenHands CLI runs through WSL in the upstream install docs, so those paths live in the WSL user's home directory. This Codex Pooler example uses environment overrides instead of saved config because it is explicit, easy to test, and does not mutate the user's OpenHands state.
 
-## Run with environment overrides
+<a id="run-with-environment-overrides"></a>
+<a id="deployed-instances"></a>
 
-The `uvx` command below is a Codex Pooler smoke-friendly way to run the published OpenHands CLI. It is not a replacement for the upstream installation guide.
+### Environment overrides
 
-```bash
-export LLM_API_KEY=<pool-api-key>
-export LLM_BASE_URL=http://localhost:4000/v1
-export LLM_MODEL=openai/gpt-5.6-terra
-
-uvx --python 3.12 --from openhands openhands \
-  --headless \
-  --override-with-envs \
-  -t 'Check the repository and summarize what you can do.'
-```
-
-`LLM_API_KEY` is your Codex Pooler Pool API key. It authenticates `/v1` model requests and should stay out of shell history, logs, tickets, and screenshots.
-
-## Deployed instances
-
-For a deployed Codex Pooler instance, keep the same OpenHands options and change only the base URL:
+Set `CODEX_POOLER_API_KEY` to your Pool API key, then configure the shell that will start OpenHands:
 
 ```bash
-export LLM_API_KEY=<pool-api-key>
+export LLM_API_KEY="$CODEX_POOLER_API_KEY"
 export LLM_BASE_URL=https://codex-pooler.example.com/v1
 export LLM_MODEL=openai/gpt-5.6-terra
-
-uvx --python 3.12 --from openhands openhands \
-  --headless \
-  --override-with-envs \
-  -t 'Check the repository and summarize what you can do.'
 ```
 
-## Model naming
+`LLM_API_KEY` is your Codex Pooler Pool API key. Keep it out of shared logs and screenshots. For local setup, change `LLM_BASE_URL` to `http://localhost:4000/v1`.
+
+<a id="model-naming"></a>
+
+## Choose a model
 
 Use `LLM_MODEL=openai/gpt-5.6-terra` for OpenHands. The `openai/` prefix makes OpenHands select its OpenAI-compatible provider path. Codex Pooler receives the request on `/v1` and routes it through the assigned Pool.
 
 Define only models that your Pool can serve. If your Pool exposes a different model, keep the `openai/` prefix and change the model id after the slash.
 
-## Boundaries
+## Verify the connection
+
+Run the published OpenHands CLI with the environment values above. The `uvx` command is a one-shot setup; it does not replace the upstream installation guide.
+
+```bash
+uvx --python 3.12 --from openhands openhands \
+  --headless \
+  --override-with-envs \
+  -t 'Check the repository and summarize what you can do.'
+```
+
+Confirm that the command completes with a repository summary. In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+<a id="boundaries"></a>
+
+## Compatibility notes
 
 Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK and agent routes. It doesn't provide full OpenAI API parity.
 

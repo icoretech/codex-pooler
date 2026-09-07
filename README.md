@@ -4,13 +4,13 @@
   <strong>The full featured self-hosted Codex gateway, for teams, agents and you. Works with:</strong><br>
   <br>
   <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode"><img src=".github/assets/opencode-favicon.png" alt="OpenCode" width="24" height="24"></a>
-  <a href="https://docs.codex-pooler.com/clients/codex-cli/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/pi/" title="Pi"><img src=".github/assets/pi-favicon.png" alt="Pi" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/omp/" title="OMP"><img src=".github/assets/omp-favicon.png" alt="OMP" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/cursor/" title="Cursor"><img src=".github/assets/cursor-favicon.png" alt="Cursor" width="24" height="24"></a>
-  <a href="https://docs.codex-pooler.com/clients/kilo/" title="Kilo"><img src=".github/assets/kilo-favicon.png" alt="Kilo" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/kilo-code/" title="Kilo Code"><img src=".github/assets/kilo-favicon.png" alt="Kilo Code" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/trae/" title="Trae"><img src=".github/assets/trae-favicon.png" alt="Trae" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/aider/" title="Aider"><img src=".github/assets/aider-favicon.png" alt="Aider" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/continue/" title="Continue"><img src=".github/assets/continue-favicon.png" alt="Continue" width="24" height="24"></a>
@@ -1152,10 +1152,10 @@ for prerequisites, model selection, and connection checks.
 </details>
 
 <details>
-<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo logo" width="16" height="16"> Kilo <code>~/.config/kilo/kilo.jsonc</code></summary>
+<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
 
 Kilo Code should use a named OpenAI-compatible provider whose base URL ends at
-Codex Pooler's `/v1` surface. Kilo appends `/chat/completions` itself, so do
+Codex Pooler's `/v1` surface. Kilo Code appends `/chat/completions` itself, so do
 not put `/v1/chat/completions` in `baseURL`. Install the current CLI from npm:
 
 ```bash
@@ -1250,7 +1250,7 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
 }
 ```
 
-Kilo uses OpenCode-style `limit.{context,input,output}` fields, but it includes
+Kilo Code uses OpenCode-style `limit.{context,input,output}` fields, but it includes
 reasoning tokens in overflow accounting and uses `compaction.threshold_percent`
 for preflight compaction. The `828400` values above are long-profile examples
 for models whose selected Pool catalog source reports an 872000-token raw
@@ -1260,14 +1260,14 @@ model's `/v1/models.context_length` for `limit.context` and `limit.input`. For
 the long-profile example, `compaction.reserved: 41420` and
 `threshold_percent: 95` meet at 786980 tokens.
 `limit.input` is the local pre-compaction boundary, not a simultaneous
-input-plus-output envelope. For GPT-5 OpenAI-compatible models, Kilo suppresses
+input-plus-output envelope. For GPT-5 OpenAI-compatible models, Kilo Code suppresses
 the outgoing max-token request field to avoid incompatible `max_tokens`, so
 `limit.output` is still important for local context math and UI even when it is
 not forwarded.
 
 Define only model ids your assigned Pool can serve. For deployed instances,
-change `baseURL` to `https://codex-pooler.example.com/v1`. If you add Kilo
-permissions, use Kilo's object form such as `"permission": {"bash": "allow"}`;
+change `baseURL` to `https://codex-pooler.example.com/v1`. If you add Kilo Code
+permissions, use Kilo Code's object form such as `"permission": {"bash": "allow"}`;
 do not set `"permission": "ask"`, which is not a valid config shape.
 
 Check the headless tool path from an isolated directory:
@@ -1287,7 +1287,7 @@ kilo run \
 ```
 
 `--pure` keeps external plugins out of the check. `--auto` is only for trusted,
-isolated automation where Kilo may run approved tools without prompting. Codex
+isolated automation where Kilo Code may run approved tools without prompting. Codex
 Pooler model use does not require MCP. If you need operator metadata, use a
 separate MCP-capable host with an operator MCP token.
 
@@ -1473,7 +1473,7 @@ For deployed instances, change `openai-api-base` to
 
 Continue can use Codex Pooler as an OpenAI-compatible provider by setting
 `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue
-secret. For `gpt-5*` models, Continue uses the Responses API by default.
+secret. Keep the base URL at `/v1`; the installed Continue version chooses the request endpoint.
 
 For local Continue configs, put the assistant in `~/.continue/config.yaml` on
 macOS/Linux or `%USERPROFILE%\.continue\config.yaml` on Windows. In the IDE
@@ -1505,6 +1505,54 @@ models:
     capabilities:
       - tool_use
       - image_input
+  - name: GPT-5.6 Luna via Codex Pooler
+    provider: openai
+    model: gpt-5.6-luna
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
+  - name: GPT-5.6 Sol via Codex Pooler
+    provider: openai
+    model: gpt-5.6-sol
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
+  - name: GPT-6 Astra via Codex Pooler
+    provider: openai
+    model: gpt-6-astra
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcpServers:
@@ -1517,7 +1565,9 @@ mcpServers:
         Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
 ```
 
-For deployed instances, change `apiBase` to `https://codex-pooler.example.com/v1`;
+The configuration defines Terra, Luna, Sol, and Astra in Continue's model selector. Keep only models available to your Pool and check each model's context limit independently.
+
+For deployed instances, change every model's `apiBase` to `https://codex-pooler.example.com/v1`;
 if you keep the optional operator MCP add-on, change the MCP `url` to
 `https://codex-pooler.example.com/mcp`.
 

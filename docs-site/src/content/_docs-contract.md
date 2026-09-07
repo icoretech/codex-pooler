@@ -13,6 +13,31 @@ fixed product name requires capitalization. Keep `llms.txt` as a deliberate
 curated index: add a page only when it belongs in the declared primary or
 discovery scope, then update its inventory check and matching review date.
 
+## Client guide structure
+
+Dedicated client guides use this section order, with sentence-case headings:
+
+Use `Client on Codex Pooler` for the page title and a short `sidebar.label` containing only the client name. Use `Kilo Code` as the product name while preserving the `kilo` executable, config paths, and package identifiers. The Codex guide uses `Codex CLI / Desktop on Codex Pooler` at `/clients/codex-cli-desktop/`; retain the old `/clients/codex-cli/` route as a redirect and update internal links and discovery indexes to the canonical route.
+
+1. A short introduction identifying the client and connection type
+2. An optional integration banner, after the introduction and before prerequisites
+3. `Before you start`: installed client, reachable endpoint, Pool API key, and client-specific prerequisites
+4. `Configure the connection`: config file or settings screen, credential setup, and the recommended configuration
+5. `Choose a model`: selection, prefixes, roles, and client-specific context/output limits
+6. `Verify the connection`: a client-side check, expected result, and matching Pooler request metadata
+7. `Advanced configuration`, when needed: alternative providers, transports, migration, or optional features
+8. `Operator MCP (optional)`, only when a supported client setup is documented
+9. `Troubleshooting`, when there are concrete client-specific symptoms and remedies
+10. `Compatibility notes`: client-specific limits and links to shared reference material
+
+Keep installation instructions under prerequisites and file paths beside their configuration examples. Keep optional MCP blocks outside the primary model configuration; explain how to merge them into the same file. Do not add empty sections or imply MCP support merely to fill the outline.
+
+Every configuration-file code block uses Expressive Code's explicit `title="path/to/file" frame="code"` metadata, including repeated optional snippets for the same file. Environment-file contents also use the editor frame; commands executed in a shell retain the terminal frame. Do not rely on inferred filename comments or invent filenames for UI settings, API responses, or SDK fragments. Use the same filename for snippets merged into one file and explain the merge in adjacent prose. The editor filename header is not an interactive tab; use Starlight Tabs only when readers must select between genuine alternatives.
+
+Use one deployed configuration example and a short localhost substitution where the client supports it. Explain which process must reach the endpoint for server-mediated clients. Keep instructional screenshots beside the relevant step; optional integration banners use the existing approximately 3:1 format, with no placeholder when absent.
+
+Preserve existing heading anchors when renaming or regrouping sections. The OpenAI-compatible SDK page remains a cross-client reference, not a dedicated client guide, and keeps its SDK and API-contract organization.
+
 ## Allowed Hosts
 
 Use only these hosts in public examples:

@@ -1,42 +1,38 @@
 ---
-title: Hermes Agent
+title: Hermes Agent on Codex Pooler
+sidebar:
+  label: Hermes Agent
 description: Configure Hermes Agent with Codex Pooler's narrow OpenAI-compatible /v1 surface, image generation, speech-to-text, and operator MCP endpoint.
 ---
-
-![Codex Pooler Hermes Agent integration](/codex-pooler-hermes.png)
 
 Hermes Agent should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface unless a Codex backend route is documented for the specific Hermes path you are testing.
 
 The recommended setup is the Hermes `openai-api` provider. It keeps Hermes on its OpenAI API path, sends model requests to `/v1`, configures image generation on the OpenAI image provider, and keeps the Pool API key separate from the optional operator MCP token.
 
-For a deployed instance, use these URLs:
+![Codex Pooler Hermes Agent integration](/codex-pooler-hermes.png)
 
-```text
-OpenAI API base URL:
-https://codex-pooler.example.com/v1
+## Before you start
 
-Operator MCP URL:
-https://codex-pooler.example.com/mcp
-```
+- Hermes Agent installed and ready to use.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
 
-For local setup, replace the host with `http://localhost:4000`.
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
 
-## Recommended `openai-api` provider
+<a id="recommended-openai-api-provider"></a>
 
-Store the Pool API key in a private Hermes environment file such as `~/.hermes/.env`. Add the operator MCP token only if you want the optional read-only metadata tools.
+## Configure the connection
 
-```bash
+Store the Pool API key and base URL in a private Hermes environment file such as `~/.hermes/.env`:
+
+```bash title="~/.hermes/.env" frame="code"
 OPENAI_API_KEY=<pool-api-key>
 OPENAI_BASE_URL=https://codex-pooler.example.com/v1
-# Required for the optional speech-to-text setup below:
-STT_OPENAI_BASE_URL=https://codex-pooler.example.com/v1
-# Optional operator-only MCP metadata add-on:
-CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 ```
 
-Then point `~/.hermes/config.yaml` at the same `/v1` base URL, force the Responses transport mode, and include the `image_gen` block for Hermes image generation and edits. Add the `stt` block to enable speech-to-text through Codex Pooler.
+Then point `~/.hermes/config.yaml` at the same `/v1` base URL and use the Responses transport mode:
 
-```yaml
+```yaml title="~/.hermes/config.yaml" frame="code"
 model:
   default: gpt-5.6-terra
   provider: openai-api
@@ -48,6 +44,41 @@ model:
 agent:
   image_input_mode: native
 
+compression:
+  threshold: 0.95
+
+auxiliary:
+  compression:
+    timeout: 900
+```
+
+For local setup, use `http://localhost:4000/v1` in both the environment and model configuration.
+
+## Choose a model
+
+Set `model.default` to a model available to your Pool.
+
+Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/models`, flattened from the selected native raw context window and its effective percentage. Treat that per-model endpoint value as authoritative because provider accounts can temporarily report different catalog ceilings. The `828400` value in this example is a long-profile fallback for a Pool whose selected model source reports 872000 raw tokens; a short 272000-token profile reports `258400` instead. Match an explicit fallback to the Pool's `/v1/models` result rather than configuring the raw ceiling. With the long-profile example, `compression.threshold: 0.95` starts Hermes compression at 786980 tokens. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout` and from an application output cap.
+
+## Verify the connection
+
+Test the model path with a one-shot prompt:
+
+```bash
+hermes -z 'Reply with exactly: hermes openai api ok' --ignore-rules
+```
+
+That test should create normal `/v1` traffic using the Pool API key. The MCP entry is separate and should authenticate only with an operator-owned MCP token.
+
+In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+## Advanced configuration
+
+### Image generation and speech-to-text
+
+Add these optional blocks to `~/.hermes/config.yaml`:
+
+```yaml title="~/.hermes/config.yaml" frame="code"
 image_gen:
   provider: openai
   model: gpt-image-2-medium
@@ -57,26 +88,15 @@ stt:
   provider: openai
   openai:
     model: gpt-4o-transcribe
-
-compression:
-  threshold: 0.95
-
-auxiliary:
-  compression:
-    timeout: 900
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcp_servers:
-  codex_pooler:
-    url: https://codex-pooler.example.com/mcp
-    headers:
-      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
-    enabled: true
-    timeout: 120
-    connect_timeout: 15
 ```
 
-Use `http://localhost:4000/v1` and `http://localhost:4000/mcp` for a local Codex Pooler instance.
+For speech-to-text, also add this value to `~/.hermes/.env`:
+
+```bash title="~/.hermes/.env" frame="code"
+STT_OPENAI_BASE_URL=https://codex-pooler.example.com/v1
+```
+
+For local setup, use `http://localhost:4000/v1`.
 
 Speech-to-text uses `POST /v1/audio/transcriptions`. Hermes' audio client needs
 `STT_OPENAI_BASE_URL`; it does not inherit `model.base_url` or `OPENAI_BASE_URL`.
@@ -98,37 +118,19 @@ text/model provider path; the OpenAI image provider still needs the SDK
 environment so image requests go through Codex Pooler's `/v1` surface instead
 of OpenAI directly.
 
-If text requests work but image generation fails with `invalid_api_key`, check
-the environment of the long-running Hermes process or gateway service first.
-It may not have loaded `OPENAI_BASE_URL`, so the OpenAI SDK image client may be
-using OpenAI's default endpoint instead of Codex Pooler.
-
-Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/models`, flattened from the selected native raw context window and its effective percentage. Treat that per-model endpoint value as authoritative because provider accounts can temporarily report different catalog ceilings. The `828400` value in this example is a long-profile fallback for a Pool whose selected model source reports 872000 raw tokens; a short 272000-token profile reports `258400` instead. Match an explicit fallback to the Pool's `/v1/models` result rather than configuring the raw ceiling. With the long-profile example, `compression.threshold: 0.95` starts Hermes compression at 786980 tokens. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout` and from an application output cap.
-
-Remote HTTP MCP servers require Hermes' `mcp` extra. If `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not available`, install MCP support into the Hermes environment, following the [Hermes MCP Integration docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp), and rerun the test.
-
-Test the model path with a one-shot prompt:
-
-```bash
-hermes -z 'Reply with exactly: hermes openai api ok' --ignore-rules
-```
-
-That test should create normal `/v1` traffic using the Pool API key. The MCP entry is separate and should authenticate only with an operator-owned MCP token.
-
-## Alternate `openai-codex` credential-pool path
+### Alternate `openai-codex` credential-pool path
 
 Hermes can also use its `openai-codex` provider against Codex Pooler, but this alternate path is less direct. The preferred setup is the `openai-api` provider above with `api_mode: codex_responses`. Hermes treats `openai-codex` as an OAuth provider by default, so add a Pool API key credential ahead of any device-code credential and keep the credential `base_url` on `/v1`.
 
-Keep endpoint and MCP token values in the environment:
+Keep the endpoint value in the environment:
 
-```bash
+```bash title="~/.hermes/.env" frame="code"
 HERMES_CODEX_BASE_URL=https://codex-pooler.example.com/v1
-CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 ```
 
 Set the provider in `~/.hermes/config.yaml`:
 
-```yaml
+```yaml title="~/.hermes/config.yaml" frame="code"
 model:
   default: gpt-5.6-terra
   provider: openai-codex
@@ -145,21 +147,11 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcp_servers:
-  codex_pooler:
-    url: https://codex-pooler.example.com/mcp
-    headers:
-      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
-    enabled: true
-    timeout: 120
-    connect_timeout: 15
 ```
 
 Add a credential-pool entry for Codex Pooler in the Hermes `auth.json` file. This example shows only placeholders. Don't paste a real key into public docs or shared files.
 
-```json
+```json title="~/.hermes/auth.json" frame="code"
 {
   "active_provider": "openai-codex",
   "credential_pool": {
@@ -178,6 +170,39 @@ Add a credential-pool entry for Codex Pooler in the Hermes `auth.json` file. Thi
 ```
 
 Use the `openai-api` path first unless you specifically need to test Hermes credential-pool behavior.
+
+## Operator MCP (optional)
+
+Add a separate operator token to `~/.hermes/.env`:
+
+```bash title="~/.hermes/.env" frame="code"
+CODEX_POOLER_MCP_KEY=<operator-mcp-token>
+```
+
+Add the following top-level block to `~/.hermes/config.yaml` with either provider setup:
+
+```yaml title="~/.hermes/config.yaml" frame="code"
+# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
+mcp_servers:
+  codex_pooler:
+    url: https://codex-pooler.example.com/mcp
+    headers:
+      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
+    enabled: true
+    timeout: 120
+    connect_timeout: 15
+```
+
+For local MCP setup, use `http://localhost:4000/mcp`.
+
+Remote HTTP MCP servers require Hermes' `mcp` extra. If `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not available`, install MCP support into the Hermes environment, following the [Hermes MCP Integration docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp), and rerun the test.
+
+## Troubleshooting
+
+If text requests work but image generation fails with `invalid_api_key`, check
+the environment of the long-running Hermes process or gateway service first.
+It may not have loaded `OPENAI_BASE_URL`, so the OpenAI SDK image client may be
+using OpenAI's default endpoint instead of Codex Pooler.
 
 ## Compatibility notes
 

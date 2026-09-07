@@ -1,31 +1,35 @@
 ---
-title: OpenCode
+title: OpenCode on Codex Pooler
+sidebar:
+  label: OpenCode
 description: Configure OpenCode and optional OMO model routing with Codex Pooler's narrow OpenAI-compatible /v1 surface.
 ---
-
-![Codex Pooler OpenCode integration](/codex-pooler-opencode.png)
 
 OpenCode should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the provider id as `openai` for this setup so OpenCode continues to use its OpenAI provider-family behavior. The Pool API key authenticates model requests. A separate operator MCP token authenticates the optional remote MCP endpoint. MCP is not required for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only metadata tools.
 
 OpenCode websocket support is the narrow Responses websocket route at `GET /v1/responses`, not OpenAI Realtime SDK compatibility.
 
-For a deployed instance, use these URLs:
+![Codex Pooler OpenCode integration](/codex-pooler-opencode.png)
 
-```text
-OpenCode provider base URL:
-https://codex-pooler.example.com/v1
+## Before you start
 
-Remote MCP URL:
-https://codex-pooler.example.com/mcp
+- OpenCode installed and ready to use.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
+
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+
+<a id="provider-example"></a>
+
+## Configure the connection
+
+Merge the provider settings into `~/.config/opencode/opencode.json`. Store the Pool API key outside the config and read it through environment expansion:
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-For local setup, replace the host with `http://localhost:4000`.
-
-## Provider example
-
-Store the Pool API key outside the config and read it through environment expansion.
-
-```jsonc
+```jsonc title="~/.config/opencode/opencode.json" frame="code"
 {
   "$schema": "https://opencode.ai/config.json",
   "small_model": "openai/gpt-5.6-luna",
@@ -154,6 +158,10 @@ Store the Pool API key outside the config and read it through environment expans
 
 Define only model ids your assigned Pool can serve. If you run Codex Pooler locally, set `baseURL` to `http://localhost:4000/v1`.
 
+## Choose a model
+
+Select an `openai/` model configured below the `openai` provider and available to your Pool.
+
 OpenCode uses `small_model` for background helpers such as automatic session titles. Without an explicit override, it may infer a nano model that Codex Pools do not serve. Point `small_model` at a lightweight model assigned to your Pool. The setting remains effective when OMO is loaded.
 
 Request-time OpenAI options belong under each model's `options` block. Keep only connection settings such as `baseURL` and `apiKey` in provider-level `options`. Use `serviceTier: "priority"` for priority processing. `fast` is an accepted equivalent request spelling, but `priority` is the canonical spelling for new configuration. Enable it only when your Pool and upstream offer it and you intentionally accept the potentially higher cost; leave it commented to use the default tier. This `/v1` route translates the request shape, while any projected provider `service_tier` response value keeps the provider's literal vocabulary.
@@ -161,13 +169,21 @@ Do not add `store`: Codex Pooler sets `store: false` on its upstream streaming r
 
 OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. The `828400` values above are long-profile examples for models whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` through `/v1/models` instead. Use each model's `/v1/models.context_length` as the authoritative value for `limit.context` and `limit.input`. With the long-profile example and `reserved: 41420`, OpenCode starts compaction at 786980 tokens. `limit.input` is the local pre-compaction boundary, not a simultaneous input-plus-output envelope. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap.
 
-## Oh My OpenAgent (OMO) routing
+## Verify the connection
+
+Start a new conversation with the configured model and send a short request. In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+If you automate OpenCode from scripts, use OpenCode's own documented headless command shape for your installed version and verify both the final response and the expected file changes. The examples on this page focus on configuration, not a full automation workflow.
+
+## Advanced configuration
+
+### Oh My OpenAgent (OMO) routing
 
 If you use Oh My OpenAgent, keep the native `openai` provider configuration above and add model overrides in `~/.config/opencode/oh-my-openagent.jsonc`. Keep the `openai/` prefix on every OMO model so delegated agents continue to use the same Codex Pooler provider.
 
 This example assigns Luna to lightweight and background work, Terra to daily agent work, and Sol to planning and deep-reasoning roles. Each explicit fallback stays inside the model ids assigned to the Pool and preserves the primary reasoning variant.
 
-```jsonc
+```jsonc title="~/.config/opencode/oh-my-openagent.jsonc" frame="code"
 {
   "agents": {
     "sisyphus": {
@@ -281,11 +297,13 @@ bunx oh-my-openagent doctor --platform=opencode --json
 
 The doctor validates plugin loading, schema, and model resolution, but it does not prove that an upstream can serve the selected model. Send one bounded request through the installed OpenCode headless workflow for every model tier assigned to OMO before relying on the routing map.
 
-## Remote MCP example
+<a id="remote-mcp-example"></a>
+
+## Operator MCP (optional)
 
 Add Codex Pooler as a remote MCP server only when the OpenCode host should inspect metadata that the operator can already see in the admin UI.
 
-```jsonc
+```jsonc title="~/.config/opencode/opencode.json" frame="code"
 {
   "mcp": {
     "codex_pooler": {
@@ -305,8 +323,6 @@ Add Codex Pooler as a remote MCP server only when the OpenCode host should inspe
 Use a dedicated operator MCP token for hosts that persist remote MCP headers. Don't use a Pool API key for `/mcp`.
 
 ## Compatibility notes
-
-If you automate OpenCode from scripts, use OpenCode's own documented headless command shape for your installed version and verify both the final response and the expected file changes. The examples on this page focus on configuration, not a full automation workflow.
 
 Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. Supported OpenCode traffic should stay on `/v1/responses` or `/v1/chat/completions`, depending on the OpenAI provider path OpenCode uses.
 

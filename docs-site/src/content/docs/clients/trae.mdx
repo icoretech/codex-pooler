@@ -1,5 +1,7 @@
 ---
-title: Trae
+title: Trae on Codex Pooler
+sidebar:
+  label: Trae
 description: Configure Trae or Trae CN with Codex Pooler's narrow OpenAI-compatible /v1 chat-completions surface and a Pool API key.
 ---
 
@@ -8,7 +10,19 @@ Pooler custom model entry through the OpenAI Chat Completions API format. This
 is a chat-completions setup, not Codex backend compatibility and not full
 OpenAI API parity.
 
-## Runtime Shape
+## Before you start
+
+- Trae or Trae CN installed and ready to use.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
+
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+
+Sign in to Trae before opening the Models screen or agent chat.
+
+## Configure the connection
+
+### Runtime shape
 
 Use a Pool API key for model requests. Do not reuse operator MCP tokens,
 browser sessions, upstream account tokens, or imported account material.
@@ -28,10 +42,7 @@ For local setup, use `http://localhost:4000/v1`.
 
 ![Trae custom model configuration for Codex Pooler](/trae-custom-model-config.png)
 
-## Custom Model Settings
-
-Trae requires a Trae account session before the Models screen and agent chat
-surface are usable. Sign in to Trae first, then add the custom model.
+### Custom model settings
 
 In Trae, open **Settings -> Models**, add a custom model, and use the custom
 configuration path.
@@ -54,7 +65,7 @@ If you enable **Full URL** instead, the value must become
 `https://codex-pooler.example.com/v1/chat/completions`. Keep it off for the
 normal setup shown above.
 
-## Trae CN Labels
+### Trae CN labels
 
 In Trae CN, the same flow appears as **设置 -> 模型** and **自定义配置**. The
 field values are the same:
@@ -80,7 +91,9 @@ For Trae Work, custom model availability is limited to the desktop/local
 environment in the current public docs. Keep this configuration on the client
 surface that can actually save and validate custom models.
 
-## Model Picker
+<a id="model-picker"></a>
+
+## Choose a model
 
 After saving the custom model, open the agent model picker and turn **Auto
 Mode** off. The model list is hidden behind Auto Mode by default. Select the
@@ -88,7 +101,9 @@ custom Codex Pooler model under **Custom Models**.
 
 ![Trae model picker with Auto Mode off and Codex Pooler selected](/trae-model-picker.png)
 
-## Connection Check
+<a id="connection-check"></a>
+
+## Verify the connection
 
 First check the Pool API key and model with a direct chat-completions request:
 
@@ -114,7 +129,11 @@ Then save the custom model in Trae or Trae CN. Treat the setup as working only
 when the model add/check step succeeds and a real chat can answer `trae ok`
 through the configured model.
 
-## Boundaries
+In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+<a id="boundaries"></a>
+
+## Compatibility notes
 
 Trae should point at Codex Pooler's `/v1` base URL with **Full URL** off, or at
 `/v1/chat/completions` only when **Full URL** is on. Do not point Trae at

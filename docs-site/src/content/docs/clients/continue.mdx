@@ -1,11 +1,23 @@
 ---
-title: Continue
+title: Continue on Codex Pooler
+sidebar:
+  label: Continue
 description: Configure Continue with Codex Pooler's narrow OpenAI-compatible /v1 surface, local config.yaml file locations, model capabilities, and optional operator MCP metadata access.
 ---
 
-Continue can use Codex Pooler as an OpenAI-compatible provider by setting `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue secret. For `gpt-5*` models, Continue uses the Responses API by default.
+Continue can use Codex Pooler as an OpenAI-compatible provider by setting `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue secret. Keep the base URL at `/v1`; the installed Continue version chooses the request endpoint.
 
-## Config file path
+## Before you start
+
+- Continue CLI or the IDE extension installed and ready to use.
+- A Codex Pooler URL reachable from the client.
+- A Pool API key and a model available to that Pool.
+
+Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+
+## Configure the connection
+
+### Config file path
 
 For local Continue configs, put the Codex Pooler assistant in `config.yaml`:
 
@@ -21,7 +33,7 @@ Continue CLI resolves config from `--config` first, then the saved last-used con
 
 Hub configs live in Continue Mission Control instead of this local file. For Codex Pooler examples, local `config.yaml` is the clearest setup because it keeps the Pool route, capabilities, and optional MCP entry inspectable.
 
-```yaml
+```yaml title="~/.continue/config.yaml" frame="code"
 name: Codex Pooler
 version: 1.0.0
 schema: v1
@@ -43,21 +55,65 @@ models:
     capabilities:
       - tool_use
       - image_input
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcpServers:
-  - name: codex_pooler
-    type: streamable-http
-    url: https://codex-pooler.example.com/mcp
-    requestOptions:
-      timeout: 30000
-      headers:
-        Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
+  - name: GPT-5.6 Luna via Codex Pooler
+    provider: openai
+    model: gpt-5.6-luna
+    apiBase: https://codex-pooler.example.com/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
+  - name: GPT-5.6 Sol via Codex Pooler
+    provider: openai
+    model: gpt-5.6-sol
+    apiBase: https://codex-pooler.example.com/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
+  - name: GPT-6 Astra via Codex Pooler
+    provider: openai
+    model: gpt-6-astra
+    apiBase: https://codex-pooler.example.com/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
 ```
 
-For local setup, change `apiBase` to `http://localhost:4000/v1`. If you keep the optional operator MCP add-on locally, change the MCP `url` to `http://localhost:4000/mcp`.
+For local setup, change `apiBase` to `http://localhost:4000/v1` in every model entry.
+
+## Choose a model
+
+The configuration defines Terra, Luna, Sol, and Astra separately so they are available in Continue's model selector. Select the model you want to use and keep only entries available to your Pool. Keep the documented `roles` and `capabilities` with each model entry, and check each model's context limit independently.
 
 Continue uses `contextLength` for request pruning and `defaultCompletionOptions.maxTokens` for the completion budget. The `828400` value above is a long-profile example for a model whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` instead. Use `/v1/models.context_length` as the authoritative `contextLength`, not the raw ceiling. For the long-profile example, Continue leaves 699400 tokens for input after its 128000-token completion cap and fixed 1000-token counting buffer.
+
+## Verify the connection
 
 Check the headless CLI path after saving the config:
 
@@ -69,4 +125,28 @@ npx -y @continuedev/cli@latest -p \
   'Reply with exactly: continue ok'
 ```
 
+In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
+
+## Operator MCP (optional)
+
+To enable operator metadata tools, add this top-level block to the same `config.yaml` and configure the separate `CODEX_POOLER_MCP_KEY` secret:
+
+```yaml title="~/.continue/config.yaml" frame="code"
+# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
+mcpServers:
+  - name: codex_pooler
+    type: streamable-http
+    url: https://codex-pooler.example.com/mcp
+    requestOptions:
+      timeout: 30000
+      headers:
+        Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
+```
+
+For local MCP setup, change `url` to `http://localhost:4000/mcp`.
+
 The Pool API key authenticates model requests. The MCP token authenticates only the operator metadata endpoint.
+
+## Compatibility notes
+
+This client uses Codex Pooler's narrow OpenAI-compatible `/v1` surface. For shared route support and limits, see [OpenAI-compatible SDKs](/clients/openai-compatible/).

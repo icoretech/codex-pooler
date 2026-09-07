@@ -1,5 +1,7 @@
 ---
-title: Cursor
+title: Cursor on Codex Pooler
+sidebar:
+  label: Cursor
 description: Configure Cursor BYOK with a public Codex Pooler endpoint, an explicit model, and a Pool API key.
 ---
 
@@ -46,7 +48,9 @@ Check both switches after restarting or changing settings.
 Keep the base URL at `/v1`; do not append `/responses` or `/chat/completions`.
 Start a **new chat**, turn **Auto** off, and select the explicit model.
 
-## Model selection and Auto
+<a id="model-selection-and-auto"></a>
+
+## Choose a model
 
 Cursor's model list is not an import of the Pooler's `/v1/models` catalog.
 Refreshing the list retrieves Cursor's own catalog. Verify model availability
@@ -62,7 +66,9 @@ Keep the exact model ID for initial verification. A prefix such as
 `pooler/` changes the identifier and may also change Cursor's request
 construction; it is not merely a display label.
 
-## Verify actual traffic
+<a id="verify-actual-traffic"></a>
+
+## Verify the connection
 
 Send a short request with the explicit model selected. In Codex Pooler's
 request logs, verify the time, API key, requested model, final status, and
@@ -80,14 +86,16 @@ request row. Check the HTTP ingress log for the request path, status and
 | Named models unavailable | Confirm Cursor recognizes your active paid subscription. A [similar erroneous gate on Pro](https://forum.cursor.com/t/169438/5) has also been reported. |
 | Access to private networks is forbidden | Use a publicly reachable HTTPS endpoint instead of localhost or a private address. |
 | Model name is not valid | Check the API key switch, exact model ID, Pool permissions, and any team BYOK policy. Start a new chat after enabling the key. |
-| Unsupported parameter | Correlate the gateway error with the installed client version; do not assume old request-shape reports describe your version. |
+| Unsupported parameter | [Report a bug](https://github.com/icoretech/codex-pooler/issues/new) with your Cursor and Codex Pooler versions, selected model, parameter name, and sanitized error code. Do not include API keys, prompts, or raw request bodies. |
 | Auto answers but Pooler has no request | Select the explicit model. Auto can use Cursor's own routing. |
 
 ![Cursor free-plan message blocking an explicitly selected model](/cursor-free-plan-limit.png)
 
 *Enabling BYOK does not remove the paid-plan requirement for named models.*
 
-## Supported setup
+<a id="supported-setup"></a>
+
+## Compatibility notes
 
 This guide covers Cursor desktop with an explicit model and a Pool API key.
 It does not cover Auto, Tab completion, Cloud Agents, or the separate Cursor
