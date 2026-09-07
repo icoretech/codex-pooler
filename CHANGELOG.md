@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.3...codex-pooler-v0.7.4) (2026-09-07)
+
+
+### Bug Fixes
+
+* **quotas:** preserve provider permissions and model-specific reset evidence ([8ae4595](https://github.com/icoretech/codex-pooler/commit/8ae4595fc9d5f09eb9e185476d51d7add6180ccd))
+* **websocket:** recover interrupted native compaction retries ([42d9f9a](https://github.com/icoretech/codex-pooler/commit/42d9f9aac153c9cebdd7aede2b803beb648f0917))
+
+
+### Miscellaneous Chores
+
+* **deps:** update helm release codex-pooler to v0.8.0 ([#361](https://github.com/icoretech/codex-pooler/issues/361)) ([2f87d2b](https://github.com/icoretech/codex-pooler/commit/2f87d2bfb9975f19bca9870150251e4163391047))
+
 ## [0.7.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.2...codex-pooler-v0.7.3) (2026-09-07)
 
 
