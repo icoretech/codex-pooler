@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
@@ -81,6 +82,93 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
     assert prepared.payload["previous_response_id"] == "resp_synthetic_anchor"
     assert is_nil(prepared.request_options.continuity.previous_response_id)
+  end
+
+  test "projected full-history native compact retains replay eligibility without raw metadata" do
+    payload =
+      remote_compaction_v2_incremental_subset!("full_history_without_anchor")
+      |> Map.put("model", "gpt-example")
+      |> Map.put("client_metadata", %{
+        "x-codex-turn-metadata" =>
+          CodexPooler.JSON.encode!(%{
+            "turn_id" => Ecto.UUID.generate(),
+            "window_id" => "projected-window",
+            "context_window_id" => Ecto.UUID.generate(),
+            "window_number" => 1,
+            "request_kind" => "compaction",
+            "compaction" => %{
+              "trigger" => "auto",
+              "reason" => "context_limit",
+              "implementation" => "responses_compaction_v2",
+              "phase" => "mid_turn",
+              "strategy" => "memento"
+            }
+          })
+      })
+
+    session_id = Ecto.UUID.generate()
+
+    assert {:ok, metadata} =
+             NativeCodexTurnMetadata.parse(payload, session_id)
+
+    options =
+      %{
+        transport: "websocket",
+        websocket_owner_forwarding_enabled?: true,
+        codex_session: %{id: session_id}
+      }
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> RequestOptions.put_payload_context(native_codex_turn_metadata: metadata)
+
+    assert {:ok, prepared} =
+             WebsocketCodec.prepare_frame(
+               CodexPooler.JSON.encode!(payload),
+               options,
+               fn _ -> :ok end
+             )
+
+    refute Map.has_key?(prepared.payload, "client_metadata")
+    assert prepared.request_options.payload_context.compaction_input_mode == :full_history
+    assert WebsocketCodec.replay_eligible?(prepared)
+
+    for updates <- [
+          [transport: "http_compact_json"],
+          [websocket_delivery_mode: :collect_compaction],
+          [websocket_delivery_mode: :relay]
+        ] do
+      options = RequestOptions.put_transport(prepared.request_options, updates)
+
+      refute WebsocketCodec.replay_eligible?(%{prepared | request_options: options})
+    end
+
+    for updates <- [
+          [previous_response_id: "resp_synthetic_anchor"],
+          [request_claim_key: nil]
+        ] do
+      continuity = struct!(prepared.request_options.continuity, updates)
+
+      refute WebsocketCodec.replay_eligible?(
+               put_in(prepared.request_options.continuity, continuity)
+             )
+    end
+
+    refute WebsocketCodec.replay_eligible?(%{
+             prepared
+             | endpoint: "/backend-api/codex/responses"
+           })
+
+    for updates <- [
+          %{compaction_input_mode: :incremental},
+          %{compaction_trigger_bridge?: false},
+          %{compaction_result_mode: :public_websocket},
+          %{native_codex_turn_metadata: nil}
+        ] do
+      context = struct!(prepared.request_options.payload_context, updates)
+
+      refute WebsocketCodec.replay_eligible?(
+               put_in(prepared.request_options.payload_context, context)
+             )
+    end
   end
 
   describe "decode_payload/1" do

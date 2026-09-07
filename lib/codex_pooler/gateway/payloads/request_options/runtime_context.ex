@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions.Normalization
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
+  alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
 
   defstruct [
     :now,
@@ -19,7 +20,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
     :replay_generation,
     :native_replay_binding,
     :native_replay_proof,
-    :replay_provisional_token
+    :replay_provisional_token,
+    :compaction_retry_submit_hold
   ]
 
   @type t :: %__MODULE__{
@@ -37,7 +39,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
           replay_generation: non_neg_integer() | nil,
           native_replay_binding: term(),
           native_replay_proof: term(),
-          replay_provisional_token: binary() | nil
+          replay_provisional_token: binary() | nil,
+          compaction_retry_submit_hold: CompactionRetrySubmitHold.t() | nil
         }
 
   @spec build(map() | keyword()) :: t()

@@ -904,6 +904,104 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     refute_received {:websocket_owner_harness_upstream_started, _upstream_pid}
   end
 
+  test "graceful drain preserves a reserved compaction retry until its single submit", context do
+    block_ref = make_ref()
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        block_ref: block_ref,
+        messages: ["reserved-compact-delta", "reserved-compact-terminal"]
+      )
+
+    owner = start_supervised_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("reserved-compact"))
+
+    assert {:ok, hold} =
+             WebsocketOwnerSession.reserve_compaction_retry_submit(
+               owner,
+               context.owner_lease_token,
+               downstream,
+               self()
+             )
+
+    assert :ok = WebsocketOwnerSession.begin_drain(owner)
+
+    assert {:ok, %{active_turn?: true, draining?: true}} =
+             WebsocketOwnerSession.owner_status(owner)
+
+    assert {:error, :owner_unavailable} =
+             WebsocketOwnerSession.reserve_compaction_retry_submit(
+               owner,
+               context.owner_lease_token,
+               downstream,
+               self()
+             )
+
+    request = websocket_request()
+
+    assert {:error, :owner_busy} =
+             WebsocketOwnerSession.submit_request(owner, downstream, request)
+
+    assert WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid) == []
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_compaction_retry(owner, downstream, request, false, hold)
+      end)
+
+    assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref},
+                   @pending_terminal_observation_timeout_ms
+
+    assert %{compaction_retry_submit_hold: nil, draining?: true, active_turn: active} =
+             :sys.get_state(owner)
+
+    assert is_map(active)
+
+    assert {:error, :owner_unavailable} =
+             WebsocketOwnerSession.submit_compaction_retry(
+               owner,
+               downstream,
+               request,
+               false,
+               hold
+             )
+
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+    assert :ok = Task.await(submit_task, @pending_terminal_observation_timeout_ms)
+    assert [_single_request] = WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid)
+    assert %{active_turn: nil, draining?: true} = :sys.get_state(owner)
+  end
+
+  test "hard drain terminates a held compaction retry before any upstream send", context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    owner = start_supervised_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("held-hard-drain"))
+
+    assert {:ok, hold} =
+             WebsocketOwnerSession.reserve_compaction_retry_submit(
+               owner,
+               context.owner_lease_token,
+               downstream,
+               self()
+             )
+
+    monitor = Process.monitor(owner)
+    assert WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid) == []
+    assert :ok = WebsocketOwnerSession.drain_owner(owner)
+
+    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal},
+                   @pending_terminal_observation_timeout_ms
+
+    assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
+    assert :ok = WebsocketOwnerSession.cancel_compaction_retry_submit(hold)
+  end
+
   test "owner survives caller shutdown so websocket cleanup can detach", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     parent = self()

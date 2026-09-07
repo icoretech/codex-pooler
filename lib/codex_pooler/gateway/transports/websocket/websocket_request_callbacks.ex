@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV4
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV5
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV7
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -54,6 +55,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
              | WebsocketOwnerRequestV3.validation_error()
              | WebsocketOwnerRequestV4.validation_error()
              | WebsocketOwnerRequestV6.validation_error()
+             | WebsocketOwnerRequestV7.validation_error()
              | WebsocketOwnerRequestV5.validation_error()}
 
   @spec mapper(WebsocketOwnerRequest.mapper() | term()) ::
@@ -75,6 +77,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
           | WebsocketOwnerRequestV3.t()
           | WebsocketOwnerRequestV4.t()
           | WebsocketOwnerRequestV6.t()
+          | WebsocketOwnerRequestV7.t()
           | WebsocketOwnerRequestV5.t()
           | map(),
           writer()
@@ -202,6 +205,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
 
   def materialize(%WebsocketOwnerRequestV3{}, _writer), do: {:error, :invalid_writer}
 
+  def materialize(%WebsocketOwnerRequestV7{} = owner_request, nil) do
+    with :ok <- validate_v7(owner_request),
+         :ok <- validate_client_retry_owner_request(owner_request),
+         {:ok, full_history} <- WebsocketOwnerRequestV7.full_history_request(owner_request),
+         {:ok, request} <- materialize(full_history, nil) do
+      {:ok,
+       %{request | client_retry_dispatch_authority: owner_request.client_retry_dispatch_authority}}
+    end
+  end
+
+  def materialize(%WebsocketOwnerRequestV7{}, _writer), do: {:error, :invalid_writer}
+
   def materialize(%WebsocketOwnerRequestV6{} = owner_request, nil) do
     with :ok <- validate_v6(owner_request),
          %UpstreamIdentity{} = identity <-
@@ -306,6 +321,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
       nil -> {:error, :upstream_identity_not_found}
       {:error, :invalid_mapper} -> {:error, {:invalid_owner_request, {:invalid_field, :mapper}}}
       {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_v7(request) do
+    case WebsocketOwnerRequestV7.validate(request) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:invalid_owner_request, reason}}
     end
   end
 

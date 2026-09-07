@@ -114,6 +114,19 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   def claim_client_retry_successor(_auth, _model_or_id, _payload, _opts),
     do: {:error, :authorization_changed}
 
+  @spec claim_compaction_retry_successor(auth(), model_ref(), map(), map()) ::
+          {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
+  def claim_compaction_retry_successor(%{pool: _, api_key: _} = auth, model_or_id, payload, opts)
+      when is_map(payload) and is_map(opts) do
+    case normalize_model(model_or_id) do
+      %Model{} = model -> Reservation.claim_compaction_retry_successor(auth, model, payload, opts)
+      _invalid -> {:error, :authorization_changed}
+    end
+  end
+
+  def claim_compaction_retry_successor(_auth, _model_or_id, _payload, _opts),
+    do: {:error, :authorization_changed}
+
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   def record_denied_request(auth, model_or_id, opts \\ %{})
 

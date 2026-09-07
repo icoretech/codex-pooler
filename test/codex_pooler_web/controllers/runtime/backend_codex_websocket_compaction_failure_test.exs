@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   }
 
   alias CodexPooler.Gateway.Runtime.Service
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Repo
@@ -469,6 +470,196 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
            ) == 1
 
     assert_health(setup.assignment, compact_request, "upstream_stream_error", :failed)
+  end
+
+  test "full-history native compact retry after an incremental stream close does not become a duplicate turn" do
+    anchor = "resp_incremental_retry_anchor"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           completed_websocket_response(anchor),
+           FakeUpstream.websocket_sse_then_close([]),
+           successful_compaction_response("incremental_retry")
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok,
+            %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} =
+             Websocket.prepare_websocket_session(auth)
+
+    options =
+      Websocket.websocket_response_options(
+        %{request_id: "incremental-compact-retry"},
+        session,
+        upstream_websocket_session,
+        true
+      )
+
+    assert :ok =
+             Service.execute_websocket_response(
+               auth,
+               ordinary_payload(setup, anchor),
+               options,
+               fn _frame -> :ok end
+             )
+
+    payload =
+      setup
+      |> compact_payload(anchor)
+      |> CodexPooler.JSON.decode!()
+      |> Map.put("input", [
+        %{"type" => "function_call_output", "call_id" => "call_synthetic_retry", "output" => ""},
+        %{"type" => "compaction_trigger"}
+      ])
+      |> CodexPooler.JSON.encode!()
+
+    assert {:ok, metadata} =
+             NativeCodexTurnMetadata.parse(CodexPooler.JSON.decode!(payload), session.id)
+
+    options = RequestOptions.put_payload_context(options, native_codex_turn_metadata: metadata)
+
+    assert {:error, %{code: "upstream_request_failed"}} =
+             Service.execute_websocket_response(auth, payload, options, fn _frame -> :ok end)
+
+    assert FakeUpstream.count(upstream) == 2
+    assert FakeUpstream.http_request_count(upstream) == 0
+
+    request =
+      Repo.one!(
+        from(request in Request,
+          where:
+            request.pool_id == ^setup.pool.id and
+              request.endpoint == "/backend-api/codex/responses/compact"
+        )
+      )
+
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [%{status: "failed"}] =
+             Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
+
+    full_history_retry_payload =
+      payload
+      |> CodexPooler.JSON.decode!()
+      |> Map.delete("previous_response_id")
+      |> CodexPooler.JSON.encode!()
+
+    assert {:ok, prepared_retry} =
+             Service.prepare_websocket_response(
+               full_history_retry_payload,
+               RequestOptions.capture_api_key_runtime_epoch(options, auth),
+               fn frame -> send(self(), {:retry_frame, frame}) end
+             )
+
+    assert {:ok, %{intent: :fresh} = intent} = Service.prepare_replay_intent(auth, prepared_retry)
+    refreshed_session = Repo.reload!(session)
+
+    lifecycle =
+      Map.merge(intent.lifecycle || %{replay_generation: 0}, %{
+        owner_idle_validated?: true,
+        owner_lease_token: refreshed_session.owner_lease_token,
+        owner_instance_id: refreshed_session.owner_instance_id
+      })
+
+    assert {:ok, admitted_retry} =
+             WebsocketCodec.attach_replay_intent(
+               prepared_retry,
+               intent.authorization_binding,
+               lifecycle
+             )
+
+    assert {:ok, %{status: 200} = retry_result} =
+             Service.execute_prepared_websocket_response(auth, admitted_retry, true)
+
+    assert :ok =
+             WebsocketCodec.deliver_result(retry_result, fn frame ->
+               send(self(), {:retry_frame, frame})
+             end)
+
+    assert_receive {:retry_frame, done_frame}, @detection_timeout_ms
+    assert_receive {:retry_frame, completed_frame}, @detection_timeout_ms
+
+    assert %{"type" => "response.output_item.done", "item" => item} =
+             CodexPooler.JSON.decode!(done_frame)
+
+    assert item["type"] == "compaction"
+
+    assert %{
+             "type" => "response.completed",
+             "response" => %{"status" => "completed", "output" => [^item]}
+           } = CodexPooler.JSON.decode!(completed_frame)
+
+    assert [_, _, retry_upstream_request] = FakeUpstream.requests(upstream)
+    assert retry_upstream_request.method == "WEBSOCKET"
+
+    refute Map.has_key?(
+             CodexPooler.JSON.decode!(retry_upstream_request.body),
+             "previous_response_id"
+           )
+
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert_compaction_retry_successor!(request, session.id)
+
+    assert {:error, %{code: "duplicate_turn"}} =
+             Service.execute_websocket_response(
+               auth,
+               full_history_retry_payload,
+               options,
+               fn _frame -> flunk("a completed retry must not emit more compaction output") end
+             )
+
+    assert FakeUpstream.count(upstream) == 3
+    assert_compaction_retry_successor!(request, session.id)
+  end
+
+  defp assert_compaction_retry_successor!(predecessor, session_id) do
+    assert [link] =
+             Repo.all(
+               from(link in RequestClientRetryLink,
+                 where: link.predecessor_request_id == ^predecessor.id
+               )
+             )
+
+    successor = Repo.get!(Request, link.successor_request_id)
+    assert successor.status == "succeeded"
+    assert successor.endpoint == predecessor.endpoint
+    assert successor.transport == "websocket"
+    assert successor.id != predecessor.id
+    assert successor.correlation_id != predecessor.correlation_id
+    assert Repo.get!(Request, predecessor.id).status == "failed"
+
+    assert Repo.aggregate(
+             from(request in Request,
+               where:
+                 request.pool_id == ^predecessor.pool_id and
+                   request.endpoint == ^predecessor.endpoint
+             ),
+             :count
+           ) == 2
+
+    for {request, status} <- [{predecessor, "failed"}, {successor, "succeeded"}] do
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == status
+      assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
+      assert turn.status == status
+      assert turn.codex_session_id == session_id
+      assert turn.final_attempt_id == attempt.id
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+    end
+
+    successor
   end
 
   defp execute_failure(first_mode, opts \\ []) do

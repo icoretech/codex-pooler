@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.InputShape
+  alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
@@ -443,6 +444,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   @spec replay_eligible?(PreparedWebsocketFrame.t()) :: boolean()
   def replay_eligible?(%PreparedWebsocketFrame{
         variant: :native_response_create,
+        endpoint: endpoint,
         semantic_turn_key: semantic,
         replay_claim_digest: replay,
         payload: payload,
@@ -454,7 +456,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       })
       when is_binary(semantic) and byte_size(semantic) == 32 and
              is_binary(replay) and byte_size(replay) == 32 do
-    ordinary_native_tool_continuation?(payload, options) or replay_request_kind?(payload, options)
+    ordinary_native_tool_continuation?(payload, options) or replay_request_kind?(payload, options) or
+      projected_native_compaction_retry?(endpoint, options)
   end
 
   def replay_eligible?(%PreparedWebsocketFrame{}), do: false
@@ -991,6 +994,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp replay_request_kind?(_payload, %RequestOptions{}), do: false
+
+  defp projected_native_compaction_retry?(
+         "/backend-api/codex/responses/compact",
+         %RequestOptions{
+           native_compaction_admission: nil,
+           transport: %{transport: "websocket", websocket_delivery_mode: :collect_full_history},
+           continuity: %{previous_response_id: nil, request_claim_key: request_claim_key},
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_input_mode: :full_history,
+             compaction_result_mode: :native_websocket,
+             native_codex_turn_metadata: %NativeCodexTurnMetadata{request_kind: :compaction}
+           }
+         }
+       )
+       when is_binary(request_claim_key),
+       do: true
+
+  defp projected_native_compaction_retry?(_endpoint, %RequestOptions{}), do: false
 
   defp valid_final_compaction_admission?(%RequestOptions{
          native_compaction_admission:

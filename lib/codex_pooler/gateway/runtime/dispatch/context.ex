@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
 
   defstruct [
     :auth,
@@ -50,7 +52,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
 
   @spec new(input()) :: {:ok, t()} | {:error, map()}
   def new(input) when is_map(input) do
-    request_options = Map.fetch!(input, :request_options)
+    request_options =
+      input
+      |> Map.fetch!(:request_options)
+      |> RequestOptions.put_runtime_context(
+        compaction_retry_submit_hold: Map.get(input.reserved, :compaction_retry_submit_hold)
+      )
 
     route_plan =
       BridgeRing.plan_route(%{
@@ -83,6 +90,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
          }}
 
       {:error, reason} ->
+        cancel_compaction_retry_hold(request_options)
+
         FailureResponse.accounting_failure(
           :merge_route_plan_metadata,
           input.reserved.request,
@@ -91,6 +100,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
         )
     end
   end
+
+  defp cancel_compaction_retry_hold(%RequestOptions{
+         runtime: %{compaction_retry_submit_hold: %CompactionRetrySubmitHold{} = hold}
+       }),
+       do: WebsocketOwnerForwarder.cancel_compaction_retry_v7(hold)
+
+  defp cancel_compaction_retry_hold(%RequestOptions{}), do: :ok
 
   # Successful turns persist the same top-level canonical_partition evidence the
   # denial path records, so one request-log query covers both outcomes. The

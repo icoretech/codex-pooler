@@ -35,6 +35,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV4
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV5
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV7
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
@@ -791,13 +792,19 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp owner_request_envelope(attrs, request_data, request_options) do
     admission = RequestOptions.native_compaction_admission(request_options)
 
-    case request_data.client_retry_dispatch_authority do
-      %ClientRetry.DispatchAuthority{} = authority ->
+    case {request_data.websocket_delivery_mode, request_data.client_retry_dispatch_authority} do
+      {:collect_full_history, %ClientRetry.DispatchAuthority{}} when admission == :none ->
+        owner_full_history_envelope(attrs, request_data, request_options)
+
+      {:collect_full_history, %ClientRetry.DispatchAuthority{}} ->
+        {:error, {:invalid_field, :client_retry_dispatch_authority}}
+
+      {_delivery_mode, %ClientRetry.DispatchAuthority{} = authority} ->
         attrs
         |> Map.merge(%{version: 5, client_retry_dispatch_authority: authority})
         |> WebsocketOwnerRequestV5.new()
 
-      nil ->
+      {_delivery_mode, nil} ->
         owner_request_envelope_without_client_retry(
           attrs,
           request_data,
@@ -862,20 +869,38 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         )
 
       {:collect_full_history, :none} ->
-        attrs
-        |> Map.merge(%{
-          version: 6,
-          websocket_delivery_mode: :collect_full_history,
-          native_compaction_metadata: request_data.native_compaction_metadata,
-          effective_serving_mode: String.to_existing_atom(request_data.effective_serving_mode)
-        })
-        |> WebsocketOwnerRequestV6.new()
+        owner_full_history_envelope(attrs, request_data, request_options)
 
       {:collect_compaction, _no_owner_capability} ->
         owner_collect_envelope(attrs, request_data, request_options)
 
       {:relay, _admission} ->
         WebsocketOwnerRequest.new(Map.put(attrs, :version, 1))
+    end
+  end
+
+  defp owner_full_history_envelope(attrs, request_data, request_options) do
+    attrs =
+      Map.merge(attrs, %{
+        version: 6,
+        websocket_delivery_mode: :collect_full_history,
+        native_compaction_metadata: request_data.native_compaction_metadata,
+        effective_serving_mode: String.to_existing_atom(request_data.effective_serving_mode)
+      })
+
+    case request_data.client_retry_dispatch_authority do
+      nil ->
+        WebsocketOwnerRequestV6.new(attrs)
+
+      %ClientRetry.DispatchAuthority{} = authority ->
+        attrs
+        |> Map.merge(%{
+          version: 7,
+          client_retry_dispatch_authority: authority,
+          compaction_retry_submit_hold:
+            Map.get(request_options.runtime, :compaction_retry_submit_hold)
+        })
+        |> WebsocketOwnerRequestV7.new()
     end
   end
 

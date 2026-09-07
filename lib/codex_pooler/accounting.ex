@@ -51,6 +51,11 @@ defmodule CodexPooler.Accounting do
   defdelegate claim_client_retry_successor(auth, model_or_id, payload, opts),
     to: RequestLifecycle
 
+  @spec claim_compaction_retry_successor(auth(), model_ref(), map(), map()) ::
+          {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
+  defdelegate claim_compaction_retry_successor(auth, model_or_id, payload, opts),
+    to: RequestLifecycle
+
   @spec client_retry_preflight_snapshot(
           CodexPooler.Gateway.Persistence.CodexSession.t(),
           CodexPooler.Access.APIKey.t(),

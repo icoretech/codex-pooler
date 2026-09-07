@@ -3723,6 +3723,68 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert collect_request.body == collect.payload
   end
 
+  for {failure_mode, phase, source} <- [
+        {:transport_close, "receive", "mint_transport_error"},
+        {:peer_close, "upstream_close", "peer_close_frame"},
+        {:unexpected_binary, "unexpected_frame", "unexpected_binary_frame"}
+      ] do
+    @tag :compaction_connection_recovery
+    test "client-authored full-history retry reconnects after collected #{failure_mode}" do
+      peer = start_raw_websocket_peer()
+      {:ok, session} = UpstreamWebsocketSession.start_link([])
+      on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+      request = ordinary_request(raw_websocket_request(peer.url, self()))
+
+      assert {:ok, %{terminal: "response.completed"}} =
+               UpstreamWebsocketSession.request(session, request)
+
+      Agent.update(peer.state, &%{&1 | response_mode: unquote(failure_mode)})
+
+      payload = %{
+        "type" => "response.create",
+        "previous_response_id" => "resp_raw_ws_1_1",
+        "input" => [
+          %{"type" => "message", "role" => "user", "content" => "synthetic"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      collect = %{
+        request
+        | payload: CodexPooler.JSON.encode!(payload),
+          writer: nil,
+          websocket_delivery_mode: :collect_compaction
+      }
+
+      assert {:error, failure} = UpstreamWebsocketSession.request(session, collect)
+      assert failure.transport_failure["phase"] == unquote(phase)
+      assert failure.transport_failure["termination_source"] == unquote(source)
+      assert failure.transport_failure["terminal_seen"] == false
+      assert Agent.get(peer.state, & &1.connection_count) == 1
+      assert_receive {:raw_upstream_websocket_request, 1, 2}, @detection_timeout_ms
+
+      Agent.update(peer.state, &%{&1 | response_mode: :terminal})
+
+      retry = %{
+        collect
+        | payload: payload |> Map.delete("previous_response_id") |> CodexPooler.JSON.encode!(),
+          websocket_delivery_mode: :collect_full_history
+      }
+
+      assert {:ok, %{terminal: "response.completed"} = result} =
+               UpstreamWebsocketSession.request(session, retry)
+
+      refute result.upstream_websocket_connection.reused
+      refute result.upstream_websocket_connection.reconnected
+      assert Agent.get(peer.state, & &1.connection_count) == 2
+      assert lifecycle_state(session).generation == 2
+      assert_receive {:raw_upstream_websocket_request, 2, 1}, @detection_timeout_ms
+      refute_receive {:raw_upstream_websocket_request, 1, 3}
+      refute_receive {:raw_upstream_websocket_request, 2, 2}
+    end
+  end
+
   @tag :collect_compaction
   test "collect compaction rejects fresh mode-mismatched and invalidated connections without send or reconnect" do
     upstream =
@@ -4941,6 +5003,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp send_raw_websocket_peer_response(state, socket, connection_id, request_count, owner) do
     case Agent.get(state, & &1.response_mode) do
+      :transport_close ->
+        send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
+        :ok = :gen_tcp.close(socket)
+
+      :peer_close ->
+        send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
+        :ok = :gen_tcp.send(socket, <<0x88, 2, 1000::16>>)
+
+      :unexpected_binary ->
+        send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
+        :ok = :gen_tcp.send(socket, <<0x82, 1, 0>>)
+
       :hold ->
         send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
         :ok
@@ -4954,6 +5028,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         :gen_tcp.send(socket, raw_websocket_server_text_frame(CodexPooler.JSON.encode!(response)))
 
       :terminal ->
+        send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
         response = %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
         :gen_tcp.send(socket, raw_websocket_server_text_frame(CodexPooler.JSON.encode!(response)))
     end

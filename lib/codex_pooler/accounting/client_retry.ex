@@ -22,6 +22,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @max_done_count 65_535
   @successor_prefix "client-retry-v1:"
   @retry_window_seconds 30
+  @compaction_retry_window_seconds 330
 
   defmodule SuccessorClaim do
     @moduledoc false
@@ -64,14 +65,16 @@ defmodule CodexPooler.Accounting.ClientRetry do
       :link_id,
       :successor_claim
     ]
-    defstruct @enforce_keys
+    defstruct @enforce_keys ++ [:compaction_owner]
 
     @type t :: %__MODULE__{
             version: 1,
             predecessor_request_id: Ecto.UUID.t(),
             successor_request_id: Ecto.UUID.t(),
             link_id: Ecto.UUID.t(),
-            successor_claim: String.t()
+            successor_claim: String.t(),
+            compaction_owner:
+              %{owner_instance_id: String.t(), downstream_epoch: pos_integer()} | nil
           }
   end
 
@@ -114,6 +117,21 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   @type observation_metadata :: %{
           required(String.t()) => boolean() | non_neg_integer() | String.t()
+        }
+
+  @type reclaimable_successor :: %{
+          request: Request.t(),
+          turn: CodexTurn.t(),
+          reservation: LedgerEntry.t(),
+          link: RequestClientRetryLink.t()
+        }
+
+  @type eligible_predecessor :: %{
+          request: Request.t(),
+          turn: CodexTurn.t() | nil,
+          attempt: Attempt.t() | nil,
+          db_now: DateTime.t(),
+          successor: reclaimable_successor() | nil
         }
 
   @spec original_witness(binary(), non_neg_integer()) ::
@@ -178,7 +196,8 @@ defmodule CodexPooler.Accounting.ClientRetry do
       predecessor_request_id: predecessor.id,
       successor_request_id: successor.id,
       link_id: link.id,
-      successor_claim: successor.correlation_id
+      successor_claim: successor.correlation_id,
+      compaction_owner: compaction_dispatch_owner(successor)
     }
   end
 
@@ -192,7 +211,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
           successor_request_id: successor_request_id,
           link_id: link_id,
           successor_claim: successor_claim
-        }
+        } = authority
       ) do
     link =
       Repo.one(
@@ -209,7 +228,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
          link
        ) and successor_request_id == request.id and successor_claim == request.correlation_id and
          reserved_successor_claim?(request.correlation_id) and
-         not original_witness_eligible?(request) do
+         not original_witness_eligible?(request) and dispatch_owner_matches?(request, authority) do
       :ok
     else
       {:error, :invalid_client_retry_dispatch_authority}
@@ -223,10 +242,37 @@ defmodule CodexPooler.Accounting.ClientRetry do
   def dispatch_authority_shape?(%DispatchAuthority{} = authority) do
     authority.version == @version and uuid?(authority.predecessor_request_id) and
       uuid?(authority.successor_request_id) and uuid?(authority.link_id) and
-      reserved_successor_claim?(authority.successor_claim)
+      reserved_successor_claim?(authority.successor_claim) and
+      compaction_owner_shape?(Map.get(authority, :compaction_owner))
   end
 
   def dispatch_authority_shape?(_authority), do: false
+
+  defp compaction_dispatch_owner(%Request{
+         correlation_id: @successor_prefix <> "compaction:" <> _,
+         request_metadata: metadata
+       }) do
+    case Map.get(metadata, "websocket_owner_forwarding") do
+      %{"owner_instance_id" => owner, "downstream_epoch" => epoch}
+      when is_binary(owner) and is_integer(epoch) and epoch > 0 ->
+        %{owner_instance_id: owner, downstream_epoch: epoch}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp compaction_dispatch_owner(_request), do: nil
+
+  defp dispatch_owner_matches?(request, authority),
+    do: Map.get(authority, :compaction_owner) == compaction_dispatch_owner(request)
+
+  defp compaction_owner_shape?(nil), do: true
+
+  defp compaction_owner_shape?(%{owner_instance_id: owner, downstream_epoch: epoch}),
+    do: is_binary(owner) and byte_size(owner) > 0 and is_integer(epoch) and epoch > 0
+
+  defp compaction_owner_shape?(_owner), do: false
 
   @spec validate_dispatch_attempt(term(), term(), DispatchAuthority.t() | term()) ::
           :ok | {:error, :stale_owner}
@@ -252,22 +298,27 @@ defmodule CodexPooler.Accounting.ClientRetry do
   # bound row predicate in one query prevents a time-of-check/time-of-use gap.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp current_dispatch_attempt?(request_id, attempt_id, authority) do
-    Repo.exists?(
-      from request in Request,
-        join: link in RequestClientRetryLink,
-        on: link.successor_request_id == request.id,
-        join: attempt in Attempt,
-        on: attempt.request_id == request.id,
-        where:
-          request.id == ^request_id and request.status == "in_progress" and
-            is_nil(request.completed_at) and request.correlation_id == ^authority.successor_claim and
-            link.id == ^authority.link_id and
-            link.predecessor_request_id == ^authority.predecessor_request_id and
-            link.successor_request_id == ^authority.successor_request_id and
-            attempt.id == ^attempt_id and attempt.attempt_number == 1 and
-            attempt.replay_generation == 0 and attempt.status == "in_progress" and
-            is_nil(attempt.completed_at)
-    )
+    request =
+      Repo.one(
+        from request in Request,
+          join: link in RequestClientRetryLink,
+          on: link.successor_request_id == request.id,
+          join: attempt in Attempt,
+          on: attempt.request_id == request.id,
+          where:
+            request.id == ^request_id and request.status == "in_progress" and
+              is_nil(request.completed_at) and
+              request.correlation_id == ^authority.successor_claim and
+              link.id == ^authority.link_id and
+              link.predecessor_request_id == ^authority.predecessor_request_id and
+              link.successor_request_id == ^authority.successor_request_id and
+              attempt.id == ^attempt_id and attempt.attempt_number == 1 and
+              attempt.replay_generation == 0 and attempt.status == "in_progress" and
+              is_nil(attempt.completed_at),
+          select: request
+      )
+
+    match?(%Request{}, request) and dispatch_owner_matches?(request, authority)
   end
 
   @spec deterministic_successor_claim(Request.t()) :: {:ok, String.t()} | {:error, atom()}
@@ -290,6 +341,30 @@ defmodule CodexPooler.Accounting.ClientRetry do
   end
 
   def deterministic_successor_claim(%Request{}), do: {:error, :missing_witness}
+
+  @spec deterministic_compaction_successor_claim(Request.t(), CodexTurn.t(), binary()) ::
+          {:ok, String.t()} | {:error, atom()}
+  def deterministic_compaction_successor_claim(
+        request,
+        %CodexTurn{semantic_turn_digest: semantic},
+        replay
+      )
+      when is_binary(semantic) and byte_size(semantic) == @digest_bytes and
+             is_binary(replay) and byte_size(replay) == @digest_bytes do
+    with {:ok, mac} <-
+           AppSecretCrypto.hmac_digest(
+             :erlang.term_to_binary(
+               {"codex_pooler.compaction_retry_successor", 1, request.id, request.correlation_id,
+                semantic, replay},
+               [:deterministic]
+             )
+           ) do
+      {:ok, @successor_prefix <> "compaction:" <> Base.url_encode64(mac, padding: false)}
+    end
+  end
+
+  def deterministic_compaction_successor_claim(_request, _turn, _replay),
+    do: {:error, :payload_mismatch}
 
   @spec preflight_snapshot(CodexSession.t(), APIKey.t(), CodexPooler.Catalog.Model.t(), map()) ::
           :none | {:ok, map()} | {:error, atom()}
@@ -323,14 +398,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
           CodexPooler.Catalog.Model.t(),
           map()
         ) ::
-          {:ok,
-           %{
-             request: Request.t(),
-             turn: CodexTurn.t() | nil,
-             attempt: Attempt.t() | nil,
-             db_now: DateTime.t()
-           }}
-          | {:error, atom()}
+          {:ok, eligible_predecessor()} | {:error, atom()}
   def lock_eligible_predecessor!(
         %CodexSession{} = session,
         %APIKey{} = api_key,
@@ -342,7 +410,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
          {:ok, turn, request} <- lock_predecessor(session, api_key, input),
          attempt <- lock_attempt(if(turn, do: turn.final_attempt_id), request.id),
          owner_lease <- lock_owner_lease(session),
-         lineage <- lock_lineage(request.id),
+         lineage <- lock_lineage(request.id, input),
          entitlement <- lock_entitlement(request.id),
          :ok <- maybe_test_after_locks(input),
          db_now <- db_now(),
@@ -359,8 +427,16 @@ defmodule CodexPooler.Accounting.ClientRetry do
              entitlement,
              input,
              db_now
-           ) do
-      {:ok, %{request: request, turn: turn, attempt: attempt, db_now: db_now}}
+           ),
+         input <-
+           Map.put(
+             input,
+             :reclaim_owner_validated?,
+             reclaim_owner_valid?(session, owner_lease, input, db_now)
+           ),
+         {:ok, successor} <- lock_compaction_successor(lineage, request, turn, input) do
+      {:ok,
+       %{request: request, turn: turn, attempt: attempt, db_now: db_now, successor: successor}}
     else
       {:error, _reason} = error -> error
     end
@@ -636,21 +712,45 @@ defmodule CodexPooler.Accounting.ClientRetry do
     digest = Map.get(input, :semantic_turn_digest)
 
     if is_binary(digest) and byte_size(digest) == @digest_bytes do
-      case Repo.one(
-             from turn in CodexTurn,
-               where:
-                 turn.codex_session_id == ^session_id and turn.semantic_turn_digest == ^digest,
-               order_by: [asc: turn.turn_sequence],
-               limit: 1,
-               lock: "FOR UPDATE"
-           ) do
-        %CodexTurn{} = turn -> {:ok, turn}
+      query =
+        from turn in CodexTurn,
+          where: turn.codex_session_id == ^session_id and turn.semantic_turn_digest == ^digest,
+          limit: 1,
+          lock: "FOR UPDATE"
+
+      case Repo.one(predecessor_turn_query(query, input)) do
+        %CodexTurn{} = turn -> {:ok, resolve_predecessor_turn(turn, input)}
         nil -> {:error, :terminal_predecessor}
       end
     else
       {:error, :payload_mismatch}
     end
   end
+
+  defp predecessor_turn_query(query, %{retry_policy: :native_compaction}),
+    do: from(turn in query, order_by: [desc: turn.turn_sequence])
+
+  defp predecessor_turn_query(query, _input),
+    do: from(turn in query, order_by: [asc: turn.turn_sequence])
+
+  defp resolve_predecessor_turn(turn, %{retry_policy: :native_compaction}) do
+    # A claimed successor may be reclaimed, but a newer unrelated turn must
+    # never let this lookup revive an older eligible compaction.
+    Repo.one(
+      from predecessor in CodexTurn,
+        join: link in RequestClientRetryLink,
+        on: link.predecessor_request_id == predecessor.request_id,
+        where:
+          link.successor_request_id == ^turn.request_id and
+            predecessor.codex_session_id == ^turn.codex_session_id and
+            predecessor.semantic_turn_digest == ^turn.semantic_turn_digest and
+            predecessor.turn_sequence < ^turn.turn_sequence,
+        select: predecessor,
+        lock: "FOR UPDATE OF c0"
+    ) || turn
+  end
+
+  defp resolve_predecessor_turn(turn, _input), do: turn
 
   defp lock_attempt(attempt_id, request_id) when is_binary(attempt_id) do
     Repo.one(
@@ -678,15 +778,70 @@ defmodule CodexPooler.Accounting.ClientRetry do
          db_now
        ) do
     with :ok <- validate_authorization(session, api_key, model, request, input),
-         :ok <- validate_original_witness(request, input),
+         :ok <- validate_policy_witness(request, input),
          :ok <- validate_original_claim(request),
          :ok <- maybe_validate_owner_idle(session, owner_lease, input, db_now),
-         :ok <- validate_no_lineage(lineage, request.id),
+         :ok <- validate_policy_lineage(lineage, request.id, input),
          :ok <- validate_no_entitlement(entitlement),
-         :ok <- validate_retry_lifecycle(turn, request, attempt) do
-      validate_retry_window(request.completed_at, db_now)
+         :ok <- validate_retry_lifecycle_for_policy(turn, request, attempt, input) do
+      window =
+        if input[:retry_policy] == :native_compaction,
+          do: @compaction_retry_window_seconds,
+          else: @retry_window_seconds
+
+      validate_retry_window(request.completed_at, db_now, window)
     end
   end
+
+  defp validate_policy_witness(_request, %{
+         retry_policy: :native_compaction,
+         full_history?: true,
+         compaction_trigger_bridge?: true,
+         anchor_present?: false
+       }),
+       do: :ok
+
+  defp validate_policy_witness(_request, %{retry_policy: :native_compaction}),
+    do: {:error, :missing_witness}
+
+  defp validate_policy_witness(request, input), do: validate_original_witness(request, input)
+
+  defp validate_retry_lifecycle_for_policy(turn, request, attempt, %{
+         retry_policy: :native_compaction
+       }),
+       do: validate_compaction_lifecycle(turn, request, attempt)
+
+  defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input),
+    do: validate_retry_lifecycle(turn, request, attempt)
+
+  defp validate_compaction_lifecycle(
+         %CodexTurn{
+           status: turn_status,
+           error_code: error,
+           transport_kind: "websocket",
+           first_visible_output_at: nil,
+           completed_at: %DateTime{}
+         },
+         %Request{
+           status: "failed",
+           last_error_code: error,
+           endpoint: "/backend-api/codex/responses/compact",
+           completed_at: %DateTime{}
+         },
+         %Attempt{
+           status: "failed",
+           network_error_code: error,
+           transport: "websocket",
+           replay_generation: 0,
+           completed_at: %DateTime{}
+         }
+       )
+       when turn_status in ["failed", "interrupted"] and
+              error in ["upstream_stream_error", "client_disconnected", "owner_drained"],
+       do: :ok
+
+  defp validate_compaction_lifecycle(_turn, _request, _attempt),
+    do: {:error, :terminal_predecessor}
 
   defp validate_retry_lifecycle(turn, request, %Attempt{} = attempt) do
     with :ok <- validate_terminal_lifecycle(turn, request, attempt),
@@ -866,7 +1021,21 @@ defmodule CodexPooler.Accounting.ClientRetry do
     end
   end
 
-  defp lock_lineage(request_id) do
+  defp lock_lineage(request_id, %{retry_policy: :native_compaction}) do
+    # Dispatch locks the successor request before its link. Preserve that order
+    # when reclaiming; the caller already holds the session and predecessor.
+    case Repo.one(
+           from link in RequestClientRetryLink,
+             where: link.predecessor_request_id == ^request_id
+         ) do
+      %RequestClientRetryLink{} = link -> lock_request!(link.successor_request_id)
+      nil -> :ok
+    end
+
+    lock_lineage(request_id, %{})
+  end
+
+  defp lock_lineage(request_id, _input) do
     Repo.one(
       from link in RequestClientRetryLink,
         where:
@@ -882,6 +1051,105 @@ defmodule CodexPooler.Accounting.ClientRetry do
       nil -> :ok
     end
   end
+
+  defp validate_policy_lineage(
+         %RequestClientRetryLink{predecessor_request_id: request_id},
+         request_id,
+         %{retry_policy: :native_compaction}
+       ),
+       do: :ok
+
+  defp validate_policy_lineage(lineage, request_id, _input),
+    do: validate_no_lineage(lineage, request_id)
+
+  defp lock_compaction_successor(nil, _request, _turn, _input), do: {:ok, nil}
+
+  defp lock_compaction_successor(link, request, turn, %{retry_policy: :native_compaction} = input) do
+    successor = lock_request!(link.successor_request_id)
+
+    successor_turn =
+      Repo.one(
+        from candidate in CodexTurn,
+          where: candidate.request_id == ^successor.id,
+          lock: "FOR UPDATE"
+      )
+
+    entries =
+      Repo.all(
+        from entry in LedgerEntry,
+          where: entry.request_id == ^successor.id,
+          lock: "FOR UPDATE"
+      )
+
+    with {:ok, correlation} <-
+           deterministic_compaction_successor_claim(request, turn, input.replay_claim_digest),
+         true <- input.reclaim_owner_validated?,
+         true <- successor.correlation_id == correlation,
+         true <- unattempted_compaction_successor?(successor, successor_turn, request, turn),
+         [
+           %LedgerEntry{
+             entry_kind: "reservation",
+             amount_status: "recorded",
+             attempt_id: nil,
+             usage_status: "usage_pending"
+           } = reservation
+         ] <-
+           entries,
+         false <-
+           Repo.exists?(from attempt in Attempt, where: attempt.request_id == ^successor.id),
+         nil <- lock_entitlement(successor.id) do
+      {:ok, %{request: successor, turn: successor_turn, reservation: reservation, link: link}}
+    else
+      _ -> {:error, :successor_claimed}
+    end
+  end
+
+  defp unattempted_compaction_successor?(
+         %Request{status: "in_progress", completed_at: nil} = successor,
+         %CodexTurn{
+           status: "in_progress",
+           completed_at: nil,
+           first_visible_output_at: nil,
+           final_attempt_id: nil,
+           transport_kind: "websocket"
+         } = successor_turn,
+         request,
+         turn
+       ) do
+    Map.take(successor, [
+      :pool_id,
+      :api_key_id,
+      :model_id,
+      :requested_model,
+      :endpoint,
+      :transport
+    ]) ==
+      Map.take(request, [
+        :pool_id,
+        :api_key_id,
+        :model_id,
+        :requested_model,
+        :endpoint,
+        :transport
+      ]) and
+      successor_turn.codex_session_id == turn.codex_session_id and
+      successor_turn.semantic_turn_digest == turn.semantic_turn_digest
+  end
+
+  defp unattempted_compaction_successor?(_successor, _successor_turn, _request, _turn), do: false
+
+  defp reclaim_owner_valid?(session, %BridgeOwnerLease{status: "active"} = lease, input, db_now) do
+    input[:owner_idle_validated?] == true and
+      session.owner_instance_id == input[:owner_instance_id] and
+      lease.owner_instance_id == input[:owner_instance_id] and
+      secure_compare(session.owner_lease_token, input[:owner_lease_token]) and
+      secure_compare(lease.lease_token, input[:owner_lease_token]) and
+      match?(%DateTime{}, session.owner_lease_expires_at) and
+      DateTime.compare(session.owner_lease_expires_at, db_now) == :gt and
+      DateTime.compare(lease.expires_at, db_now) == :gt
+  end
+
+  defp reclaim_owner_valid?(_session, _lease, _input, _db_now), do: false
 
   defp lock_entitlement(request_id) do
     Repo.one(
@@ -960,12 +1228,12 @@ defmodule CodexPooler.Accounting.ClientRetry do
       failure["transport_signal"] in ["ssl_closed", "tcp_closed"]
   end
 
-  defp validate_retry_window(%DateTime{} = completed_at, %DateTime{} = db_now) do
+  defp validate_retry_window(%DateTime{} = completed_at, %DateTime{} = db_now, window_seconds) do
     age = DateTime.diff(db_now, completed_at, :millisecond)
-    if age in 0..(@retry_window_seconds * 1_000), do: :ok, else: {:error, :retry_expired}
+    if age in 0..(window_seconds * 1_000), do: :ok, else: {:error, :retry_expired}
   end
 
-  defp validate_retry_window(_completed_at, _db_now), do: {:error, :terminal_predecessor}
+  defp validate_retry_window(_completed_at, _db_now, _window), do: {:error, :terminal_predecessor}
 
   defp secure_compare(left, right)
        when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right),

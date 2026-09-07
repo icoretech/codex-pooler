@@ -1420,6 +1420,121 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  test "socket preflight admits projected full-history compaction retry after stream close" do
+    compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-retry-compact"}
+
+    terminal = fn id, output ->
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => id,
+           "status" => "completed",
+           "output" => output
+         }
+       }}
+    end
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.sse_stream([terminal.("resp_socket_compact_anchor", [])]),
+           FakeUpstream.websocket_sse_then_close([]),
+           FakeUpstream.sse_stream([
+             {"response.output_item.done",
+              %{"type" => "response.output_item.done", "item" => compact_item}},
+             terminal.("resp_socket_compact_retry", [compact_item])
+           ])
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "socket-compact-retry", "socket-compact-retry-state")
+
+    anchor =
+      websocket_payload(setup, "synthetic anchor", %{"request_id" => "socket-compact-anchor"})
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({anchor, [opcode: :text]}, state)
+    assert {:push, {:text, _anchor_frame}, state} = receive_owner_socket_push(state)
+    assert {:ok, state} = receive_socket_done(state)
+
+    metadata =
+      CodexPooler.JSON.encode!(%{
+        "turn_id" => "socket-compact-turn",
+        "window_id" => "socket-compact-window",
+        "context_window_id" => Ecto.UUID.generate(),
+        "window_number" => 1,
+        "request_kind" => "compaction",
+        "compaction" => %{
+          "trigger" => "auto",
+          "reason" => "context_limit",
+          "implementation" => "responses_compaction_v2",
+          "phase" => "mid_turn",
+          "strategy" => "memento"
+        }
+      })
+
+    compact = %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "previous_response_id" => "resp_socket_compact_anchor",
+      "stream" => true,
+      "input" => [
+        %{"type" => "function_call_output", "call_id" => "call_socket_compact", "output" => ""},
+        %{"type" => "compaction_trigger"}
+      ],
+      "client_metadata" => %{"x-codex-turn-metadata" => metadata}
+    }
+
+    assert {:ok, state} =
+             CodexResponsesSocket.handle_in(
+               {CodexPooler.JSON.encode!(compact), [opcode: :text]},
+               state
+             )
+
+    assert {:push, {:text, error_frame}, state} = receive_native_collect_socket_push(state)
+
+    assert %{"error" => %{"code" => "upstream_request_failed"}} =
+             CodexPooler.JSON.decode!(error_frame)
+
+    retry = compact |> Map.delete("previous_response_id") |> CodexPooler.JSON.encode!()
+    assert {:ok, state} = CodexResponsesSocket.handle_in({retry, [opcode: :text]}, state)
+    assert {:push, {:text, done_frame}, state} = receive_native_collect_socket_push(state)
+
+    assert %{"type" => "response.output_item.done", "item" => ^compact_item} =
+             CodexPooler.JSON.decode!(done_frame)
+
+    assert {:push, {:text, completed_frame}, state} = receive_native_collect_socket_push(state)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(completed_frame)
+    assert {:ok, state} = receive_socket_done(state)
+
+    assert [first, incremental, full_history] = FakeUpstream.requests(upstream)
+    assert Enum.all?([first, incremental, full_history], &(&1.method == "WEBSOCKET"))
+    assert FakeUpstream.http_request_count(upstream) == 0
+
+    compact_requests =
+      Repo.all(
+        from(r in Request,
+          where:
+            r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
+        )
+      )
+
+    assert Enum.sort(Enum.map(compact_requests, & &1.status)) == ["failed", "succeeded"]
+    ids = Enum.map(compact_requests, & &1.id)
+
+    assert Repo.aggregate(
+             from(l in RequestClientRetryLink,
+               where: l.predecessor_request_id in ^ids and l.successor_request_id in ^ids
+             ),
+             :count
+           ) == 1
+
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+  end
+
   test "owner-forwarded upstream close before terminal persists safe transport metadata" do
     raw_event_type = "response.private_event_sentinel_deadbeef"
 

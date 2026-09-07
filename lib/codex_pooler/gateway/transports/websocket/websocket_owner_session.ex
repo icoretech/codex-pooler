@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
+  alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedOwnerRequestHandoff
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedSendWitnessV1
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
@@ -57,6 +58,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   @terminal_delivery_timeout_ms 1_000
   @handoff_soft_timeout_ms 1_000
   @handoff_absolute_timeout_ms 5_000
+  @compaction_retry_hold_timeout_ms 30_000
   @terminal_result_types ["response.completed", "response.failed", "response.incomplete", "error"]
 
   # The one-shot collection result belongs to this existing owner lifecycle.
@@ -95,6 +97,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :native_compaction_admission,
     :native_compaction_admission_downstream,
     :forwarded_send_witness,
+    :compaction_retry_submit_hold,
     provisional_issuances: [],
     pending_admissions: %{},
     pending_admission_monitors: %{}
@@ -209,6 +212,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   @spec owner_status(GenServer.server()) :: {:ok, owner_status()}
   def owner_status(owner), do: GenServer.call(owner, :owner_status, owner_call_timeout())
+
+  @spec reserve_compaction_retry_submit(GenServer.server(), binary(), downstream(), pid()) ::
+          {:ok, CompactionRetrySubmitHold.t()} | {:error, atom()}
+  def reserve_compaction_retry_submit(owner, lease_token, downstream, requester)
+      when is_binary(lease_token) and is_map(downstream) and is_pid(requester) do
+    GenServer.call(
+      owner,
+      {:reserve_compaction_retry_submit, lease_token, downstream, requester},
+      owner_call_timeout()
+    )
+  end
+
+  @spec cancel_compaction_retry_submit(CompactionRetrySubmitHold.t()) :: :ok
+  def cancel_compaction_retry_submit(%CompactionRetrySubmitHold{owner: owner} = hold) do
+    GenServer.call(owner, {:cancel_compaction_retry_submit, hold}, owner_call_timeout())
+  catch
+    :exit, _reason -> :ok
+  end
+
+  @spec submit_compaction_retry(
+          GenServer.server(),
+          downstream(),
+          UpstreamWebsocketSession.Request.t(),
+          boolean(),
+          CompactionRetrySubmitHold.t()
+        ) :: submitted_request_result()
+  def submit_compaction_retry(owner, downstream, request, submission_notification?, hold) do
+    GenServer.call(
+      owner,
+      {:submit_compaction_retry, downstream, request, submission_notification?, hold},
+      :infinity
+    )
+  end
 
   @spec touch_replay_liveness(GenServer.server(), map(), timeout()) ::
           :ok | {:error, :owner_unavailable}
@@ -1110,6 +1146,87 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_call(:native_compaction_trace_cooperative?, _from, state),
     do: {:reply, true, state}
 
+  def handle_call(
+        {:reserve_compaction_retry_submit, lease_token, downstream, requester},
+        _from,
+        state
+      ) do
+    state = expire_compaction_retry_submit_hold(state)
+
+    with true <- lease_token == state.owner_lease_token,
+         false <- state.draining?,
+         true <- Process.alive?(state.upstream_pid),
+         nil <- state.active_turn,
+         nil <- state.pending_handoff,
+         nil <- state.suspended_replay,
+         nil <- state.compaction_retry_submit_hold,
+         {:ok, _downstream} <- active_turn_downstream(state.downstream, downstream) do
+      token = CompactionRetrySubmitHold.new()
+
+      hold = %{
+        token: token,
+        downstream: Map.take(downstream, @public_per_call_downstream_keys),
+        monitor: Process.monitor(requester),
+        expires_at: System.monotonic_time(:millisecond) + @compaction_retry_hold_timeout_ms,
+        timer:
+          Process.send_after(
+            self(),
+            {:compaction_retry_submit_hold_expired, token.ref},
+            @compaction_retry_hold_timeout_ms
+          )
+      }
+
+      {:reply, {:ok, token}, %{state | compaction_retry_submit_hold: hold}}
+    else
+      _unavailable -> {:reply, {:error, :owner_unavailable}, state}
+    end
+  end
+
+  def handle_call({:cancel_compaction_retry_submit, token}, _from, state) do
+    state =
+      case state.compaction_retry_submit_hold do
+        %{token: ^token} -> clear_compaction_retry_submit_hold(state)
+        _hold -> state
+      end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call(
+        {:submit_compaction_retry, downstream, request, submission_notification?, token},
+        from,
+        state
+      ) do
+    state = expire_compaction_retry_submit_hold(state)
+
+    with nil <- state.active_turn,
+         %{token: ^token, downstream: held_downstream} <- state.compaction_retry_submit_hold,
+         true <- held_downstream == Map.take(downstream, @public_per_call_downstream_keys) do
+      state
+      |> clear_compaction_retry_submit_hold()
+      |> accept_or_consume_upstream_submission(
+        from,
+        downstream,
+        request,
+        submission_notification?
+      )
+    else
+      _unavailable -> {:reply, {:error, :owner_unavailable}, state}
+    end
+  end
+
+  def handle_call(message, _from, %{compaction_retry_submit_hold: hold} = state)
+      when not is_nil(hold) and is_tuple(message) and
+             elem(message, 0) in [
+               :submit_upstream,
+               :attach_downstream,
+               :restore_downstream,
+               :preflight_reconnect,
+               :reconnect_control_v2
+             ] do
+    {:reply, {:error, :owner_busy}, state}
+  end
+
   if @dev_features_build_enabled do
     def handle_call(
           {:native_compaction_trace_sensitivity, :observe, generation, authorization, restorer},
@@ -1180,6 +1297,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         draining?: state.draining?,
         active_turn?:
           DownstreamState.active_turn?(state) or
+            not is_nil(state.compaction_retry_submit_hold) or
             (state.draining? and Persistence.pending_finalization?(state))
       }}, state}
   end
@@ -1198,7 +1316,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call(:drain, _from, state) do
-    state = cancel_pending_admissions(state, "owner_drained")
+    state =
+      state |> clear_compaction_retry_submit_hold() |> cancel_pending_admissions("owner_drained")
 
     state = %{
       state
@@ -1439,6 +1558,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         else
           state =
             state
+            |> clear_compaction_retry_submit_hold()
             |> cancel_pending_handoff(requested_downstream, :socket_closed)
             |> DownstreamState.demonitor_downstream()
             |> DownstreamState.schedule_idle_shutdown()
@@ -1475,6 +1595,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       :active ->
         state =
           state
+          |> clear_compaction_retry_submit_hold()
           |> DownstreamState.demonitor_downstream()
           |> DownstreamState.schedule_idle_shutdown()
           |> DownstreamState.cancel_active_turn_downstream(downstream, reason)
@@ -1917,6 +2038,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   @impl GenServer
   def handle_info(
+        {:compaction_retry_submit_hold_expired, ref},
+        %{compaction_retry_submit_hold: %{token: %{ref: ref}}} = state
+      ),
+      do: {:noreply, clear_compaction_retry_submit_hold(state)}
+
+  def handle_info(
+        {:DOWN, monitor, :process, _requester, _reason},
+        %{compaction_retry_submit_hold: %{monitor: monitor}} = state
+      ),
+      do: {:noreply, clear_compaction_retry_submit_hold(state)}
+
+  def handle_info(
         {:websocket_owner_upstream_frame, ref, _payload},
         %{active_turn: %{ref: ref, collect?: true}} = state
       ) do
@@ -2119,7 +2252,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{downstream_monitor: ref} = state) do
-    state = state |> handle_monitored_downstream_loss() |> reconcile_disconnected_provisional()
+    state =
+      state
+      |> clear_compaction_retry_submit_hold()
+      |> handle_monitored_downstream_loss()
+      |> reconcile_disconnected_provisional()
 
     state =
       case state.active_turn do
@@ -2618,6 +2755,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp owner_occupied?(state) do
     DownstreamState.active_turn?(state) or not is_nil(state.downstream)
+  end
+
+  defp expire_compaction_retry_submit_hold(%{compaction_retry_submit_hold: nil} = state),
+    do: state
+
+  defp expire_compaction_retry_submit_hold(state) do
+    if System.monotonic_time(:millisecond) >= state.compaction_retry_submit_hold.expires_at,
+      do: clear_compaction_retry_submit_hold(state),
+      else: state
+  end
+
+  defp clear_compaction_retry_submit_hold(%{compaction_retry_submit_hold: nil} = state), do: state
+
+  defp clear_compaction_retry_submit_hold(%{compaction_retry_submit_hold: hold} = state) do
+    Process.cancel_timer(hold.timer)
+    Process.demonitor(hold.monitor, [:flush])
+    %{state | compaction_retry_submit_hold: nil}
   end
 
   defp suspended_replay_attachable?(%{provisional_status: status}),

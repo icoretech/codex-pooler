@@ -39,10 +39,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
+  alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Pools.Routing, as: PoolRouting
@@ -591,6 +593,19 @@ defmodule CodexPooler.Gateway.Runtime.Service do
             {:error, error(499, "client_disconnected", "request cancelled before dispatch")}
         end
 
+      {:error, %{accounting_disposition: :zero_work} = reason} ->
+        clear_native_compaction_admission(request_options)
+
+        reject_claimed_turn(
+          auth,
+          model,
+          reason,
+          endpoint,
+          payload,
+          request_options,
+          turn_claim
+        )
+
       {:error, %{code: "duplicate_turn"} = reason} ->
         clear_native_compaction_admission(request_options)
         {:error, reason}
@@ -810,6 +825,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       {:armed_generation_one, lifecycle} ->
         replay_intent_result(:suspended_replay, authorization_binding, lifecycle)
+
+      {:error, :lifecycle_conflict} ->
+        # An unattempted compaction successor cannot be reattached or replayed.
+        # Only its native full-history retry may reach the owner-idle check and
+        # the transactional successor claim, which validates exact reclamation.
+        if native_full_history_compaction?(context.endpoint, context.request_options),
+          do: replay_intent_result(:fresh, authorization_binding, nil),
+          else: Repo.rollback(duplicate_turn_error())
 
       {:error, _reason} ->
         Repo.rollback(duplicate_turn_error())
@@ -1234,6 +1257,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            }) do
       CandidateDispatch.dispatch(context, &dispatch_decrypted_candidate/1)
     end
+  after
+    case Map.get(reserved, :compaction_retry_submit_hold) do
+      %CompactionRetrySubmitHold{} = hold ->
+        WebsocketOwnerForwarder.cancel_compaction_retry_v7(hold)
+
+      nil ->
+        :ok
+    end
   end
 
   defp dispatch_replay_candidate(
@@ -1463,8 +1494,16 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
 
     case Accounting.claim_websocket_turn(auth, model, attrs) do
-      {:ok, %{request: request}} -> {:ok, request, nil}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{request: request}} ->
+        {:ok, request, nil}
+
+      {:error, %{code: :duplicate_request} = reason} ->
+        if native_full_history_compaction?(endpoint, request_options),
+          do: {:ok, nil, nil},
+          else: {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1586,9 +1625,87 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         end
 
       _ordinary ->
-        Accounting.reserve(auth, model, payload, attrs)
+        if is_nil(turn_claim) and native_full_history_compaction?(endpoint, request_options) do
+          reserve_compaction_retry(auth, model, payload, request_options, attrs)
+        else
+          Accounting.reserve(auth, model, payload, attrs)
+        end
     end
   end
+
+  defp native_full_history_compaction?(
+         "/backend-api/codex/responses/compact",
+         %RequestOptions{
+           native_compaction_admission: nil,
+           continuity: %{previous_response_id: nil, request_claim_key: claim},
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_result_mode: :native_websocket,
+             compaction_input_mode: :full_history,
+             native_codex_turn_metadata: %NativeCodexTurnMetadata{request_kind: :compaction}
+           },
+           transport: %{
+             transport: "websocket",
+             websocket_delivery_mode: :collect_full_history
+           }
+         }
+       )
+       when is_binary(claim),
+       do: true
+
+  defp native_full_history_compaction?(_endpoint, %RequestOptions{}), do: false
+
+  defp reserve_compaction_retry(auth, model, payload, request_options, attrs) do
+    lifecycle = request_options.runtime.replay_lifecycle_binding || %{}
+
+    retry_attrs =
+      Map.merge(attrs, %{
+        codex_session: request_options.continuity.codex_session,
+        semantic_turn_digest: request_options.continuity.semantic_turn_key,
+        original_request_claim: request_options.continuity.request_claim_key,
+        replay_claim_digest: request_options.continuity.replay_claim_digest,
+        full_history?: true,
+        anchor_present?: false,
+        compaction_trigger_bridge?: true,
+        owner_idle_validated?: Map.get(lifecycle, :owner_idle_validated?) == true,
+        owner_lease_token: Map.get(lifecycle, :owner_lease_token),
+        owner_instance_id: Map.get(lifecycle, :owner_instance_id)
+      })
+
+    case Accounting.claim_compaction_retry_successor(auth, model, payload, retry_attrs) do
+      {:ok, claim} ->
+        {:ok, Map.from_struct(claim)}
+
+      {:error, _reason} ->
+        {:error, duplicate_turn_error()}
+    end
+  end
+
+  defp reserve_compaction_retry_owner(
+         %RequestOptions{
+           transport: %{websocket_owner: %{enabled?: true} = owner}
+         } = request_options
+       ) do
+    case WebsocketOwnerForwarder.reserve_compaction_retry_v7(
+           owner.session,
+           owner.lease_token,
+           owner.downstream,
+           owner.forwarder_opts
+         ) do
+      {:ok, %CompactionRetrySubmitHold{} = hold} ->
+        {:ok,
+         RequestOptions.put_runtime_context(request_options, compaction_retry_submit_hold: hold)}
+
+      {:error, :owner_unavailable} ->
+        {:error,
+         error(503, "owner_unavailable", "websocket owner admission is unavailable", nil, %{
+           accounting_disposition: :zero_work
+         })}
+    end
+  end
+
+  defp reserve_compaction_retry_owner(%RequestOptions{} = request_options),
+    do: {:ok, request_options}
 
   defp reserve_and_start_turn(
          auth,
@@ -1602,6 +1719,37 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        ) do
     maybe_test_runtime_authorization_barrier(:reserve, :before)
 
+    hold_result =
+      if is_nil(turn_claim) and native_full_history_compaction?(endpoint, request_options) do
+        reserve_compaction_retry_owner(request_options)
+      else
+        {:ok, request_options}
+      end
+
+    with {:ok, request_options} <- hold_result do
+      transact_reserved_turn(
+        auth,
+        model,
+        payload,
+        endpoint,
+        request_options,
+        route_state,
+        turn_claim,
+        authorized_correlation_id
+      )
+    end
+  end
+
+  defp transact_reserved_turn(
+         auth,
+         model,
+         payload,
+         endpoint,
+         request_options,
+         route_state,
+         turn_claim,
+         authorized_correlation_id
+       ) do
     Repo.transaction(fn ->
       request_options = lock_codex_session_before_reservation(request_options)
 
@@ -1635,17 +1783,44 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       end
     end)
     |> case do
-      {:ok, reserved} -> {:ok, reserved}
-      {:error, reason} -> {:error, reason}
+      {:ok, reserved} ->
+        case request_options.runtime.compaction_retry_submit_hold do
+          %CompactionRetrySubmitHold{} = hold ->
+            {:ok, Map.put(reserved, :compaction_retry_submit_hold, hold)}
+
+          nil ->
+            {:ok, reserved}
+        end
+
+      {:error, reason} ->
+        cancel_compaction_retry_hold(request_options)
+        {:error, reason}
     end
   rescue
     error in Ecto.ConstraintError ->
+      cancel_compaction_retry_hold(request_options)
+
       if duplicate_turn_reservation_constraint?(error, request_options) do
         {:error, duplicate_turn_error()}
       else
         reraise(error, __STACKTRACE__)
       end
+
+    error ->
+      cancel_compaction_retry_hold(request_options)
+      reraise(error, __STACKTRACE__)
+  catch
+    kind, reason ->
+      cancel_compaction_retry_hold(request_options)
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
+
+  defp cancel_compaction_retry_hold(%RequestOptions{
+         runtime: %{compaction_retry_submit_hold: %CompactionRetrySubmitHold{} = hold}
+       }),
+       do: WebsocketOwnerForwarder.cancel_compaction_retry_v7(hold)
+
+  defp cancel_compaction_retry_hold(%RequestOptions{}), do: :ok
 
   defp maybe_start_reserved_turn(
          %{codex_turn: %CodexPooler.Gateway.Persistence.CodexTurn{}} = reserved,

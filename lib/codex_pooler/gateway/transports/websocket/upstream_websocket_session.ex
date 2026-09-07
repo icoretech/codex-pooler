@@ -1572,7 +1572,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     |> Enum.reduce_while({:continue, state, receive_state}, &handle_part/2)
     |> case do
       {:continue, state, receive_state} ->
-        {transport_error_result(state, receive_state, reason), state}
+        {transport_error_result(state, receive_state, reason), close_state(state)}
 
       halted ->
         {result, state} = finish_receive_result(halted)
@@ -1668,6 +1668,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         {{:ok, result}, state}
 
       {:failure, state, receive_state, reason} ->
+        next_state =
+          if receive_state.termination_source == :upstream_terminal_event,
+            do: state,
+            else: close_state(state)
+
         {{:error,
           %{
             body: receive_body(receive_state),
@@ -1680,7 +1685,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
                 phase: failure_phase(reason)
               ),
             native_client_retry_observation: final_client_retry_observation(receive_state)
-          }}, state}
+          }}, next_state}
     end
   end
 

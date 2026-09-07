@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV4
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV5
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV7
 
   @type owner_key :: Ecto.UUID.t()
   @type owner_token :: Ecto.UUID.t()
@@ -27,6 +28,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
           | WebsocketOwnerRequestV3.t()
           | WebsocketOwnerRequestV4.t()
           | WebsocketOwnerRequestV6.t()
+          | WebsocketOwnerRequestV7.t()
           | WebsocketOwnerRequestV5.t()
 
   @type owner_error ::
