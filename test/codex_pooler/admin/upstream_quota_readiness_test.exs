@@ -351,6 +351,43 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
   end
 
   describe "from_snapshot/1" do
+    test "affirmative permission with exhausted percentage remains ready" do
+      pool = pool_fixture()
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          identity_metadata: %{
+            "credential_epoch" => 1,
+            AccountAvailabilityStore.metadata_key() =>
+              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+          }
+        })
+
+      window =
+        account_primary_window(
+          source: "codex_usage_api",
+          used_percent: Decimal.new(100),
+          observed_at: @as_of,
+          metadata: %{"rate_limit_allowed" => true, "rate_limit_reached" => false}
+        )
+
+      snapshot = RoutingQuotaSnapshot.from_identity(identity, [window], @as_of)
+      projection = UpstreamQuotaReadiness.from_snapshot(snapshot)
+      assert projection.state == "ready"
+      assert projection.routing_ready_now?
+      assert projection.reason_codes == []
+      assert Decimal.equal?(projection.primary_window.used_percent, 100)
+
+      routing =
+        UpstreamRoutingReadiness.from_inputs(
+          identity,
+          %{status: "active", health_status: "active", eligibility_status: "eligible"},
+          projection
+        )
+
+      assert routing.routing_ready_now?
+    end
+
     test "maps fresh provider availability without windows to warning readiness" do
       pool = pool_fixture()
 

@@ -8,7 +8,8 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
   @window_kinds ~w(primary secondary)
 
   @spec parse([{String.t(), String.t()}] | map() | term(), DateTime.t()) :: [Evidence.t()]
-  def parse(headers, observed_at) do
+  @spec parse(term(), DateTime.t(), String.t() | nil) :: [Evidence.t()]
+  def parse(headers, observed_at, dispatched_model \\ nil) do
     header_map = normalize_headers(headers)
 
     rate_limit_reached_type = RateLimitReachedType.parse_header(header_map)
@@ -16,15 +17,27 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
     header_map
     |> rate_limit_header_limit_ids()
     |> Enum.flat_map(
-      &codex_header_evidence_for_limit(&1, header_map, observed_at, rate_limit_reached_type)
+      &codex_header_evidence_for_limit(
+        &1,
+        header_map,
+        observed_at,
+        rate_limit_reached_type,
+        dispatched_model
+      )
     )
     |> normalize_many(observed_at)
     |> dedupe_by_identity()
   end
 
-  defp codex_header_evidence_for_limit(limit_id, header_map, observed_at, rate_limit_reached_type) do
+  defp codex_header_evidence_for_limit(
+         limit_id,
+         header_map,
+         observed_at,
+         rate_limit_reached_type,
+         dispatched_model
+       ) do
     limit_name = header_limit_name(limit_id, header_map)
-    descriptor = Descriptors.limit_descriptor(limit_id, limit_name, %{raw_limit_id: limit_id})
+    descriptor = header_descriptor(limit_id, limit_name, dispatched_model)
 
     [
       header_window_attrs(
@@ -46,6 +59,13 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
     ]
     |> Enum.reject(&is_nil/1)
   end
+
+  defp header_descriptor("codex", nil, "gpt-5.3-codex-spark") do
+    Descriptors.limit_descriptor("codex_bengalfox", nil, %{})
+  end
+
+  defp header_descriptor(limit_id, limit_name, _dispatched_model),
+    do: Descriptors.limit_descriptor(limit_id, limit_name, %{raw_limit_id: limit_id})
 
   defp header_window_attrs(
          kind,

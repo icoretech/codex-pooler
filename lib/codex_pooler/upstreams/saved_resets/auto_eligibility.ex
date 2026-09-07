@@ -6,6 +6,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.SavedResets
@@ -125,7 +126,6 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       scheduled_saved_reset_state(snapshot, policy) == :available and
       SavedResets.expires_soon?(identity, timestamp) and
       identity
-      |> Windows.list_evidence()
       |> scheduled_burn(snapshot, policy, timestamp)
       |> burn_ready?()
   end
@@ -158,7 +158,6 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
              snapshot |> scheduled_saved_reset_state(policy) |> scheduled_saved_reset_result(),
            :ok <- scheduled_expiry_result(identity, timestamp) do
         identity
-        |> Windows.list_evidence()
         |> scheduled_burn(snapshot, policy, timestamp)
         |> scheduled_burn_result()
       end
@@ -249,21 +248,22 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
         %DateTime{} = timestamp
       )
       when is_map(quota_scope) do
-    eligibility =
+    windows =
       identity
       |> Windows.list_evidence()
       |> Enum.reject(&(&1.source_precision == "unknown"))
-      |> Windows.routing_quota_eligibility_from_windows(
-        quota_scope
-        |> Map.to_list()
-        |> Keyword.put(:at, timestamp)
-      )
+
+    eligibility =
+      identity
+      |> RoutingQuotaSnapshot.from_identity(windows, timestamp)
+      |> Windows.routing_quota_eligibility_from_snapshot(Map.to_list(quota_scope))
 
     eligibility.eligible? and
-      Enum.any?(eligibility.selection.routing_windows, fn window ->
-        account_window?(window) and window.source_precision != "unknown" and
-          Windows.usable_window?(window, timestamp, Map.to_list(quota_scope))
-      end)
+      (eligibility.routing_state in [:provider_available, :windowless_provider_available] or
+         Enum.any?(eligibility.selection.routing_windows, fn window ->
+           account_window?(window) and
+             Windows.usable_window?(window, timestamp, Map.to_list(quota_scope))
+         end))
   end
 
   def locked_sibling_usable_capacity?(_identity, _context, _timestamp), do: false
@@ -416,7 +416,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
 
   defp trigger_current?(
          trigger,
-         _identity,
+         identity,
          policy,
          windows_by_identity_id,
          identity_windows,
@@ -426,7 +426,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
        ) do
     case trigger do
       :blocked_weekly_exhaustion ->
-        blocked_weekly_exhaustion?(identity_windows, policy, timestamp)
+        not provider_permits_account?(identity, identity_windows, timestamp) and
+          blocked_weekly_exhaustion?(identity_windows, policy, timestamp)
 
       :threshold_pressure ->
         threshold_pressure?(
@@ -437,6 +438,15 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           timestamp
         )
     end
+  end
+
+  defp provider_permits_account?(identity, windows, timestamp) do
+    eligibility =
+      identity
+      |> RoutingQuotaSnapshot.from_identity(Enum.filter(windows, &account_window?/1), timestamp)
+      |> Windows.routing_quota_eligibility_from_snapshot()
+
+    eligibility.routing_state in [:provider_available, :windowless_provider_available]
   end
 
   defp unavailable_snapshot_result(%{in_progress?: true}), do: {:error, :redemption_in_progress}
@@ -577,8 +587,17 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           SavedResets.snapshot_projection(),
           DateTime.t()
         ) :: scheduled_burn_result()
-  def scheduled_burn_condition(windows, policy, snapshot, %DateTime{} = timestamp)
-      when is_list(windows) and is_map(policy) and is_map(snapshot) do
+  def scheduled_burn_condition(windows, policy, snapshot, timestamp),
+    do: scheduled_burn_condition(windows, policy, snapshot, timestamp, false)
+
+  defp scheduled_burn_condition(
+         windows,
+         policy,
+         snapshot,
+         %DateTime{} = timestamp,
+         provider_available?
+       )
+       when is_list(windows) and is_map(policy) and is_map(snapshot) do
     credit_expires_at = scheduled_credit_expires_at(snapshot.next_expires_at)
     expiration_fresh? = SavedResets.expiration_observation_fresh?(snapshot, timestamp)
     comparison_timestamp = DateTime.truncate(timestamp, :second)
@@ -591,7 +610,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           policy,
           credit_expires_at,
           expiration_fresh?,
-          future_expiration?,
+          future_expiration? and not provider_available?,
           comparison_timestamp
         ),
       threshold:
@@ -815,15 +834,23 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   end
 
   @spec scheduled_burn(
-          [AccountQuotaWindow.t()],
+          UpstreamIdentity.t(),
           SavedResets.snapshot_projection(),
           SavedResets.auto_policy_projection(),
           DateTime.t()
         ) :: scheduled_burn_result()
-  defp scheduled_burn(windows, snapshot, policy, timestamp) do
+  defp scheduled_burn(identity, snapshot, policy, timestamp) do
+    windows = Windows.list_evidence(identity)
+
     case scheduled_weekly_eligibility(windows, snapshot, timestamp) do
       {:eligible, eligible_windows} ->
-        scheduled_burn_condition(eligible_windows, policy, snapshot, timestamp)
+        scheduled_burn_condition(
+          eligible_windows,
+          policy,
+          snapshot,
+          timestamp,
+          provider_permits_account?(identity, windows, timestamp)
+        )
 
       :unavailable ->
         {:not_ready, :burn_condition_absent}

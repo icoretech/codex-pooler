@@ -60,6 +60,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:advertised_state) => assignment_advertised_state(),
           required(:model_freshness) => assignment_model_freshness(),
           required(:circuit_readiness) => UpstreamCircuitReadiness.summary(),
+          optional(:routing_readiness) => UpstreamRoutingReadiness.t(),
           required(:recent_traffic) => TokenBurnProjection.pool_traffic()
         }
   @type quota_limit_row :: QuotaProjection.quota_limit_row()
@@ -390,6 +391,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     identity_assignments =
       identity_assignments(identity, assignments, quota_readiness, token_burn)
+      |> Enum.map(fn assignment ->
+        readiness =
+          identity
+          |> UpstreamRoutingReadiness.from_inputs(assignment, quota_readiness)
+          |> UpstreamRoutingReadiness.with_model_availability(quota_snapshot, [assignment])
+
+        Map.put(assignment, :routing_readiness, readiness)
+      end)
 
     identity_observability =
       identity_observability(
@@ -408,6 +417,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     routing_readiness =
       identity
       |> UpstreamRoutingReadiness.from_inputs(identity_assignments, quota_readiness)
+      |> UpstreamRoutingReadiness.with_model_availability(quota_snapshot, identity_assignments)
       |> UpstreamRoutingReadiness.with_circuit_visibility(circuit_readiness)
 
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()

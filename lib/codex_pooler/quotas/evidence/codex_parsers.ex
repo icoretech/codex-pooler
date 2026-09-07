@@ -40,6 +40,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       |> Kernel.++(additional_usage_evidence(payload, observed_at, :strict))
       |> normalize_many(observed_at)
       |> dedupe_by_identity()
+      |> attest_spark_permission(payload)
 
     {:ok,
      %{
@@ -108,6 +109,55 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       basis
       |> basis_state()
       |> AccountAvailability.new!(basis, account_windows)
+    end
+  end
+
+  # This is a distinct provider meter, not a label-derived model exemption.
+  # Bind its grant to this complete usage observation; account-wide blockers
+  # and malformed permission signals must never acquire the marker.
+  defp attest_spark_permission(windows, payload) do
+    ordinary_only_denial? =
+      rate_limit_signal(payload) == :blocker and
+        spend_control_signal(payload) == nil and
+        ordinary_reached_type?(payload) and
+        credits_signal(payload) in [nil, :affirmative, :no_proof] and
+        additional_integrity_signal(payload) == nil
+
+    Enum.map(windows, &put_spark_permission(&1, ordinary_only_denial?))
+  end
+
+  defp put_spark_permission(
+         %{raw_metered_feature: "codex_bengalfox"} = window,
+         ordinary_only_denial?
+       ) do
+    granted? =
+      ordinary_only_denial? and window.model == "gpt-5.3-codex-spark" and
+        window.metadata["rate_limit_allowed"] == true and
+        window.metadata["rate_limit_reached"] == false
+
+    %{
+      window
+      | metadata:
+          window.metadata
+          |> Map.put("independent_spark_permission", granted?)
+          |> Map.put(
+            "independent_spark_permission_reset_at",
+            DateTime.to_iso8601(window.reset_at)
+          )
+          |> Map.put(
+            "independent_spark_permission_observed_at",
+            DateTime.to_iso8601(window.observed_at)
+          )
+    }
+  end
+
+  defp put_spark_permission(window, _ordinary_only_denial?), do: window
+
+  defp ordinary_reached_type?(payload) do
+    case Map.get(payload, "rate_limit_reached_type") do
+      nil -> true
+      %{"type" => "rate_limit_reached"} -> true
+      _other -> false
     end
   end
 
@@ -437,6 +487,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       ]
     end
     |> Enum.reject(&is_nil/1)
+    |> Enum.map(&put_provider_status(&1, provider_status_metadata(rate_limit)))
   end
 
   defp additional_limit_evidence(_limit, _observed_at, _validation), do: []

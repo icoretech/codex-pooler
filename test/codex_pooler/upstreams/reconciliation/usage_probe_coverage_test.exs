@@ -346,7 +346,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
   end
 
   test "account conflict suppression preserves model-scoped evidence whose quota key is account" do
-    observed_at = ~U[2026-08-20 10:11:12.000000Z]
+    observed_at = DateTime.utc_now()
 
     payload = %{
       "plan_type" => "plus",
@@ -795,7 +795,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
   end
 
   test "an enclosing transaction rollback reverts the complete fenced persistence bundle" do
-    observed_at = ~U[2026-08-20 10:11:12.000000Z]
+    observed_at = DateTime.utc_now()
     prior_observed_at = DateTime.add(observed_at, -1, :hour)
 
     payload = %{

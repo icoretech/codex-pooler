@@ -19,6 +19,61 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
 
   setup :register_and_log_in_user
 
+  test "Spark-only readiness survives account and cockpit projections", %{scope: scope} do
+    as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    pool = pool_fixture()
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:blocked, as_of, 1)
+        }
+      })
+
+    model_fixture(pool, %{
+      exposed_model_id: "gpt-5.3-codex-spark",
+      metadata: %{"source_assignment_models" => %{assignment.id => %{}}}
+    })
+
+    spark =
+      quota_projection_window_attrs(as_of, "Spark")
+      |> Map.merge(%{
+        quota_key: "codex_bengalfox",
+        quota_scope: "model",
+        quota_family: "codex_model",
+        model: "gpt-5.3-codex-spark",
+        upstream_model: "gpt-5.3-codex-spark",
+        raw_metered_feature: "codex_bengalfox",
+        used_percent: Decimal.new(0),
+        metadata: %{
+          "independent_spark_permission" => true,
+          "independent_spark_permission_observed_at" => DateTime.to_iso8601(as_of),
+          "independent_spark_permission_reset_at" =>
+            as_of |> DateTime.add(6, :day) |> DateTime.to_iso8601(),
+          "rate_limit_allowed" => true,
+          "rate_limit_reached" => false
+        }
+      })
+
+    assert {:ok, [_]} = Windows.upsert_quota_windows(identity, [spark])
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    assert account.routing_readiness.state == "model_limited"
+    refute account.quota_readiness.routing_ready_now?
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+
+    assert [%{routing_usable?: true, routing_readiness_state: "model_limited"}] =
+             cockpit.charts.pool_contribution.items
+
+    assert [%{routing_usable?: true, routing_readiness_state: "model_limited"}] =
+             cockpit.charts.quota_health.items
+
+    metrics = UpstreamCockpitReadModel.request_metrics(scope, cockpit)
+    assert [%{routing_usable?: true}] = metrics.pool_contribution.items
+  end
+
   test "account snapshot preserves fresh provider availability without fabricating quota rows", %{
     scope: scope
   } do

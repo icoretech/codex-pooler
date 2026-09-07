@@ -132,6 +132,47 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionRemoteTest do
     end)
   end
 
+  test "a second BEAM retains permission after committed percent-only headers", ctx do
+    Sandbox.unboxed_run(Repo, fn ->
+      assert_distinct_backends(ctx.remote)
+
+      snapshots =
+        Windows.load_routing_quota_snapshots([ctx.fixture.identity.id], DateTime.utc_now())
+
+      [usage_window] = snapshots[ctx.fixture.identity.id].raw_windows
+
+      headers = [
+        {"x-codex-secondary-used-percent", "100"},
+        {"x-codex-secondary-window-minutes", "10080"},
+        {"x-codex-secondary-reset-at", DateTime.to_iso8601(usage_window.reset_at)}
+      ]
+
+      assert {:ok, [_]} =
+               Windows.upsert_quota_windows_from_codex_headers(ctx.fixture.identity, headers)
+
+      snapshots =
+        :erpc.call(ctx.remote, Windows, :load_routing_quota_snapshots, [
+          [ctx.fixture.identity.id],
+          DateTime.utc_now()
+        ])
+
+      snapshot = snapshots[ctx.fixture.identity.id]
+
+      assert %{eligible?: true, routing_state: :provider_available} =
+               :erpc.call(ctx.remote, Windows, :routing_quota_eligibility_from_snapshot, [
+                 snapshot,
+                 [
+                   model: ctx.fixture.model.exposed_model_id,
+                   upstream_model: ctx.fixture.model.upstream_model_id
+                 ]
+               ])
+
+      {auth, payload, options} = request_context(ctx.fixture)
+      assert {:ok, %{status: 200}} = Service.execute(auth, @endpoint, payload, options)
+      assert generation_count(ctx.upstream) == 1
+    end)
+  end
+
   for change <- [:denial, :credential_epoch] do
     test "committed remote #{change} invalidates an already reserved affirmative selection",
          ctx do

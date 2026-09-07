@@ -717,8 +717,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           anchored_reset_presentation(window.reset_at, datetime_preferences, snapshot_at)
 
         :floating ->
-          {:floating, nil, "starts on use",
-           "provider reports a rolling seven-day window until use starts"}
+          {:floating, nil, "starts on use", floating_reset_title(window)}
 
         :unknown ->
           {:unknown, nil, nil, nil}
@@ -757,15 +756,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
        do: {:unknown, :absent, nil, nil, nil}
 
   defp legacy_quota_reset_presentation(
-         %Quota.AccountQuotaWindow{metadata: metadata, reset_at: reset_at},
+         %Quota.AccountQuotaWindow{metadata: metadata, reset_at: reset_at} = window,
          datetime_preferences,
          snapshot_at
        )
        when is_map(metadata) do
     case Map.fetch(metadata, "reset_state") do
       {:ok, "floating"} ->
-        {:floating, reset_at, "starts on use",
-         "provider reports a rolling seven-day window until use starts"}
+        {:floating, reset_at, "starts on use", floating_reset_title(window)}
 
       {:ok, "anchored"} ->
         anchored_reset_presentation(reset_at, datetime_preferences, snapshot_at)
@@ -785,6 +783,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
        ) do
     anchored_reset_presentation(reset_at, datetime_preferences, snapshot_at)
   end
+
+  defp floating_reset_title(%{window_minutes: 10_080}),
+    do: "provider reports a rolling seven-day window until use starts"
+
+  defp floating_reset_title(_window),
+    do: "provider reports a rolling window until use starts"
 
   defp anchored_reset_presentation(
          %DateTime{} = reset_at,

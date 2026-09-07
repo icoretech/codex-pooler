@@ -17,7 +17,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   @historical_spark_quota_keys ~w(gpt_5_3_codex_spark codex_bengalfox codex_other)
   @spark_quota_keys ["codex_spark" | @historical_spark_quota_keys]
   @usage_reset_forward_tolerance_seconds 5 * 60
-  @model_weekly_window_seconds 604_800
   @model_weekly_immediate_elapsed_floor_seconds 60
   @model_weekly_immediate_elapsed_ceiling_seconds 120
   @weekly_restart_anchor_margin_seconds 60 * 60
@@ -106,7 +105,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
       with {:ok, existing} <- get_existing_evidence(identity_id, evidence),
            :ok <- validate_initial_relative_weekly_observation(existing, evidence, timestamp) do
-        timestamped_attrs = merge_attrs(existing, attrs, evidence, timestamp)
+        timestamped_attrs =
+          merge_attrs(existing, attrs, evidence, timestamp)
+          |> retain_spark_permission_observation(existing, evidence)
 
         result =
           existing
@@ -119,6 +120,39 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       {:error, _errors} = error -> error
       _missing_identity -> {:error, %{upstream_identity_id: ["can't be blank"]}}
     end
+  end
+
+  defp retain_spark_permission_observation(attrs, existing, %Evidence{
+         source: "codex_usage_api",
+         raw_metered_feature: "codex_bengalfox",
+         metadata: metadata,
+         observed_at: observed_at
+       }) do
+    permission =
+      if current_spark_observation?(existing, observed_at),
+        do: metadata,
+        else: existing.metadata || %{}
+
+    keys =
+      ~w(independent_spark_permission independent_spark_permission_observed_at independent_spark_permission_reset_at rate_limit_allowed rate_limit_reached)
+
+    Map.update!(attrs, :metadata, fn retained ->
+      retained |> Map.drop(keys) |> Map.merge(Map.take(permission, keys))
+    end)
+  end
+
+  defp retain_spark_permission_observation(attrs, _existing, _evidence), do: attrs
+
+  defp current_spark_observation?(existing, observed_at) do
+    previous = (existing.metadata || %{})["independent_spark_permission_observed_at"]
+
+    previous_at =
+      case previous && DateTime.from_iso8601(previous) do
+        {:ok, at, 0} -> at
+        _missing -> existing.observed_at
+      end
+
+    is_nil(previous_at) or DateTime.compare(observed_at, previous_at) != :lt
   end
 
   defp lock_evidence_identity_reference(identity_id) do
@@ -441,6 +475,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       |> clear_candidate_attrs()
       |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
       |> put_model_weekly_anchored_state(evidence)
+      |> CycleConfirmation.observe_positive(existing, evidence, timestamp)
     else
       attrs
     end
@@ -516,7 +551,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp same_datetime?(_left, _right), do: false
 
-  # A zero-use model weekly window can be unanchored: the provider reports a
+  # A zero-use model window can be unanchored: the provider reports a
   # full relative reset on every live observation until first use starts the
   # actual cycle. Preserve the routing-required reset-bearing shape, but only
   # label it floating after the sliding proof shows reset_at advancing with
@@ -528,14 +563,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{
            source: "codex_usage_api",
            quota_scope: scope,
-           window_kind: "secondary",
-           window_minutes: 10_080,
+           window_minutes: minutes,
            used_percent: %Decimal{}
          } = evidence,
          %Quota.AccountQuotaWindow{reset_at: %DateTime{}, used_percent: %Decimal{}} = existing,
          timestamp
        )
-       when scope in ["model", "upstream_model"] do
+       when scope in ["model", "upstream_model"] and is_integer(minutes) and minutes > 0 do
     zero_percent?(evidence.used_percent) and
       relative_reset_metadata?(evidence.metadata) and
       RelativeLiveness.valid?(evidence, timestamp) and
@@ -607,7 +641,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   # The bounded proof is intentionally narrow: zero over zero, an exact
-  # 604_800-second provider window, elapsed 61..120 seconds, proven non-future
+  # matching provider window duration, elapsed 61..120 seconds, proven non-future
   # provider advancement, and no more than 300 seconds of reset displacement.
   # This captures the first live anchored countdown without treating every
   # reset_after_seconds value below one week as proof.
@@ -615,7 +649,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{
            used_percent: %Decimal{} = incoming_percent,
            reset_at: %DateTime{} = incoming_reset,
-           metadata: metadata
+           metadata: metadata,
+           window_minutes: minutes
          },
          %Quota.AccountQuotaWindow{
            used_percent: %Decimal{} = existing_percent,
@@ -624,7 +659,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
        ) do
     zero_percent?(incoming_percent) and
       zero_percent?(existing_percent) and
-      bounded_immediate_countdown?(RelativeLiveness.countdown_timing(metadata)) and
+      bounded_immediate_countdown?(RelativeLiveness.countdown_timing(metadata), minutes * 60) and
       abs(DateTime.diff(incoming_reset, existing_reset, :second)) <=
         @usage_reset_forward_tolerance_seconds
   end
@@ -634,22 +669,27 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp bounded_immediate_countdown?(
          {:ok,
           %{
-            limit_window_seconds: @model_weekly_window_seconds,
+            limit_window_seconds: seconds,
             elapsed_seconds: elapsed_seconds
-          }}
+          }},
+         seconds
        ) do
     elapsed_seconds > @model_weekly_immediate_elapsed_floor_seconds and
       elapsed_seconds <= @model_weekly_immediate_elapsed_ceiling_seconds
   end
 
-  defp bounded_immediate_countdown?(_timing), do: false
+  defp bounded_immediate_countdown?(_timing, _seconds), do: false
 
   defp started_model_weekly_countdown?(%Evidence{
          used_percent: %Decimal{} = used_percent,
-         metadata: metadata
+         metadata: metadata,
+         window_minutes: minutes
        }) do
     zero_percent?(used_percent) and
-      started_model_weekly_countdown_timing?(RelativeLiveness.countdown_timing(metadata))
+      started_model_weekly_countdown_timing?(
+        RelativeLiveness.countdown_timing(metadata),
+        minutes * 60
+      )
   end
 
   defp started_model_weekly_countdown?(_evidence), do: false
@@ -657,13 +697,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp started_model_weekly_countdown_timing?(
          {:ok,
           %{
-            limit_window_seconds: @model_weekly_window_seconds,
+            limit_window_seconds: seconds,
             elapsed_seconds: elapsed_seconds
-          }}
+          }},
+         seconds
        ),
        do: elapsed_seconds > @model_weekly_immediate_elapsed_floor_seconds
 
-  defp started_model_weekly_countdown_timing?(_timing), do: false
+  defp started_model_weekly_countdown_timing?(_timing, _seconds), do: false
 
   # A fixed far-back countdown cannot satisfy the sliding proof because its
   # reset is supposed to remain stable. Keep that proof in a separate candidate
@@ -1173,8 +1214,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp invalid_relative_weekly_timing?(
          %Evidence{
            source: "codex_usage_api",
-           window_kind: "secondary",
-           window_minutes: 10_080,
            used_percent: %Decimal{},
            reset_at: %DateTime{}
          } = evidence,
@@ -1190,8 +1229,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp weekly_account_or_model_evidence?(evidence) do
     account_weekly_evidence?(evidence) or
       (Map.get(evidence, :quota_scope) in ["model", "upstream_model"] and
-         Map.get(evidence, :window_kind) == "secondary" and
-         Map.get(evidence, :window_minutes) == 10_080)
+         is_integer(Map.get(evidence, :window_minutes)) and
+         Map.get(evidence, :window_minutes) > 0)
   end
 
   # A usage-endpoint zero must never rewrite recorded weekly account usage on
@@ -1748,7 +1787,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     if Map.has_key?(incoming_metadata, "reset_state") do
       metadata
     else
-      Map.delete(metadata, "reset_state")
+      metadata
+      |> Map.delete("reset_state")
+      |> Map.delete("__quota_cycle_confirmation_v1")
     end
   end
 

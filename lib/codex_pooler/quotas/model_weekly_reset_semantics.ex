@@ -1,6 +1,6 @@
 defmodule CodexPooler.Quotas.ModelWeeklyResetSemantics do
   @moduledoc """
-  Classifies reset semantics for weekly model quota evidence.
+  Classifies reset semantics for model quota evidence.
 
   The result is a pure interpretation of shared quota fields. It does not make
   freshness, expiry, routing, or persistence decisions.
@@ -64,9 +64,20 @@ defmodule CodexPooler.Quotas.ModelWeeklyResetSemantics do
       quota_scope in @target_scopes and window_minutes == @weekly_minutes ->
         :applicable
 
+      quota_scope in @target_scopes and explicit_reset_semantics?(window) ->
+        :applicable
+
       true ->
         :not_applicable
     end
+  end
+
+  defp explicit_reset_semantics?(window) do
+    metadata = field(window, :metadata)
+
+    is_map(metadata) and Map.has_key?(metadata, "reset_state") and
+      is_struct(field(window, :reset_at), DateTime) and
+      is_struct(field(window, :used_percent), Decimal)
   end
 
   @spec classify_applicable(input()) :: semantic()

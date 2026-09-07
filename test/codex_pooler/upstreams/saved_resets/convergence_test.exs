@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.SavedResets.ConfirmationMetadata
@@ -413,6 +414,32 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert converged["result"]["applied"] == true
 
     assert RedemptionLifecycle.gateway_auto_latch(converged, DateTime.utc_now()) == :cooldown
+  end
+
+  test "fresh rounded-full provider permission durably confirms without losing the consume latch" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    consumed_at = DateTime.add(now, -60)
+
+    identity =
+      identity_with_pending(consumed_at,
+        metadata: %{
+          "credential_epoch" => 1,
+          "quota_account_availability" => AccountAvailabilityStore.encode!(:available, now, 1)
+        }
+      )
+
+    upsert_source_window!(identity, Decimal.new(100),
+      source: "codex_usage_api",
+      observed_at: now,
+      metadata: %{"rate_limit_allowed" => true, "rate_limit_reached" => false}
+    )
+
+    assert {:ok, :confirmed_by_quota} = Convergence.converge(identity, now)
+    converged = redemption(identity)
+    assert converged["consumed_at"] == DateTime.to_iso8601(consumed_at)
+    assert converged["result"]["applied"] == true
+    assert RedemptionLifecycle.gateway_auto_latch(converged, now) == :cooldown
+    assert {:ok, :unchanged} = Convergence.converge(identity, now)
   end
 
   test "fresh exhausted evidence reblocks a pending reset" do

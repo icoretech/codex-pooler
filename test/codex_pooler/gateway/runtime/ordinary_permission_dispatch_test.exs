@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
   alias CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
+  alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
@@ -25,6 +26,85 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
 
   @endpoint_path "/backend-api/codex/responses"
+
+  test "fresh permission keeps consecutive requests routable after percent-only response headers",
+       %{conn: conn} do
+    usage = usage_payload(:weekly_primary)
+    {upstream, setup} = reconciled_setup(usage)
+    reset_at = get_in(usage, ["rate_limit", "primary_window", "reset_at"])
+
+    {:path_json, usage_routes} = routes(usage)
+
+    FakeUpstream.set_mode(
+      upstream,
+      {:path_json,
+       Map.put(
+         usage_routes,
+         @endpoint_path,
+         FakeUpstream.json_response_with_headers(
+           %{"id" => "resp_permission_headers", "object" => "response", "output" => []},
+           [
+             {"x-codex-secondary-used-percent", "100"},
+             {"x-codex-secondary-window-minutes", "10080"},
+             {"x-codex-secondary-reset-at", Integer.to_string(reset_at)}
+           ]
+         )
+       )}
+    )
+
+    assert dispatch(conn, setup).status == 200
+    assert generation_count(upstream) == 1
+    identity = Repo.reload!(setup.identity)
+    assert {:ok, %{state: :available}} = AccountAvailabilityStore.load(identity.metadata)
+    assert dispatch(Phoenix.ConnTest.build_conn(), setup).status == 200
+    assert generation_count(upstream) == 2
+    assert Repo.aggregate(Attempt, :count) == 2
+
+    FakeUpstream.set_mode(upstream, routes(denied_payload(:denied)))
+
+    assert {:ok, _} =
+             PoolReconciliation.refresh_quota_from_usage(
+               Repo.reload!(setup.identity),
+               setup.assignment
+             )
+
+    assert dispatch(Phoenix.ConnTest.build_conn(), setup).status == 503
+    assert generation_count(upstream) == 2
+    assert Repo.aggregate(Attempt, :count) == 2
+  end
+
+  test "percent-only stream events preserve permission for the next dispatch" do
+    usage = usage_payload(:weekly_primary)
+    {upstream, setup} = reconciled_setup(usage)
+
+    event = %{
+      "type" => "codex.rate_limits",
+      "rate_limits" => %{
+        "secondary" => %{
+          "used_percent" => 100,
+          "window_minutes" => 10_080,
+          "reset_at" => get_in(usage, ["rate_limit", "primary_window", "reset_at"])
+        }
+      }
+    }
+
+    state = RateLimitObserver.event_state()
+
+    assert {:ok, state} =
+             RateLimitObserver.collect_events(
+               "data: " <> CodexPooler.JSON.encode!(event) <> "\n\n",
+               state
+             )
+
+    assert :ok =
+             RateLimitObserver.commit_events(
+               Repo.reload!(setup.identity),
+               state
+             )
+
+    assert dispatch(Phoenix.ConnTest.build_conn(), setup).status == 200
+    assert generation_count(upstream) == 1
+  end
 
   for shape <- [:weekly_primary, :five_hour_and_weekly] do
     test "full affirmative #{shape} usage at 100 percent reaches the provider" do

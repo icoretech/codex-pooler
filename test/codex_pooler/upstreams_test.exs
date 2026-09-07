@@ -3399,7 +3399,7 @@ defmodule CodexPooler.UpstreamsTest do
                DateTime.diff(reset_at, synced_at, :second)
     end
 
-    test "preserves exact provider allow status on account windows only" do
+    test "preserves distinct provider allow status on account and model windows" do
       synced_at = ~U[2026-04-27 10:00:00Z]
 
       assert {:ok, windows} =
@@ -3446,8 +3446,8 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert [model_window] = Enum.filter(windows, &(&1.quota_scope == "model"))
 
-      refute Map.has_key?(model_window.metadata, "rate_limit_allowed")
-      refute Map.has_key?(model_window.metadata, "rate_limit_reached")
+      assert model_window.metadata["rate_limit_allowed"] == false
+      assert model_window.metadata["rate_limit_reached"] == true
     end
 
     test "preserves rejected provider status on weekly primary normalized as account secondary" do
@@ -4505,7 +4505,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "persists reset-bearing usage windows with precise evidence dimensions" do
       identity = active_identity_fixture()
-      observed_at = ~U[2026-04-27 14:00:00Z]
+      observed_at = DateTime.utc_now()
       reset_at = DateTime.add(observed_at, 900, :second)
 
       assert {:ok, windows} =

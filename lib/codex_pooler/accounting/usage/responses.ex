@@ -145,9 +145,35 @@ defmodule CodexPooler.Accounting.UsageResponses do
         limit_name: representative.display_label || representative.limit_name || quota_key,
         display_label: representative.display_label || representative.limit_name || quota_key,
         metered_feature: meter_token || representative.metered_feature,
-        rate_limit: codex_rate_limit(primary, secondary)
+        rate_limit: additional_rate_limit(primary, secondary, quota_windows, as_of)
       }
     end)
+  end
+
+  defp additional_rate_limit(primary, secondary, windows, as_of) do
+    rate_limit = codex_rate_limit(primary, secondary)
+
+    allowed =
+      Enum.all?(windows, fn window ->
+        metadata = window.metadata || %{}
+
+        case {Evidence.current_freshness_state(window, as_of), metadata, window} do
+          {"fresh", %{"rate_limit_allowed" => false}, _window} ->
+            false
+
+          {"fresh", %{"rate_limit_reached" => true}, _window} ->
+            false
+
+          {"fresh", %{"rate_limit_allowed" => true, "rate_limit_reached" => false},
+           %{source: "codex_usage_api", active_limit: nil, credits: nil}} ->
+            true
+
+          _other ->
+            window |> codex_limit_from_quota_window(as_of) |> codex_limit_allowed?()
+        end
+      end)
+
+    %{rate_limit | allowed: allowed, limit_reached: not allowed}
   end
 
   def codex_limit_allowed?(%{remaining_value: remaining}) when is_integer(remaining),

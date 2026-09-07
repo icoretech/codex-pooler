@@ -224,6 +224,108 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
         assert window.metadata["rate_limit_allowed"] == true
         assert window.metadata["rate_limit_reached"] == false
 
+        for source <- ["codex_response_headers", "codex_rate_limit_event"] do
+          runtime_window = %{
+            window
+            | source: source,
+              metadata: %{},
+              active_limit: nil,
+              credits: nil,
+              merge_precedence: Evidence.merge_precedence(source, window.reset_at, "observed")
+          }
+
+          mixed = %{snapshot | raw_windows: [window, runtime_window]}
+          scope = [model: model.exposed_model_id, upstream_model: model.upstream_model_id]
+
+          if seconds == 604_800 do
+            legacy_usage = %{window | window_kind: "primary"}
+
+            assert %{eligible?: true} =
+                     Windows.routing_quota_eligibility_from_snapshot(
+                       %{mixed | raw_windows: [legacy_usage, runtime_window]},
+                       scope
+                     )
+
+            legacy_error = %{
+              runtime_window
+              | window_kind: "primary",
+                source: "codex_rate_limit_error",
+                merge_precedence: 80
+            }
+
+            assert %{eligible?: false} =
+                     Windows.routing_quota_eligibility_from_snapshot(
+                       %{mixed | raw_windows: [window, runtime_window, legacy_error]},
+                       scope
+                     )
+          end
+
+          error_window = %{
+            runtime_window
+            | source: "codex_rate_limit_error",
+              merge_precedence: 80
+          }
+
+          assert %{eligible?: false} =
+                   Windows.routing_quota_eligibility_from_snapshot(
+                     %{mixed | raw_windows: [window, runtime_window, error_window]},
+                     scope
+                   )
+
+          older_error = %{error_window | observed_at: DateTime.add(observed_at, -1, :second)}
+
+          drifted_error = %{error_window | reset_at: DateTime.add(window.reset_at, 1, :second)}
+
+          assert %{eligible?: false} =
+                   Windows.routing_quota_eligibility_from_snapshot(
+                     %{mixed | raw_windows: [window, runtime_window, drifted_error]},
+                     scope
+                   )
+
+          assert %{eligible?: true} =
+                   Windows.routing_quota_eligibility_from_snapshot(
+                     %{mixed | raw_windows: [window, runtime_window, older_error]},
+                     scope
+                   )
+
+          assert %{eligible?: true, routing_state: :provider_available} =
+                   Windows.routing_quota_eligibility_from_snapshot(mixed, scope)
+
+          for blocked <- [
+                %{runtime_window | reset_at: DateTime.add(window.reset_at, 60, :second)},
+                %{runtime_window | credits: 0},
+                %{runtime_window | active_limit: 0},
+                %{
+                  runtime_window
+                  | metadata: %{"rate_limit_reached_type" => "rate_limit_reached"}
+                },
+                %{runtime_window | metadata: %{"rate_limit_allowed" => false}},
+                %{runtime_window | metadata: %{"rate_limit_reached" => true}},
+                %{runtime_window | source: "codex_rate_limit_error"}
+              ] do
+            assert %{eligible?: false} =
+                     Windows.routing_quota_eligibility_from_snapshot(
+                       %{mixed | raw_windows: [window, blocked]},
+                       scope
+                     )
+          end
+
+          for denied <- [
+                %{mixed | credential_epoch: snapshot.credential_epoch + 1},
+                %{mixed | availability: nil},
+                %{mixed | availability: %{snapshot.availability | state: :blocked}},
+                %{
+                  mixed
+                  | as_of:
+                      DateTime.add(observed_at, Evidence.freshness_ttl_seconds() + 1, :second)
+                },
+                %{mixed | raw_windows: [runtime_window]}
+              ] do
+            assert %{eligible?: false} =
+                     Windows.routing_quota_eligibility_from_snapshot(denied, scope)
+          end
+        end
+
         assert %{eligible?: true} =
                  Windows.routing_quota_eligibility_from_snapshot(snapshot,
                    model: model.exposed_model_id,

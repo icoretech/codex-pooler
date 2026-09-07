@@ -5,6 +5,7 @@ defmodule CodexPooler.Upstreams.Quota.Evidence do
 
   alias CodexPooler.Quotas
   alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders
 
   @type window_attrs :: map()
 
@@ -20,9 +21,10 @@ defmodule CodexPooler.Upstreams.Quota.Evidence do
   @spec codex_header_windows([{String.t(), String.t()}] | map(), DateTime.t()) :: [
           window_attrs()
         ]
-  def codex_header_windows(headers, synced_at) do
+  @spec codex_header_windows(term(), DateTime.t(), String.t() | nil) :: [window_attrs()]
+  def codex_header_windows(headers, synced_at, dispatched_model \\ nil) do
     headers
-    |> Quotas.parse_codex_headers(synced_at)
+    |> ResponseHeaders.parse(synced_at, dispatched_model)
     |> Enum.map(&Evidence.to_window_attrs/1)
   end
 

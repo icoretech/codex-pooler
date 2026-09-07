@@ -8,6 +8,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResetRedemption
@@ -103,6 +104,52 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
 
     assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_sibling_usable_capacity"}} =
              evidence.claim_result
+
+    assert provider_consume_count(fixture.fake) == 0
+  end
+
+  test "rounded-full permitted sibling vetoes redemption before provider consume" do
+    fixture = committed_fixture!("closed", false)
+    on_exit(fn -> cleanup_fixture!(fixture) end)
+
+    result =
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.delete!(Repo.get!(RoutingCircuitState, fixture.circuit_id))
+        identity = Repo.get!(UpstreamIdentity, fixture.sibling_identity_id)
+        window = put_weekly_quota!(identity, "100")
+
+        window
+        |> Ecto.Changeset.change(
+          metadata: %{
+            "rate_limit_allowed" => true,
+            "rate_limit_reached" => false
+          }
+        )
+        |> Repo.update!()
+
+        identity
+        |> Ecto.Changeset.change(
+          metadata:
+            Map.put(
+              identity.metadata,
+              "quota_account_availability",
+              AccountAvailabilityStore.encode!(
+                :available,
+                window.observed_at,
+                1
+              )
+            )
+        )
+        |> Repo.update!()
+
+        SavedResetRedemption.redeem(fixture.target_assignment,
+          trigger_kind: "gateway_auto",
+          gateway_auto_context: %{fixture.context | transient_circuit_exclusions: []}
+        )
+      end)
+
+    assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_sibling_usable_capacity"}} =
+             result
 
     assert provider_consume_count(fixture.fake) == 0
   end

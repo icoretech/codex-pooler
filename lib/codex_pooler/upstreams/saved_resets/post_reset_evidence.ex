@@ -31,11 +31,16 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
   winner fails closed instead of being folded away.
 
   Pure: it never touches the repo and reuses the routing window classifiers so
-  "usable" and "exhausted" mean exactly what routing means.
+  window measurement semantics stay aligned. Production callers supply the
+  locked identity to `classify/4` so a current provider permission can attest
+  usable capacity even when the measured percentage is 100%.
   """
 
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @account_quota_key "account"
   # A window carrying "unknown" precision was not parsed into a trustworthy
@@ -66,6 +71,33 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
       Enum.any?(fresh_account_windows, &exhausted?(&1, now)) -> :reblocked
       Enum.all?(fresh_account_windows, &Windows.usable_window?(&1, now)) -> :confirmed
       true -> :pending
+    end
+  end
+
+  @doc "Classifies post-consume windows with the locked identity's provider permission."
+  @spec classify(UpstreamIdentity.t(), [AccountQuotaWindow.t()], DateTime.t(), DateTime.t()) ::
+          classification()
+  def classify(%UpstreamIdentity{} = identity, windows, consumed_at, now) do
+    fresh_windows =
+      Enum.filter(windows, &(account_window?(&1) and observed_at_or_after?(&1, consumed_at)))
+
+    ordinary = classify(fresh_windows, consumed_at, now)
+
+    snapshot = RoutingQuotaSnapshot.from_identity(identity, fresh_windows, now)
+    eligibility = Windows.routing_quota_eligibility_from_snapshot(snapshot)
+
+    cond do
+      ordinary == :pending ->
+        :pending
+
+      AccountAvailabilityStore.blocked?(snapshot.availability, snapshot.credential_epoch, now) ->
+        :reblocked
+
+      ordinary == :reblocked and eligibility.routing_state == :provider_available ->
+        :confirmed
+
+      true ->
+        ordinary
     end
   end
 

@@ -430,6 +430,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       quota_priming_label: snapshot.quota_priming_label,
       last_successful_refresh_at: snapshot.last_successful_refresh_at,
       pool_label: snapshot.pool_label,
+      routing_readiness: Map.get(snapshot, :routing_readiness),
       circuit_readiness: snapshot.circuit_readiness
     }
   end

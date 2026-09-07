@@ -53,6 +53,69 @@ defmodule CodexPooler.Upstreams.Quota.Windows.CycleConfirmation do
     end
   end
 
+  @positive_candidate "__quota_positive_cycle_candidate_v1"
+
+  @spec observe_positive(map(), AccountQuotaWindow.t(), Evidence.t(), DateTime.t()) :: map()
+  def observe_positive(attrs, existing, evidence, timestamp) do
+    if evidence.quota_scope == "account" and evidence.window_minutes == 10_080 and
+         evidence.source == "codex_usage_api" and
+         same_datetime?(attrs.reset_at, evidence.reset_at) and
+         RelativeLiveness.advances?(evidence, existing, timestamp) do
+      observe_positive_anchor(attrs, existing, evidence, timestamp)
+    else
+      attrs
+    end
+  end
+
+  defp observe_positive_anchor(attrs, existing, evidence, timestamp) do
+    if selector_valid?(existing, timestamp) and
+         same_datetime?(existing.reset_at, evidence.reset_at) do
+      maintain(attrs, existing, evidence, timestamp)
+    else
+      candidate = (existing.metadata || %{})[@positive_candidate]
+      {:ok, provider_at} = RelativeLiveness.provider_observed_at(evidence)
+
+      case positive_candidate_age(candidate, evidence, provider_at, timestamp) do
+        {:ok, age} when age >= 180 ->
+          attrs
+          |> Map.update!(:metadata, &Map.delete(&1, @positive_candidate))
+          |> confirm(evidence, timestamp)
+
+        {:ok, _age} ->
+          attrs
+
+        :restart ->
+          put_positive_candidate(attrs, evidence, provider_at)
+      end
+    end
+  end
+
+  defp put_positive_candidate(attrs, evidence, provider_at) do
+    Map.update!(attrs, :metadata, fn metadata ->
+      Map.put(metadata, @positive_candidate, %{
+        "reset_at" => DateTime.to_iso8601(evidence.reset_at),
+        "provider_at" => DateTime.to_iso8601(provider_at),
+        "used_percent" => Decimal.to_string(evidence.used_percent)
+      })
+    end)
+  end
+
+  defp positive_candidate_age(candidate, evidence, provider_at, timestamp) do
+    with %{"reset_at" => reset, "provider_at" => first, "used_percent" => percent} <- candidate,
+         {:ok, reset_at} <- parse_datetime(reset),
+         true <- same_datetime?(reset_at, evidence.reset_at),
+         {:ok, first_at} <- parse_datetime(first),
+         true <- provider_fresh?(first_at, timestamp),
+         true <- DateTime.compare(provider_at, first_at) == :gt,
+         true <- is_binary(percent),
+         {first_percent, ""} <- Decimal.parse(percent),
+         true <- Decimal.compare(evidence.used_percent, first_percent) != :lt do
+      {:ok, DateTime.diff(provider_at, first_at)}
+    else
+      _invalid -> :restart
+    end
+  end
+
   @spec selector_valid?(AccountQuotaWindow.t(), DateTime.t()) :: boolean()
   def selector_valid?(%AccountQuotaWindow{} = window, %DateTime{} = as_of) do
     with {:ok, marker} <- valid_marker(window),

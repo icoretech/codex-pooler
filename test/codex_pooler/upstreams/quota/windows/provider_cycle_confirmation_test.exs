@@ -558,6 +558,72 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
     end)
   end
 
+  test "positive usage preserves and recovers provider cycle confirmation before runtime TTL" do
+    for initial <- ["0", "2"] do
+      identity = identity!()
+      at = ~U[2026-07-21 17:00:00Z]
+      provider_row!(identity, at, "95", @old_reset)
+      runtime_row!(identity, at, "95", @old_reset)
+      first = DateTime.add(at, 60)
+      confirmed_at = DateTime.add(first, 180)
+      provider_row!(identity, first, initial, @new_reset)
+      provider_row!(identity, confirmed_at, initial, @new_reset)
+      positive_at = DateTime.add(confirmed_at, 60)
+      provider_row!(identity, positive_at, "3", @new_reset)
+      row = provider_row(identity)
+      assert CycleConfirmation.selector_valid?(row, positive_at)
+      assert Windows.list_quota_windows(identity, positive_at) == [row]
+      assert Decimal.equal?(row.used_percent, Decimal.new("3"))
+    end
+  end
+
+  test "positive anchor confirmation rejects replay, future provider time and moving resets" do
+    for variant <- [:replay, :future, :moving] do
+      identity = identity!()
+      at = ~U[2026-07-21 17:00:00Z]
+      provider_row!(identity, at, "95", @old_reset)
+      runtime_row!(identity, at, "95", @old_reset)
+      first = DateTime.add(at, 60)
+      later = DateTime.add(first, 180)
+      provider_row!(identity, first, "2", @new_reset)
+      reset = if variant == :moving, do: DateTime.add(@new_reset, 180), else: @new_reset
+
+      provider_at =
+        case variant do
+          :replay -> first
+          :future -> DateTime.add(later, 1)
+          :moving -> later
+        end
+
+      provider_row!(identity, later, "3", reset, provider_at: provider_at)
+      refute CycleConfirmation.selector_valid?(provider_row(identity), later)
+
+      assert Windows.quota_window_selection_data(identity, at: later).secondary.source ==
+               "codex_rate_limit_event"
+    end
+  end
+
+  test "positive confirmation needs the complete proof span and survives increasing usage" do
+    identity = identity!()
+    at = ~U[2026-07-21 17:00:00Z]
+    provider_row!(identity, at, "95", @old_reset)
+    runtime_row!(identity, at, "95", @old_reset)
+    first = DateTime.add(at, 60)
+    provider_row!(identity, first, "2", @new_reset)
+    early = DateTime.add(first, 179)
+    provider_row!(identity, early, "3", @new_reset)
+    refute CycleConfirmation.selector_valid?(provider_row(identity), early)
+    ready = DateTime.add(first, 180)
+    provider_row!(identity, ready, "4", @new_reset)
+    assert CycleConfirmation.selector_valid?(provider_row(identity), ready)
+    next_cycle = DateTime.add(@new_reset, 86_400)
+    next_at = DateTime.add(ready, 60)
+    provider_row!(identity, next_at, "1", next_cycle)
+    row = provider_row(identity)
+    refute CycleConfirmation.selector_valid?(row, next_at)
+    refute Map.has_key?(row.metadata, @confirmation_key)
+  end
+
   defp identity! do
     %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
     identity

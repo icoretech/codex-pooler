@@ -51,6 +51,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     ordinary = eligibility_from_windows(raw_windows, opts)
 
     cond do
+      applicable_model_denial?(ordinary.selection, snapshot.as_of) ->
+        applicable_unusable_exclusion(ordinary.selection, snapshot.as_of)
+
+      independent_spark_permission?(snapshot, ordinary.selection, opts) ->
+        %{ordinary | eligible?: true, routing_state: :provider_available, exclusions: []}
+
       AccountAvailabilityStore.blocked?(
         snapshot.availability,
         snapshot.credential_epoch,
@@ -74,11 +80,119 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     end
   end
 
+  defp applicable_model_denial?(selection, as_of) do
+    Enum.any?(selection.routing_windows, fn window ->
+      window.quota_scope != "account" and fresh_window?(window, as_of) and
+        (window.metadata["rate_limit_allowed"] == false or
+           window.metadata["rate_limit_reached"] == true)
+    end)
+  end
+
+  defp independent_spark_permission?(snapshot, selection, opts) do
+    requested =
+      Keyword.get(opts, :upstream_model) || Keyword.get(opts, :upstream_model_id) ||
+        Keyword.get(opts, :model) || Keyword.get(opts, :requested_model)
+
+    availability = snapshot.availability
+    model_windows = Enum.filter(selection.routing_windows, &(&1.quota_scope != "account"))
+
+    requested == "gpt-5.3-codex-spark" and not Keyword.get(opts, :account_only, false) and
+      AccountAvailabilityStore.blocked?(availability, snapshot.credential_epoch, snapshot.as_of) and
+      model_windows != [] and
+      Enum.all?(model_windows, &supported_spark_window?(&1, snapshot)) and
+      not later_permission_blocker?(snapshot)
+  end
+
+  defp supported_spark_window?(window, snapshot) do
+    current_spark_grant?(window, snapshot.availability, snapshot.as_of) or
+      (percent_only_spark_window?(window, snapshot.as_of) and
+         Enum.any?(RoutingQuotaSnapshot.time_visible_raw_windows(snapshot), fn grant ->
+           current_spark_grant?(grant, snapshot.availability, snapshot.as_of) and
+             grant.quota_key == window.quota_key and grant.window_kind == window.window_kind and
+             grant.window_minutes == window.window_minutes and
+             DateTime.compare(grant.reset_at, window.reset_at) == :eq
+         end))
+  end
+
+  defp percent_only_spark_window?(window, as_of) do
+    window.source in ["codex_response_headers", "codex_rate_limit_event"] and
+      permission_capacity_window?(window, as_of) and
+      window.raw_metered_feature == "codex_bengalfox" and
+      is_nil(window.metadata["rate_limit_allowed"]) and
+      is_nil(window.metadata["rate_limit_reached"]) and
+      is_nil(window.metadata["rate_limit_reached_type"])
+  end
+
+  defp current_spark_grant?(window, availability, as_of) do
+    window.source == "codex_usage_api" and
+      same_spark_permission_observation?(window.metadata, availability.observed_at) and
+      same_permission_instant?(
+        window.metadata["independent_spark_permission_reset_at"],
+        window.reset_at
+      ) and
+      window.raw_metered_feature == "codex_bengalfox" and
+      window.model == "gpt-5.3-codex-spark" and
+      window.metadata["independent_spark_permission"] == true and
+      permission_capacity_window?(window, as_of)
+  end
+
+  defp same_spark_permission_observation?(metadata, observed_at) do
+    same_permission_instant?(metadata["independent_spark_permission_observed_at"], observed_at)
+  end
+
+  defp same_permission_instant?(value, observed_at) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, permission_at, 0} -> DateTime.compare(permission_at, observed_at) == :eq
+      _invalid -> false
+    end
+  end
+
+  defp same_permission_instant?(_value, _observed_at), do: false
+
+  defp permission_capacity_window?(window, as_of) do
+    usable_window?(window, as_of) or
+      (window_reason_codes(window, as_of) == ["exhausted"] and
+         exhausted_by_used_percent?(window) and is_nil(window.active_limit) and
+         is_nil(window.credits))
+  end
+
+  defp later_permission_blocker?(snapshot) do
+    snapshot
+    |> RoutingQuotaSnapshot.time_visible_raw_windows()
+    |> Enum.any?(fn window ->
+      metadata = window.metadata || %{}
+
+      DateTime.compare(window.observed_at, snapshot.availability.observed_at) != :lt and
+        (window.quota_scope == "account" or window.model == "gpt-5.3-codex-spark") and
+        window.source != "codex_usage_api" and
+        (window.source == "codex_rate_limit_error" or
+           not is_nil(metadata["rate_limit_reached_type"]) or
+           metadata["rate_limit_allowed"] == false or metadata["rate_limit_reached"] == true)
+    end)
+  end
+
   # Preserve the reported percentage. A current full usage observation may
   # attest account capacity, but cannot override another window's authority.
   defp provider_permission_usable?(snapshot, selection) do
     fresh_available?(snapshot) and selection.blocked_windows != [] and
-      Enum.all?(selection.blocked_windows, &permission_overrides_percent?(&1, snapshot))
+      Enum.all?(selection.blocked_windows, fn window ->
+        permission_overrides_percent?(window, snapshot) and
+          not competing_permission_blocker?(window, snapshot)
+      end)
+  end
+
+  defp competing_permission_blocker?(window, snapshot) do
+    snapshot
+    |> RoutingQuotaSnapshot.time_visible_raw_windows()
+    |> Enum.any?(fn evidence ->
+      metadata = evidence.metadata || %{}
+
+      same_account_window?(window, evidence) and
+        DateTime.compare(evidence.observed_at, snapshot.availability.observed_at) != :lt and
+        (evidence.source == "codex_rate_limit_error" or
+           not is_nil(metadata["rate_limit_reached_type"]) or
+           metadata["rate_limit_allowed"] == false or metadata["rate_limit_reached"] == true)
+    end)
   end
 
   defp permission_overrides_percent?(
@@ -88,13 +202,50 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
            observed_at: observed_at,
            metadata: %{"rate_limit_allowed" => true, "rate_limit_reached" => false}
          } = window,
-         %RoutingQuotaSnapshot{availability: %{observed_at: observed_at}} = snapshot
+         %RoutingQuotaSnapshot{availability: %{observed_at: availability_at}} = snapshot
        ) do
-    window_reason_codes(window, snapshot.as_of) == ["exhausted"] and
+    DateTime.compare(observed_at, availability_at) == :eq and
+      window_reason_codes(window, snapshot.as_of) == ["exhausted"] and
       exhausted_by_used_percent?(window)
   end
 
+  defp permission_overrides_percent?(
+         %Quota.AccountQuotaWindow{quota_scope: "account", source: source} = window,
+         snapshot
+       )
+       when source in ["codex_response_headers", "codex_rate_limit_event"] do
+    # Runtime percentage observations outrank usage rows for measurement selection,
+    # but an unchanged percentage is not a revocation of same-cycle permission.
+    percent_only_runtime_window?(window, snapshot.as_of) and
+      Enum.any?(RoutingQuotaSnapshot.time_visible_raw_windows(snapshot), fn evidence ->
+        evidence.source == "codex_usage_api" and same_account_cycle?(window, evidence) and
+          permission_overrides_percent?(evidence, snapshot)
+      end)
+  end
+
   defp permission_overrides_percent?(_window, _snapshot), do: false
+
+  defp percent_only_runtime_window?(window, as_of) do
+    metadata = window.metadata || %{}
+
+    window_reason_codes(window, as_of) == ["exhausted"] and
+      exhausted_by_used_percent?(window) and is_nil(window.active_limit) and
+      is_nil(window.credits) and is_nil(metadata["rate_limit_reached_type"]) and
+      is_nil(metadata["rate_limit_allowed"]) and is_nil(metadata["rate_limit_reached"])
+  end
+
+  defp same_account_cycle?(left, right) do
+    same_account_window?(left, right) and DateTime.compare(left.reset_at, right.reset_at) == :eq
+  end
+
+  defp same_account_window?(left, right) do
+    right.quota_scope == "account" and left.quota_family == right.quota_family and
+      account_window_kind(left) == account_window_kind(right) and
+      left.window_minutes == right.window_minutes
+  end
+
+  defp account_window_kind(%{window_kind: "primary", window_minutes: 10_080}), do: "secondary"
+  defp account_window_kind(window), do: window.window_kind
 
   defp availability_fallback(snapshot, raw_windows, ordinary) do
     windowless_evidence? =
@@ -660,6 +811,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     do: credits > 0
 
   defp positive_credits?(_window), do: false
+
+  defp exhausted?(%Quota.AccountQuotaWindow{
+         quota_scope: scope,
+         metadata: %{"rate_limit_allowed" => false}
+       })
+       when scope in ["model", "upstream_model"], do: true
+
+  defp exhausted?(%Quota.AccountQuotaWindow{
+         quota_scope: scope,
+         metadata: %{"rate_limit_reached" => true}
+       })
+       when scope in ["model", "upstream_model"], do: true
 
   defp exhausted?(%Quota.AccountQuotaWindow{credits: credits} = window)
        when is_integer(credits) and credits > 0 do

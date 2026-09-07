@@ -7,6 +7,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
 
   alias CodexPooler.Accounting.UsageResponses
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -147,7 +148,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     usage =
       %{
         plan_type: public_plan_type(identity),
-        rate_limit: UsageResponses.codex_rate_limit(primary, secondary),
+        rate_limit: account_rate_limit(snapshot, primary, secondary),
         additional_rate_limits: additional_rate_limits
       }
 
@@ -213,7 +214,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     as_of = Keyword.get(opts, :as_of, now())
     windows = RoutingQuotaSnapshot.effective_windows(snapshot)
     {primary, secondary} = UsageResponses.account_usage_windows(windows, as_of)
-    rate_limit = UsageResponses.codex_rate_limit(primary, secondary)
+    rate_limit = account_rate_limit(snapshot, primary, secondary)
 
     {
       if(rate_limit.allowed, do: 1, else: 0),
@@ -243,10 +244,31 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
   defp usage_routing_state_rank(snapshot) do
     case QuotaWindows.routing_quota_eligibility_from_snapshot(snapshot, account_only: true) do
       %{routing_state: :precise} -> 3
+      %{routing_state: :provider_available} -> 3
       %{routing_state: :credit_backed_probe} -> 2
       %{routing_state: :weekly_only_probe} -> 1
       %{routing_state: :windowless_provider_available} -> 1
       _state -> 0
+    end
+  end
+
+  defp account_rate_limit(snapshot, primary, secondary) do
+    rate_limit = UsageResponses.codex_rate_limit(primary, secondary)
+    routing = QuotaWindows.routing_quota_eligibility_from_snapshot(snapshot, account_only: true)
+
+    cond do
+      AccountAvailabilityStore.blocked?(
+        snapshot.availability,
+        snapshot.credential_epoch,
+        snapshot.as_of
+      ) ->
+        %{rate_limit | allowed: false, limit_reached: true}
+
+      routing.routing_state == :provider_available ->
+        %{rate_limit | allowed: true, limit_reached: false}
+
+      true ->
+        rate_limit
     end
   end
 

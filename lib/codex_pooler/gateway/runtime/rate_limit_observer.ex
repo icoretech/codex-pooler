@@ -33,25 +33,48 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
         }
 
   @spec record_headers(UpstreamIdentity.t(), Req.Response.t()) :: observer_result()
-  def record_headers(%UpstreamIdentity{} = identity, response) do
-    record_header_evidence(identity, response.headers, "rate_limit_headers", "runtime_headers")
+  @spec record_headers(UpstreamIdentity.t(), Req.Response.t(), String.t() | nil) ::
+          observer_result()
+  def record_headers(%UpstreamIdentity{} = identity, response, dispatched_model \\ nil) do
+    record_header_evidence(
+      identity,
+      response.headers,
+      "rate_limit_headers",
+      "runtime_headers",
+      dispatched_model
+    )
   end
 
   @spec record_websocket_upgrade_headers(UpstreamIdentity.t() | term(), term()) ::
           observer_result()
-  def record_websocket_upgrade_headers(%UpstreamIdentity{} = identity, headers) do
+  @spec record_websocket_upgrade_headers(term(), term(), String.t() | nil) :: observer_result()
+  def record_websocket_upgrade_headers(identity, headers, dispatched_model \\ nil)
+
+  def record_websocket_upgrade_headers(%UpstreamIdentity{} = identity, headers, dispatched_model) do
     record_header_evidence(
       identity,
       headers,
       "rate_limit_websocket_upgrade_headers",
-      "runtime_websocket_upgrade_headers"
+      "runtime_websocket_upgrade_headers",
+      dispatched_model
     )
   end
 
-  def record_websocket_upgrade_headers(_identity, _headers), do: :ok
+  def record_websocket_upgrade_headers(_identity, _headers, _dispatched_model), do: :ok
 
-  defp record_header_evidence(%UpstreamIdentity{} = identity, headers, operation, source) do
-    case QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers) do
+  defp record_header_evidence(
+         %UpstreamIdentity{} = identity,
+         headers,
+         operation,
+         source,
+         dispatched_model
+       ) do
+    case QuotaWindows.upsert_quota_windows_from_codex_headers(
+           identity,
+           headers,
+           DateTime.utc_now(),
+           dispatched_model
+         ) do
       {:ok, windows} ->
         maybe_converge_saved_reset(identity, windows, source)
 
@@ -62,9 +85,17 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
 
   @spec record_websocket_frame_headers(UpstreamIdentity.t() | term(), map() | term()) ::
           observer_result()
-  def record_websocket_frame_headers(%UpstreamIdentity{} = identity, headers)
+  @spec record_websocket_frame_headers(term(), term(), String.t() | nil) :: observer_result()
+  def record_websocket_frame_headers(identity, headers, dispatched_model \\ nil)
+
+  def record_websocket_frame_headers(%UpstreamIdentity{} = identity, headers, dispatched_model)
       when is_map(headers) and map_size(headers) > 0 do
-    case QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers) do
+    case QuotaWindows.upsert_quota_windows_from_codex_headers(
+           identity,
+           headers,
+           DateTime.utc_now(),
+           dispatched_model
+         ) do
       {:ok, windows} ->
         maybe_converge_saved_reset(identity, windows, "runtime_websocket_frame_headers")
 
@@ -73,7 +104,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
     end
   end
 
-  def record_websocket_frame_headers(_identity, _headers), do: :ok
+  def record_websocket_frame_headers(_identity, _headers, _dispatched_model), do: :ok
 
   @spec event_state() :: event_state()
   def event_state, do: StreamProtocol.new_sse_block_state()

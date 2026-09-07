@@ -56,8 +56,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
   end
 
   @spec observe_http_response(SelectedCandidateContext.t(), Req.Response.t(), binary()) :: :ok
-  def observe_http_response(%SelectedCandidateContext{identity: identity}, response, body) do
-    RateLimitObserver.record_headers(identity, response)
+  def observe_http_response(
+        %SelectedCandidateContext{identity: identity} = context,
+        response,
+        body
+      ) do
+    RateLimitObserver.record_headers(identity, response, context.model.upstream_model_id)
     RateLimitObserver.record_error(identity, body)
     :ok
   end
@@ -69,12 +73,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
           map() | nil
         ) :: :ok
   def observe_stream_response(
-        %SelectedCandidateContext{identity: identity},
+        %SelectedCandidateContext{identity: identity} = context,
         response,
         body,
         state
       ) do
-    RateLimitObserver.record_headers(identity, response)
+    RateLimitObserver.record_headers(identity, response, context.model.upstream_model_id)
 
     rate_limit_state =
       if is_map(state) do
@@ -90,15 +94,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
   end
 
   @spec observe_websocket_response(SelectedCandidateContext.t(), map()) :: :ok
-  def observe_websocket_response(%SelectedCandidateContext{identity: identity}, response) do
+  def observe_websocket_response(
+        %SelectedCandidateContext{identity: identity} = context,
+        response
+      ) do
     RateLimitObserver.record_websocket_upgrade_headers(
       identity,
-      websocket_upgrade_headers(response)
+      websocket_upgrade_headers(response),
+      context.model.upstream_model_id
     )
 
     RateLimitObserver.record_websocket_frame_headers(
       identity,
-      Map.get(response, :websocket_frame_headers, %{})
+      Map.get(response, :websocket_frame_headers, %{}),
+      context.model.upstream_model_id
     )
 
     :ok

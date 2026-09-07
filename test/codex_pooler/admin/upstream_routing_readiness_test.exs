@@ -3,7 +3,13 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadinessTest do
 
   alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Admin.UpstreamRoutingReadiness
-  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+
+  alias CodexPooler.Upstreams.Quota.{
+    AccountAvailabilityStore,
+    AccountQuotaWindow,
+    RoutingQuotaSnapshot
+  }
+
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @as_of ~U[2026-05-30 12:00:00Z]
@@ -277,6 +283,83 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadinessTest do
                circuit_summary(:closed)
              ) === base_readiness
     end
+  end
+
+  describe "with_model_availability/3" do
+    test "exposes only limited readiness when advertised Spark has independent permission" do
+      {identity, snapshot, assignment} = spark_inputs()
+      quota = UpstreamQuotaReadiness.from_snapshot(snapshot)
+      refute quota.routing_ready_now?
+
+      readiness =
+        identity
+        |> UpstreamRoutingReadiness.from_inputs([assignment], quota)
+        |> UpstreamRoutingReadiness.with_model_availability(snapshot, [assignment])
+
+      assert readiness.state == "model_limited"
+      assert readiness.label == "Limited model availability"
+      assert readiness.reason_code == "spark_quota_available"
+      assert readiness.tone == :warning
+      assert readiness.routing_ready_now?
+      refute readiness.quota_readiness.routing_ready_now?
+    end
+
+    test "preserves lifecycle assignment catalog and permission blockers" do
+      {identity, snapshot, assignment} = spark_inputs()
+
+      for {identity, snapshot, assignment} <- [
+            {%{identity | status: "disabled"}, snapshot, assignment},
+            {identity, snapshot, %{assignment | health_status: "errored"}},
+            {identity, snapshot, %{assignment | models: []}},
+            {identity, %{snapshot | raw_windows: []}, assignment}
+          ] do
+        quota = UpstreamQuotaReadiness.from_snapshot(snapshot)
+
+        readiness =
+          identity
+          |> UpstreamRoutingReadiness.from_inputs([assignment], quota)
+          |> UpstreamRoutingReadiness.with_model_availability(snapshot, [assignment])
+
+        refute readiness.routing_ready_now?
+        refute readiness.state == "model_limited"
+      end
+    end
+  end
+
+  defp spark_inputs do
+    identity = %UpstreamIdentity{
+      id: Ecto.UUID.generate(),
+      status: "active",
+      metadata: %{
+        "credential_epoch" => 1,
+        AccountAvailabilityStore.metadata_key() =>
+          AccountAvailabilityStore.encode!(:blocked, @as_of, 1)
+      }
+    }
+
+    spark = %{
+      account_primary_window()
+      | quota_key: "codex_bengalfox",
+        quota_scope: "model",
+        quota_family: "codex_model",
+        model: "gpt-5.3-codex-spark",
+        upstream_model: "gpt-5.3-codex-spark",
+        raw_metered_feature: "codex_bengalfox",
+        metadata: %{
+          "independent_spark_permission" => true,
+          "independent_spark_permission_observed_at" => DateTime.to_iso8601(@as_of),
+          "independent_spark_permission_reset_at" => DateTime.to_iso8601(@future_reset),
+          "rate_limit_allowed" => true,
+          "rate_limit_reached" => false
+        }
+    }
+
+    assignment =
+      healthy_assignment()
+      |> Map.from_struct()
+      |> Map.put(:models, [%{exposed_model_id: "gpt-5.3-codex-spark"}])
+
+    {identity, RoutingQuotaSnapshot.from_identity(identity, [spark], @as_of), assignment}
   end
 
   defp fresh_quota_readiness do

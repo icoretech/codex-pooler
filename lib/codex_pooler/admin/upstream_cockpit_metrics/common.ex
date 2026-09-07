@@ -26,6 +26,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.Common do
   def identity_id(_identity_or_id), do: nil
 
   @spec routing_readiness(term(), map(), term()) :: UpstreamRoutingReadiness.t()
+  def routing_readiness(_identity_or_status, %{routing_readiness: readiness}, _quota_readiness)
+      when is_map(readiness),
+      do: readiness
+
   def routing_readiness(identity_or_status, assignment, quota_readiness) do
     identity_or_status
     |> routing_identity_status(assignment)

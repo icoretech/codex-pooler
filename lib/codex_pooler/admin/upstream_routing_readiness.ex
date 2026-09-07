@@ -9,12 +9,14 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
 
   alias CodexPooler.Admin.{UpstreamCircuitReadiness, UpstreamQuotaReadiness}
   alias CodexPooler.Upstreams.Lifecycle.IdentityRouting
+  alias CodexPooler.Upstreams.Quota.{RoutingQuotaSnapshot, Windows}
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
 
   @assignment_active AssignmentStatus.active_status()
   @assignment_health_active AssignmentStatus.active_health_status()
   @assignment_eligible AssignmentStatus.eligible_status()
+  @spark_model "gpt-5.3-codex-spark"
   @circuit_blocked_projection %{
     state: "circuit_protection_active",
     label: "Circuit protection active",
@@ -132,6 +134,37 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
       quota_readiness: quota_readiness
     })
   end
+
+  @spec with_model_availability(t(), RoutingQuotaSnapshot.t(), [map()]) :: t()
+  def with_model_availability(%{state: "quota_blocked"} = readiness, snapshot, assignments) do
+    advertised? =
+      Enum.any?(assignments, fn assignment ->
+        assignment_routing_ready?(assignment) and
+          Enum.any?(Map.get(assignment, :models, []), &(&1.exposed_model_id == @spark_model))
+      end)
+
+    eligibility =
+      Windows.routing_quota_eligibility_from_snapshot(snapshot,
+        model: @spark_model,
+        upstream_model: @spark_model
+      )
+
+    if advertised? and eligibility.eligible? and eligibility.routing_state == :provider_available do
+      Map.merge(readiness, %{
+        routing_ready_now?: true,
+        state: "model_limited",
+        label: "Limited model availability",
+        tone: :warning,
+        reason: "Spark quota allows routing while ordinary account quota remains blocked.",
+        reason_code: "spark_quota_available",
+        recovery_action: "Use Spark or wait for ordinary account quota to recover."
+      })
+    else
+      readiness
+    end
+  end
+
+  def with_model_availability(readiness, _snapshot, _assignments), do: readiness
 
   @spec with_circuit_visibility(t(), UpstreamCircuitReadiness.summary()) :: t()
   def with_circuit_visibility(%{routing_ready_now?: true} = base_readiness, %{state: :blocked}) do

@@ -7,6 +7,77 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
+  test "upstream usage preserves current permission at rounded weekly exhaustion" do
+    as_of = DateTime.utc_now() |> DateTime.truncate(:second)
+    pool = pool_fixture()
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:available, as_of, 1)
+        }
+      })
+
+    assert {:ok, _} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 quota_scope: "account",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new(100),
+                 observed_at: as_of,
+                 reset_at: DateTime.add(as_of, 86_400, :second),
+                 source: "codex_usage_api",
+                 freshness_state: "fresh",
+                 metadata: %{"rate_limit_allowed" => true, "rate_limit_reached" => false}
+               }
+             ])
+
+    assert {:ok, %{rate_limit: rate_limit}} =
+             Accounting.build_codex_usage_for_pool(pool, as_of: as_of)
+
+    assert rate_limit.allowed
+    refute rate_limit.limit_reached
+    assert rate_limit.secondary_window.used_percent == 100
+
+    assert {:ok, _} =
+             QuotaWindows.upsert_quota_windows_from_codex_headers(
+               identity,
+               [
+                 {"x-codex-secondary-used-percent", "100"},
+                 {"x-codex-secondary-window-minutes", "10080"},
+                 {"x-codex-secondary-reset-at",
+                  Integer.to_string(DateTime.to_unix(DateTime.add(as_of, 86_400, :second)))}
+               ],
+               DateTime.add(as_of, 1, :second)
+             )
+
+    assert {:ok, %{rate_limit: %{allowed: true, limit_reached: false}}} =
+             Accounting.build_codex_usage_for_pool(pool, as_of: DateTime.add(as_of, 2, :second))
+
+    for {state, observed_at, epoch} <- [
+          {:blocked, as_of, 1},
+          {:available, DateTime.add(as_of, -7_201, :second), 1},
+          {:available, as_of, 2}
+        ] do
+      identity
+      |> Ecto.Changeset.change(
+        metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(state, observed_at, epoch)
+        }
+      )
+      |> CodexPooler.Repo.update!()
+
+      assert {:ok, %{rate_limit: %{allowed: false, limit_reached: true}}} =
+               Accounting.build_codex_usage_for_pool(pool, as_of: DateTime.add(as_of, 2, :second))
+    end
+  end
+
   test "account-id usage read model refuses ambiguous workspace slots" do
     pool = pool_fixture()
     account_id = "acct_usage_ambiguous_#{System.unique_integer([:positive])}"

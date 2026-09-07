@@ -18,6 +18,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
@@ -3616,6 +3617,64 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end
 
     @tag :saved_reset_redemption_cause
+    test "scheduled available rounded-full quota preserves threshold and last-call policies only" do
+      for {mode, expires_in_seconds, expected} <- [
+            {"blocked", 4 * 60 * 60, :not_ready},
+            {"threshold", 4 * 60 * 60, "threshold"},
+            {"blocked", 60 * 60, "last_call"}
+          ] do
+        %{identity: identity, assignment: assignment, as_of: as_of} =
+          scheduled_expiry_fixture(
+            quota_used_percent: Decimal.new(100),
+            expires_in_seconds: expires_in_seconds,
+            quota_overrides: %{
+              metadata: %{"rate_limit_allowed" => true, "rate_limit_reached" => false}
+            },
+            policy_attrs: %{saved_reset_auto_redeem_trigger_mode: mode}
+          )
+
+        identity =
+          identity
+          |> Ecto.Changeset.change(
+            metadata:
+              Map.put(
+                identity.metadata,
+                "quota_account_availability",
+                AccountAvailabilityStore.encode!(:available, as_of, 1)
+              )
+          )
+          |> Repo.update!()
+
+        context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+        assert {:ok, context} = AutoEligibility.normalize_context(context)
+
+        assert {:noop, "gateway_auto_trigger_not_current"} =
+                 AutoEligibility.validate_locked_gateway_auto(
+                   identity,
+                   assignment,
+                   context,
+                   as_of
+                 )
+
+        result =
+          AutoEligibility.validate_locked_scheduled_expiry(
+            identity,
+            assignment,
+            identity.id,
+            as_of,
+            SavedResets.redemption_receive_timeout_ms()
+          )
+
+        if expected == :not_ready do
+          assert {:noop, "scheduled_expiry_burn_not_ready"} == result
+          refute AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
+        else
+          assert {:ok, %{trigger_detail: ^expected}} = result
+          assert AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
+        end
+      end
+    end
+
     test "eligible scheduled rescue consumes once through the shared redemption pipeline" do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
         scheduled_expiry_fixture()

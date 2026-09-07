@@ -803,8 +803,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          now
        ) do
     identity
-    |> Windows.list_evidence()
-    |> PostResetEvidence.classify(dispatched_at, later_datetime(now, now()))
+    |> PostResetEvidence.classify(
+      Windows.list_evidence(identity),
+      dispatched_at,
+      later_datetime(now, now())
+    )
     |> Kernel.==(:confirmed)
   end
 
@@ -2903,14 +2906,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   # to the present or that fresh evidence would be invisible.
   defp post_reset_phase(%UpstreamIdentity{} = refreshed_identity, consumed_at, timestamp) do
     post_reset_phase(
-      Windows.list_evidence(refreshed_identity),
+      {refreshed_identity, Windows.list_evidence(refreshed_identity)},
       consumed_at,
       later_datetime(timestamp, now())
     )
   end
 
-  defp post_reset_phase(evidence, consumed_at, timestamp) when is_list(evidence) do
-    case PostResetEvidence.classify(evidence, consumed_at, timestamp) do
+  defp post_reset_phase({identity, evidence}, consumed_at, timestamp) do
+    case PostResetEvidence.classify(identity, evidence, consumed_at, timestamp) do
       :confirmed -> RedemptionLifecycle.confirmed_by_quota()
       _pending_or_reblocked -> RedemptionLifecycle.consumed_pending_probe()
     end
@@ -2925,7 +2928,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     decision_at = later_datetime(finished_at, now())
     evidence = Windows.list_evidence(identity)
 
-    {finalize_confirmation_phase(result, evidence, decision_at), evidence, decision_at}
+    {finalize_confirmation_phase(result, {identity, evidence}, decision_at), evidence,
+     decision_at}
   end
 
   defp finalize_confirmation(_identity, result, _finished_at), do: {result, [], nil}
