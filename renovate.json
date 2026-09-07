@@ -17,7 +17,8 @@
   ],
   "constraints": {
     "elixir": "1.20.2",
-    "erlang": "28.5.0.2"
+    "erlang": "28.5.0.2",
+    "node": ">=26 <27"
   },
   "labels": [
     "dependencies"
@@ -52,11 +53,9 @@
     },
     {
       "description": "Automerge stable Codex client updates immediately",
-      "matchManagers": [
-        "custom.regex"
-      ],
       "matchPackageNames": [
-        "openai/codex"
+        "openai/codex",
+        "ghcr.io/icoretech/codex-docker"
       ],
       "automerge": true,
       "automergeType": "pr",
@@ -153,6 +152,19 @@
       ],
       "groupName": "Tailwind CSS CLI",
       "groupSlug": "tailwind-css-cli"
+    },
+    {
+      "description": "Keep Astro check on the TypeScript JavaScript API until native compiler support is available",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "docs-site/package.json"
+      ],
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<7"
     }
   ],
   "customManagers": [
@@ -178,8 +190,7 @@
       ],
       "depNameTemplate": "codex-pooler",
       "datasourceTemplate": "helm",
-      "registryUrlTemplate": "https://icoretech.github.io/helm",
-      "autoReplaceStringTemplate": "{{{prefix}}}{{{newValue}}}{{{suffix}}}"
+      "registryUrlTemplate": "https://icoretech.github.io/helm"
     },
     {
       "customType": "regex",
@@ -217,8 +228,7 @@
         "(?<prefix>elixir\\s*=\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+-otp-28)(?<suffix>\")"
       ],
       "depNameTemplate": "elixir",
-      "datasourceTemplate": "docker",
-      "autoReplaceStringTemplate": "{{{prefix}}}{{{newValue}}}{{{suffix}}}"
+      "datasourceTemplate": "docker"
     },
     {
       "customType": "regex",
@@ -231,8 +241,7 @@
       ],
       "depNameTemplate": "elixir-lang/elixir",
       "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$",
-      "autoReplaceStringTemplate": "{{{prefix}}}{{{newValue}}}{{{suffix}}}"
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
@@ -245,8 +254,7 @@
       ],
       "depNameTemplate": "containerbase/erlang-prebuild",
       "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver-coerced",
-      "autoReplaceStringTemplate": "{{{prefix}}}{{{newValue}}}{{{suffix}}}"
+      "versioningTemplate": "semver-coerced"
     },
     {
       "customType": "regex",
