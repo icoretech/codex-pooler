@@ -10,7 +10,7 @@ WORKDIR /app
 COPY assets/package.json assets/package-lock.json ./assets/
 RUN npm ci --prefix assets
 
-FROM elixir:1.20.2-otp-28-slim AS builder
+FROM elixir:1.20.4-otp-29-slim AS builder
 
 ARG DEBIAN_MIRROR
 ARG DEBIAN_SECURITY_MIRROR
@@ -92,7 +92,7 @@ RUN for file in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do
     fi; \
   done \
   && apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates libncurses6 libstdc++6 openssl tzdata \
+  && apt-get install -y --no-install-recommends ca-certificates libncurses6 libsctp1 libstdc++6 openssl tzdata \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --system codex_pooler \
   && useradd --system --gid codex_pooler --home-dir /app --shell /usr/sbin/nologin codex_pooler

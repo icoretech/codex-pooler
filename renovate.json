@@ -16,8 +16,8 @@
     "npm"
   ],
   "constraints": {
-    "elixir": "1.20.2",
-    "erlang": "28.5.0.2",
+    "elixir": "1.20.4",
+    "erlang": "29.0.6.0",
     "node": ">=26 <27"
   },
   "labels": [
@@ -89,7 +89,7 @@
       "minimumGroupSize": 4
     },
     {
-      "description": "Use Docker-tag-compatible custom updates for mise Elixir OTP 28 pins",
+      "description": "Use Docker-tag-compatible custom updates for mise Elixir OTP 29 pins",
       "matchManagers": [
         "mise"
       ],
@@ -99,26 +99,13 @@
       "enabled": false
     },
     {
-      "description": "Hold Elixir at the latest official OTP 28 Docker tag until the next matching image is published",
-      "matchManagers": [
-        "custom.regex",
-        "dockerfile",
-        "mise"
-      ],
-      "matchPackageNames": [
-        "elixir",
-        "elixir-lang/elixir"
-      ],
-      "allowedVersions": "<1.20.3"
-    },
-    {
-      "description": "Keep the project on Erlang/OTP 28",
+      "description": "Keep the project on Erlang/OTP 29",
       "matchPackageNames": [
         "containerbase/erlang-prebuild",
         "erlang",
         "erlang/otp"
       ],
-      "allowedVersions": "<29"
+      "allowedVersions": "<30"
     },
     {
       "description": "Keep Node runtime image updates together",
@@ -220,12 +207,12 @@
     },
     {
       "customType": "regex",
-      "description": "Update mise Elixir OTP 28 version from Docker tag compatibility",
+      "description": "Update mise Elixir OTP 29 version from Docker tag compatibility",
       "managerFilePatterns": [
         "/(^|/)mise\\.toml$/"
       ],
       "matchStrings": [
-        "(?<prefix>elixir\\s*=\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+-otp-28)(?<suffix>\")"
+        "(?<prefix>elixir\\s*=\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+-otp-29)(?<suffix>\")"
       ],
       "depNameTemplate": "elixir",
       "datasourceTemplate": "docker"

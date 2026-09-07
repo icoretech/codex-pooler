@@ -39,10 +39,10 @@ local helmVersion = 'v4.2.4';
     steps: [
       {
         name: 'quality',
-        image: 'elixir:1.20.2-otp-28-slim',
+        image: 'elixir:1.20.4-otp-29-slim',
         commands: [
           'apt-get update',
-          'apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl git lsof procps python3 ripgrep tar tzdata',
+          'apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl git libsctp1 lsof procps python3 ripgrep tar tzdata',
           'curl -fsSLO https://get.helm.sh/helm-' + helmVersion + '-linux-amd64.tar.gz',
           'curl -fsSLO https://get.helm.sh/helm-' + helmVersion + '-linux-amd64.tar.gz.sha256sum',
           'sha256sum -c helm-' + helmVersion + '-linux-amd64.tar.gz.sha256sum',
