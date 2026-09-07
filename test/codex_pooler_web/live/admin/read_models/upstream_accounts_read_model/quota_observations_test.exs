@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
 
   @now ~U[2026-09-07 12:00:00Z]
 
-  test "caps observations at five while retaining the selected source in chronological order" do
+  test "retains every entry with selected first and remaining entries in chronological order" do
     for count <- [4, 5, 8], selected_index <- [0, count - 1] do
       raw =
         for index <- 0..(count - 1),
@@ -32,12 +32,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
 
       row = Enum.find(rows, &(&1.key == :weekly))
 
-      expected =
-        if count > 5 and selected_index >= 5,
-          do: [0, 1, 2, 3, selected_index],
-          else: Enum.to_list(0..(min(count, 5) - 1))
+      expected = [selected_index | Enum.reject(0..(count - 1), &(&1 == selected_index))]
 
-      assert length(row.observations) == min(count, 5)
+      assert length(row.observations) == count
       assert Enum.count(row.observations, & &1.selected?) == 1
       assert Enum.map(row.observations, & &1.used) == Enum.map(expected, &"#{&1}%")
     end
@@ -49,7 +46,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
     preferences = DateTimeDisplay.preferences_for_user(nil)
     rows = QuotaProjection.quota_limit_rows([older], preferences, @now, nil, [older, newer])
     row = Enum.find(rows, &(&1.key == :weekly))
-    assert [latest, selected] = row.observations
+    assert [selected, latest] = row.observations
     assert latest.source == "Usage API"
     refute latest.selected?
     assert selected.source == "Response headers"
@@ -128,6 +125,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
 
     row = Enum.find(rows, &(&1.key == :weekly))
     assert length(row.observations) == 3
+
+    assert Enum.any?(
+             row.observations,
+             &(List.keyfind(&1.details, "Reported slot", 0) == {"Reported slot", "primary"})
+           )
+
     assert Enum.any?(row.observations, &(&1.reset_at == "Not reported"))
     assert Enum.any?(row.observations, & &1.elapsed?)
     assert Enum.count(row.observations, & &1.selected?) == 1

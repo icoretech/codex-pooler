@@ -6383,6 +6383,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#upstream-account-#{identity.id}", "Async account after")
   end
 
+  test "defers upstream reloads while quota observations are open", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "quota-reading", name: "Quota reading"})
+    %{identity: identity} = upstream_assignment_fixture(pool, %{account_label: "Quota reading"})
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    render_click(view, "open_quota_observations", %{})
+
+    assert {:ok, _event} =
+             Events.broadcast_upstreams(pool.id, "quota_windows_updated", %{
+               "upstream_identity_id" => identity.id
+             })
+
+    state = :sys.get_state(view.pid)
+    assert state.socket.assigns.upstreams_reload_dirty?
+    refute state.socket.assigns.upstreams_reload_running?
+    render_click(view, "close_quota_observations", %{})
+    _ = render_async(view)
+    refute :sys.get_state(view.pid).socket.assigns.upstreams_reload_dirty?
+  end
+
   test "defers an upstream event reload until the saved reset dialog closes", %{
     conn: conn,
     scope: scope

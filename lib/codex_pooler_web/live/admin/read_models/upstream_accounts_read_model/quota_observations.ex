@@ -6,8 +6,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.DateTimeDisplay
 
-  @observation_limit 5
-
   @sources %{
     "codex_usage_api" => "Usage API",
     "codex_response_headers" => "Response headers",
@@ -18,6 +16,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
   @type observation :: %{
           key: String.t(),
           source: String.t(),
+          slot: String.t(),
           used: String.t(),
           remaining: String.t(),
           remaining_value: float() | nil,
@@ -25,7 +24,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
           reset_at: String.t(),
           freshness: String.t(),
           elapsed?: boolean(),
-          selected?: boolean()
+          selected?: boolean(),
+          details: [{String.t(), String.t()}]
         }
 
   @spec group_key(AccountQuotaWindow.t()) :: String.t()
@@ -42,6 +42,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     %{
       key: fingerprint({window.id, window.source, window.observed_at, window.reset_at}),
       source: Map.get(@sources, window.source, "Other source"),
+      slot: allowed(window.window_kind, ~w(primary secondary)),
       used: percent(window.used_percent),
       remaining: remaining(window.used_percent),
       remaining_value: remaining_value(window.used_percent),
@@ -50,7 +51,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
       freshness: Evidence.current_freshness_state(window, as_of),
       elapsed?:
         match?(%DateTime{}, window.reset_at) and DateTime.compare(window.reset_at, as_of) != :gt,
-      selected?: true
+      selected?: true,
+      details: [
+        {"Reset reported", timestamp(window.reset_at, preferences)},
+        {"Last synchronized", timestamp(window.last_sync_at, preferences)},
+        {"Source precision",
+         allowed(window.source_precision, ~w(authoritative observed inferred unknown))},
+        {"Window", window_duration(window.window_minutes)},
+        {"Reported slot", allowed(window.window_kind, ~w(primary secondary))},
+        {"Scope", allowed(window.quota_scope, ~w(account model upstream_model feature))},
+        {"Window state", window_state(window.reset_at, as_of)}
+      ]
     }
   end
 
@@ -71,7 +82,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
             |> Map.get(row.observation_group, [])
             |> Enum.map(&project(&1, preferences, as_of))
             |> Enum.map(&%{&1 | selected?: &1.key == selected.key})
-            |> limit_observations()
+            |> Enum.sort_by(&(not &1.selected?))
 
           Map.put(row, :observations, observations)
 
@@ -79,22 +90,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
           row
       end
     end)
-  end
-
-  defp limit_observations(observations) do
-    latest = Enum.take(observations, @observation_limit)
-
-    case Enum.find(observations, & &1.selected?) do
-      nil ->
-        latest
-
-      selected ->
-        if Enum.any?(latest, & &1.selected?) do
-          latest
-        else
-          Enum.take(latest, @observation_limit - 1) ++ [selected]
-        end
-    end
   end
 
   defp fingerprint(value) do
@@ -118,4 +113,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     do: DateTimeDisplay.format_datetime(value, preferences)
 
   defp timestamp(_value, _preferences), do: "Not reported"
+
+  defp allowed(value, values),
+    do: if(value in values, do: String.replace(value, "_", " "), else: "Not reported")
+
+  defp window_duration(minutes)
+       when is_integer(minutes) and minutes > 0 and rem(minutes, 1440) == 0,
+       do: "#{div(minutes, 1440)} days"
+
+  defp window_duration(minutes)
+       when is_integer(minutes) and minutes > 0 and rem(minutes, 60) == 0,
+       do: "#{div(minutes, 60)} hours"
+
+  defp window_duration(minutes) when is_integer(minutes) and minutes > 0, do: "#{minutes} minutes"
+  defp window_duration(_minutes), do: "Not reported"
+
+  defp window_state(%DateTime{} = reset_at, as_of),
+    do: if(DateTime.compare(reset_at, as_of) == :gt, do: "not elapsed", else: "elapsed")
+
+  defp window_state(_reset_at, _as_of), do: "Not reported"
 end

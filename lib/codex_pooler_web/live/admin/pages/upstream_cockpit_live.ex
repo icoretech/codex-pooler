@@ -80,7 +80,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   @impl true
   def handle_info({Events, %{topics: topics, payload: payload}}, socket) do
     if "upstreams" in topics and upstream_event_in_scope?(socket, payload) do
-      {:noreply, load_cockpit(socket)}
+      {:noreply, reload_cockpit_or_defer(socket)}
     else
       {:noreply, socket}
     end
@@ -91,12 +91,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   # can overwrite this one's. The gate says so instead of guessing, and the only
   # honest answer from here is to reload.
   def handle_info(:live_updates_resumed, socket) do
-    {:noreply, load_cockpit(socket)}
+    {:noreply, reload_cockpit_or_defer(socket)}
   end
 
   @impl true
   def handle_info({:poll_oauth_relink_device, flow_id}, socket) do
     {:noreply, OAuthRelinkWorkflow.poll_device(socket, flow_id, &refresh_oauth_flow_state/1)}
+  end
+
+  @impl true
+  def handle_event("open_quota_observations", _params, socket),
+    do: {:noreply, assign(socket, :quota_observations_open?, true)}
+
+  def handle_event("close_quota_observations", _params, socket) do
+    dirty? = socket.assigns[:quota_observations_dirty?] == true
+    socket = assign(socket, quota_observations_open?: false, quota_observations_dirty?: false)
+    {:noreply, if(dirty?, do: load_cockpit(socket), else: socket)}
   end
 
   @impl true
@@ -395,6 +405,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         socket
         |> put_flash(:error, "Upstream account was not found")
         |> redirect(to: ~p"/admin/upstreams")
+    end
+  end
+
+  defp reload_cockpit_or_defer(socket) do
+    if socket.assigns[:quota_observations_open?] == true do
+      assign(socket, :quota_observations_dirty?, true)
+    else
+      load_cockpit(socket)
     end
   end
 

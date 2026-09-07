@@ -379,6 +379,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     end
   end
 
+  def handle_event("open_quota_observations", _params, socket) do
+    {:noreply, socket |> assign(:quota_observations_open?, true) |> defer_upstreams_reload()}
+  end
+
+  def handle_event("close_quota_observations", _params, socket) do
+    {:noreply,
+     socket |> assign(:quota_observations_open?, false) |> flush_deferred_upstreams_reload()}
+  end
+
   def handle_event("cancel_saved_reset_policy", _params, socket) do
     {:noreply,
      socket
@@ -725,7 +734,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   defp upstream_dialog_open?(socket) do
-    socket.assigns.importing_auth_json or
+    socket.assigns[:quota_observations_open?] == true or socket.assigns.importing_auth_json or
       socket.assigns.oauth_linking or
       socket.assigns.creating_invite or
       not is_nil(socket.assigns.editing_pool) or

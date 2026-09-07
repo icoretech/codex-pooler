@@ -279,6 +279,10 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
 
   def handle_event("validate_oauth_link_pool", _params, socket), do: {:noreply, socket}
 
+  def handle_event(event, _params, socket)
+      when event in ["open_quota_observations", "close_quota_observations"],
+      do: {:noreply, socket}
+
   def handle_event("close_request_log", _params, socket),
     do: {:noreply, select_review_state(socket, "catalog")}
 

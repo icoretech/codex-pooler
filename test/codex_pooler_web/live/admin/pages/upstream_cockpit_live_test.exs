@@ -5334,6 +5334,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#upstream-quota-limits-empty")
     refute has_element?(view, "#upstream-quota-limit-primary_5h")
 
+    render_click(view, "open_quota_observations", %{})
+
     upsert_quota_window!(identity, %{
       window_kind: "primary",
       window_minutes: 300,
@@ -5345,6 +5347,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     })
 
     _ = :sys.get_state(view.pid)
+    refute has_element?(view, "#upstream-quota-limit-primary_5h-progress[value='64'][max='100']")
+    render_click(view, "close_quota_observations", %{})
     assert has_element?(view, "#upstream-quota-limit-primary_5h-progress[value='64'][max='100']")
 
     request_health_request_fixture(pool, assignment, %{

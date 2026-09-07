@@ -19,6 +19,22 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
       )
       |> Enum.filter(&is_binary(&1.key))
 
+    entries =
+      for index <- 1..8,
+          do: %{hd(limit.observations) | key: "entry-#{index}", selected?: index == 1}
+
+    expanded_document = LazyHTML.from_fragment(render_quota_row(%{limit | observations: entries}))
+
+    assert Enum.count(
+             LazyHTML.query(expanded_document, "[data-role='quota-observation']:not(.hidden)")
+           ) == 5
+
+    assert Enum.count(LazyHTML.query(expanded_document, "[data-extra-evidence='true'].hidden")) ==
+             3
+
+    assert LazyHTML.query(expanded_document, "#quota-row-observations-dialog-show-all")
+           |> LazyHTML.text() =~ "Show all 8 records"
+
     html = render_quota_row(limit)
     document = LazyHTML.from_fragment(html)
 
@@ -49,6 +65,18 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
              []
 
     assert LazyHTML.query(document, "[data-selected='true'] .badge") |> Enum.empty?()
+
+    refute LazyHTML.query(
+             document,
+             "[data-selected='true'] details[data-preserve-open] > summary"
+           )
+           |> Enum.empty?()
+
+    assert LazyHTML.query(document, "[data-selected='true'] details[open]") |> Enum.empty?()
+
+    assert LazyHTML.query(document, "[data-selected='true'] dl") |> LazyHTML.text() =~
+             "Source precision"
+
     refute html =~ "private-demo"
     refute html =~ "sources differ"
   end
