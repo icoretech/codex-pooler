@@ -183,7 +183,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
 
   @spec decode_sse_data(term()) :: map()
   def decode_sse_data(data) when is_binary(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} -> decoded
       _other -> %{}
     end
@@ -192,7 +192,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   def decode_sse_data(_data), do: %{}
 
   @spec valid_json?(term()) :: boolean()
-  def valid_json?(body) when is_binary(body), do: match?({:ok, _}, Jason.decode(body))
+  def valid_json?(body) when is_binary(body), do: match?({:ok, _}, CodexPooler.JSON.decode(body))
   def valid_json?(_body), do: false
 
   @spec stream_block_event(binary()) :: {String.t() | nil, map()}

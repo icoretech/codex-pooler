@@ -326,7 +326,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   defp response_id_from_body(_body), do: nil
 
   defp response_id_from_json_body(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, decoded} -> response_id_from_decoded(decoded)
       {:error, _reason} -> nil
     end
@@ -339,7 +339,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     |> Stream.map(&String.replace_prefix(&1, "data: ", ""))
     |> Stream.filter(&String.starts_with?(&1, "{"))
     |> Enum.find_value(fn payload ->
-      case Jason.decode(payload) do
+      case CodexPooler.JSON.decode(payload) do
         {:ok, decoded} -> response_id_from_decoded(decoded)
         {:error, _reason} -> nil
       end

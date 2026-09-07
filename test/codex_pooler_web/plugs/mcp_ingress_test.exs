@@ -51,7 +51,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         conn
         |> remote_ip({198, 51, 100, 20})
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_response(conn, 200)["result"]["protocolVersion"] == @mcp_version
       refute_received {@firewall_denied_event, _measurements, _metadata}
@@ -66,7 +66,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         conn
         |> remote_ip({198, 51, 100, 20})
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 403) == %{
                "jsonrpc" => "2.0",
@@ -88,7 +88,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
           conn
           |> remote_ip({198, 51, 100, 20})
           |> put_req_header("content-type", "application/json")
-          |> post("/mcp", Jason.encode!(initialize_request()))
+          |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
         end)
 
       assert json_rpc_error(conn, 503) == %{
@@ -114,7 +114,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         conn
         |> remote_ip({198, 51, 100, 20})
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_response(conn, 200)["result"]["protocolVersion"] == @mcp_version
     end
@@ -127,7 +127,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         conn
         |> remote_ip({198, 51, 100, 20})
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       error = json_rpc_error(conn, 403)["error"]
       assert error["message"] == "client IP is not allowed"
@@ -151,7 +151,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         |> remote_ip({10, 0, 0, 1})
         |> put_req_header("x-forwarded-for", "203.0.113.10, 10.0.0.1")
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_response(allowed_conn, 200)["result"]["protocolVersion"] == @mcp_version
 
@@ -161,7 +161,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         |> remote_ip({198, 51, 100, 20})
         |> put_req_header("x-forwarded-for", "203.0.113.10")
         |> json_rpc_conn()
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(denied_conn, 403)["error"]["message"] == "client IP is not allowed"
     end
@@ -186,7 +186,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         |> put_req_header("x-forwarded-for", <<255, 0, 44>>)
         |> put_req_header("x-real-ip", "203.0.113.10")
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_response(allowed_conn, 200)["result"]["protocolVersion"] == @mcp_version
       refute_received {@firewall_denied_event, _measurements, _metadata}
@@ -198,7 +198,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         |> put_req_header("x-real-ip", "203.0.113.10")
         |> then(&%{&1 | req_headers: &1.req_headers ++ [{"x-real-ip", "198.51.100.20"}]})
         |> json_rpc_conn()
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(denied_conn, 403)["error"]["message"] == "client IP is not allowed"
 
@@ -224,7 +224,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         |> put_req_header("x-forwarded-for", "203.0.113.10")
         |> put_req_header("x-real-ip", <<255>>)
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_response(allowed_conn, 200)["result"]["protocolVersion"] == @mcp_version
     end
@@ -291,7 +291,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("content-encoding", "gzip")
-        |> post("/mcp", :zlib.gzip(Jason.encode!(initialize_request())))
+        |> post("/mcp", :zlib.gzip(CodexPooler.JSON.encode!(initialize_request())))
 
       assert json_rpc_error(conn, 415)["error"]["message"] ==
                "compressed MCP request bodies are not supported"
@@ -305,7 +305,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         |> put_req_header("content-type", "text/plain")
         |> put_req_header("accept", "application/json, text/event-stream")
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 415)["error"]["message"] ==
                "content-type must be application/json"
@@ -341,7 +341,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
       conn =
         conn
         |> json_rpc_conn()
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       error = json_rpc_error(conn, 503)["error"]
       assert error["message"] == "MCP route class is temporarily overloaded"
@@ -448,5 +448,5 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
 
   defp remote_ip(conn, ip), do: %{conn | remote_ip: ip}
 
-  defp string_keyed_map(map), do: map |> Jason.encode!() |> Jason.decode!()
+  defp string_keyed_map(map), do: map |> CodexPooler.JSON.encode!() |> CodexPooler.JSON.decode!()
 end

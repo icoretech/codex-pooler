@@ -67,7 +67,7 @@ server =
               ]
             }
 
-            body = Jason.encode!(payload)
+            body = CodexPooler.JSON.encode!(payload)
 
             :ok =
               :gen_tcp.send(
@@ -80,7 +80,7 @@ server =
             {:cont, :ok}
 
           {_path, _result} ->
-            body = Jason.encode!(%{"error" => "unexpected proof request"})
+            body = CodexPooler.JSON.encode!(%{"error" => "unexpected proof request"})
 
             :ok =
               :gen_tcp.send(

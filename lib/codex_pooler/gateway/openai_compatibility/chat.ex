@@ -429,7 +429,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
       "type" => "function_call",
       "call_id" => call_id,
       "name" => name,
-      "arguments" => Jason.encode!(input)
+      "arguments" => CodexPooler.JSON.encode!(input)
     }
   end
 
@@ -512,7 +512,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
        do: %{"type" => "input_image", "image_url" => "data:#{media_type};base64,#{data}"}
 
   defp normalize_cline_tool_result_output_part(%{"type" => "json", "value" => value}),
-    do: %{"type" => "input_text", "text" => Jason.encode!(value)}
+    do: %{"type" => "input_text", "text" => CodexPooler.JSON.encode!(value)}
 
   defp normalize_cline_tool_result_output_part(part), do: part
 

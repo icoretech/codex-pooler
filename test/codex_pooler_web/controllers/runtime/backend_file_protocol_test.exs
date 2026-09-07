@@ -461,8 +461,8 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
   defp residency_token(:root, value), do: jwt(%{"chatgpt_compute_residency" => value})
 
   defp jwt(claims) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
-    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(CodexPooler.JSON.encode!(claims), padding: false)
     Enum.join([header, payload, "signature"], ".")
   end
 

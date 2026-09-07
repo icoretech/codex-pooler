@@ -62,7 +62,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                "param" => nil,
                "sequence_number" => sequence_number,
                "type" => "error"
-             } = payload = Jason.decode!(data)
+             } = payload = CodexPooler.JSON.decode!(data)
 
       assert Enum.sort(Map.keys(payload)) == [
                "code",
@@ -105,7 +105,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.output_text.delta\n",
           "data: ",
-          Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "split answer"})
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.output_text.delta",
+            "delta" => "split answer"
+          })
         ]
         |> IO.iodata_to_binary()
 
@@ -136,7 +139,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.output_text.delta\n",
           "data: ",
-          Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "split answer"})
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.output_text.delta",
+            "delta" => "split answer"
+          })
         ]
         |> IO.iodata_to_binary()
 
@@ -179,7 +185,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.output_text.delta\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.output_text.delta",
             "delta" => String.duplicate("synthetic chat delta ", 5_000)
           })
@@ -284,7 +290,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
       state = DownstreamStream.initial_state(:relay, opts)
 
-      json_body = Jason.encode!(%{"id" => "resp_sparse_metadata", "object" => "response"})
+      json_body =
+        CodexPooler.JSON.encode!(%{"id" => "resp_sparse_metadata", "object" => "response"})
 
       assert {^json_body, ^state} =
                DownstreamStream.normalize_data(
@@ -388,7 +395,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         "response" => %{"id" => "resp_backend_cr", "status" => "completed"}
       }
 
-      source = "event: response.completed\rdata: " <> Jason.encode!(payload) <> "\r\r"
+      source = "event: response.completed\rdata: " <> CodexPooler.JSON.encode!(payload) <> "\r\r"
 
       for endpoint <- [
             "/backend-api/codex/responses",
@@ -401,7 +408,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                  DownstreamStream.normalize_data(source, endpoint, opts, state)
 
         assert normalized ==
-                 "event: response.completed\ndata: " <> Jason.encode!(payload) <> "\n\n"
+                 "event: response.completed\ndata: " <>
+                   CodexPooler.JSON.encode!(payload) <> "\n\n"
 
         assert state.codex_responses_sse_block_state.skip_leading_lf?
 
@@ -452,7 +460,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.created\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.created",
             "response" => %{
               "id" => "resp_public_incomplete_keepalive",
@@ -495,7 +503,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.created\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.created",
             "response" => %{
               "id" => "resp_public_oversized_keepalive",
@@ -548,7 +556,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.completed\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.completed",
             "response" => %{
               "id" => "resp_public_large_terminal",
@@ -661,7 +669,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.incomplete\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.incomplete",
             "response" => %{
               "id" => "resp_public_large_failed_incomplete",
@@ -722,7 +730,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.failed\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.failed",
             "response" => %{
               "id" => "resp_public_large_failed_with_specific_code",
@@ -829,7 +837,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       failed =
         "data: " <>
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.failed",
             "response" => %{
               "id" => "resp_public_failed_headerless_top_level_error",
@@ -997,7 +1005,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert data["error"]["message"] ==
                "upstream request failed: stream interrupted before terminal response event"
 
-      refute Jason.encode!(data) =~ "raw-upstream-reason"
+      refute CodexPooler.JSON.encode!(data) =~ "raw-upstream-reason"
 
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
     end
@@ -1065,7 +1073,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         [
           "event: response.created\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.created",
             "response" => %{"id" => "resp_public_incomplete", "status" => "in_progress"}
           })
@@ -1313,7 +1321,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert data["code"] == "server_error"
       assert data["error"]["code"] == "server_error"
       refute Map.has_key?(data, "response")
-      refute Jason.encode!(data) =~ "resp_from_delta"
+      refute CodexPooler.JSON.encode!(data) =~ "resp_from_delta"
 
       assert data["error"]["message"] ==
                "upstream request failed: stream interrupted before terminal response event"
@@ -1431,7 +1439,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert stream_bytes == byte_size(stream)
       assert relay_bytes > 0
-      refute Jason.encode!(summary) =~ "visible answer"
+      refute CodexPooler.JSON.encode!(summary) =~ "visible answer"
     end
 
     test "summarizes terminal-only public Responses completion" do
@@ -1583,7 +1591,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert summary["delta_bytes"] == 20 * byte_size(delta)
       assert summary["stream_bytes"] == byte_size(stream)
       assert map_size(summary) == 18
-      refute Jason.encode!(summary) =~ "bounded-delta"
+      refute CodexPooler.JSON.encode!(summary) =~ "bounded-delta"
     end
 
     test "keeps malformed and incomplete stream summaries bounded and safe" do
@@ -1606,7 +1614,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert stream_bytes == byte_size(incomplete)
       assert map_size(summary) == 18
-      refute Jason.encode!(summary) =~ "raw hidden"
+      refute CodexPooler.JSON.encode!(summary) =~ "raw hidden"
 
       malformed = "event: response.unknown\ndata: {not-json}\n\n"
 
@@ -1622,7 +1630,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert stream_bytes == byte_size(incomplete) + byte_size(malformed)
       assert map_size(summary) == 18
-      refute Jason.encode!(summary) =~ "not-json"
+      refute CodexPooler.JSON.encode!(summary) =~ "not-json"
     end
   end
 
@@ -1643,7 +1651,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
     data = lines |> Enum.find(&String.starts_with?(&1, "data: ")) |> strip_sse_prefix("data: ")
 
     if is_binary(event) and is_binary(data) and data != "[DONE]" do
-      %{"event" => event, "data" => Jason.decode!(data)}
+      %{"event" => event, "data" => CodexPooler.JSON.decode!(data)}
     end
   end
 
@@ -1655,13 +1663,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
     |> String.split("\n\n", trim: true)
     |> Enum.flat_map(fn
       "data: [DONE]" -> []
-      "data: " <> data -> [Jason.decode!(data)]
+      "data: " <> data -> [CodexPooler.JSON.decode!(data)]
       _block -> []
     end)
   end
 
   defp sse_event(event, payload) do
-    "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
+    "event: " <> event <> "\n" <> "data: " <> CodexPooler.JSON.encode!(payload) <> "\n\n"
   end
 
   defp public_responses_stream_opts do

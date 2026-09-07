@@ -32,7 +32,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   def normalize_raw_body(status, body, normalize_success, opts \\ [])
 
   def normalize_raw_body(status, body, normalize_success, opts) when is_binary(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, decoded} when is_map(decoded) and status < 400 ->
         {:ok, normalize_success.(decoded)}
 

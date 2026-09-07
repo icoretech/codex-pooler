@@ -99,7 +99,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(result)
 
     assert [%{"type" => "text", "text" => text}] = result["content"]
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
 
     structured = result["structuredContent"]
 
@@ -260,7 +260,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
 
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
 
     items_by_id = Map.new(result["structuredContent"]["items"], &{&1["id"], &1})
 
@@ -690,7 +690,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       |> Enum.count(&String.starts_with?(&1, "- admitted_at="))
 
     assert row_count == 10
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
   end
 
   test "request-log tool rejects malformed semantic filters without echoing date sentinels", %{
@@ -757,7 +757,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert result["isError"] == false
     assert :ok = Redaction.assert_mcp_output_safe!(result)
     assert [%{"type" => "text", "text" => text}] = result["content"]
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
 
     assert %{"status" => "ok", "kind" => "request_log", "item" => item} =
              result["structuredContent"]
@@ -1112,7 +1112,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
           raw_body
         ] do
       refute text =~ forbidden
-      refute Jason.encode!(result["structuredContent"]) =~ forbidden
+      refute CodexPooler.JSON.encode!(result["structuredContent"]) =~ forbidden
       refute inspect(result) =~ forbidden
     end
   end
@@ -1362,7 +1362,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
 
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
 
     assert %{"status" => "ok", "kind" => "request_log", "item" => item} =
              result["structuredContent"]
@@ -2122,7 +2122,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
 
     assert [presented] = list_result["structuredContent"]["items"]
     assert presented["id"] == visible_request.id
-    refute Jason.encode!(list_result["structuredContent"]) =~ hidden_request.id
+    refute CodexPooler.JSON.encode!(list_result["structuredContent"]) =~ hidden_request.id
 
     assert {:ok, hidden_result} =
              ToolDispatch.call("codex_pooler_get_request_log", %{"id" => hidden_request.id}, %{
@@ -2526,14 +2526,14 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
   defp assert_output_omits_adversarial_debug_values(result) do
     assert [%{"type" => "text", "text" => text}] = result["content"]
     structured = result["structuredContent"]
-    encoded = Jason.encode!(result)
+    encoded = CodexPooler.JSON.encode!(result)
     inspected = inspect(result)
 
-    refute text =~ Jason.encode!(structured)
+    refute text =~ CodexPooler.JSON.encode!(structured)
 
     for forbidden <- adversarial_forbidden_strings() do
       refute text =~ forbidden
-      refute Jason.encode!(structured) =~ forbidden
+      refute CodexPooler.JSON.encode!(structured) =~ forbidden
       refute encoded =~ forbidden
       refute inspected =~ forbidden
     end

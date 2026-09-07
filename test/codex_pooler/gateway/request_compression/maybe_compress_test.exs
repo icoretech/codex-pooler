@@ -20,14 +20,14 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = oversized_log_fixture("read", "private build output sentinel")
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
               "type" => "function_call",
               "call_id" => call_id,
               "name" => "arbitrary_command_tool",
-              "arguments" => Jason.encode!(%{"cmd" => command})
+              "arguments" => CodexPooler.JSON.encode!(%{"cmd" => command})
             },
             %{
               "type" => "function_call_output",
@@ -70,13 +70,13 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
           "private_marker" => "private json output sentinel",
           "rows" => Enum.map(1..64, &%{"id" => &1, "state" => "synthetic"})
         }
-        |> Jason.encode!(pretty: true)
+        |> CodexPooler.JSON.encode!(pretty: true)
 
       ordinary_sentinel = "ordinary mixed output sentinel"
       ordinary_output = oversized_log_fixture("ordinary", ordinary_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -133,13 +133,13 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
 
     test "preserves schema-bound JSON output while compressing an unbound function output" do
       schema_bound_output =
-        Jason.encode!(%{"rows" => Enum.map(1..160, &%{"id" => &1})}, pretty: true)
+        CodexPooler.JSON.encode!(%{"rows" => Enum.map(1..160, &%{"id" => &1})}, pretty: true)
 
       unbound_sentinel = "unbound compression sentinel"
       unbound_output = oversized_log_fixture("unbound", unbound_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "tools" => [
             %{
@@ -180,12 +180,15 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       assert {compressed_body, compressed_options} =
                RequestCompression.maybe_compress(body, context, request_options)
 
-      compressed_input = compressed_body |> Jason.decode!() |> Map.fetch!("input")
+      compressed_input = compressed_body |> CodexPooler.JSON.decode!() |> Map.fetch!("input")
       preserved_output = Enum.at(compressed_input, 1)["output"]
       compressed_output = Enum.at(compressed_input, 3)["output"]
 
       assert preserved_output == schema_bound_output
-      assert Jason.decode!(preserved_output) == Jason.decode!(schema_bound_output)
+
+      assert CodexPooler.JSON.decode!(preserved_output) ==
+               CodexPooler.JSON.decode!(schema_bound_output)
+
       assert compressed_output =~ "[compressed log output: omitted"
       refute compressed_output =~ unbound_sentinel
 
@@ -264,7 +267,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
         malformed_program_output
       ]
 
-      body = Jason.encode!(%{"model" => @supported_model, "input" => input})
+      body = CodexPooler.JSON.encode!(%{"model" => @supported_model, "input" => input})
 
       assert {:ok, [candidate]} =
                body
@@ -280,7 +283,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
 
       assert compressed_body != body
 
-      compressed_input = compressed_body |> Jason.decode!() |> Map.fetch!("input")
+      compressed_input = compressed_body |> CodexPooler.JSON.decode!() |> Map.fetch!("input")
 
       assert Enum.at(compressed_input, 0) == program
       assert Enum.at(compressed_input, 1) == function_call
@@ -317,7 +320,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = compression_log_fixture(omitted_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -374,7 +377,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = compression_log_fixture("indexed tool compression sentinel")
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "tools" => [tool],
           "input" => [
@@ -398,7 +401,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
                RequestCompression.maybe_compress(body, context, request_options)
 
       assert compressed_body != body
-      assert Jason.decode!(compressed_body)["tools"] == [tool]
+      assert CodexPooler.JSON.decode!(compressed_body)["tools"] == [tool]
 
       compressed_output = first_output(compressed_body)
       assert compressed_output =~ "[compressed log output: omitted"
@@ -420,7 +423,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = incomplete_failure_log_fixture(omitted_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -463,7 +466,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = compression_log_fixture(omitted_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -507,7 +510,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
         call_id = "call_#{tool_name}"
 
         body =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "model" => @supported_model,
             "input" => [
               %{
@@ -550,7 +553,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = compression_log_fixture(omitted_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "previous_response_id" => "resp_fixture_previous",
           "input" => [
@@ -599,14 +602,14 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       ]
 
       for item <- payloads do
-        body = Jason.encode!(%{"model" => @supported_model, "input" => [item]})
+        body = CodexPooler.JSON.encode!(%{"model" => @supported_model, "input" => [item]})
 
         {context, request_options} = request_context(body)
 
         assert {^body, compressed_options} =
                  RequestCompression.maybe_compress(body, context, request_options)
 
-        assert body |> Jason.decode!() |> Map.fetch!("input") |> List.first() == item
+        assert body |> CodexPooler.JSON.decode!() |> Map.fetch!("input") |> List.first() == item
 
         assert %{
                  "enabled" => true,
@@ -632,7 +635,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       assert byte_size(original_output) > 8_192
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -658,7 +661,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
 
       compressed_output =
         compressed_body
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> Map.fetch!("input")
         |> Enum.find(&(&1["type"] == "function_call_output"))
         |> Map.fetch!("output")
@@ -700,7 +703,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       assert byte_size(original_output) > 8_192
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -754,7 +757,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       assert byte_size(original_output) > 8_192
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -794,7 +797,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = compression_log_fixture(omitted_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "gpt-fixture",
           "input" => [
             %{
@@ -852,10 +855,10 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
             end),
           "LastUpdateTime" => "2026-05-28T09:52:17.525000+02:00"
         }
-        |> Jason.encode!(pretty: true)
+        |> CodexPooler.JSON.encode!(pretty: true)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -875,12 +878,14 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
 
       compressed_output =
         compressed_body
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> Map.fetch!("input")
         |> List.first()
         |> Map.fetch!("output")
 
-      assert Jason.decode!(compressed_output) == Jason.decode!(original_output)
+      assert CodexPooler.JSON.decode!(compressed_output) ==
+               CodexPooler.JSON.decode!(original_output)
+
       assert byte_size(compressed_output) < byte_size(original_output)
 
       assert %{
@@ -911,12 +916,12 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
             end),
           "summary" => %{"count" => 16, "source" => "synthetic"}
         }
-        |> Jason.encode!(pretty: true)
+        |> CodexPooler.JSON.encode!(pretty: true)
 
       original_output = prefix <> original_json <> suffix
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -951,7 +956,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
           byte_size(compressed_output) - byte_size(prefix) - byte_size(suffix)
         )
 
-      assert Jason.decode!(compressed_json) == Jason.decode!(original_json)
+      assert CodexPooler.JSON.decode!(compressed_json) == CodexPooler.JSON.decode!(original_json)
       assert byte_size(compressed_json) < byte_size(original_json)
 
       assert %{
@@ -971,7 +976,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = compression_nul_search_fixture(omitted_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -1020,7 +1025,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = compression_nul_search_fixture(sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "metadata" => %{"cache_control" => cache_control, "stable" => "prefix"},
           "input" => [
@@ -1065,7 +1070,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       refute compressed_output =~ sentinel
       refute compressed_output =~ <<0>>
 
-      decoded = Jason.decode!(compressed_body)
+      decoded = CodexPooler.JSON.decode!(compressed_body)
 
       assert decoded["metadata"]["cache_control"] == cache_control
       assert decoded["input"] |> Enum.at(0) |> Map.fetch!("cache_control") == cache_control
@@ -1104,7 +1109,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       assert second_body == compressed_body
       assert first_output(second_body) == first_output(compressed_body)
 
-      second_decoded = Jason.decode!(second_body)
+      second_decoded = CodexPooler.JSON.decode!(second_body)
 
       assert second_decoded["metadata"]["cache_control"] == cache_control
       assert second_decoded["input"] |> Enum.at(0) |> Map.fetch!("cache_control") == cache_control
@@ -1125,7 +1130,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       column_output = compression_column_search_fixture(column_sentinel)
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -1188,7 +1193,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       original_output = grep_engine_failure_fixture("grep engine omitted sentinel")
 
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -1245,7 +1250,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
         call_id = "call_unsupported_#{shape}"
 
         body =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "model" => @supported_model,
             "input" => [
               %{
@@ -1289,7 +1294,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
 
     test "skips when no route model is available" do
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "input" => [
             %{
               "type" => "function_call_output",
@@ -1317,7 +1322,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
 
     test "does not fall back to payload model when route model is unsupported" do
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => @supported_model,
           "input" => [
             %{
@@ -1343,7 +1348,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
   end
 
   defp request_context(body, opts \\ []) do
-    payload = Jason.decode!(body)
+    payload = CodexPooler.JSON.decode!(body)
     route_model = Keyword.get(opts, :model, supported_model())
     visible_model = Keyword.get(opts, :visible_model, route_model)
 
@@ -1416,7 +1421,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
           }
         end)
     }
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp oversized_log_fixture(kind, omitted_sentinel) do
@@ -1544,7 +1549,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
 
   defp outputs(body) do
     body
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> Map.fetch!("input")
     |> Enum.filter(&Map.has_key?(&1, "output"))
     |> Enum.map(&Map.fetch!(&1, "output"))

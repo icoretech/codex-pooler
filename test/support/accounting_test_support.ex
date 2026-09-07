@@ -103,7 +103,7 @@ defmodule CodexPooler.AccountingTestSupport do
 
     File.write!(
       path,
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "generated_at" => DateTime.to_iso8601(generated_at),
         "models" => %{
           model_identifier => %{

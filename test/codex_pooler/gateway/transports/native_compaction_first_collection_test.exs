@@ -426,7 +426,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [],
       payload:
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "sample-model",
           "input" => [
             %{"role" => "user", "content" => "sample"},
@@ -516,13 +516,13 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
 
   defp with_owner(fun) do
     item =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_item.done",
         "item" => %{"type" => "compaction", "encrypted_content" => "synthetic-compact"}
       })
 
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_ordinary_fixture", "status" => "completed"}
       })

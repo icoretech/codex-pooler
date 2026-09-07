@@ -98,7 +98,7 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
     assert [attempt] = Repo.all(AlertDeliveryAttempt)
 
     attempt_metadata =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         response_metadata: attempt.response_metadata,
         failure_metadata: attempt.failure_metadata,
         failure_code: attempt.failure_code,
@@ -193,7 +193,7 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
              "source" => "persisted_saved_resets"
            }
 
-    attempt_metadata = Jason.encode!(attempt.response_metadata)
+    attempt_metadata = CodexPooler.JSON.encode!(attempt.response_metadata)
     refute attempt_metadata =~ "provider-credit-hidden"
     refute attempt_metadata =~ "pool_upstream_assignment_id"
   end

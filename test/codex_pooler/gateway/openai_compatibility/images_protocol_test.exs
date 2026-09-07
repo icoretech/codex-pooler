@@ -195,5 +195,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
   end
 
   defp payload, do: %{"model" => "gpt-image-1", "prompt" => "synthetic"}
-  defp stream(events), do: Enum.map_join(events, "", &("data: " <> Jason.encode!(&1) <> "\n\n"))
+
+  defp stream(events),
+    do: Enum.map_join(events, "", &("data: " <> CodexPooler.JSON.encode!(&1) <> "\n\n"))
 end

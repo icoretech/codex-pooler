@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Transports.OrdinarySuccessTestSeed do
     {:ok, server} =
       FakeUpstream.start_link(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.completed",
             "response" => %{"id" => "resp_seed_authority", "status" => "completed"}
           })
@@ -62,7 +62,7 @@ defmodule CodexPooler.Gateway.Transports.OrdinarySuccessTestSeed do
     request = %Upstream.Request{
       url: url <> "/backend-api/codex/responses",
       headers: [],
-      payload: Jason.encode!(%{"model" => "ordinary-authority-seed", "input" => []}),
+      payload: CodexPooler.JSON.encode!(%{"model" => "ordinary-authority-seed", "input" => []}),
       request_id: Ecto.UUID.generate(),
       attempt_id: Ecto.UUID.generate(),
       effective_serving_mode: "full",

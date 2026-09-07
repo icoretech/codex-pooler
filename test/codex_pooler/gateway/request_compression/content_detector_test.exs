@@ -98,7 +98,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
               %{"index" => index, "label" => "synthetic record #{index}", "active" => true}
             end)
         }
-        |> Jason.encode!(pretty: true)
+        |> CodexPooler.JSON.encode!(pretty: true)
 
       content = "synthetic prefix\n" <> embedded_object <> "\nsynthetic suffix"
 
@@ -111,7 +111,9 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
 
       assert_noop(
         :text,
-        ContentDetector.detect("synthetic quoted value " <> Jason.encode!(embedded_object))
+        ContentDetector.detect(
+          "synthetic quoted value " <> CodexPooler.JSON.encode!(embedded_object)
+        )
       )
 
       assert_noop(:text, ContentDetector.detect("synthetic prefix {\n  \"broken\": true"))

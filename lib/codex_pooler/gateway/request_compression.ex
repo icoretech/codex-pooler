@@ -274,7 +274,7 @@ defmodule CodexPooler.Gateway.RequestCompression do
       replacement = %{
         byte_start: candidate.byte_start,
         byte_end: candidate.byte_end,
-        replacement: Jason.encode!(compressed_content)
+        replacement: CodexPooler.JSON.encode!(compressed_content)
       }
 
       {:ok, replacement, strategy_metadata}
@@ -613,7 +613,7 @@ defmodule CodexPooler.Gateway.RequestCompression do
   defp skip_status(:pool_disabled), do: :disabled
   defp skip_status(_reason), do: :ineligible
 
-  defp classify_exception(%Jason.DecodeError{}), do: :invalid_json
+  defp classify_exception(%JSON.DecodeError{}), do: :invalid_json
   defp classify_exception(_error), do: :compression_error
 
   defp safe_failure_metadata(upstream_payload, context, %RequestOptions{} = request_options) do

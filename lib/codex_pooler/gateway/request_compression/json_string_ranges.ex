@@ -35,7 +35,7 @@ defmodule CodexPooler.Gateway.RequestCompression.JsonStringRanges do
   def decode_string(json, %{byte_start: byte_start, byte_end: byte_end})
       when is_binary(json) and is_integer(byte_start) and is_integer(byte_end) do
     with {:ok, encoded} <- slice_range(json, byte_start, byte_end),
-         {:ok, decoded} when is_binary(decoded) <- Jason.decode(encoded) do
+         {:ok, decoded} when is_binary(decoded) <- CodexPooler.JSON.decode(encoded) do
       {:ok, decoded}
     else
       _error -> {:error, :invalid_json}
@@ -337,7 +337,7 @@ defmodule CodexPooler.Gateway.RequestCompression.JsonStringRanges do
 
   defp decode_string_range(json, byte_start, byte_end) do
     with {:ok, encoded} <- slice_range(json, byte_start, byte_end),
-         {:ok, decoded} when is_binary(decoded) <- Jason.decode(encoded) do
+         {:ok, decoded} when is_binary(decoded) <- CodexPooler.JSON.decode(encoded) do
       {:ok, decoded}
     else
       _error -> :error

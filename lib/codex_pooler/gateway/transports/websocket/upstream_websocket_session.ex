@@ -2173,7 +2173,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          } = receive_state
        ) do
     metadata = NativeCodexResponseControl.pooler_metadata_event(models_etag, state.headers)
-    write_frame(receive_state.writer, Jason.encode!(metadata), %TerminalDiscriminator{})
+
+    write_frame(
+      receive_state.writer,
+      CodexPooler.JSON.encode!(metadata),
+      %TerminalDiscriminator{}
+    )
+
     %{receive_state | native_metadata_emitted?: true}
   end
 
@@ -2214,7 +2220,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp sanitize_downstream_text({text, %{} = decoded}, %TurnSnapshot{}) when is_binary(text) do
     case NativeCodexResponseControl.sanitize_websocket_event(decoded) do
       :unchanged -> {text, decoded}
-      {:changed, sanitized} -> {Jason.encode!(sanitized), sanitized}
+      {:changed, sanitized} -> {CodexPooler.JSON.encode!(sanitized), sanitized}
       {:error, :invalid_event} -> {text, decoded}
     end
   end
@@ -2224,7 +2230,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       type
       when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
         sanitized = Map.drop(decoded, ["headers"])
-        {Jason.encode!(sanitized), sanitized}
+        {CodexPooler.JSON.encode!(sanitized), sanitized}
 
       _other ->
         {text, decoded}
@@ -2234,7 +2240,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp sanitize_downstream_text({text, decoded}, _native_snapshot), do: {text, decoded}
 
   defp decode_text_frame(text) do
-    case Jason.decode(text) do
+    case CodexPooler.JSON.decode(text) do
       {:ok, %{} = decoded} -> decoded
       {:ok, _decoded} -> :non_object_json
       {:error, _reason} -> :undecodable

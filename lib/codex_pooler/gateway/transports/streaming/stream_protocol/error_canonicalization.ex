@@ -83,7 +83,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     [
       "event: error\n",
       "data: ",
-      Jason.encode!(event),
+      CodexPooler.JSON.encode!(event),
       "\n\n"
     ]
     |> IO.iodata_to_binary()
@@ -91,7 +91,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
   @spec canonicalize_codex_responses_json_message(binary()) :: binary()
   def canonicalize_codex_responses_json_message(data) when is_binary(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         {canonical, _decoded} = canonicalize_codex_responses_json_message(data, decoded)
         canonical
@@ -109,13 +109,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
   @spec canonicalize_native_codex_responses_json_message(binary()) :: binary()
   def canonicalize_native_codex_responses_json_message(data) when is_binary(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok,
        %{
          "type" => "error",
          "error" => %{"code" => "previous_response_not_found"}
        }} ->
-        Jason.encode!(native_previous_response_not_found_event())
+        CodexPooler.JSON.encode!(native_previous_response_not_found_event())
 
       _other ->
         canonicalize_codex_responses_json_message(data)
@@ -131,7 +131,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
         "error" => %{"code" => "previous_response_not_found"}
       } ->
         canonical = native_previous_response_not_found_event()
-        {Jason.encode!(canonical), canonical}
+        {CodexPooler.JSON.encode!(canonical), canonical}
 
       _other ->
         canonicalize_codex_responses_json_message(data, decoded)
@@ -206,7 +206,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     [
       "event: response.failed\n",
       "data: ",
-      Jason.encode!(canonical_codex_responses_error_event(decoded)),
+      CodexPooler.JSON.encode!(canonical_codex_responses_error_event(decoded)),
       "\n\n"
     ]
   end
@@ -215,14 +215,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     cond do
       EventSummary.typeless_detail_error?(decoded) ->
         canonical = EventSummary.canonical_typeless_detail_error_event()
-        {Jason.encode!(canonical), canonical}
+        {CodexPooler.JSON.encode!(canonical), canonical}
 
       codex_responses_error_needs_canonical_response?(
         ErrorCodes.decoded_string(decoded, "type"),
         decoded
       ) ->
         canonical = canonical_codex_responses_error_event(decoded)
-        {Jason.encode!(canonical), canonical}
+        {CodexPooler.JSON.encode!(canonical), canonical}
 
       true ->
         {data, decoded}
@@ -303,7 +303,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
       |> Map.put("error", error)
       |> put_in(["response", "error"], error)
 
-    ["event: response.failed\n", "data: ", Jason.encode!(event), "\n\n"]
+    ["event: response.failed\n", "data: ", CodexPooler.JSON.encode!(event), "\n\n"]
   end
 
   defp canonical_codex_responses_error_response(decoded, error) do

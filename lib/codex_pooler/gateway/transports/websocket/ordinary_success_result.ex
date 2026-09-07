@@ -37,7 +37,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.OrdinarySuccessResult do
     with :relay <- request.websocket_delivery_mode,
          {:ok, request_id} <- Ecto.UUID.cast(request.request_id),
          {:ok, attempt_id} <- Ecto.UUID.cast(request.attempt_id),
-         {:ok, %{"model" => model}} when is_binary(model) <- Jason.decode(request.payload),
+         {:ok, %{"model" => model}} when is_binary(model) <-
+           CodexPooler.JSON.decode(request.payload),
          mode when mode in ["full", "lite"] <- request.effective_serving_mode do
       {:ok,
        %__MODULE__{

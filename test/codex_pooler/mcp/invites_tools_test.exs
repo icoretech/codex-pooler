@@ -242,7 +242,7 @@ defmodule CodexPooler.MCP.InvitesToolsTest do
 
     assert [presented] = list_result["structuredContent"]["invites"]
     assert presented["id"] == visible_invite.id
-    refute Jason.encode!(list_result["structuredContent"]) =~ hidden_invite.id
+    refute CodexPooler.JSON.encode!(list_result["structuredContent"]) =~ hidden_invite.id
 
     assert {:ok, hidden_result} =
              ToolDispatch.call("codex_pooler_get_invite", %{"selector" => hidden_invite.id}, %{

@@ -56,14 +56,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
     try do
       assert {:error, :cancelled} =
                Repo.transaction(fn ->
-                 writer.(Jason.encode!(%{"type" => "response.created"}))
+                 writer.(CodexPooler.JSON.encode!(%{"type" => "response.created"}))
                  Repo.rollback(:cancelled)
                end)
 
       assert drain_frames() == 1
       assert Repo.reload!(fixture.turn).first_visible_output_at == nil
       assert {:ok, _armed} = RequestReplay.arm(arm_input(fixture))
-      writer.(Jason.encode!(%{"type" => "response.output_text.delta", "delta" => ""}))
+      writer.(CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => ""}))
       assert drain_frames() == 0
     after
       WebsocketRequestCallbacks.end_request()
@@ -116,7 +116,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
 
     try do
       event = %{"type" => "response.output_text.delta", "delta" => ""}
-      observer.(Jason.encode!(event), event)
+      observer.(CodexPooler.JSON.encode!(event), event)
       assert drain_queries(handler, []) != []
     after
       :telemetry.detach(handler)
@@ -352,7 +352,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
     ([%{"type" => "response.created"}] ++
        List.duplicate(%{"type" => "response.output_text.delta", "delta" => ""}, deltas) ++
        [%{"type" => "response.completed", "response" => %{"id" => "resp_example"}}])
-    |> Enum.map(&Jason.encode!/1)
+    |> Enum.map(&CodexPooler.JSON.encode!/1)
   end
 
   defp drain_frames(count \\ 0) do

@@ -147,7 +147,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       try do
         payload =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => "synthetic public websocket overload",
@@ -167,7 +167,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                    "param" => nil,
                    "type" => "server_error"
                  }
-               } = Jason.decode!(frame)
+               } = CodexPooler.JSON.decode!(frame)
 
         refute frame =~ internal_reason
         assert FakeUpstream.count(upstream) == 0
@@ -400,7 +400,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
@@ -414,7 +414,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "type" => "response.completed",
                "response" => %{"id" => "resp_v1_websocket_continuity"}
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert_receive_finalized_request!()
 
@@ -459,7 +459,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                "recovery_kind" => "restart_with_full_context",
                "recovery" => recovery
              }
-           } = Jason.decode!(frame)
+           } = CodexPooler.JSON.decode!(frame)
 
     assert_pinned_reauth_recovery_contract!(recovery)
   end
@@ -514,7 +514,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              Gateway.register_codex_session_continuity(
                session,
                %{},
-               Jason.encode!(%{"id" => previous_response_id})
+               CodexPooler.JSON.encode!(%{"id" => previous_response_id})
              )
 
     session
@@ -657,7 +657,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert Repo.aggregate(Request, :count) == request_count
 
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
@@ -675,7 +675,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                  "id" => "resp_v1_websocket_public",
                  "service_tier" => "fast"
                }
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
@@ -757,7 +757,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             "generate" => true
           }
           |> Map.merge(effort_payload)
-          |> Jason.encode!()
+          |> CodexPooler.JSON.encode!()
 
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
         {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
@@ -765,7 +765,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         assert %{
                  "type" => "response.completed",
                  "response" => %{"id" => "resp_v1_ws_reasoning_policy"}
-               } = Jason.decode!(frame)
+               } = CodexPooler.JSON.decode!(frame)
 
         assert [captured] = FakeUpstream.requests(upstream)
         assert get_in(captured.json, ["reasoning", "effort"]) == expected_effort
@@ -809,7 +809,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => "synthetic public websocket policy denial",
@@ -829,7 +829,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                  "message" => @reasoning_denial_message,
                  "param" => "reasoning.effort"
                }
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert FakeUpstream.count(upstream) == 0
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -886,7 +886,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
@@ -904,7 +904,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                  "status" => "incomplete",
                  "incomplete_details" => %{"reason" => "max_output_tokens"}
                }
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       refute frame =~ "response.failed"
       assert_receive_finalized_request!()
@@ -946,7 +946,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => "resp_v1_ws_opencode_previous",
@@ -990,7 +990,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "type" => "response.completed",
                "response" => %{"id" => "resp_v1_websocket_opencode_replay"}
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/codex/responses"
@@ -1058,7 +1058,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => "resp_v1_custom_tool_previous",
@@ -1098,7 +1098,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "type" => "response.completed",
                "response" => %{"id" => "resp_v1_websocket_custom_tool_replay"}
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert_receive_finalized_request!()
 
@@ -1155,7 +1155,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "conversation.item.create",
           "item" => %{
             "type" => "message",
@@ -1167,7 +1167,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
       {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"type" => "error", "status" => 400, "error" => error} = Jason.decode!(frame)
+      assert %{"type" => "error", "status" => 400, "error" => error} =
+               CodexPooler.JSON.decode!(frame)
+
       assert error["code"] == "invalid_request"
       assert error["param"] == "type"
 
@@ -1200,7 +1202,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => previous_response_id,
@@ -1231,7 +1233,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "type" => "response.completed",
                "response" => %{"id" => "resp_v1_websocket_safe_continuation"}
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert_receive_finalized_request!()
 
@@ -1272,7 +1274,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       try do
         invalid_payload =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "previous_response_id" => invalid_previous_response_id,
@@ -1303,7 +1305,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           public_websocket_receive_text!(invalid_conn, invalid_websocket, invalid_ref)
 
         assert %{"type" => "error", "status" => 400, "error" => error} =
-                 Jason.decode!(invalid_frame)
+                 CodexPooler.JSON.decode!(invalid_frame)
 
         assert error["code"] == "invalid_request"
         assert error["param"] == "input"
@@ -1733,7 +1735,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     }
 
     source =
-      "event: response.completed\rdata: " <> Jason.encode!(terminal) <> "\r\r"
+      "event: response.completed\rdata: " <> CodexPooler.JSON.encode!(terminal) <> "\r\r"
 
     upstream =
       start_upstream(
@@ -2509,7 +2511,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "id" => "resp_hosted_shell_curl_json",
              "object" => "response",
              "status" => "completed"
-           } = Jason.decode!(json_body)
+           } = CodexPooler.JSON.decode!(json_body)
 
     counts_before_malformed = durable_accounting_counts()
 
@@ -2531,7 +2533,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                "param" => "input",
                "type" => "invalid_request_error"
              }
-           } = Jason.decode!(malformed_body)
+           } = CodexPooler.JSON.decode!(malformed_body)
 
     assert_no_hosted_shell_lifecycle_stream!(malformed_body)
     assert FakeUpstream.count(upstream) == 1
@@ -4128,7 +4130,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             "type" => "function_call",
             "call_id" => call_id,
             "name" => "arbitrary_command_tool",
-            "arguments" => Jason.encode!(%{"cmd" => command})
+            "arguments" => CodexPooler.JSON.encode!(%{"cmd" => command})
           },
           %{
             "type" => "function_call_output",
@@ -4190,8 +4192,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     setup = gateway_setup(upstream, exposed_model_id: "gpt-4o", upstream_model_id: "gpt-4o")
     enable_request_compression!(setup.pool)
-    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
-    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+    schema_bound_output =
+      CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+
+    unbound_output = CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
 
     assert byte_size(schema_bound_output) > 512
     assert byte_size(unbound_output) > 512
@@ -4258,9 +4263,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       end)
 
     assert schema_bound_item["output"] == schema_bound_output
-    assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+
+    assert CodexPooler.JSON.decode!(schema_bound_item["output"]) ==
+             CodexPooler.JSON.decode!(schema_bound_output)
+
     assert unbound_item["output"] != unbound_output
-    assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
+    assert CodexPooler.JSON.decode!(unbound_item["output"]) ==
+             CodexPooler.JSON.decode!(unbound_output)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -4305,7 +4315,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     terminal_payload =
       IO.iodata_to_binary([
         ~s({"type":"response.completed","response":{"id":"resp_v1_retained_usage_terminal","status":"completed","service_tier":"flex","usage":{"input_tokens":16,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"reasoning_tokens":0,"total_tokens":21},"output":[{"type":"message","content":[{"type":"output_text","text":),
-        Jason.encode!(retained_padding),
+        CodexPooler.JSON.encode!(retained_padding),
         ~s(}]}]}})
       ])
 
@@ -4678,7 +4688,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     usage =
       ~s({"input_tokens":16,"input_tokens_details":{"cached_tokens":4},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":21})
 
-    padding = Jason.encode!(String.duplicate("x", 290_000))
+    padding = CodexPooler.JSON.encode!(String.duplicate("x", 290_000))
 
     output =
       ~s("output":[{"type":"message","content":[{"type":"output_text","text":#{padding}}]}])
@@ -4697,7 +4707,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   defp measured_usage_field(:malformed_large, _usage), do: {"malformed", ~s("usage":17,)}
 
   defp measured_usage_field(:candidate_limit_large, _usage) do
-    {"candidate_limit", ~s("usage":{"padding":#{Jason.encode!(String.duplicate("y", 20_000))}},)}
+    {"candidate_limit",
+     ~s("usage":{"padding":#{CodexPooler.JSON.encode!(String.duplicate("y", 20_000))}},)}
   end
 
   defp measured_usage_field(_scenario, usage), do: {"known", ~s("usage":#{usage},)}
@@ -6505,7 +6516,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              }
            } = public_error
 
-    public_error_text = Jason.encode!(public_error)
+    public_error_text = CodexPooler.JSON.encode!(public_error)
     refute public_error_text =~ rejected_field
     refute public_error_text =~ rejected_value
 
@@ -6904,7 +6915,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => visible_pinned_input(),
@@ -7186,7 +7197,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            %{
              status: status,
              raw_body:
-               Jason.encode!(%{
+               CodexPooler.JSON.encode!(%{
                  "error" => provider_invalid_request_error(code, provider_message, param)
                })
            }},
@@ -7332,7 +7343,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     body =
       "event: response.failed\n" <>
         "data: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.failed",
           "error" => upstream_error,
           "response" => %{
@@ -7364,7 +7375,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       }
     }
 
-    body = "event: response.completed\rdata: " <> Jason.encode!(terminal) <> "\r\r"
+    body = "event: response.completed\rdata: " <> CodexPooler.JSON.encode!(terminal) <> "\r\r"
 
     assert {:ok, response} = Responses.response_from_sse(body)
     assert response["id"] == "resp_v1_collect_standalone_cr"
@@ -7390,11 +7401,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     body =
       "event: response.output_item.done\n" <>
         "data: " <>
-        Jason.encode!(%{"type" => "response.output_item.done", "item" => call}) <>
+        CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => call}) <>
         "\n\n" <>
         "event: response.completed\n" <>
         "data: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "id" => "resp_issue241_empty_terminal",
@@ -7417,11 +7428,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     body =
       "event: response.output_item.done\n" <>
         "data: " <>
-        Jason.encode!(%{"type" => "response.output_item.done", "item" => streamed}) <>
+        CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => streamed}) <>
         "\n\n" <>
         "event: response.completed\n" <>
         "data: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "id" => "resp_issue241_populated_terminal",
@@ -7445,7 +7456,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     body =
       "event: response.failed\n" <>
         "data: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.failed",
           "error" => upstream_error,
           "response" => %{
@@ -7471,7 +7482,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     body =
       "event: response.incomplete\n" <>
         "data: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.incomplete",
           "response" => %{
             "id" => "resp_v1_collect_failed_incomplete",
@@ -7537,7 +7548,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         {:ok,
          %{
            status: 429,
-           raw_body: Jason.encode!(%{"error" => safe_looking_upstream_error(provider_message)})
+           raw_body:
+             CodexPooler.JSON.encode!(%{"error" => safe_looking_upstream_error(provider_message)})
          }},
         fn decoded -> decoded end
       )
@@ -7783,7 +7795,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         }
       }
 
-    raw_failed = "event: \t \ndata: " <> Jason.encode!(failed) <> "\n\n"
+    raw_failed = "event: \t \ndata: " <> CodexPooler.JSON.encode!(failed) <> "\n\n"
 
     late_completed =
       {"response.completed",
@@ -8300,7 +8312,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       [
         "event: response.completed\n",
         "data: ",
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "id" => "resp_v1_terminal_without_separator",
@@ -8389,7 +8401,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       [
         "event: response.completed\n",
         "data: ",
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "id" => "resp_v1_large_terminal_without_separator",
@@ -8492,7 +8504,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       [
         "event: response.completed\n",
         "data: ",
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "id" => "resp_v1_flushed_terminal_closed_client",
@@ -8617,7 +8629,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       [
         "event: response.failed\n",
         "data: ",
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.failed",
           "response" => %{
             "id" => "resp_v1_flushed_failed_terminal_closed_client",
@@ -8710,7 +8722,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       [
         "event: response.incomplete\n",
         "data: ",
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.incomplete",
           "response" => %{
             "id" => "resp_v1_large_failed_incomplete_without_separator",
@@ -9372,7 +9384,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           assert status == 502
           assert header_elapsed_ms < @ttfh_threshold_ms
           assert total_elapsed_ms < @ttfh_threshold_ms
-          assert %{"error" => %{"code" => "upstream_request_failed"}} = Jason.decode!(body)
+
+          assert %{"error" => %{"code" => "upstream_request_failed"}} =
+                   CodexPooler.JSON.decode!(body)
         after
           send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
           Mint.HTTP.close(http_conn)
@@ -9723,7 +9737,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
@@ -9742,9 +9756,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       total_elapsed_ms = elapsed_ms(started)
 
       assert first_elapsed_ms < @ttfh_threshold_ms
-      assert Jason.decode!(first_frame)["type"] == "response.output_text.delta"
-      assert Jason.decode!(second_frame)["delta"] == "progress-2"
-      assert %{"type" => "response.completed"} = Jason.decode!(terminal_frame)
+      assert CodexPooler.JSON.decode!(first_frame)["type"] == "response.output_text.delta"
+      assert CodexPooler.JSON.decode!(second_frame)["delta"] == "progress-2"
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(terminal_frame)
       assert total_elapsed_ms >= 600
 
       assert_receive_finalized_request!()
@@ -9814,7 +9828,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(%{"detail" => upstream_detail})
+          CodexPooler.JSON.encode!(%{"detail" => upstream_detail})
         ])
       )
 
@@ -9832,7 +9846,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
@@ -9853,7 +9867,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                  "status" => "failed",
                  "error" => %{"code" => "upstream_terminal_failure"}
                }
-             } = Jason.decode!(terminal_frame)
+             } = CodexPooler.JSON.decode!(terminal_frame)
 
       refute terminal_frame =~ upstream_detail
 
@@ -9913,7 +9927,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     try do
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
@@ -9931,13 +9945,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert visible_elapsed_ms < @ttfh_threshold_ms
       assert silent_gap_elapsed_ms >= 250
-      assert Jason.decode!(visible_frame)["delta"] == "visible-before-ws-idle"
+      assert CodexPooler.JSON.decode!(visible_frame)["delta"] == "visible-before-ws-idle"
 
       assert %{
                "type" => "error",
                "status" => 502,
                "error" => %{"code" => "stream_idle_timeout"}
-             } = terminal = Jason.decode!(terminal_frame)
+             } = terminal = CodexPooler.JSON.decode!(terminal_frame)
 
       refute Map.has_key?(terminal, "code")
       refute Map.has_key?(terminal, "param")
@@ -10818,7 +10832,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   defp receive_public_websocket_until_completed!(conn, websocket, ref) do
     {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-    case Jason.decode!(frame) do
+    case CodexPooler.JSON.decode!(frame) do
       %{"type" => "response.completed"} -> {conn, websocket, frame}
       _other -> receive_public_websocket_until_completed!(conn, websocket, ref)
     end
@@ -10851,7 +10865,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     started = System.monotonic_time(:millisecond)
 
     {:ok, conn, ref} =
-      Mint.HTTP.request(conn, "POST", "/v1/responses", headers, Jason.encode!(payload))
+      Mint.HTTP.request(conn, "POST", "/v1/responses", headers, CodexPooler.JSON.encode!(payload))
 
     {:ok, conn, ref, started}
   end
@@ -11345,7 +11359,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     File.write!(
       request_path,
-      Jason.encode!(hosted_shell_payload(model, input) |> Map.put("stream", true))
+      CodexPooler.JSON.encode!(hosted_shell_payload(model, input) |> Map.put("stream", true))
     )
 
     File.chmod!(request_path, 0o600)
@@ -11788,7 +11802,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     data = lines |> Enum.find(&String.starts_with?(&1, "data: ")) |> strip_sse_prefix("data: ")
 
     if is_binary(event) and is_binary(data) and data != "[DONE]" do
-      %{"event" => event, "data" => Jason.decode!(data)}
+      %{"event" => event, "data" => CodexPooler.JSON.decode!(data)}
     end
   end
 

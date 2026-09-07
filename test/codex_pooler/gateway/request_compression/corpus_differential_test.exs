@@ -75,7 +75,7 @@ defmodule CodexPooler.Gateway.RequestCompression.CorpusDifferentialTest do
     assert byte_size(cases.one_mib_boundary) == @max_body_bytes
 
     assert cases.over_candidate_boundary
-           |> Jason.decode!()
+           |> CodexPooler.JSON.decode!()
            |> Map.fetch!("input")
            |> Enum.count(&Map.has_key?(&1, "output")) == @max_candidate_count + 1
   end
@@ -149,7 +149,7 @@ defmodule CodexPooler.Gateway.RequestCompression.CorpusDifferentialTest do
         "values" => Enum.to_list(index..(index + 5))
       }
     end)
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp json_document_output do
@@ -164,7 +164,7 @@ defmodule CodexPooler.Gateway.RequestCompression.CorpusDifferentialTest do
           }
         end)
     }
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp request(output) when is_binary(output), do: request([output])
@@ -187,7 +187,7 @@ defmodule CodexPooler.Gateway.RequestCompression.CorpusDifferentialTest do
         ]
       end)
 
-    Jason.encode!(%{"model" => @model_id, "input" => input})
+    CodexPooler.JSON.encode!(%{"model" => @model_id, "input" => input})
   end
 
   defp fixed_size_request(target_bytes) do
@@ -197,11 +197,14 @@ defmodule CodexPooler.Gateway.RequestCompression.CorpusDifferentialTest do
       "output" => ""
     }
 
-    empty = Jason.encode!(%{"model" => @model_id, "input" => [output_item]})
+    empty = CodexPooler.JSON.encode!(%{"model" => @model_id, "input" => [output_item]})
     padding = String.duplicate("x", target_bytes - byte_size(empty))
 
     body =
-      Jason.encode!(%{"model" => @model_id, "input" => [%{output_item | "output" => padding}]})
+      CodexPooler.JSON.encode!(%{
+        "model" => @model_id,
+        "input" => [%{output_item | "output" => padding}]
+      })
 
     assert byte_size(body) == target_bytes
     body
@@ -217,11 +220,11 @@ defmodule CodexPooler.Gateway.RequestCompression.CorpusDifferentialTest do
         }
       end)
 
-    Jason.encode!(%{"model" => @model_id, "input" => input})
+    CodexPooler.JSON.encode!(%{"model" => @model_id, "input" => input})
   end
 
   defp request_context(body) do
-    payload = Jason.decode!(body)
+    payload = CodexPooler.JSON.decode!(body)
     model = %Model{exposed_model_id: @model_id, upstream_model_id: @model_id}
 
     request_options =

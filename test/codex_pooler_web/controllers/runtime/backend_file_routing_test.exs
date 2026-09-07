@@ -97,7 +97,8 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
                ]
              )
 
-    lineage_metadata = Jason.encode!(%{"forked_from_thread_id" => "file-bridge-lineage"})
+    lineage_metadata =
+      CodexPooler.JSON.encode!(%{"forked_from_thread_id" => "file-bridge-lineage"})
 
     create_conn =
       conn

@@ -591,7 +591,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
   defp validate_writer(_writer), do: {:error, :invalid_writer}
 
   defp emit_downstream_observation(observation, text) when is_binary(text) do
-    case Jason.decode(text) do
+    case CodexPooler.JSON.decode(text) do
       {:ok, %{} = decoded} -> emit_product_observation(observation, :pooler_to_codex, decoded)
       _not_json -> :ok
     end

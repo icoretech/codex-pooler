@@ -142,19 +142,19 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
     token_kinds = List.duplicate("tokens", length(column_series))
 
     Map.new(
-      categories: Jason.encode!(Enum.map(rows, & &1.label)),
+      categories: CodexPooler.JSON.encode!(Enum.map(rows, & &1.label)),
       series:
-        Jason.encode!(
+        CodexPooler.JSON.encode!(
           column_series ++ [%{"name" => "Cost", "type" => "line", "data" => cost_values}]
         ),
-      units: Jason.encode!(token_kinds ++ ["USD"]),
-      value_kinds: Jason.encode!(token_kinds ++ ["usd"]),
+      units: CodexPooler.JSON.encode!(token_kinds ++ ["USD"]),
+      value_kinds: CodexPooler.JSON.encode!(token_kinds ++ ["usd"]),
       yaxis:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           %{seriesName: series_names, title: "tokens", valueKind: "tokens"},
           %{seriesName: "Cost", title: "cost", opposite: true, valueKind: "usd"}
         ]),
-      colors: Jason.encode!(chart_colors(model_series) ++ [@chart_cost_color])
+      colors: CodexPooler.JSON.encode!(chart_colors(model_series) ++ [@chart_cost_color])
     )
   end
 

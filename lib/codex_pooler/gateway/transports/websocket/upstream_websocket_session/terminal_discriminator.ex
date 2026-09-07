@@ -27,7 +27,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Term
 
   @spec classify(binary()) :: t()
   def classify(text) when is_binary(text) do
-    case Jason.decode(text) do
+    case CodexPooler.JSON.decode(text) do
       {:ok, %{} = decoded} ->
         classify(decoded)
 

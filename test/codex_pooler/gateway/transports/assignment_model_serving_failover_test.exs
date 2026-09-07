@@ -336,6 +336,6 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
   defp terminal_event(payload), do: sse_event("response.failed", payload)
 
   defp sse_event(event, payload) do
-    "event: #{event}\n" <> "data: #{Jason.encode!(payload)}\n\n"
+    "event: #{event}\n" <> "data: #{CodexPooler.JSON.encode!(payload)}\n\n"
   end
 end

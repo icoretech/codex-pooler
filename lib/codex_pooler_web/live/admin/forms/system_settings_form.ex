@@ -380,7 +380,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
     if value == "" do
       %{}
     else
-      case Jason.decode(value) do
+      case CodexPooler.JSON.decode(value) do
         {:ok, decoded} when is_map(decoded) -> decoded
         _invalid -> value
       end

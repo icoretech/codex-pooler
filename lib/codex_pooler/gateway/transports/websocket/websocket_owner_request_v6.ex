@@ -98,7 +98,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6 do
   @doc false
   @spec unanchored_full_history_payload?(term()) :: boolean()
   def unanchored_full_history_payload?(encoded) when is_binary(encoded) do
-    with {:ok, %{"input" => input} = payload} <- Jason.decode(encoded),
+    with {:ok, %{"input" => input} = payload} <- CodexPooler.JSON.decode(encoded),
          true <- is_list(input) and length(input) >= 2,
          true <- Enum.all?(input, &history_item?/1),
          true <- is_nil(payload["previous_response_id"]),

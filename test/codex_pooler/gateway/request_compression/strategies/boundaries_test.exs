@@ -23,7 +23,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.BoundariesTest do
     assert {:ok, normalized, 2} = ContentDetector.normalize_concatenated_json_objects(stream)
 
     assert [%{"key" => "escaped \" quote", "nested" => %{"a" => 1}}, %{"key" => 2}] =
-             Jason.decode!(normalized)
+             CodexPooler.JSON.decode!(normalized)
   end
 
   test "lossless strategies reject non-text values" do
@@ -34,7 +34,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.BoundariesTest do
   end
 
   test "embedded JSON reports tokenizer bounds without dropping a large span" do
-    object = Jason.encode!(%{"value" => String.duplicate("abc ", 3_000)}, pretty: true)
+    object = CodexPooler.JSON.encode!(%{"value" => String.duplicate("abc ", 3_000)}, pretty: true)
     original = "prefix\n" <> object <> "\nsuffix"
 
     assert {:skip, :tokenizer_input_limit} =

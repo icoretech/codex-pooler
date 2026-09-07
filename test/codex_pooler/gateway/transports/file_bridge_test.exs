@@ -171,10 +171,12 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
   end
 
   defp residency_token(value) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
 
     payload =
-      Base.url_encode64(Jason.encode!(%{"chatgpt_compute_residency" => value}), padding: false)
+      Base.url_encode64(CodexPooler.JSON.encode!(%{"chatgpt_compute_residency" => value}),
+        padding: false
+      )
 
     Enum.join([header, payload, "signature"], ".")
   end

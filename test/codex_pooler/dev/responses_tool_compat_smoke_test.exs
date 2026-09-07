@@ -450,7 +450,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     call = %{
       "type" => "function_call",
       "name" => smoke_case.name,
-      "arguments" => Jason.encode!(%{"goal" => %{"value" => "issue241"}})
+      "arguments" => CodexPooler.JSON.encode!(%{"goal" => %{"value" => "issue241"}})
     }
 
     assert :ok = Smoke.validate_terminal_output(%{"output" => [call]}, smoke_case)
@@ -692,7 +692,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              })
 
     assert {:ok, content} = File.read(receipt_path)
-    assert {:ok, receipt} = Jason.decode(content)
+    assert {:ok, receipt} = CodexPooler.JSON.decode(content)
 
     assert receipt == %{
              "certification_status" => "failed",

@@ -128,7 +128,7 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
            ]
 
     [row] = model.traffic.fallback.rows
-    chart_series = Jason.decode!(model.traffic.chart.series)
+    chart_series = CodexPooler.JSON.decode!(model.traffic.chart.series)
 
     assert row.total == 138_200_000
     assert row.total_label == "138.2M"

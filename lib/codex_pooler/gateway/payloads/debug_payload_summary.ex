@@ -125,7 +125,7 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummary do
   end
 
   defp json_bytes(payload) do
-    case Jason.encode(payload) do
+    case CodexPooler.JSON.encode(payload) do
       {:ok, encoded} -> byte_size(encoded)
       {:error, _reason} -> 0
     end

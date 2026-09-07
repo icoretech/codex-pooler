@@ -23,6 +23,6 @@ defmodule Mix.Tasks.DevCodexVscodeAppServerMisalignmentFixtureTest do
     ])
 
     assert_receive {:mix_shell, :info, [json]}
-    assert Jason.decode!(json) == %{"run_id" => run_id, "status" => "absent"}
+    assert CodexPooler.JSON.decode!(json) == %{"run_id" => run_id, "status" => "absent"}
   end
 end

@@ -333,8 +333,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     def request_device_code do
       case Req.post(
              CodexAuth.issuer() <> "/api/accounts/deviceauth/usercode",
-             headers: browser_request_headers(),
-             json: %{client_id: CodexAuth.client_id()},
+             headers: [{"content-type", "application/json"} | browser_request_headers()],
+             body: CodexPooler.JSON.encode_to_iodata!(%{client_id: CodexAuth.client_id()}),
              retry: false,
              receive_timeout: 30_000
            ) do
@@ -361,8 +361,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
       body = %{device_auth_id: state["device_auth_id"], user_code: state["user_code"]}
 
       case Req.post(CodexAuth.issuer() <> "/api/accounts/deviceauth/token",
-             headers: browser_request_headers(),
-             json: body,
+             headers: [{"content-type", "application/json"} | browser_request_headers()],
+             body: CodexPooler.JSON.encode_to_iodata!(body),
              retry: false,
              receive_timeout: 30_000
            ) do

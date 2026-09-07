@@ -100,7 +100,7 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
     expected_total_label = "160 tokens · $1.25"
     state = :sys.get_state(view.pid)
     traffic = state.socket.assigns.observatory_report.traffic
-    chart_series = Jason.decode!(traffic.chart.series)
+    chart_series = CodexPooler.JSON.decode!(traffic.chart.series)
     fallback_rows = traffic.fallback.rows
 
     assert :ready == state.socket.assigns.observatory_state

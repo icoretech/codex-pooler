@@ -193,7 +193,7 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
     assert code == 0, output
 
     assert [%{"host_ip" => "127.0.0.1", "published" => "45488", "target" => 5432}] =
-             Jason.decode!(output)["services"]["db"]["ports"]
+             CodexPooler.JSON.decode!(output)["services"]["db"]["ports"]
   end
 
   defp temp_dir!(label) do

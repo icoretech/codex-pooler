@@ -496,7 +496,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     assert metadata["upstream_error_code"] == "unsupported_parameter"
     assert metadata["masked_error_code"] == "invalid_request_error"
 
-    encoded = Jason.encode!(metadata)
+    encoded = CodexPooler.JSON.encode!(metadata)
     refute encoded =~ "raw-message-sentinel"
     refute encoded =~ "raw-value-sentinel"
     refute encoded =~ "raw-frame-sentinel"
@@ -577,7 +577,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
 
   test "response metadata extracts bounded rejection facts from private before the ordinary body" do
     private_body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "error" => %{
           "code" => nil,
           "message" => "synthetic rejection detail",
@@ -590,7 +590,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
       %Req.Response{
         status: 400,
         body:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "error" => %{
               "code" => "wrong_fallback",
               "message" => "wrong fallback detail",
@@ -617,7 +617,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
       response = %Req.Response{
         status: 422,
         body:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "error" => %{
               "code" => "invalid_request",
               "message" => message,
@@ -642,7 +642,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
 
     valid = %Req.Response{
       status: 400,
-      body: Jason.encode!(%{"error" => %{"message" => long_message}})
+      body: CodexPooler.JSON.encode!(%{"error" => %{"message" => long_message}})
     }
 
     assert Metadata.response_metadata(valid, "upstream_status", %{})[
@@ -653,11 +653,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
           %Req.Response{status: 400, body: "not-json"},
           %Req.Response{
             status: 400,
-            body: Jason.encode!(%{"error" => %{"message" => String.duplicate("x", 65_537)}})
+            body:
+              CodexPooler.JSON.encode!(%{
+                "error" => %{"message" => String.duplicate("x", 65_537)}
+              })
           },
           %Req.Response{
             status: 429,
-            body: Jason.encode!(%{"error" => %{"code" => "rate_limit_exceeded"}})
+            body: CodexPooler.JSON.encode!(%{"error" => %{"code" => "rate_limit_exceeded"}})
           }
         ] do
       metadata = Metadata.response_metadata(response, "upstream_status", %{})
@@ -669,7 +672,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     response =
       %Req.Response{
         status: 400,
-        body: Jason.encode!(%{"error" => %{"code" => "must_not_fall_through"}})
+        body: CodexPooler.JSON.encode!(%{"error" => %{"code" => "must_not_fall_through"}})
       }
       |> RejectionBody.put("")
 

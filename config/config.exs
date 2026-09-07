@@ -195,7 +195,12 @@ config :logger, :default_formatter,
 
 config :phoenix, :logger, false
 
-config :phoenix, :json_library, Jason
+config :phoenix, :json_library, CodexPooler.JSON
+config :postgrex, :json_library, CodexPooler.JSON
+config :swoosh, :json_library, CodexPooler.JSON
+
+config :req, :default_options,
+  decoders: [json: &CodexPooler.JSON.decode/1, json_api: &CodexPooler.JSON.decode/1]
 
 config :phoenix, :filter_parameters, [
   "access_token",

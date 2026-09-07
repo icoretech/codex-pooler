@@ -3190,7 +3190,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          message_mapper: mapper
        }) do
     if native_message_mapper?(mapper) do
-      with {:ok, decoded} when is_map(decoded) <- Jason.decode(payload),
+      with {:ok, decoded} when is_map(decoded) <- CodexPooler.JSON.decode(payload),
            {:ok, %{semantic_turn_key: semantic_turn_key}} <-
              WebsocketTurnIdentity.resolve(decoded, state.codex_session_id) do
         %{kind: :native, semantic_turn_key: semantic_turn_key}

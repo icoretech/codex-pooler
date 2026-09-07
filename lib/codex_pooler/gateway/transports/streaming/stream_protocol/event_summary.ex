@@ -97,7 +97,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary d
   end
 
   defp direct_stream_event_summary(data) when is_binary(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         decoded =
           if typeless_detail_error?(decoded),

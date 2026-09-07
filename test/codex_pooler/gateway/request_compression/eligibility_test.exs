@@ -396,7 +396,7 @@ defmodule CodexPooler.Gateway.RequestCompression.EligibilityTest do
     upstream_endpoint = Keyword.get(opts, :upstream_endpoint, @responses_endpoint)
     route_class = Keyword.get(opts, :route_class, RouteClass.proxy_http())
     transport = Keyword.get(opts, :transport, default_transport(route_class))
-    payload = Jason.decode!(body)
+    payload = CodexPooler.JSON.decode!(body)
 
     request_options =
       %{transport: transport, upstream_endpoint: upstream_endpoint}
@@ -453,7 +453,7 @@ defmodule CodexPooler.Gateway.RequestCompression.EligibilityTest do
       "input" => []
     }
     |> Map.merge(overrides)
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp model do

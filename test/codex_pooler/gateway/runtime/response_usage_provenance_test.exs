@@ -78,8 +78,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageProvenanceTest d
   test "stream tier metadata is bounded and does not retain the decoded frame" do
     for tier <- ["priority", String.duplicate("x", 70), String.duplicate("x", 140_000)] do
       decoded =
-        Jason.decode!(
-          Jason.encode!(%{
+        CodexPooler.JSON.decode!(
+          CodexPooler.JSON.encode!(%{
             "usage" => Map.put(@usage, "attribution", String.duplicate("x", 200_000)),
             "service_tier" => tier
           })
@@ -100,5 +100,5 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageProvenanceTest d
     end
   end
 
-  defp sse(event), do: "data: " <> Jason.encode!(event) <> "\n\n"
+  defp sse(event), do: "data: " <> CodexPooler.JSON.encode!(event) <> "\n\n"
 end

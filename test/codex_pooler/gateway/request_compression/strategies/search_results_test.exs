@@ -95,7 +95,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResultsTest do
       assert metadata.compressed_file_count == 1
       assert metadata.original_match_count == 12
       assert metadata.compressed_match_count == 3
-      assert Jason.encode!(metadata)
+      assert CodexPooler.JSON.encode!(metadata)
       refute inspect(metadata) =~ <<0>>
       assert_safe_metadata(metadata, :search_results, sentinel)
     end

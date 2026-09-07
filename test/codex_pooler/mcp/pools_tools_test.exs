@@ -214,7 +214,7 @@ defmodule CodexPooler.MCP.PoolsToolsTest do
     assert list_result["isError"] == false
     assert list_result["structuredContent"]["items"] == []
     assert list_result["structuredContent"]["count"] == 0
-    refute Jason.encode!(list_result["structuredContent"]) =~ hidden_pool.id
+    refute CodexPooler.JSON.encode!(list_result["structuredContent"]) =~ hidden_pool.id
 
     assert {:ok, get_result} =
              ToolDispatch.call("codex_pooler_get_pool", %{"selector" => hidden_pool.id}, %{
@@ -255,7 +255,7 @@ defmodule CodexPooler.MCP.PoolsToolsTest do
     assert list_result["isError"] == false
     assert [%{"id" => visible_id}] = list_result["structuredContent"]["items"]
     assert visible_id == visible_pool.id
-    refute Jason.encode!(list_result["structuredContent"]) =~ hidden_pool.id
+    refute CodexPooler.JSON.encode!(list_result["structuredContent"]) =~ hidden_pool.id
 
     assert {:ok, hidden_result} =
              ToolDispatch.call("codex_pooler_get_pool", %{"selector" => hidden_pool.id}, %{

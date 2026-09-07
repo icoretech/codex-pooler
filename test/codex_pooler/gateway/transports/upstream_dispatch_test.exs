@@ -80,7 +80,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   test "direct websocket dispatch preserves mapper bytes and local callback behavior" do
     completed =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_direct_mapper_characterization"}
       })
@@ -126,11 +126,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   test "direct collect compaction materializes a nil writer from anchored Full options regardless of output item names" do
     compact_frames = fn suffix ->
       [
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.output_item.done",
           "item" => %{"type" => "compaction", "encrypted_content" => "opaque-#{suffix}"}
         }),
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{"id" => "resp_collect_#{suffix}", "status" => "completed"}
         })
@@ -193,7 +193,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       request = %{
         websocket_dispatch_request(upstream, options)
         | writer: nil,
-          upstream_payload: Jason.encode!(payload),
+          upstream_payload: CodexPooler.JSON.encode!(payload),
           original_payload: payload
       }
 
@@ -207,12 +207,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert warmup.websocket_connection_id == custom_collect.websocket_connection_id
     assert custom_collect.websocket_connection_id == future_collect.websocket_connection_id
 
-    assert Enum.map(Jason.decode!(custom_collect.body)["input"], & &1["type"]) == [
+    assert Enum.map(CodexPooler.JSON.decode!(custom_collect.body)["input"], & &1["type"]) == [
              "custom_tool_call_output",
              "compaction_trigger"
            ]
 
-    assert Enum.map(Jason.decode!(future_collect.body)["input"], & &1["type"]) == [
+    assert Enum.map(CodexPooler.JSON.decode!(future_collect.body)["input"], & &1["type"]) == [
              "future_tool_output",
              "compaction_trigger"
            ]
@@ -221,13 +221,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   @tag :collect_compaction
   test "direct collect compaction reuses a matching Lite connection for function output" do
     compact_item =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_item.done",
         "item" => %{"type" => "compaction", "encrypted_content" => "opaque-lite"}
       })
 
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_collect_lite", "status" => "completed"}
       })
@@ -278,7 +278,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     request = %{
       websocket_dispatch_request(upstream, options)
       | writer: nil,
-        upstream_payload: Jason.encode!(payload),
+        upstream_payload: CodexPooler.JSON.encode!(payload),
         original_payload: payload
     }
 
@@ -288,7 +288,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert [warmup, collect] = FakeUpstream.requests(upstream)
     assert warmup.websocket_connection_id == collect.websocket_connection_id
 
-    assert Enum.map(Jason.decode!(collect.body)["input"], & &1["type"]) == [
+    assert Enum.map(CodexPooler.JSON.decode!(collect.body)["input"], & &1["type"]) == [
              "function_call_output",
              "compaction_trigger"
            ]
@@ -319,7 +319,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       |> RequestOptions.put_transport(websocket_owner_submission_observer: observer)
 
     identity = active_upstream_identity_fixture()
-    payload = Jason.encode!(%{"type" => "response.create", "model" => "example-model"})
+    payload = CodexPooler.JSON.encode!(%{"type" => "response.create", "model" => "example-model"})
 
     request = %UpstreamDispatch.Request{
       url: "https://upstream.example.test/backend-api/codex/responses",
@@ -412,7 +412,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     request = %UpstreamDispatch.Request{
       url: "https://upstream.example.test/backend-api/codex/responses",
       token: "redacted",
-      upstream_payload: Jason.encode!(payload),
+      upstream_payload: CodexPooler.JSON.encode!(payload),
       original_payload: payload,
       identity: identity,
       accounting_request: nil,
@@ -508,7 +508,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     request = %UpstreamDispatch.Request{
       url: "https://upstream.example.test/backend-api/codex/responses",
       token: "redacted",
-      upstream_payload: Jason.encode!(payload),
+      upstream_payload: CodexPooler.JSON.encode!(payload),
       original_payload: payload,
       identity: identity,
       accounting_request: nil,
@@ -770,7 +770,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     request = %UpstreamDispatch.Request{
       url: url,
       token: "redacted",
-      upstream_payload: Jason.encode!(payload),
+      upstream_payload: CodexPooler.JSON.encode!(payload),
       original_payload: payload,
       identity: upstream_identity(),
       request_options:
@@ -816,7 +816,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       request = %UpstreamDispatch.Request{
         url: FakeUpstream.url(upstream) <> path,
         token: "redacted",
-        upstream_payload: Jason.encode!(upstream_payload),
+        upstream_payload: CodexPooler.JSON.encode!(upstream_payload),
         original_payload: %{"model" => "public-model", "input" => []},
         identity: upstream_identity(),
         routing_hint_authorized?: true,
@@ -854,7 +854,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "redacted",
       upstream_payload:
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "upstream-routing-model",
           "service_tier" => "priority\r\nforged",
           "input" => []
@@ -911,7 +911,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     http_request = %UpstreamDispatch.Request{
       url: FakeUpstream.url(http_upstream) <> "/backend-api/codex/responses",
       token: "redacted",
-      upstream_payload: Jason.encode!(upstream_payload),
+      upstream_payload: CodexPooler.JSON.encode!(upstream_payload),
       original_payload: upstream_payload,
       identity: upstream_identity(),
       routing_hint_authorized?: true,
@@ -939,7 +939,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     websocket_request = %{
       websocket_dispatch_request(websocket_upstream, websocket_request_options())
       | upstream_payload:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => "upstream-routing-model",
             "input" => [],
@@ -968,11 +968,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         {:sequence,
          [
            FakeUpstream.websocket_text_frames([
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{
                "type" => "response.output_text.delta",
                "delta" => "forbidden raw text"
              }),
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{
                "type" => "response.completed",
                "response" => %{"id" => "multi-agent-round-product-observer"}
              })
@@ -1067,7 +1067,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         ] do
       request = %{
         websocket_dispatch_request(upstream, request_options)
-        | upstream_payload: Jason.encode!(upstream_payload)
+        | upstream_payload: CodexPooler.JSON.encode!(upstream_payload)
       }
 
       assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
@@ -1098,7 +1098,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     http_request = %UpstreamDispatch.Request{
       url: FakeUpstream.url(http_upstream) <> "/backend-api/codex/responses",
       token: "redacted",
-      upstream_payload: Jason.encode!(upstream_payload),
+      upstream_payload: CodexPooler.JSON.encode!(upstream_payload),
       original_payload: upstream_payload,
       # Provider-specific credentials are represented by a synthetic local
       # identity rather than a selected Codex OpenAI-auth identity.
@@ -1118,7 +1118,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         identity: %UpstreamIdentity{},
         routing_hint_authorized?: false,
         upstream_payload:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => "upstream-routing-model",
             "input" => []
@@ -1153,7 +1153,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     http_request = %UpstreamDispatch.Request{
       url: FakeUpstream.url(http_upstream) <> "/backend-api/codex/responses",
       token: "redacted",
-      upstream_payload: Jason.encode!(upstream_payload),
+      upstream_payload: CodexPooler.JSON.encode!(upstream_payload),
       original_payload: upstream_payload,
       identity: custom_identity,
       routing_hint_authorized?: false,
@@ -1170,7 +1170,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       | identity: custom_identity,
         routing_hint_authorized?: false,
         upstream_payload:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => "upstream-routing-model",
             "input" => []
@@ -1216,7 +1216,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       request = %UpstreamDispatch.Request{
         url: FakeUpstream.url(upstream) <> path,
         token: "redacted",
-        upstream_payload: Jason.encode!(upstream_payload),
+        upstream_payload: CodexPooler.JSON.encode!(upstream_payload),
         original_payload: %{"model" => "public-model", "input" => []},
         identity: upstream_identity(),
         routing_hint_authorized?: true,
@@ -1233,7 +1233,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   test "streaming non-429 4xx drains the complete rejection body into response private" do
     body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "error" => %{
           "code" => "invalid_request_error",
           "message" => "synthetic rejection detail",
@@ -1257,7 +1257,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     request = %UpstreamDispatch.Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "redacted",
-      upstream_payload: Jason.encode!(payload),
+      upstream_payload: CodexPooler.JSON.encode!(payload),
       original_payload: payload,
       identity: upstream_identity(),
       request_options:
@@ -1277,7 +1277,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   test "streaming exact policy rejection attaches only its sanitized summary beside the private body" do
     body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "error" => %{
           "code" => "misalignment_policy_violation",
           "message" => "  exact provider wording  ",
@@ -1301,7 +1301,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     request = %UpstreamDispatch.Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "redacted",
-      upstream_payload: Jason.encode!(payload),
+      upstream_payload: CodexPooler.JSON.encode!(payload),
       original_payload: payload,
       identity: upstream_identity(),
       request_options:
@@ -1655,7 +1655,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     {:ok, upstream} =
       FakeUpstream.start_link(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(%{"type" => "response.completed", "response" => %{"id" => "resp_stale"}})
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.completed",
+            "response" => %{"id" => "resp_stale"}
+          })
         ])
       )
 
@@ -1757,7 +1760,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       FakeUpstream.start_link(
         FakeUpstream.websocket_text_frames([
           rate_limit_event,
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.completed",
             "response" => %{"id" => "resp_stale_rate_limit_frame"}
           })
@@ -2180,7 +2183,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   defp websocket_success(id) do
     FakeUpstream.websocket_text_frames([
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => id}
       })
@@ -2190,7 +2193,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   defp websocket_rate_limit_event(used_percent) do
     reset_at = DateTime.utc_now() |> DateTime.add(900, :second) |> DateTime.truncate(:second)
 
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "codex.rate_limits",
       "rate_limits" => %{
         "primary" => %{
@@ -2246,11 +2249,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   end
 
   defp synthetic_access_jwt(residency) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
 
     payload =
       Base.url_encode64(
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "https://api.openai.com/auth" => %{"chatgpt_compute_residency" => residency}
         }),
         padding: false
@@ -2311,7 +2314,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   defp contains_function?(_value), do: false
 
   defp direct_mapper_output(mapper, raw) do
-    decoded = Jason.decode!(raw)
+    decoded = CodexPooler.JSON.decode!(raw)
 
     {output, _mapped} =
       case mapper do

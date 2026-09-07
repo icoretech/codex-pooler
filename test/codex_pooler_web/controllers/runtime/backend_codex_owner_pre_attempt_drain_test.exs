@@ -50,7 +50,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
     }
 
     frame =
-      setup |> payload() |> Jason.decode!() |> Map.delete("client_metadata") |> Jason.encode!()
+      setup
+      |> payload()
+      |> CodexPooler.JSON.decode!()
+      |> Map.delete("client_metadata")
+      |> CodexPooler.JSON.encode!()
 
     assert {:ok, state} = CodexResponsesSocket.handle_in({frame, [opcode: :text]}, state)
     assert_receive {:codex_response_done, task, result}, @budget
@@ -229,13 +233,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
   end
 
   defp payload(setup) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
       "input" => [],
       "client_metadata" => %{
         "x-codex-turn-metadata" =>
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "session_id" => Ecto.UUID.generate(),
             "thread_id" => Ecto.UUID.generate(),
             "turn_id" => Ecto.UUID.generate(),

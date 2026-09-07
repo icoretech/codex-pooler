@@ -62,7 +62,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
   test "classifies the reviewed September 3 target with exact artifact and warning coverage" do
     raw = File.read!(@target)
-    payload = Jason.decode!(raw)
+    payload = CodexPooler.JSON.decode!(raw)
     result = OpenAIPricingPreflight.validate_file(@target)
 
     assert byte_size(raw) == 64_430

@@ -272,7 +272,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
       version: 1,
       url: "https://upstream.example.com/backend-api/codex/responses",
       headers: [{"authorization", "synthetic-value"}],
-      payload: Jason.encode!(%{"model" => "example-model", "input" => []}),
+      payload: CodexPooler.JSON.encode!(%{"model" => "example-model", "input" => []}),
       timeouts: %TimeoutConfig{
         connect_timeout_ms: 1_000,
         pool_timeout_ms: 1_000,

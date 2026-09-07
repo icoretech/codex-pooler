@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Dev.CodexVscodeAppServerMisalignmentFixture do
     with {:ok, action, options} <- CodexVscodeAppServerMisalignmentFixture.parse_args(args),
          result <- run_action(action, options) do
       case result do
-        {:ok, status} -> Mix.shell().info(Jason.encode!(status))
+        {:ok, status} -> Mix.shell().info(CodexPooler.JSON.encode!(status))
         {:error, message} -> Mix.raise(message)
       end
     else

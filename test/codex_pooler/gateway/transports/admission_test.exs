@@ -390,5 +390,5 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
              })
   end
 
-  defp string_keyed_map(map), do: map |> Jason.encode!() |> Jason.decode!()
+  defp string_keyed_map(map), do: map |> CodexPooler.JSON.encode!() |> CodexPooler.JSON.decode!()
 end

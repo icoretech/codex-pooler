@@ -10,7 +10,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
   @spec response_from_sse(binary(), map()) :: {:ok, map()} | {:error, Error.reason()}
   def response_from_sse(body, custom_tool_namespaces \\ %{})
       when is_binary(body) and is_map(custom_tool_namespaces) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{} = decoded} ->
         response =
           decoded

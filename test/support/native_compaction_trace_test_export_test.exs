@@ -45,7 +45,11 @@ defmodule CodexPooler.NativeCompactionTraceTestExportTest do
     assert Bitwise.band(File.stat!(export_root).mode, 0o777) == 0o700
     assert Bitwise.band(File.stat!(destination).mode, 0o777) == 0o600
 
-    assert destination |> File.stream!() |> Enum.at(-1) |> Jason.decode!() |> Map.fetch!("event") ==
+    assert destination
+           |> File.stream!()
+           |> Enum.at(-1)
+           |> CodexPooler.JSON.decode!()
+           |> Map.fetch!("event") ==
              "trace_stopped"
 
     assert_raise ArgumentError, ~r/already exists/, fn ->
@@ -82,7 +86,7 @@ defmodule CodexPooler.NativeCompactionTraceTestExportTest do
     source_root = fresh_root("trace-test-incomplete")
     export_root = fresh_root("trace-test-incomplete-export")
     source = Path.join(source_root, "source.jsonl")
-    File.write!(source, Jason.encode!(%{"event" => "beam_call"}) <> "\n")
+    File.write!(source, CodexPooler.JSON.encode!(%{"event" => "beam_call"}) <> "\n")
 
     on_exit(fn ->
       File.rm_rf!(source_root)
@@ -103,8 +107,8 @@ defmodule CodexPooler.NativeCompactionTraceTestExportTest do
     File.write!(
       source,
       [
-        Jason.encode!(%{"event" => "trace_started"}),
-        Jason.encode!(%{"event" => "trace_stopped"})
+        CodexPooler.JSON.encode!(%{"event" => "trace_started"}),
+        CodexPooler.JSON.encode!(%{"event" => "trace_stopped"})
       ]
       |> Enum.join("\n")
       |> Kernel.<>("\n")

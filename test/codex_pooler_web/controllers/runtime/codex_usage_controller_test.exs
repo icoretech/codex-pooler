@@ -1232,7 +1232,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       end
     end)
 
-    encoded = Jason.encode!(response)
+    encoded = CodexPooler.JSON.encode!(response)
     refute encoded =~ "freshness_state"
     refute encoded =~ "raw_limit_id"
     refute encoded =~ "raw_metered_feature"

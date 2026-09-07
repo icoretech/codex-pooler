@@ -71,21 +71,22 @@ defmodule CodexPooler.Gateway.Transports.MisalignmentPolicyViolationTest do
         do: {status, exact_body("blocked"), eligible_options}
       ) ++
         [
-          {400, Jason.encode!(%{"error" => %{"code" => "other_code"}}), eligible_options},
+          {400, CodexPooler.JSON.encode!(%{"error" => %{"code" => "other_code"}}),
+           eligible_options},
           {400,
-           Jason.encode!(%{
+           CodexPooler.JSON.encode!(%{
              "response" => %{
                "error" => %{"code" => "misalignment_policy_violation"}
              }
            }), eligible_options},
           {400,
-           Jason.encode!(%{
+           CodexPooler.JSON.encode!(%{
              "status_details" => %{
                "error" => %{"code" => "misalignment_policy_violation"}
              }
            }), eligible_options},
           {400,
-           Jason.encode!(%{
+           CodexPooler.JSON.encode!(%{
              "response" => %{
                "status_details" => %{
                  "error" => %{"code" => "misalignment_policy_violation"}
@@ -93,7 +94,7 @@ defmodule CodexPooler.Gateway.Transports.MisalignmentPolicyViolationTest do
              }
            }), eligible_options},
           {400,
-           Jason.encode!(%{
+           CodexPooler.JSON.encode!(%{
              "type" => "error",
              "code" => "misalignment_policy_violation",
              "message" => "blocked"
@@ -294,7 +295,7 @@ defmodule CodexPooler.Gateway.Transports.MisalignmentPolicyViolationTest do
       }
       |> maybe_put_misalignment(misalignment)
 
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "error" => error,
       "sibling" => "must not escape"
     })

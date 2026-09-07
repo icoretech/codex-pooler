@@ -242,7 +242,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                }
              }
 
-      refute Jason.encode!(payload) =~ internal_reason
+      refute CodexPooler.JSON.encode!(payload) =~ internal_reason
     end
   end
 
@@ -437,7 +437,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                revoked_state
              )
 
-    assert Jason.decode!(final_frame)["error"]["code"] == "upstream_failed"
+    assert CodexPooler.JSON.decode!(final_frame)["error"]["code"] == "upstream_failed"
     assert closed_state.firewall_close_sent?
     assert MapSet.size(closed_state.tasks) == 0
     assert :queue.is_empty(closed_state.queued_response_payloads)
@@ -480,7 +480,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                    revoked_state
                  )
 
-        assert Jason.decode!(payload)["stream_id"] == "lane-revoked"
+        assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-revoked"
         assert closed_state.public_response_stream_id == nil
         assert closed_state.public_responses_websocket_state == nil
         assert closed_state.firewall_close_sent?
@@ -577,7 +577,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     }
 
     for control_type <- ["codex.rate_limits", "codex.response.metadata"] do
-      control = Jason.encode!(%{"type" => control_type})
+      control = CodexPooler.JSON.encode!(%{"type" => control_type})
 
       assert {:push, {:text, ^control}, control_state} =
                CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, control}, state)
@@ -585,7 +585,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       assert control_state.native_turn_output_task_pids == MapSet.new()
     end
 
-    unknown_control = Jason.encode!(%{"type" => "codex.future_control"})
+    unknown_control = CodexPooler.JSON.encode!(%{"type" => "codex.future_control"})
 
     assert {:push, {:text, ^unknown_control}, visible_state} =
              CodexResponsesSocket.handle_info(
@@ -604,17 +604,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:push, {:text, payload}, _next_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_chunk, task_pid, Jason.encode!(legacy_response)},
+               {:codex_response_chunk, task_pid, CodexPooler.JSON.encode!(legacy_response)},
                state
              )
 
-    assert Jason.decode!(payload) == %{
+    assert CodexPooler.JSON.decode!(payload) == %{
              "type" => "response.completed",
              "sequence_number" => 0,
              "response" => Map.put_new(legacy_response, "status", "completed")
            }
 
-    refute Map.has_key?(Jason.decode!(payload), "stream_id")
+    refute Map.has_key?(CodexPooler.JSON.decode!(payload), "stream_id")
   end
 
   test "public GET echoes the active accepted stream id" do
@@ -628,7 +628,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       task_pid = state.public_response_task_pid
       assert is_pid(task_pid)
 
-      frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
+      frame =
+        CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
 
       assert {:push, {:text, payload}, next_state} =
                CodexResponsesSocket.handle_info(
@@ -636,7 +637,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  state
                )
 
-      assert Jason.decode!(payload)["stream_id"] == "lane-active"
+      assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-active"
       assert next_state.public_response_stream_id == "lane-active"
       cleanup_response_task(next_state, task_pid)
     end)
@@ -644,7 +645,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
   test "public response.create validates before dispatch and never echoes a rejected stream id" do
     invalid_payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => "gpt-test",
         "input" => "ignored",
@@ -656,7 +657,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert {:push, {:text, payload}, settled_state} =
              CodexResponsesSocket.handle_in({invalid_payload, [opcode: :text]}, state)
 
-    decoded = Jason.decode!(payload)
+    decoded = CodexPooler.JSON.decode!(payload)
     assert decoded["status"] == 400
     assert decoded["error"]["param"] == "stream_id"
     refute Map.has_key?(decoded, "stream_id")
@@ -706,7 +707,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     on_exit(fn -> send(lineage_task_pid, :stop) end)
 
     payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => "gpt-test",
         "previous_response_id" => "resp_fixture_anchor",
@@ -786,7 +787,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                      state
                    )
 
-          assert Jason.decode!(payload)["stream_id"] == "lane-error"
+          assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-error"
           assert settled_state.public_response_stream_id == nil
           assert settled_state.public_responses_websocket_state == nil
           assert settled_state.public_response_task_pid == nil
@@ -805,7 +806,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         "stream_id" => "lane-retarget",
         "previous_response_id" => "resp_missing_owner"
       }
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     state =
       public_socket_state(%{
@@ -821,7 +822,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
     assert %{"status" => 400, "error" => %{"param" => "previous_response_id"}} =
-             Jason.decode!(error_payload)
+             CodexPooler.JSON.decode!(error_payload)
 
     assert settled_state.public_response_task_pid == nil
     assert settled_state.public_response_stream_id == nil
@@ -841,8 +842,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     on_exit(fn -> send(second_task_pid, :stop) end)
 
-    first_frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "first"})
-    second_frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "second"})
+    first_frame =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "first"})
+
+    second_frame =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "second"})
+
     first_state = public_turn_state(first_task_pid)
 
     assert {:push, {:text, first_payload}, first_state} =
@@ -851,7 +856,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                first_state
              )
 
-    assert Jason.decode!(first_payload)["sequence_number"] == 0
+    assert CodexPooler.JSON.decode!(first_payload)["sequence_number"] == 0
 
     second_state =
       first_state
@@ -871,7 +876,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                second_state
              )
 
-    assert Jason.decode!(second_payload)["sequence_number"] == 0
+    assert CodexPooler.JSON.decode!(second_payload)["sequence_number"] == 0
   end
 
   @tag :socket_lifecycle_regression
@@ -1119,7 +1124,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                overflow_latched?: false
              }
 
-      frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "current"})
+      frame =
+        CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "current"})
 
       assert {:ok, ^turn_two_state} =
                CodexResponsesSocket.handle_info(
@@ -1139,7 +1145,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  turn_two_state
                )
 
-      assert Jason.decode!(direct_payload)["sequence_number"] == 0
+      assert CodexPooler.JSON.decode!(direct_payload)["sequence_number"] == 0
 
       assert {:push, {:text, owner_payload}, turn_two_state} =
                CodexResponsesSocket.handle_info(
@@ -1147,7 +1153,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  turn_two_state
                )
 
-      assert Jason.decode!(owner_payload)["sequence_number"] == 1
+      assert CodexPooler.JSON.decode!(owner_payload)["sequence_number"] == 1
       cleanup_response_task(turn_two_state, second_task_pid)
     end
   end
@@ -1167,7 +1173,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         }
       })
 
-    data = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "current"})
+    data =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "current"})
 
     stale_frame =
       {:websocket_owner_frame, "corr-shared", 8, stale_task_pid, {:data, data}}
@@ -1183,7 +1190,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                state
              )
 
-    assert Jason.decode!(payload)["sequence_number"] == 0
+    assert CodexPooler.JSON.decode!(payload)["sequence_number"] == 0
 
     assert {:ok, completed_state} =
              CodexResponsesSocket.handle_info(
@@ -1236,7 +1243,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         public_responses_websocket_state: Map.put(tracker, :stream_id, "lane-overflow")
       })
 
-    frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "overflow"})
+    frame =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "overflow"})
 
     assert {:push, {:text, payload}, state} =
              CodexResponsesSocket.handle_info(
@@ -1249,7 +1257,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              "status" => 500,
              "stream_id" => "lane-overflow",
              "error" => %{"code" => "websocket_sequence_exhausted"}
-           } = Jason.decode!(payload)
+           } = CodexPooler.JSON.decode!(payload)
 
     assert state.public_responses_websocket_state.overflow_latched?
     assert state.public_responses_websocket_state.terminal_latched?
@@ -1265,7 +1273,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     task_pid = self()
     state = public_turn_state(task_pid)
 
-    visible = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
+    visible =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
 
     assert {:push, {:text, _payload}, visible_state} =
              CodexResponsesSocket.handle_info(
@@ -1275,7 +1284,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert visible_state.public_turn_output_committed?
 
-    rate_limits = Jason.encode!(%{"type" => "codex.rate_limits", "remaining" => 1})
+    rate_limits = CodexPooler.JSON.encode!(%{"type" => "codex.rate_limits", "remaining" => 1})
 
     assert {:push, {:text, _payload}, rate_limit_state} =
              CodexResponsesSocket.handle_info(
@@ -1286,7 +1295,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     refute rate_limit_state.public_turn_output_committed?
 
     dropped =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_drop", "status" => "in_progress"}
       })
@@ -1510,7 +1519,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert {:push, {:text, payload}, pushed_state} =
                  CodexResponsesSocket.handle_info(owner_error, state)
 
-        assert Jason.decode!(payload) == %{
+        assert CodexPooler.JSON.decode!(payload) == %{
                  "type" => "error",
                  "status" => 502,
                  "stream_id" => "lane-owner-upstream",
@@ -1558,7 +1567,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert {:push, {:text, payload}, ^state} =
              CodexResponsesSocket.handle_info(frame, state)
 
-    assert Jason.decode!(payload)["stream_id"] == "lane-owner-generic"
+    assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-owner-generic"
   end
 
   test "successful public completion clears the active accepted stream id" do
@@ -1695,8 +1704,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert {:push, {:text, payload}, aborted_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
-        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
-        assert Jason.decode!(payload)["stream_id"] == "lane-drain"
+        assert CodexPooler.JSON.decode!(payload)["error"]["code"] == "owner_drained"
+        assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-drain"
         assert aborted_state.public_turn_aborted?
         assert aborted_state.public_response_stream_id == nil
         assert aborted_state.public_responses_websocket_state == nil
@@ -1758,7 +1767,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert {:push, {:text, payload}, drained_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
-        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+        assert CodexPooler.JSON.decode!(payload)["error"]["code"] == "owner_drained"
 
         assert {:ok, done_state} =
                  CodexResponsesSocket.handle_info(
@@ -1806,7 +1815,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert {:push, {:text, payload}, drained_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
-        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+        assert CodexPooler.JSON.decode!(payload)["error"]["code"] == "owner_drained"
 
         assert {:ok, done_state} =
                  CodexResponsesSocket.handle_info(
@@ -2270,7 +2279,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert {:push, {:text, terminal}, cancelled_state} =
              CodexResponsesSocket.handle_info(cancellation, result_state)
 
-    assert Jason.decode!(terminal)["error"]["code"] == "owner_drained"
+    assert CodexPooler.JSON.decode!(terminal)["error"]["code"] == "owner_drained"
     assert Process.alive?(drain_task.pid)
 
     assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
@@ -2424,7 +2433,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
           assert {:push, {:text, error_payload}, aborted_state} =
                    CodexResponsesSocket.handle_info(drain_frame, state)
 
-          assert Jason.decode!(error_payload)["error"]["code"] == "owner_drained"
+          assert CodexPooler.JSON.decode!(error_payload)["error"]["code"] == "owner_drained"
           assert aborted_state.public_turn_aborted?
           assert aborted_state.websocket_owner_drain_observed?
           assert :queue.len(aborted_state.queued_response_payloads) == 0
@@ -2524,7 +2533,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                      "recovery_kind" => "restart_with_full_context",
                      "recovery" => recovery
                    }
-                 } = Jason.decode!(payload)
+                 } = CodexPooler.JSON.decode!(payload)
 
           assert code in [
                    "pinned_continuation_reauth_required",
@@ -2572,7 +2581,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                      %{tasks: MapSet.new(), task_monitors: %{}}
                    )
 
-          decoded = Jason.decode!(payload)
+          decoded = CodexPooler.JSON.decode!(payload)
 
           assert decoded["error"] == %{
                    "message" => reason.message,
@@ -2612,7 +2621,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                    state
                  )
 
-        decoded = Jason.decode!(payload)
+        decoded = CodexPooler.JSON.decode!(payload)
         assert decoded["type"] == "error"
         assert decoded["status"] == 500
         assert decoded["error"]["message"] == "websocket request failed: non_atom_reason"
@@ -2757,7 +2766,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     |> then(fn payload ->
       if is_binary(stream_id), do: Map.put(payload, "stream_id", stream_id), else: payload
     end)
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp firewall_socket_state(applied_version, overrides \\ %{}) do

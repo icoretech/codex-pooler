@@ -357,8 +357,8 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
       assert [%{"type" => "text", "text" => text}] = result["content"]
       assert String.trim(text) != ""
       assert String.contains?(text, "\n- ")
-      refute text == Jason.encode!(result["structuredContent"])
-      refute String.contains?(text, Jason.encode!(result["structuredContent"]))
+      refute text == CodexPooler.JSON.encode!(result["structuredContent"])
+      refute String.contains?(text, CodexPooler.JSON.encode!(result["structuredContent"]))
       refute inspect(result) =~ raw_key
 
       for expectation <- expectations do

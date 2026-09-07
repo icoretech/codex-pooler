@@ -254,7 +254,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+            CodexPooler.JSON.encode!(%{
+              "compaction" => %{"implementation" => "responses_compaction_v2"}
+            })
         }
       })
 
@@ -491,7 +493,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
             [
               {"response.output_item.done",
                %{"type" => "response.output_item.done", "item" => compact_item}},
-              "event: response.completed\ndata: #{Jason.encode!(compact_completion)}"
+              "event: response.completed\ndata: #{CodexPooler.JSON.encode!(compact_completion)}"
             ],
             done: false
           )
@@ -596,7 +598,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
             {"response.output_item.done",
              %{"type" => "response.output_item.done", "item" => compact_item}},
             {"response.completed", completed},
-            "event: response.output_text.delta\ndata: #{Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "synthetic-post-terminal"})}"
+            "event: response.output_text.delta\ndata: #{CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "synthetic-post-terminal"})}"
           ],
           done: false
         )
@@ -613,7 +615,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+            CodexPooler.JSON.encode!(%{
+              "compaction" => %{"implementation" => "responses_compaction_v2"}
+            })
         }
       })
 
@@ -663,7 +667,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+            CodexPooler.JSON.encode!(%{
+              "compaction" => %{"implementation" => "responses_compaction_v2"}
+            })
         }
       })
 
@@ -681,11 +687,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     metadata_cases = [
       {"legacy_absent", nil},
       {"malformed", %{"x-codex-turn-metadata" => "{malformed"}},
-      {"non_object", %{"x-codex-turn-metadata" => Jason.encode!(["not", "an", "object"])}},
+      {"non_object",
+       %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(["not", "an", "object"])}},
       {"wrong_implementation",
        %{
          "x-codex-turn-metadata" =>
-           Jason.encode!(%{"compaction" => %{"implementation" => "other"}})
+           CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
        }}
     ]
 
@@ -786,7 +793,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+            CodexPooler.JSON.encode!(%{
+              "compaction" => %{"implementation" => "responses_compaction_v2"}
+            })
         }
       })
 
@@ -839,7 +848,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+            CodexPooler.JSON.encode!(%{
+              "compaction" => %{"implementation" => "responses_compaction_v2"}
+            })
         }
       })
 
@@ -950,7 +961,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       )
 
     assert String.starts_with?(headers, "HTTP/1.1 400")
-    assert %{"error" => ^provider_error} = Jason.decode!(response_body)
+    assert %{"error" => ^provider_error} = CodexPooler.JSON.decode!(response_body)
     refute response_body =~ "event:"
     refute response_body =~ "data: [DONE]"
 
@@ -2292,12 +2303,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     # had already been written downstream).
     rate_limits_block =
       "event: codex.rate_limits\n" <>
-        "data: #{Jason.encode!(%{"type" => "codex.rate_limits", "rate_limits" => %{"secondary" => %{"used_percent" => 11, "window_minutes" => 10_080, "reset_at" => DateTime.to_unix(DateTime.add(DateTime.utc_now(), 3, :day))}}})}\n\n"
+        "data: #{CodexPooler.JSON.encode!(%{"type" => "codex.rate_limits", "rate_limits" => %{"secondary" => %{"used_percent" => 11, "window_minutes" => 10_080, "reset_at" => DateTime.to_unix(DateTime.add(DateTime.utc_now(), 3, :day))}}})}\n\n"
 
     {_event, failed_payload} = first_event_terminal_payload("response.failed", "server_error")
 
     failure_block =
-      "event: response.failed\n" <> "data: #{Jason.encode!(failed_payload)}\n\n"
+      "event: response.failed\n" <> "data: #{CodexPooler.JSON.encode!(failed_payload)}\n\n"
 
     upstream = start_upstream({:sse, [rate_limits_block, failure_block]})
     setup = gateway_setup(upstream, compact?: true)
@@ -2339,13 +2350,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     request =
       @codex_remote_compaction_fixture_path
       |> File.read!()
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> Map.fetch!("request")
 
     turn_metadata =
       request
       |> get_in(["client_metadata", "x-codex-turn-metadata"])
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> put_in(["additive_metadata", "privacy_probe"], raw_metadata_sentinel)
       |> put_in(
         ["additive_metadata", "instruction_like"],
@@ -2355,14 +2366,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     put_in(
       request,
       ["client_metadata", "x-codex-turn-metadata"],
-      Jason.encode!(turn_metadata)
+      CodexPooler.JSON.encode!(turn_metadata)
     )
   end
 
   defp codex_incremental_compaction_fixture! do
     @codex_incremental_compaction_fixture_path
     |> File.read!()
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> Map.fetch!("contract")
   end
 
@@ -2379,7 +2390,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       "stream" => true,
       "client_metadata" => %{
         "x-codex-turn-metadata" =>
-          Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+          CodexPooler.JSON.encode!(%{
+            "compaction" => %{"implementation" => "responses_compaction_v2"}
+          })
       }
     }
   end
@@ -2394,14 +2407,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     expected_diagnostics = Keyword.fetch!(opts, :expected_diagnostics)
 
     v2_turn_metadata =
-      Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+      CodexPooler.JSON.encode!(%{
+        "compaction" => %{"implementation" => "responses_compaction_v2"}
+      })
 
     rate_limits_block =
       "event: codex.rate_limits\n" <>
-        "data: #{Jason.encode!(%{"type" => "codex.rate_limits", "rate_limits" => %{"secondary" => %{"used_percent" => 11, "window_minutes" => 10_080, "reset_at" => DateTime.to_unix(DateTime.add(DateTime.utc_now(), 3, :day))}}})}\n\n"
+        "data: #{CodexPooler.JSON.encode!(%{"type" => "codex.rate_limits", "rate_limits" => %{"secondary" => %{"used_percent" => 11, "window_minutes" => 10_080, "reset_at" => DateTime.to_unix(DateTime.add(DateTime.utc_now(), 3, :day))}}})}\n\n"
 
     terminal_block =
-      "event: #{terminal_event}\n" <> "data: #{Jason.encode!(terminal_payload)}\n\n"
+      "event: #{terminal_event}\n" <> "data: #{CodexPooler.JSON.encode!(terminal_payload)}\n\n"
 
     upstream = start_upstream({:sse, [rate_limits_block, terminal_block]})
     setup = gateway_setup(upstream, compact?: true)
@@ -2722,7 +2737,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     data = lines |> Enum.find(&String.starts_with?(&1, "data: ")) |> strip_prefix("data: ")
 
     if is_binary(event) and is_binary(data) and data != "[DONE]" do
-      %{"event" => event, "data" => Jason.decode!(data)}
+      %{"event" => event, "data" => CodexPooler.JSON.decode!(data)}
     end
   end
 

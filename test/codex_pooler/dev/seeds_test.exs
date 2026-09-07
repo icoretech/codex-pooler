@@ -202,7 +202,7 @@ defmodule CodexPooler.Dev.SeedsTest do
              {"proxy_websocket", 4}
            ]
 
-    summary = Jason.decode!(File.read!("tmp/gateway-perf/bootstrap/seed-summary.json"))
+    summary = CodexPooler.JSON.decode!(File.read!("tmp/gateway-perf/bootstrap/seed-summary.json"))
     env = File.read!("tmp/gateway-perf/bootstrap/perf.env")
     env_stat = File.stat!("tmp/gateway-perf/bootstrap/perf.env")
 

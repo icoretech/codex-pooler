@@ -86,7 +86,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
                "upstream_status" => 404
              }
 
-      body = Jason.encode!(%{"error" => upstream_error})
+      body = CodexPooler.JSON.encode!(%{"error" => upstream_error})
 
       assert PublicResponse.normalize_raw_body(404, body, &Function.identity/1,
                input_file_upstream_404?: true
@@ -101,7 +101,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
                   }
                 }}
 
-      encoded = Jason.encode!(PublicResponse.normalize_error(upstream_error, opts))
+      encoded = CodexPooler.JSON.encode!(PublicResponse.normalize_error(upstream_error, opts))
       refute encoded =~ "private upstream input-file limitation"
       refute encoded =~ "input[0].content[1].file_id"
       refute encoded =~ "private request body"
@@ -145,7 +145,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
   describe "misalignment policy violation" do
     test "projects direct HTTP error bodies through the same narrow shape" do
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "error" => %{
             "code" => MisalignmentPolicyViolation.code(),
             "message" => "policy blocked this request",

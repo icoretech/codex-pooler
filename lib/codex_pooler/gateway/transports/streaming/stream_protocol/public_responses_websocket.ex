@@ -30,7 +30,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   def normalize(data, state) when is_binary(data) do
     stream_id = Map.get(state, :stream_id)
 
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = source_decoded} ->
         {_data, decoded} = PublicResponses.normalize_json_message(data, source_decoded)
         event_type = string_value(decoded, "type")
@@ -42,7 +42,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
               |> PublicResponses.normalize_terminal_errors(normalized)
               |> maybe_put_stream_id(stream_id)
 
-            {:push, Jason.encode!(normalized), state}
+            {:push, CodexPooler.JSON.encode!(normalized), state}
 
           {:drop, state} ->
             {:drop, state}

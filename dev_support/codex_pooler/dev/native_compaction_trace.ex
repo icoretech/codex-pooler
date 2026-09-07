@@ -697,7 +697,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   defp maybe_write_full_entry(%{truncated: true} = state, _entry), do: state
 
   defp maybe_write_full_entry(state, entry) do
-    encoded = [Jason.encode!(entry), "\n"]
+    encoded = [CodexPooler.JSON.encode!(entry), "\n"]
     bytes = IO.iodata_length(encoded)
 
     cond do
@@ -736,7 +736,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
       }
     }
 
-    encoded = [Jason.encode!(entry), "\n"]
+    encoded = [CodexPooler.JSON.encode!(entry), "\n"]
     :ok = IO.binwrite(state.file.io, encoded)
 
     %{
@@ -1090,8 +1090,8 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   defp textual_frame_key?(_key), do: false
 
   defp redact_frame_text(value) do
-    case Jason.decode(value) do
-      {:ok, decoded} -> Jason.encode!(redact(decoded))
+    case CodexPooler.JSON.decode(value) do
+      {:ok, decoded} -> CodexPooler.JSON.encode!(redact(decoded))
       {:error, _reason} -> redact_non_json_text(value)
     end
   end
@@ -1202,7 +1202,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
       "fields" => encode_term(redact_secrets(fields))
     }
 
-    encoded = [Jason.encode!(entry), "\n"]
+    encoded = [CodexPooler.JSON.encode!(entry), "\n"]
     :ok = IO.binwrite(state.file.io, encoded)
 
     %{

@@ -20,7 +20,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
   def collect_response(response, %SelectedCandidateContext{} = context, finalization_callbacks) do
     collect_stream(response, context, finalization_callbacks, fn body ->
       with {:ok, response_body} <- Responses.response_from_sse(body, context.request_options) do
-        {:ok, %{status: 200, headers: json_headers(), raw_body: Jason.encode!(response_body)}}
+        {:ok,
+         %{
+           status: 200,
+           headers: json_headers(),
+           raw_body: CodexPooler.JSON.encode!(response_body)
+         }}
       end
     end)
   end
@@ -151,7 +156,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
   defp put_json_usage(state, body, upstream_response) do
     if Metadata.json_content?(upstream_response) do
       usage =
-        case Jason.decode(body) do
+        case CodexPooler.JSON.decode(body) do
           {:ok, decoded} -> ResponseUsage.from_stream_event(decoded)
           {:error, _reason} -> %{status: "usage_unknown", source: "json_decode_failed"}
         end

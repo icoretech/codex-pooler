@@ -178,7 +178,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     opts = RequestOptions.for_websocket(%{request_id: "rejected-websocket-admission"})
 
     payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => "gpt-example",
         "input" => []
@@ -193,7 +193,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
              Gateway.run_websocket_response_for_socket(%{}, "{invalid", opts, fn _frame -> :ok end)
 
     malformed_model =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => 123,
         "input" => []
@@ -206,7 +206,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
              end)
 
     malformed_schema =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => "gpt-example",
         "input" => "not-an-array"
@@ -218,11 +218,11 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                :ok
              end)
 
-    prewarm = Jason.encode!(%{"generate" => false, "model" => "gpt-example"})
+    prewarm = CodexPooler.JSON.encode!(%{"generate" => false, "model" => "gpt-example"})
 
     assert {:socket_response_result, :local_complete, :ok} =
              Gateway.run_websocket_response_for_socket(%{}, prewarm, opts, fn frame ->
-               send(self(), {:prewarm_frame, Jason.decode!(frame)})
+               send(self(), {:prewarm_frame, CodexPooler.JSON.decode!(frame)})
              end)
 
     assert_receive {:prewarm_frame, %{"type" => "response.created"}}
@@ -264,7 +264,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     writer = fn frame -> send(self(), {:prepared_native_frame, frame}) end
 
     assert {:ok, prepared} =
-             Gateway.prepare_websocket_response(Jason.encode!(payload), opts, writer)
+             Gateway.prepare_websocket_response(CodexPooler.JSON.encode!(payload), opts, writer)
 
     assert prepared.variant == :native_response_create
     refute inspect(prepared) =~ turn_id
@@ -273,7 +273,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
 
     assert :ok = Gateway.run_prepared_websocket_response(auth, prepared, writer)
     frame = receive_prepared_provider_frame!()
-    assert %{"id" => "resp_prepared_native"} = Jason.decode!(frame)
+    assert %{"id" => "resp_prepared_native"} = CodexPooler.JSON.decode!(frame)
     refute_received :request_options_built
     assert FakeUpstream.count(upstream) == 1
 
@@ -310,7 +310,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       )
 
     payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
         "input" => [%{"type" => "message", "role" => "user", "content" => "synthetic"}],
@@ -830,7 +830,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                )
 
       frame = receive_provider_websocket_frame!()
-      assert %{"id" => "resp_ws_compression_disabled"} = Jason.decode!(frame)
+      assert %{"id" => "resp_ws_compression_disabled"} = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
@@ -888,7 +888,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                )
 
       frame = receive_provider_websocket_frame!()
-      assert %{"id" => "resp_ws_backend_skipped"} = Jason.decode!(frame)
+      assert %{"id" => "resp_ws_backend_skipped"} = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
@@ -931,7 +931,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       suffix = "\nsynthetic websocket report ends"
 
       original_json =
-        Jason.encode!(%{"rows" => Enum.map(1..24, &%{"id" => &1, "active" => true})},
+        CodexPooler.JSON.encode!(%{"rows" => Enum.map(1..24, &%{"id" => &1, "active" => true})},
           pretty: true
         )
 
@@ -947,7 +947,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                )
 
       frame = receive_provider_websocket_frame!()
-      assert %{"id" => "resp_ws_embedded_json_compressed"} = Jason.decode!(frame)
+      assert %{"id" => "resp_ws_embedded_json_compressed"} = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
@@ -968,7 +968,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
           byte_size(compressed_output) - byte_size(prefix) - byte_size(suffix)
         )
 
-      assert Jason.decode!(compressed_json) == Jason.decode!(original_json)
+      assert CodexPooler.JSON.decode!(compressed_json) == CodexPooler.JSON.decode!(original_json)
       assert byte_size(compressed_json) < byte_size(original_json)
 
       assert [request] = request_rows(setup.pool.id)
@@ -1020,7 +1020,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                )
 
       assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
-      assert %{"id" => "resp_ws_public_compressed"} = Jason.decode!(frame)
+      assert %{"id" => "resp_ws_public_compressed"} = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
@@ -1249,7 +1249,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       "stream" => true,
       "generate" => true
     }
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp backend_function_tool_output_payload(setup, output, call_id) do
@@ -1272,7 +1272,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       "stream" => true,
       "generate" => true
     }
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp public_tool_output_payload(setup, output, tool_call_id) do
@@ -1289,7 +1289,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       "stream" => true,
       "generate" => true
     }
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp assert_websocket_lossy_output_skipped!(captured, original_output) do

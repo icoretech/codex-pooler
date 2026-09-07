@@ -36,7 +36,7 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
 
     assert {:ok, %PreparedWebsocketFrame{variant: :prewarm} = prepared} =
              Service.prepare_websocket_response(
-               Jason.encode!(payload),
+               CodexPooler.JSON.encode!(payload),
                opts,
                fn _frame -> :ok end
              )
@@ -74,7 +74,11 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
       )
 
     assert {:ok, %PreparedWebsocketFrame{} = prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     assert is_binary(prepared.replay_claim_digest)
     assert byte_size(prepared.replay_claim_digest) == 32
@@ -122,7 +126,11 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
       )
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     assert prepared.native_client_retry_witness.version == 1
     assert prepared.native_client_retry_witness.digest == prepared.replay_claim_digest
@@ -177,7 +185,11 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     opts = RequestOptions.for_websocket(%{request_id: "malformed-capability"}, payload)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     malformed = put_in(prepared.provenance.capability, :not_a_capability)
 
@@ -201,7 +213,9 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     opts = RequestOptions.for_websocket(%{codex_session: %{id: Ecto.UUID.generate()}}, payload)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _ -> :ok end)
+             Service.prepare_websocket_response(CodexPooler.JSON.encode!(payload), opts, fn _ ->
+               :ok
+             end)
 
     binding = replay_binding(prepared)
     assert {:ok, resealed} = WebsocketCodec.attach_native_replay_admission(prepared, binding)
@@ -240,7 +254,11 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     opts = RequestOptions.for_websocket(%{request_id: "prepared-concurrent"}, payload)
 
     assert {:ok, %PreparedWebsocketFrame{variant: :prewarm} = prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     caller = self()
     start_ref = make_ref()
@@ -279,7 +297,11 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     opts = RequestOptions.for_websocket(%{request_id: "prepared-substitution"}, payload)
 
     assert {:ok, %PreparedWebsocketFrame{} = prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     substituted = %{
       prepared
@@ -317,7 +339,7 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
 
     assert {:ok, %PreparedWebsocketFrame{variant: :response_processed} = prepared} =
              Service.prepare_websocket_response(
-               Jason.encode!(payload),
+               CodexPooler.JSON.encode!(payload),
                opts,
                fn _frame -> :ok end
              )

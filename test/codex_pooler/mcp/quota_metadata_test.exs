@@ -817,7 +817,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
     structured = result["structuredContent"]
-    serialized_structured = Jason.encode!(structured)
+    serialized_structured = CodexPooler.JSON.encode!(structured)
 
     for forbidden <- [raw_metadata, provider_payload, raw_evidence, auth_json] do
       refute serialized_structured =~ forbidden
@@ -918,7 +918,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
     structured = result["structuredContent"]
-    serialized_structured = Jason.encode!(structured)
+    serialized_structured = CodexPooler.JSON.encode!(structured)
 
     for forbidden <- [
           raw_email,
@@ -1192,7 +1192,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert [item] = result["structuredContent"]["items"]
     assert item["id"] == visible_identity.id
     refute text =~ "Invisible quota account"
-    refute Jason.encode!(result["structuredContent"]) =~ invisible_identity.id
+    refute CodexPooler.JSON.encode!(result["structuredContent"]) =~ invisible_identity.id
 
     assert {:ok, get_result} =
              ToolDispatch.call(
@@ -1311,7 +1311,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
              "count" => 1
            }
 
-    refute Jason.encode!(filtered_result["structuredContent"]) =~ identity.id
+    refute CodexPooler.JSON.encode!(filtered_result["structuredContent"]) =~ identity.id
     assert :ok = Redaction.assert_mcp_output_safe!(filtered_result)
   end
 

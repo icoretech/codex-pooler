@@ -134,7 +134,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
           {:ok, socket_state()} | {:error, WebsocketOwnerContract.owner_error()}
   def maybe_retarget_before_start(payload, %{websocket_owner_downstream: downstream} = state)
       when is_binary(payload) and is_map(downstream) do
-    with {:ok, %{} = decoded_payload} <- Jason.decode(payload),
+    with {:ok, %{} = decoded_payload} <- CodexPooler.JSON.decode(payload),
          {:ok, runtime} <-
            Websocket.retarget_websocket_owner_runtime(
              state.auth,
@@ -148,8 +148,14 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
         do: recover_missing_local_owner(state),
         else: {:ok, state}
     else
-      {:error, %Jason.DecodeError{}} -> {:ok, state}
-      {:error, reason} -> {:error, reason}
+      {:error, {:unexpected_end, _offset}} ->
+        {:ok, state}
+
+      {:error, {kind, _offset, _value}} when kind in [:invalid_byte, :unexpected_sequence] ->
+        {:ok, state}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

@@ -71,8 +71,8 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
 
       payload =
         ModelMetadata.codex_model_payload(model, %{}, nil, %{})
-        |> Jason.encode!()
-        |> Jason.decode!()
+        |> CodexPooler.JSON.encode!()
+        |> CodexPooler.JSON.decode!()
 
       assert payload["tool_mode"] == mode
       assert payload["default_reasoning_level"] == "high"
@@ -92,7 +92,11 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
 
     payload = ModelMetadata.codex_model_payload(model, %{}, nil, %{})
     assert payload["input_modalities"] == ["text", "image"]
-    assert Jason.decode!(Jason.encode!(payload))["input_modalities"] == ["text", "image"]
+
+    assert CodexPooler.JSON.decode!(CodexPooler.JSON.encode!(payload))["input_modalities"] == [
+             "text",
+             "image"
+           ]
   end
 
   test "context policy respects explicit overrides and safe compaction bounds" do

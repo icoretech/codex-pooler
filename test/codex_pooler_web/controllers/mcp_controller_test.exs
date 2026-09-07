@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
       conn =
         conn
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       response = json_response(conn, 200)
 
@@ -78,7 +78,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"})
+          CodexPooler.JSON.encode!(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"})
         )
 
       assert response(conn, 202) == ""
@@ -92,7 +92,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{"jsonrpc" => "2.0", "id" => "ping-1", "method" => "ping"})
+          CodexPooler.JSON.encode!(%{"jsonrpc" => "2.0", "id" => "ping-1", "method" => "ping"})
         )
 
       assert json_response(conn, 200) == %{
@@ -110,7 +110,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "tools-1",
             "method" => "tools/list",
@@ -140,7 +140,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "call-1",
             "method" => "tools/call",
@@ -177,7 +177,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "tools-1",
             "method" => "tools/list",
@@ -195,7 +195,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
           |> authenticated_json_rpc_conn(raw_token)
           |> post(
             "/mcp",
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "jsonrpc" => "2.0",
               "id" => "call-#{tool["name"]}",
               "method" => "tools/call",
@@ -506,7 +506,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "wire-list-request-log-debug-privacy",
             "method" => "tools/call",
@@ -529,7 +529,13 @@ defmodule CodexPoolerWeb.McpControllerTest do
       assert list_item["id"] == request.id
       assert_debug_fields_present(list_item["debug"], :list)
       assert_response_body_omits_adversarial_debug_values(list_body)
-      assert_no_wire_leaks(Jason.decode!(list_body), raw_token, adversarial_forbidden_strings())
+
+      assert_no_wire_leaks(
+        CodexPooler.JSON.decode!(list_body),
+        raw_token,
+        adversarial_forbidden_strings()
+      )
+
       assert :ok = Redaction.assert_mcp_output_safe!(list_result)
 
       get_body =
@@ -538,7 +544,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "wire-get-request-log-debug-privacy",
             "method" => "tools/call",
@@ -557,7 +563,13 @@ defmodule CodexPoolerWeb.McpControllerTest do
       assert get_structured["item"]["id"] == request.id
       assert_debug_fields_present(get_structured["item"]["debug"], :get)
       assert_response_body_omits_adversarial_debug_values(get_body)
-      assert_no_wire_leaks(Jason.decode!(get_body), raw_token, adversarial_forbidden_strings())
+
+      assert_no_wire_leaks(
+        CodexPooler.JSON.decode!(get_body),
+        raw_token,
+        adversarial_forbidden_strings()
+      )
+
       assert :ok = Redaction.assert_mcp_output_safe!(get_result)
     end
 
@@ -836,7 +848,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
       conn =
         conn
         |> json_rpc_conn()
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       response = json_rpc_error(conn, 401)
 
@@ -853,7 +865,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
           |> recycle()
           |> json_rpc_conn()
           |> put_req_header("authorization", header)
-          |> post("/mcp?token=query-token", Jason.encode!(initialize_request()))
+          |> post("/mcp?token=query-token", CodexPooler.JSON.encode!(initialize_request()))
 
         response = json_rpc_error(checked_conn, 401)
         assert response["error"]["message"] == "MCP bearer token is required"
@@ -873,7 +885,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("authorization", "Bearer   #{raw_token}  ")
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_response(padded_conn, 200)["result"]["protocolVersion"] == @mcp_version
 
@@ -882,7 +894,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> recycle()
         |> json_rpc_conn()
         |> put_req_header("authorization", "Bearer    ")
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       response = json_rpc_error(empty_conn, 401)
 
@@ -902,7 +914,10 @@ defmodule CodexPoolerWeb.McpControllerTest do
         |> put_session(:mcp_token, raw_token)
         |> put_req_header("x-mcp-token", raw_token)
         |> json_rpc_conn()
-        |> post("/mcp?token=#{URI.encode(raw_token)}", Jason.encode!(initialize_request()))
+        |> post(
+          "/mcp?token=#{URI.encode(raw_token)}",
+          CodexPooler.JSON.encode!(initialize_request())
+        )
 
       response = json_rpc_error(conn, 401)
 
@@ -918,7 +933,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
       conn =
         conn
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       response = json_rpc_error(conn, 403)
 
@@ -937,7 +952,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
       conn =
         conn
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       response = json_rpc_error(conn, 403)
 
@@ -963,7 +978,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
           conn
           |> recycle()
           |> authenticated_json_rpc_conn(raw_token)
-          |> post("/mcp", Jason.encode!(initialize_request()))
+          |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
         response = json_rpc_error(checked_conn, 403)
 
@@ -975,7 +990,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
   end
 
   defp assert_successful_tool_body_response(body, id) do
-    response = Jason.decode!(body)
+    response = CodexPooler.JSON.decode!(body)
     {result, text, structured} = assert_successful_tool_response(response, id)
     assert String.contains?(body, "structuredContent")
     {result, text, structured}
@@ -1102,16 +1117,16 @@ defmodule CodexPoolerWeb.McpControllerTest do
   end
 
   defp assert_response_body_omits_adversarial_debug_values(body) do
-    response = Jason.decode!(body)
+    response = CodexPooler.JSON.decode!(body)
     result = response["result"]
     assert [%{"type" => "text", "text" => text}] = result["content"]
     structured = result["structuredContent"]
 
-    refute text =~ Jason.encode!(structured)
+    refute text =~ CodexPooler.JSON.encode!(structured)
 
     for forbidden <- adversarial_forbidden_strings() do
       refute text =~ forbidden
-      refute Jason.encode!(structured) =~ forbidden
+      refute CodexPooler.JSON.encode!(structured) =~ forbidden
       refute body =~ forbidden
       refute inspect(response) =~ forbidden
     end
@@ -1134,7 +1149,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
     |> authenticated_json_rpc_conn(raw_token)
     |> post(
       "/mcp",
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "jsonrpc" => "2.0",
         "id" => id,
         "method" => "tools/call",

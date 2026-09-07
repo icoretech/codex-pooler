@@ -14,7 +14,7 @@ defmodule CodexPooler.Gateway.Transports.ModelUnavailabilityTest do
             "type" => "invalid_request_error",
             "param" => "model"
           })
-          |> Jason.encode!()
+          |> CodexPooler.JSON.encode!()
 
         assert ModelUnavailability.http_response?(400, body, false),
                "expected #{envelope} to expose model_not_found"
@@ -37,7 +37,7 @@ defmodule CodexPooler.Gateway.Transports.ModelUnavailabilityTest do
             %{"type" => "invalid_request_error", "param" => "model"}
           end
 
-        body = envelope |> error_payload(error) |> Jason.encode!()
+        body = envelope |> error_payload(error) |> CodexPooler.JSON.encode!()
 
         assert ModelUnavailability.http_response?(404, body, true),
                "expected #{envelope} to expose the provenance-backed model miss"
@@ -53,7 +53,7 @@ defmodule CodexPooler.Gateway.Transports.ModelUnavailabilityTest do
     test "rejects malformed, plain, unrelated, continuation, and message-only errors" do
       fixtures = [
         {404, "not-json"},
-        {404, Jason.encode!(%{})},
+        {404, CodexPooler.JSON.encode!(%{})},
         {404, http_error(%{"type" => "invalid_request_error"})},
         {404, http_error(%{"type" => "invalid_request_error", "param" => "input"})},
         {404, http_error(%{"code" => "unknown_model_error", "param" => "model"})},
@@ -161,7 +161,7 @@ defmodule CodexPooler.Gateway.Transports.ModelUnavailabilityTest do
 
   defp error_payload(:wrapped_top_level, error), do: Map.put(error, "type", "error")
 
-  defp http_error(error), do: Jason.encode!(%{"error" => error})
+  defp http_error(error), do: CodexPooler.JSON.encode!(%{"error" => error})
 
   defp terminal_failure(code, param \\ "model") do
     %{

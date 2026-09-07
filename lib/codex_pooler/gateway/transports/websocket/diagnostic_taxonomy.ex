@@ -11,7 +11,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   # clients/openai-compatible.mdx); anything else keeps the fingerprint.
   @unknown_code_allowlist ~r/\A[A-Za-z0-9_.-]+\z/
   @max_unknown_code_bytes 80
-  @known_error_codes OwnerErrorVocabulary.owner_error_codes() ++ ErrorCodes.known_error_codes()
   @reconnect_dispositions ~w(
                              same_turn_replay
                              replacement_handoff
@@ -87,7 +86,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
 
   def safe_correlator(_value), do: "none"
 
-  defp known_error_code?(value), do: value in @known_error_codes
+  defp known_error_code?(value),
+    do:
+      value in OwnerErrorVocabulary.owner_error_codes() or value in ErrorCodes.known_error_codes()
 
   defp fixed_vocabulary(value, vocabulary) when is_atom(value) do
     value

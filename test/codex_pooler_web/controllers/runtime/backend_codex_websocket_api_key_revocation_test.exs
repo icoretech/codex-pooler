@@ -56,7 +56,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
         websocket_upgrade_response!(start_public_endpoint!(), setup, path)
 
       try do
-        assert ^expected_error = Jason.decode!(websocket_body)
+        assert ^expected_error = CodexPooler.JSON.decode!(websocket_body)
       after
         Mint.HTTP.close(mint_conn)
       end
@@ -129,12 +129,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
         public_websocket_connect!(port, setup, "busy-pause-#{route_label}", path)
 
       try do
-        first_payload = Jason.encode!(response_payload(setup, "admitted-#{route_label}"))
+        first_payload =
+          CodexPooler.JSON.encode!(response_payload(setup, "admitted-#{route_label}"))
+
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, first_payload)
         assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 5_000
 
         queued_payload =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => [
@@ -158,7 +160,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
         assert_socket_api_key_revoked!(server)
         assert_socket_queue_length!(server, 0)
 
-        later_payload = Jason.encode!(response_payload(setup, "later-#{route_label}"))
+        later_payload = CodexPooler.JSON.encode!(response_payload(setup, "later-#{route_label}"))
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, later_payload)
         {conn, websocket} = websocket_transport_barrier!(conn, websocket, ref)
         assert_socket_queue_length!(server, 0)
@@ -170,7 +172,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
           receive_websocket_frames_until_close!(conn, websocket, ref)
 
         assert [{:text, final_frame}, @api_key_close_frame] = frames
-        assert %{"type" => "response.completed"} = Jason.decode!(final_frame)
+        assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(final_frame)
         assert FakeUpstream.count(upstream) == 1
 
         assert [%Request{status: "succeeded"} = request] =
@@ -435,7 +437,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
     do: metadata_control_frame?(frame)
 
   defp metadata_control_frame?(frame) when is_binary(frame) do
-    match?({:ok, %{"type" => "codex.response.metadata"}}, Jason.decode(frame))
+    match?({:ok, %{"type" => "codex.response.metadata"}}, CodexPooler.JSON.decode(frame))
   end
 
   defp metadata_control_frame?(_frame), do: false
@@ -522,7 +524,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationDistribute
         assert paused_key.runtime_revocation_epoch == 1
 
         payload =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => native_text_input("durable-fence-#{route_label}"),

@@ -47,7 +47,7 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
     options: options
   } do
     assert {:ok, %{status: "ready", leases: 1}} = MCPFixture.acquire(options)
-    assert {:ok, receipt} = path |> File.read!() |> Jason.decode()
+    assert {:ok, receipt} = path |> File.read!() |> CodexPooler.JSON.decode()
     raw_token = receipt["mcp_token"]
     token_id = receipt["token_id"]
 
@@ -106,7 +106,7 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
     noncanonical_setting = insert_operator_setting!(noncanonical_owner, false)
 
     assert {:ok, %{status: "ready", leases: 1}} = MCPFixture.acquire(options)
-    receipt = path |> File.read!() |> Jason.decode!()
+    receipt = path |> File.read!() |> CodexPooler.JSON.decode!()
     raw_token = receipt["mcp_token"]
 
     assert %OperatorMCPKey{operator_id: operator_id} =
@@ -192,7 +192,7 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
   test "status never exposes the raw token", %{path: path, options: options} do
     assert {:ok, %{status: "absent", leases: 0}} = MCPFixture.status(options)
     assert {:ok, status} = MCPFixture.acquire(options)
-    raw_token = path |> File.read!() |> Jason.decode!() |> Map.fetch!("mcp_token")
+    raw_token = path |> File.read!() |> CodexPooler.JSON.decode!() |> Map.fetch!("mcp_token")
 
     refute inspect(status) =~ raw_token
     refute Map.has_key?(status, :mcp_token)

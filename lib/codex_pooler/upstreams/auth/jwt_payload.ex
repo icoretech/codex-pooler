@@ -7,7 +7,7 @@ defmodule CodexPooler.Upstreams.Auth.JwtPayload do
   def decode(token) when is_binary(token) do
     with [_header, payload, _signature] <- String.split(token, "."),
          {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{} = claims} <- Jason.decode(json) do
+         {:ok, %{} = claims} <- CodexPooler.JSON.decode(json) do
       {:ok, claims}
     else
       _invalid -> {:error, :invalid_jwt}

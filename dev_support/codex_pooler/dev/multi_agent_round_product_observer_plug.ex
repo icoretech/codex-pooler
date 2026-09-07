@@ -40,6 +40,6 @@ defmodule CodexPooler.Dev.MultiAgentRoundProductObserver.Plug do
     conn
     |> put_resp_header(@identity_header_name, @identity_header_value)
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> send_resp(status, CodexPooler.JSON.encode!(body))
   end
 end

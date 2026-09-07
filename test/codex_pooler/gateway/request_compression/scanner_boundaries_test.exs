@@ -21,7 +21,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ScannerBoundariesTest do
           "false",
           "null"
         ] do
-      assert {:ok, _} = Jason.decode(json)
+      assert {:ok, _} = CodexPooler.JSON.decode(json)
       assert {:ok, _} = JsonStringRanges.scan(json)
     end
   end
@@ -132,7 +132,9 @@ defmodule CodexPooler.Gateway.RequestCompression.ScannerBoundariesTest do
     assert {:error, :invalid_json} = ResponsesLiveZone.plan("1e9999")
 
     json =
-      Jason.encode!(%{"input" => [%{"type" => "local_shell_call_output", "output" => "short"}]})
+      CodexPooler.JSON.encode!(%{
+        "input" => [%{"type" => "local_shell_call_output", "output" => "short"}]
+      })
 
     assert {:ok, %{candidate_count: 0}} = ResponsesLiveZone.plan(json)
     assert {:ok, []} = ResponsesLiveZone.plan_candidates(json)
@@ -150,7 +152,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ScannerBoundariesTest do
 
   test "live-zone ignores scalar input members and protects outputs without valid call identifiers" do
     json =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "input" => [
           nil,
           4,

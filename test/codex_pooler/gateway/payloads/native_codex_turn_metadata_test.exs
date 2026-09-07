@@ -44,7 +44,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
              NativeCodexTurnMetadata.parse(
                %{
                  "client_metadata" => %{
-                   "x-codex-turn-metadata" => Jason.encode!(metadata)
+                   "x-codex-turn-metadata" => CodexPooler.JSON.encode!(metadata)
                  }
                },
                @session_id
@@ -65,7 +65,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
         "sandbox_mode" => "danger-full-access"
       }
 
-      canonical = if encoding == :encoded, do: Jason.encode!(canonical), else: canonical
+      canonical =
+        if encoding == :encoded, do: CodexPooler.JSON.encode!(canonical), else: canonical
 
       assert {:ok, parsed} = NativeCodexTurnMetadata.parse(payload(canonical), @session_id)
       assert parsed.request_kind == String.to_existing_atom(request_kind)
@@ -85,7 +86,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
       "sandbox_mode" => "read-only"
     }
 
-    for value <- [Jason.encode!(canonical), canonical] do
+    for value <- [CodexPooler.JSON.encode!(canonical), canonical] do
       assert {:ok, parsed} = NativeCodexTurnMetadata.parse(payload(value), @session_id)
       assert parsed.request_kind == :prewarm
       assert parsed.semantic_turn_key == nil
@@ -167,7 +168,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
       "unknown_sibling" => "ignored"
     }
 
-    for value <- [Jason.encode!(canonical), canonical] do
+    for value <- [CodexPooler.JSON.encode!(canonical), canonical] do
       assert {:ok, parsed} = NativeCodexTurnMetadata.parse(payload(value), @session_id)
       assert parsed.request_kind == :memory
       assert parsed.semantic_turn_key == nil

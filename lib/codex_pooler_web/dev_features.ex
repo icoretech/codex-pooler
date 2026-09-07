@@ -144,7 +144,7 @@ defmodule CodexPoolerWeb.DevFeatures do
 
     defp running_helper do
       with {:ok, body} <- File.read(live_path(@helper_info_file)),
-           {:ok, %{"port" => port, "token" => token}} <- Jason.decode(body),
+           {:ok, %{"port" => port, "token" => token}} <- CodexPooler.JSON.decode(body),
            true <- is_integer(port) and port > 0 and port < 65_536,
            true <- is_binary(token) and token != "" do
         %{port: port, token: token, origin: "http://localhost:#{port}"}
@@ -167,7 +167,7 @@ defmodule CodexPoolerWeb.DevFeatures do
     # set up for this checkout, so there is nothing to have been injected.
     defp injection_targets do
       with {:ok, body} <- File.read(live_path(@live_config_file)),
-           {:ok, %{"files" => files}} <- Jason.decode(body),
+           {:ok, %{"files" => files}} <- CodexPooler.JSON.decode(body),
            true <- is_list(files) do
         Enum.filter(files, &is_binary/1)
       else

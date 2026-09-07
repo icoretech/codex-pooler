@@ -133,13 +133,13 @@ defmodule CodexPooler.Gateway.RequestCompression.EmbeddedJson do
   end
 
   defp container_kind(content) do
-    case Jason.decode(content, objects: :ordered_objects) do
+    case CodexPooler.JSON.decode(content, objects: :ordered_objects) do
       {:ok, value} -> decoded_container_kind(value)
       _invalid_json -> :error
     end
   end
 
-  defp decoded_container_kind(%Jason.OrderedObject{}), do: {:ok, :object}
+  defp decoded_container_kind(%CodexPooler.JSON.OrderedObject{}), do: {:ok, :object}
   defp decoded_container_kind(value) when is_list(value), do: {:ok, :array}
   defp decoded_container_kind(_value), do: :error
 

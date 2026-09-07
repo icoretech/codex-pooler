@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLossless do
   def compress(content, opts \\ [])
 
   def compress(content, opts) when is_binary(content) do
-    case Jason.decode(content, objects: :ordered_objects) do
+    case CodexPooler.JSON.decode(content, objects: :ordered_objects) do
       {:ok, rows} when is_list(rows) ->
         finalize(content, rows, length(rows), opts)
 
@@ -39,7 +39,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLossless do
   end
 
   defp finalize(original, rows, row_count, opts) do
-    case Jason.encode(rows) do
+    case CodexPooler.JSON.encode(rows) do
       {:ok, compressed} ->
         Strategies.finalize(@strategy, original, compressed, %{row_count: row_count}, opts)
 

@@ -133,7 +133,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
   def read_journal!(journal_path) do
     journal_path
     |> File.read!()
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> validate_journal!()
   end
 
@@ -347,7 +347,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
 
   defp read_journal(journal_path) do
     with {:ok, encoded} <- File.read(journal_path),
-         {:ok, journal} <- Jason.decode(encoded) do
+         {:ok, journal} <- CodexPooler.JSON.decode(encoded) do
       try do
         {:ok, validate_journal!(journal)}
       rescue
@@ -426,7 +426,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
 
     File.write!(
       temporary,
-      Jason.encode!(%{"email" => browser_auth.email, "password" => browser_auth.password})
+      CodexPooler.JSON.encode!(%{"email" => browser_auth.email, "password" => browser_auth.password})
     )
 
     File.chmod!(temporary, 0o600)
@@ -451,7 +451,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
 
   defp read_browser_auth(path) do
     with {:ok, encoded} <- File.read(path),
-         {:ok, auth} <- Jason.decode(encoded),
+         {:ok, auth} <- CodexPooler.JSON.decode(encoded),
          true <- Map.keys(auth) |> Enum.sort() == ["email", "password"] do
       {:ok, auth}
     else
@@ -501,7 +501,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
 
   defp write_journal!(path, journal) do
     temporary = "#{path}.tmp"
-    File.write!(temporary, Jason.encode!(journal))
+    File.write!(temporary, CodexPooler.JSON.encode!(journal))
     File.chmod!(temporary, 0o600)
     File.rename!(temporary, path)
   end

@@ -22,7 +22,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonDocumentLossless
       assert {:ok, %{content: compressed, metadata: metadata}} =
                JsonDocumentLossless.compress(original, model: @model)
 
-      assert Jason.decode!(compressed) == Jason.decode!(original)
+      assert CodexPooler.JSON.decode!(compressed) == CodexPooler.JSON.decode!(original)
       assert byte_size(compressed) < byte_size(original)
       assert {:ok, original_tokens, _token_metadata} = TokenCounter.count(@model, original)
       assert {:ok, compressed_tokens, _token_metadata} = TokenCounter.count(@model, compressed)
@@ -53,11 +53,11 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonDocumentLossless
       assert {:ok, %{content: compressed}} =
                JsonDocumentLossless.compress(original, model: @model)
 
-      assert Jason.decode!(compressed, objects: :ordered_objects) ==
-               Jason.decode!(original, objects: :ordered_objects)
+      assert CodexPooler.JSON.decode!(compressed, objects: :ordered_objects) ==
+               CodexPooler.JSON.decode!(original, objects: :ordered_objects)
 
-      %Jason.OrderedObject{values: values} =
-        Jason.decode!(compressed, objects: :ordered_objects)
+      %CodexPooler.JSON.OrderedObject{values: values} =
+        CodexPooler.JSON.decode!(compressed, objects: :ordered_objects)
 
       assert Enum.count(values, fn {key, _value} -> key == "repeat" end) == 2
     end
@@ -97,7 +97,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonDocumentLossless
       assert {:ok, %{content: compressed, metadata: metadata}} =
                JsonDocumentLossless.compress(original, model: @model)
 
-      assert Jason.decode!(compressed) == Jason.decode!(original)
+      assert CodexPooler.JSON.decode!(compressed) == CodexPooler.JSON.decode!(original)
       assert compressed =~ synthetic_high_entropy_value
       assert String.contains?(compressed, "\n...[compressed]...\n") == false
       assert String.contains?(compressed, " ...[compressed]... ") == false

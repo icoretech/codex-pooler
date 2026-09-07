@@ -1391,8 +1391,8 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
   defp expiry_marker(metadata), do: get_in(metadata, ["token_refresh", "access_token_expiry"])
 
   defp jwt_with_exp(exp) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
-    payload = Base.url_encode64(Jason.encode!(%{"exp" => exp}), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(CodexPooler.JSON.encode!(%{"exp" => exp}), padding: false)
     header <> "." <> payload <> ".signature"
   end
 

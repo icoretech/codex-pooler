@@ -341,7 +341,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   defp normalize_event_state(_state), do: event_state()
 
   defp rate_limit_error_payloads(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{} = decoded} ->
         [decoded, Map.get(decoded, "error")]
         |> Enum.filter(&is_map/1)
@@ -453,7 +453,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   end
 
   defp rate_limit_events_from_json(payload) do
-    case Jason.decode(payload, strings: :copy) do
+    case CodexPooler.JSON.decode(payload, strings: :copy) do
       {:ok, %{"type" => "codex.rate_limits"} = event} -> [event]
       {:ok, _decoded} -> []
       {:error, _reason} -> []

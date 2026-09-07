@@ -9,7 +9,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
   test "real upstream websocket session upgrades and counts one fake connection" do
     event =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_contract"}
       })
@@ -215,7 +215,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
   end
 
   defp completed_event(id \\ "resp_contract") do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.completed",
       "response" => %{"id" => id}
     })

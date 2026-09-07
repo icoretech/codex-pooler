@@ -3,7 +3,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.NativeImageResult do
 
   @spec valid?(binary()) :: boolean()
   def valid?(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{"created" => created, "data" => [_ | _] = data} = response}
       when is_integer(created) and created >= 0 ->
         is_nil(response["error"]) and Enum.all?(data, &valid_image?/1)

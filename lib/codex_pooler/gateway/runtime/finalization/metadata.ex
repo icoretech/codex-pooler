@@ -148,7 +148,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   defp decode_rejection_metadata(body)
        when is_binary(body) and byte_size(body) <= @rejection_body_max_bytes do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{"error" => error}} when is_map(error) ->
         %{}
         |> maybe_put_rejection_value("rejection_error_code", valid_rejection_token(error["code"]))
@@ -168,7 +168,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   defp decode_rejection_error(body)
        when is_binary(body) and byte_size(body) <= @rejection_body_max_bytes do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{"error" => error}} when is_map(error) ->
         %{}
         |> maybe_put_rejection_value(:code, valid_rejection_token(error["code"]))

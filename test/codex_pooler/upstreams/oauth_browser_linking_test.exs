@@ -423,7 +423,9 @@ defmodule CodexPooler.Upstreams.OAuthBrowserLinkingTest do
     header = Base.url_encode64(~s({"alg":"none"}), padding: false)
 
     payload =
-      Base.url_encode64(Jason.encode!(%{"exp" => DateTime.to_unix(expiry)}), padding: false)
+      Base.url_encode64(CodexPooler.JSON.encode!(%{"exp" => DateTime.to_unix(expiry)}),
+        padding: false
+      )
 
     header <> "." <> payload <> ".signature"
   end

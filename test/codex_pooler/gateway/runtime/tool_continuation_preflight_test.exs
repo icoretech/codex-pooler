@@ -36,7 +36,7 @@ defmodule CodexPooler.Gateway.Runtime.ToolContinuationPreflightTest do
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
       "input" => [%{"role" => "user", "content" => "synthetic"}],
-      "client_metadata" => %{"x-codex-turn-metadata" => Jason.encode!(metadata)}
+      "client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(metadata)}
     }
 
     continuation =
@@ -203,7 +203,7 @@ defmodule CodexPooler.Gateway.Runtime.ToolContinuationPreflightTest do
       )
 
     {:ok, prepared} =
-      WebsocketCodec.prepare_frame(Jason.encode!(payload), options, fn _ -> :ok end)
+      WebsocketCodec.prepare_frame(CodexPooler.JSON.encode!(payload), options, fn _ -> :ok end)
 
     prepared
   end

@@ -88,7 +88,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       quota_handler_id = attach_quota_commit_barrier!(identity.id)
       on_exit(fn -> :telemetry.detach(quota_handler_id) end)
       reset_at = DateTime.utc_now() |> DateTime.add(900, :second) |> DateTime.truncate(:second)
-      rate_limit = Jason.encode!(rate_limit_event(reset_at))
+      rate_limit = CodexPooler.JSON.encode!(rate_limit_event(reset_at))
       terminal = terminal_frame("resp_protocol_#{mapper}")
       duplicate_terminal = terminal_frame("resp_protocol_duplicate_#{mapper}")
       expected_rate_limit = mapper_fun.(rate_limit)
@@ -257,7 +257,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     release_ref = make_ref()
     barrier_ref = make_ref()
     rate_limit = rate_limit_event(DateTime.add(DateTime.utc_now(), 900, :second))
-    encoded = Jason.encode!(rate_limit)
+    encoded = CodexPooler.JSON.encode!(rate_limit)
 
     Application.put_env(
       :codex_pooler,
@@ -345,7 +345,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     assert %{active_turn: %{ref: active_ref}} = :sys.get_state(owner)
 
     rate_limit = rate_limit_event(DateTime.add(DateTime.utc_now(), 900, :second))
-    encoded = Jason.encode!(rate_limit)
+    encoded = CodexPooler.JSON.encode!(rate_limit)
 
     observer =
       WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(current.attempt))
@@ -548,7 +548,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     assert_receive {:websocket_owner_frame, "corr-cancel", 1, {:data, created_frame}}
 
-    assert Jason.decode!(created_frame)["type"] == "response.created"
+    assert CodexPooler.JSON.decode!(created_frame)["type"] == "response.created"
     assert FakeUpstream.count(upstream) == 1
     assert %{active_turn: %{task_pid: owner_task}} = :sys.get_state(owner)
     owner_task_ref = Process.monitor(owner_task)
@@ -904,8 +904,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       upstream =
         start_fake_upstream(
           FakeUpstream.websocket_sse_then_close([
-            Jason.decode!(created),
-            Jason.decode!(visible)
+            CodexPooler.JSON.decode!(created),
+            CodexPooler.JSON.decode!(visible)
           ])
         )
 
@@ -1744,7 +1744,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     %UpstreamDispatch.Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "synthetic-token",
-      upstream_payload: Jason.encode!(Map.put(payload, "type", "response.create")),
+      upstream_payload: CodexPooler.JSON.encode!(Map.put(payload, "type", "response.create")),
       identity: identity,
       routing_hint_authorized?: true,
       accounting_request: accounting && accounting.request,
@@ -1812,7 +1812,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       context: context,
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "synthetic-token",
-      upstream_payload: Jason.encode!(Map.put(payload, "type", "response.create")),
+      upstream_payload: CodexPooler.JSON.encode!(Map.put(payload, "type", "response.create")),
       routing_hint_authorized?: true
     }
 
@@ -1869,7 +1869,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     do: {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, :complete}
 
   defp terminal_frame(response_id) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.completed",
       "response" => %{
         "id" => response_id,
@@ -1880,7 +1880,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   end
 
   defp output_delta_frame do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.output_text.delta",
       "response_id" => "resp_visible_output",
       "output_index" => 0,
@@ -1891,7 +1891,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   end
 
   defp response_created_frame do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.created",
       "response" => %{"id" => "resp_visible_output", "status" => "in_progress"}
     })

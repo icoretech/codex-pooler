@@ -1191,7 +1191,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
       )
 
     ensure_identifier_free_receipt!(payload)
-    IO.puts("quota-helper\t" <> Jason.encode!(payload))
+    IO.puts("quota-helper\t" <> CodexPooler.JSON.encode!(payload))
   end
 
   defp ensure_identifier_free_receipt!(value) when is_map(value) do

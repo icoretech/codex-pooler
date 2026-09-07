@@ -5598,7 +5598,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     |> element("#cockpit-replace-auth-json-upstream-account-#{identity.id}")
     |> render_click()
 
-    invalid_auth_json = Jason.encode!(%{"OPENAI_API_KEY" => invalid_auth_json_secret})
+    invalid_auth_json = CodexPooler.JSON.encode!(%{"OPENAI_API_KEY" => invalid_auth_json_secret})
 
     view
     |> element("#auth-json-import-form")
@@ -6064,12 +6064,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       "tokens" => tokens,
       "last_refresh" => "2026-05-03T00:00:00Z"
     }
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp jwt_token(payload) do
     header = %{"alg" => "none", "typ" => "JWT"}
-    encode = &Base.url_encode64(Jason.encode!(&1), padding: false)
+    encode = &Base.url_encode64(CodexPooler.JSON.encode!(&1), padding: false)
 
     Enum.join([encode.(header), encode.(payload), Base.url_encode64("sig", padding: false)], ".")
   end

@@ -127,7 +127,7 @@ defmodule CodexPooler.Upstreams.SecretBox do
   end
 
   defp decode_envelope(envelope) do
-    with {:ok, decoded} <- Jason.decode(envelope),
+    with {:ok, decoded} <- CodexPooler.JSON.decode(envelope),
          %{"ciphertext" => ciphertext, "nonce" => nonce, "aad" => aad} <- decoded,
          {:ok, ciphertext} <- decode64_field(ciphertext),
          {:ok, nonce} <- decode64_field(nonce),
@@ -146,7 +146,7 @@ defmodule CodexPooler.Upstreams.SecretBox do
       "nonce" => Base.encode64(nonce),
       "aad" => aad
     }
-    |> Jason.encode()
+    |> CodexPooler.JSON.encode()
     |> case do
       {:ok, encoded} -> {:ok, encoded}
       {:error, _reason} -> invalid_ciphertext()

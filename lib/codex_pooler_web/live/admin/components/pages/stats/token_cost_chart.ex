@@ -28,19 +28,19 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TokenCostChart do
     cost_total = points |> Enum.map(& &1.cost_micros) |> Enum.sum()
 
     %{
-      categories: Jason.encode!(labels),
+      categories: CodexPooler.JSON.encode!(labels),
       series:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           %{name: "Input", type: "column", data: input_values},
           %{name: "Cached input", type: "column", data: cached_input_values},
           %{name: "Output (standard)", type: "column", data: standard_output_values},
           %{name: "Reasoning", type: "column", data: reasoning_values},
           %{name: "Cost", type: "line", data: cost_values}
         ]),
-      units: Jason.encode!(["tokens", "tokens", "tokens", "tokens", "USD"]),
-      value_kinds: Jason.encode!(["tokens", "tokens", "tokens", "tokens", "usd"]),
+      units: CodexPooler.JSON.encode!(["tokens", "tokens", "tokens", "tokens", "USD"]),
+      value_kinds: CodexPooler.JSON.encode!(["tokens", "tokens", "tokens", "tokens", "usd"]),
       yaxis:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           %{
             seriesName: ["Input", "Cached input", "Output (standard)", "Reasoning"],
             title: "tokens",
@@ -49,7 +49,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TokenCostChart do
           %{seriesName: "Cost", title: "cost", opposite: true, valueKind: "usd"}
         ]),
       colors:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           "var(--color-primary)",
           "var(--color-secondary)",
           "var(--color-info)",

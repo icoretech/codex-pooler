@@ -37,7 +37,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.EmbeddedJsonLossless
     end
 
     test "does not rewrite JSON-looking containers inside a JSON string literal" do
-      quoted_json_literal = Jason.encode!(pretty_object("quoted"))
+      quoted_json_literal = CodexPooler.JSON.encode!(pretty_object("quoted"))
       object = pretty_object("actual")
       prefix = "synthetic quoted value: " <> quoted_json_literal <> "\nactual value:\n"
       suffix = "\nsynthetic suffix"
@@ -105,8 +105,8 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.EmbeddedJsonLossless
         |> String.trim_leading("synthetic prefix\n")
         |> String.trim_trailing("synthetic suffix")
 
-      %Jason.OrderedObject{values: values} =
-        Jason.decode!(compact_object, objects: :ordered_objects)
+      %CodexPooler.JSON.OrderedObject{values: values} =
+        CodexPooler.JSON.decode!(compact_object, objects: :ordered_objects)
 
       assert Enum.count(values, fn {key, _value} -> key == "repeat" end) == 2
       refute inspect(metadata) =~ sentinel
@@ -124,7 +124,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.EmbeddedJsonLossless
           }
         end)
     }
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp pretty_array do
@@ -132,12 +132,12 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.EmbeddedJsonLossless
     |> Enum.map(fn index ->
       %{"index" => index, "label" => "synthetic row #{index}", "active" => true}
     end)
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp compact_json(json) do
     json
-    |> Jason.decode!(objects: :ordered_objects)
-    |> Jason.encode!()
+    |> CodexPooler.JSON.decode!(objects: :ordered_objects)
+    |> CodexPooler.JSON.encode!()
   end
 end

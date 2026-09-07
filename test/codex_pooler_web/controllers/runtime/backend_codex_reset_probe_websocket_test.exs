@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     assert %{
              "type" => "response.failed",
              "response" => %{"error" => %{"code" => "usage_limit_exceeded"}}
-           } = Jason.decode!(terminal_frame)
+           } = CodexPooler.JSON.decode!(terminal_frame)
 
     assert_reset_probe_outcome!(
       fixture,
@@ -149,7 +149,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     assert :ok = execute_reset_probe(fixture)
 
     terminal_frame = receive_provider_websocket_frame!()
-    assert %{"type" => "response.failed"} = Jason.decode!(terminal_frame)
+    assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(terminal_frame)
 
     assert_reset_probe_outcome!(
       fixture,
@@ -456,7 +456,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   end
 
   defp reset_probe_payload(setup) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
       "input" => native_text_input("guarded reset probe over websocket"),
@@ -471,7 +471,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     assert %{
              "type" => "response.completed",
              "response" => %{"id" => ^response_id}
-           } = Jason.decode!(completed_frame)
+           } = CodexPooler.JSON.decode!(completed_frame)
   end
 
   defp assert_receive_failed_frame(error_code) do
@@ -480,7 +480,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     assert %{
              "type" => failure_type,
              "response" => %{"error" => %{"code" => ^error_code}}
-           } = Jason.decode!(failed_frame)
+           } = CodexPooler.JSON.decode!(failed_frame)
 
     assert failure_type in ["error", "response.failed"]
     refute_received {:websocket_frame, _unexpected}

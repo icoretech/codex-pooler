@@ -23,7 +23,7 @@ defmodule CodexPooler.Gateway.RequestCompression.DirectReadCommand do
   end
 
   def read?(arguments) when is_binary(arguments) do
-    case Jason.decode(arguments) do
+    case CodexPooler.JSON.decode(arguments) do
       {:ok, decoded} when is_map(decoded) -> read?(decoded)
       _invalid -> false
     end

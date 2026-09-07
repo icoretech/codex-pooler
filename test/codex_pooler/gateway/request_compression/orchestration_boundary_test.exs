@@ -51,12 +51,13 @@ defmodule CodexPooler.Gateway.RequestCompression.OrchestrationBoundaryTest do
 
   defp fixture do
     output =
-      Jason.encode!(%{"rows" => Enum.map(1..30, &%{"id" => &1, "value" => "synthetic-value"})},
+      CodexPooler.JSON.encode!(
+        %{"rows" => Enum.map(1..30, &%{"id" => &1, "value" => "synthetic-value"})},
         pretty: true
       )
 
     body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "input" => [
           %{
             "type" => "function_call",
@@ -72,7 +73,7 @@ defmodule CodexPooler.Gateway.RequestCompression.OrchestrationBoundaryTest do
       RequestOptions.build(
         %{transport: "http_json", upstream_endpoint: @endpoint},
         @endpoint,
-        Jason.decode!(body)
+        CodexPooler.JSON.decode!(body)
       )
       |> RequestOptions.put_transport(route_class: "proxy_http", upstream_endpoint: @endpoint)
 
@@ -91,10 +92,10 @@ defmodule CodexPooler.Gateway.RequestCompression.OrchestrationBoundaryTest do
 
   defp decoded_output(body) do
     body
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> Map.fetch!("input")
     |> List.last()
     |> Map.fetch!("output")
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
   end
 end

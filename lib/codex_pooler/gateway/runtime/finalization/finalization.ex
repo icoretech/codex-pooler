@@ -191,7 +191,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp public_ineligible_misalignment_policy_violation?(_status, _body, _context), do: false
 
   defp direct_misalignment_policy_violation_body?(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{"error" => %{"code" => code}}} -> code == MisalignmentPolicyViolation.code()
       _other -> false
     end
@@ -602,7 +602,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         %{
           status: status,
           headers: headers,
-          raw_body: Jason.encode!(%{"error" => error})
+          raw_body: CodexPooler.JSON.encode!(%{"error" => error})
         }
 
       {:canonical_full, _explicit_full?} ->
@@ -730,7 +730,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
          %SelectedCandidateContext{endpoint: "/backend-api/transcribe"},
          body
        ) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{"text" => text} = decoded} when is_binary(text) -> not is_nil(decoded["error"])
       _invalid -> true
     end

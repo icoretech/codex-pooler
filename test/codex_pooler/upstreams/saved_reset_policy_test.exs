@@ -38,7 +38,7 @@ defmodule CodexPooler.Upstreams.SavedResetPolicyTest do
     assert event.details["trigger_kind"] == "admin_form"
     assert event.details["pool_assignment_ids"] == [assignment.id]
 
-    event_json = Jason.encode!(event.details)
+    event_json = CodexPooler.JSON.encode!(event.details)
     refute event_json =~ "credit_1"
     refute event_json =~ "credit_id"
   end

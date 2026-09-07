@@ -112,7 +112,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       state = StreamAttempt.first_event_state()
 
       data =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "error",
           "status" => 400,
           "code" => "websocket_connection_limit_reached",
@@ -156,7 +156,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       state = StreamAttempt.first_event_state()
 
       data =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "error",
           "status" => 400,
           "code" => "unrelated_invalid_request",
@@ -377,7 +377,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
   end
 
   defp sse_event(event, payload) do
-    "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
+    "event: " <> event <> "\n" <> "data: " <> CodexPooler.JSON.encode!(payload) <> "\n\n"
   end
 
   defp attach_stream_buffer_telemetry do

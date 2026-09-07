@@ -3,6 +3,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayload do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Alerts.Schemas.{AlertChannel, AlertDeliveryAttempt, AlertIncident}
+  alias CodexPooler.JSON.OrderedObject
   alias CodexPooler.RouteClass
 
   @circuit_blocked_reasons ~w(open_cooldown open_no_probe probe_saturated)
@@ -106,7 +107,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayload do
 
     %{
       event_id: Map.fetch!(payload, "event_id"),
-      body: payload |> canonical_json_value() |> Jason.encode!()
+      body: payload |> canonical_json_value() |> CodexPooler.JSON.encode!()
     }
   end
 
@@ -228,7 +229,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayload do
     value
     |> Enum.map(fn {key, item} -> {to_string(key), canonical_json_value(item)} end)
     |> Enum.sort_by(fn {key, _value} -> key end)
-    |> Jason.OrderedObject.new()
+    |> OrderedObject.new()
   end
 
   defp canonical_json_value(values) when is_list(values),

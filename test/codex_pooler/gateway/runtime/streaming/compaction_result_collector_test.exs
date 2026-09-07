@@ -18,7 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
       assert %{
                "status" => "completed",
                "output" => [%{"type" => "compaction", "encrypted_content" => content}]
-             } = Jason.decode!(raw)
+             } = CodexPooler.JSON.decode!(raw)
 
       assert content == "opaque-#{type}"
       assert compaction_item == %{"type" => "compaction", "encrypted_content" => content}
@@ -167,14 +167,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
   defp websocket_body(events), do: Enum.map_join(events, "", &"data: #{&1}\n\n")
 
   defp item_event(type, content) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.output_item.done",
       "item" => %{"type" => type, "encrypted_content" => content}
     })
   end
 
   defp completed_event do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.completed",
       "response" => %{"id" => "resp_compact_fixture", "status" => "completed"}
     })
@@ -196,11 +196,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
         }
       end
 
-    Jason.encode!(event)
+    CodexPooler.JSON.encode!(event)
   end
 
   defp incomplete_event(reason) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.incomplete",
       "response" => %{
         "status" => "incomplete",
@@ -209,5 +209,5 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
     })
   end
 
-  defp unrelated_event, do: Jason.encode!(%{"type" => "response.in_progress"})
+  defp unrelated_event, do: CodexPooler.JSON.encode!(%{"type" => "response.in_progress"})
 end

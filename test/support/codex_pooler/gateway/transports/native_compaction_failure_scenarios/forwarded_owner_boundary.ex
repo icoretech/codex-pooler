@@ -473,7 +473,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
     %UpstreamWebsocketSession.Request{
       url: "https://example.com/backend-api/codex/responses",
       headers: [],
-      payload: Jason.encode!(%{"type" => "response.create", "turn_id" => turn_id}),
+      payload: CodexPooler.JSON.encode!(%{"type" => "response.create", "turn_id" => turn_id}),
       timeouts: %{},
       writer: fn _frame -> :ok end,
       message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1

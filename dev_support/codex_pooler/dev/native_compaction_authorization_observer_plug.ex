@@ -47,7 +47,7 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserver.Plug do
     case conn.body_params do
       %Plug.Conn.Unfetched{} ->
         with {:ok, body, conn} <- read_body(conn),
-             {:ok, decoded} when is_map(decoded) <- Jason.decode(body) do
+             {:ok, decoded} when is_map(decoded) <- CodexPooler.JSON.decode(body) do
           {:ok, decoded, conn}
         end
 
@@ -60,6 +60,6 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserver.Plug do
     conn
     |> put_resp_header(@identity_header_name, @identity_header_value)
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> send_resp(status, CodexPooler.JSON.encode!(body))
   end
 end

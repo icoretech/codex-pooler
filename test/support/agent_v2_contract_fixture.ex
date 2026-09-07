@@ -6,7 +6,7 @@ defmodule CodexPooler.AgentV2ContractFixture do
                   __DIR__
                 )
   @external_resource @fixture_path
-  @fixture @fixture_path |> File.read!() |> Jason.decode!()
+  @fixture @fixture_path |> File.read!() |> CodexPooler.JSON.decode!()
 
   @spec load!() :: map()
   def load!, do: @fixture

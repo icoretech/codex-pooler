@@ -35,7 +35,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
 
   test "terminal usage overrides earlier progress" do
     progress =
-      Jason.encode!(%{"type" => "response.in_progress", "response" => %{"usage" => @usage}})
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.in_progress",
+        "response" => %{"usage" => @usage}
+      })
 
     terminal = terminal_frame(:response, nil)
     {setup, upstream, result, _frames} = execute_frames([progress, terminal])
@@ -66,7 +69,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
       "output" => [%{"usage" => @usage}]
     }
 
-    terminal = Jason.encode!(%{"type" => "response.completed", "response" => response})
+    terminal = CodexPooler.JSON.encode!(%{"type" => "response.completed", "response" => response})
     {setup, _upstream, result, _frames} = execute_frames([terminal])
     assert :ok = result
     assert_settlement(setup, "usage_unknown")
@@ -83,8 +86,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
 
   defp terminal_frame(envelope, usage, type \\ "response.completed") do
     # Put attribution after the usage marker so suffix retention cannot see it.
-    usage_json = Jason.encode!(usage)
-    attribution = Jason.encode!(String.duplicate(@marker, 5_000))
+    usage_json = CodexPooler.JSON.encode!(usage)
+    attribution = CodexPooler.JSON.encode!(String.duplicate(@marker, 5_000))
 
     usage_json =
       if is_map(usage),
@@ -93,12 +96,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
 
     response =
       ~s({"id":"resp_synthetic_usage_123456","status":) <>
-        Jason.encode!(String.replace_prefix(type, "response.", "")) <>
+        CodexPooler.JSON.encode!(String.replace_prefix(type, "response.", "")) <>
         ",\"usage\":" <> usage_json <> "}"
 
     case envelope do
-      :response -> "{\"type\":" <> Jason.encode!(type) <> ",\"response\":" <> response <> "}"
-      :root -> response
+      :response ->
+        "{\"type\":" <> CodexPooler.JSON.encode!(type) <> ",\"response\":" <> response <> "}"
+
+      :root ->
+        response
     end
   end
 
@@ -113,7 +119,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
     observer = self()
 
     payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
         "input" => [],
@@ -125,7 +131,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
 
     result =
       Gateway.execute_websocket_response(auth, payload, opts, fn frame ->
-        if Jason.decode!(frame)["type"] != "codex.response.metadata",
+        if CodexPooler.JSON.decode!(frame)["type"] != "codex.response.metadata",
           do: send(observer, {:usage_frame, frame})
       end)
 

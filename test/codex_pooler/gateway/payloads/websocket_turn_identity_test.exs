@@ -49,7 +49,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
       assert_identity(
         %{
           "client_metadata" => %{
-            "x-codex-turn-metadata" => Jason.encode!(%{"turn_id" => "canonical-json"})
+            "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => "canonical-json"})
           },
           "turn_id" => "legacy-turn",
           "request_id" => "legacy-request"
@@ -92,7 +92,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
     end
 
     test "rejects malformed canonical metadata without fallback" do
-      for invalid <- ["not-json", Jason.encode!([]), [], 42] do
+      for invalid <- ["not-json", CodexPooler.JSON.encode!([]), [], 42] do
         payload = %{
           "client_metadata" => %{"x-codex-turn-metadata" => invalid},
           "turn_id" => "legacy-fallback",
@@ -200,7 +200,9 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
     test "is stable across map order and excluded metadata but diverges on request semantics" do
       semantic_turn_key = :crypto.hash(:sha256, "semantic-turn-stability")
       base = request_claim_payload()
-      encoded_turn_metadata = Jason.encode!(%{"turn_id" => "encoded-turn", "nonce" => "ignored"})
+
+      encoded_turn_metadata =
+        CodexPooler.JSON.encode!(%{"turn_id" => "encoded-turn", "nonce" => "ignored"})
 
       reordered_and_volatile = %{
         "client_metadata" => %{
@@ -307,7 +309,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
         put_in(
           map_payload,
           ["client_metadata", "x-codex-turn-metadata"],
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "kept" => true,
             "nested" => %{"kept" => 1, "turn_id" => "different-removed"},
             "turn_id" => "different-removed"
@@ -336,7 +338,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
     test "rejects malformed canonical metadata and invalid digest inputs" do
       semantic_turn_key = :crypto.hash(:sha256, "replay-malformed")
 
-      for metadata <- ["not-json", Jason.encode!([]), [], 42] do
+      for metadata <- ["not-json", CodexPooler.JSON.encode!([]), [], 42] do
         assert {:error, %{status: 400, code: "invalid_request"}} =
                  WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, %{
                    "type" => "response.create",

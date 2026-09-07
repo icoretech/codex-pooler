@@ -113,12 +113,12 @@ defmodule CodexPooler.Dev.NativePreAttemptDrain.Plug do
   defp dispatch(conn), do: json(conn, 404, %{error: "not_found"})
 
   defp body(%{body_params: %Plug.Conn.Unfetched{}} = conn) do
-    with {:ok, raw, _} <- read_body(conn, length: 1024), do: Jason.decode(raw)
+    with {:ok, raw, _} <- read_body(conn, length: 1024), do: CodexPooler.JSON.decode(raw)
   end
 
   defp body(%{body_params: params}), do: {:ok, params}
 
   defp json(conn, status, body),
     do:
-      conn |> put_resp_content_type("application/json") |> send_resp(status, Jason.encode!(body))
+      conn |> put_resp_content_type("application/json") |> send_resp(status, CodexPooler.JSON.encode!(body))
 end

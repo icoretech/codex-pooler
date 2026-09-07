@@ -33,7 +33,7 @@ defmodule Mix.Tasks.Dev.ExactAssignmentFullProof do
   @impl Mix.Task
   def run(args) do
     with {:ok, receipt} <- ExactAssignmentFullProof.run(args) do
-      Mix.shell().info(Jason.encode!(receipt))
+      Mix.shell().info(CodexPooler.JSON.encode!(receipt))
     else
       {:error, message} -> Mix.raise(message)
     end

@@ -53,7 +53,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     |> Enum.filter(&String.starts_with?(&1, "data: "))
     |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
     |> Enum.find_value(fn line ->
-      case Jason.decode(line) do
+      case CodexPooler.JSON.decode(line) do
         {:ok, decoded} -> error_code_from_decoded(decoded)
         {:error, _error} -> nil
       end

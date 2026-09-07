@@ -15,7 +15,7 @@ defmodule CodexPooler.Gateway.Transports.ModelUnavailability do
   @spec http_response?(integer(), binary(), boolean()) :: boolean()
   def http_response?(status, body, assignment_advertised?)
       when is_integer(status) and is_binary(body) and is_boolean(assignment_advertised?) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{} = decoded} ->
         unavailable_error?(
           ErrorCodes.structured_error_code(decoded),

@@ -7012,7 +7012,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   end
 
   defp query_param_contains?(value, expected) when is_binary(value) do
-    value == expected or decoded_query_param_contains?(Jason.decode(value), expected)
+    value == expected or decoded_query_param_contains?(CodexPooler.JSON.decode(value), expected)
   end
 
   defp query_param_contains?(%{} = value, expected) when not is_struct(value) do

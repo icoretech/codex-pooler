@@ -264,7 +264,7 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
       chart: %{
         categories: "[\"07-17 11:00\",\"07-17 12:00\"]",
         series:
-          Jason.encode!([
+          CodexPooler.JSON.encode!([
             %{"name" => "alpha-model", "type" => "column", "data" => [45, 15]},
             %{"name" => "Cost", "type" => "line", "data" => [1.0, 0.5]}
           ]),

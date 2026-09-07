@@ -97,7 +97,7 @@ defmodule CodexPooler.Gateway.Runtime.ReplayPreparationTest do
         %{
           "type" => "function_call_output",
           "call_id" => "call_sample",
-          "output" => Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+          "output" => CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
         }
       ],
       "stream" => true

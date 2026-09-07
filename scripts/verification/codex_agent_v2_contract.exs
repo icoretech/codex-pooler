@@ -45,7 +45,7 @@ defmodule CodexPooler.Verification.CodexAgentV2Contract do
 
   defp read_fixture(path) do
     with {:ok, content} <- File.read(path),
-         {:ok, fixture} <- Jason.decode(content),
+         {:ok, fixture} <- CodexPooler.JSON.decode(content),
          true <- is_map(fixture) do
       {:ok, fixture}
     else

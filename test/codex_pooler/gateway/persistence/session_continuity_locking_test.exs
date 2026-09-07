@@ -1455,7 +1455,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         records: records
       }
 
-      File.write!(path, Jason.encode!(record) <> "\n", [:append])
+      File.write!(path, CodexPooler.JSON.encode!(record) <> "\n", [:append])
     end
   end
 
@@ -1628,7 +1628,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp report_frozen_schedule(record) do
     if path = System.get_env("SESSION_CONTINUITY_MANUAL_QA_PATH") do
-      File.write!(path, Jason.encode!(record) <> "\n", [:append])
+      File.write!(path, CodexPooler.JSON.encode!(record) <> "\n", [:append])
     end
   end
 
@@ -1642,7 +1642,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         start_after_close: true
       }
 
-      File.write!(path, Jason.encode!(record) <> "\n", [:append])
+      File.write!(path, CodexPooler.JSON.encode!(record) <> "\n", [:append])
     end
   end
 

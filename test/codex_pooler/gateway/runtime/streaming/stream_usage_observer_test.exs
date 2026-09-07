@@ -17,11 +17,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
   }
 
   test "exact candidate object budget is independent of chunk placement" do
-    base = Jason.encode!(Map.put(usage(16, 5, 21), "padding", ""))
+    base = CodexPooler.JSON.encode!(Map.put(usage(16, 5, 21), "padding", ""))
 
     for size <- [16_383, 16_384, 16_385] do
       object =
-        Jason.encode!(
+        CodexPooler.JSON.encode!(
           Map.put(usage(16, 5, 21), "padding", String.duplicate("x", size - byte_size(base)))
         )
 
@@ -52,7 +52,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
       "event: response." <> oversized <> "\ndata: {}",
       ~s(data: {"type":") <> oversized <> ~s(","service_tier":") <> oversized <> ~s("}),
       ~s(data: {"type":"response.completed","service_tier":") <>
-        oversized <> ~s(","usage":) <> Jason.encode!(usage(16, 5, 21)) <> "}"
+        oversized <> ~s(","usage":) <> CodexPooler.JSON.encode!(usage(16, 5, 21)) <> "}"
     ]
 
     for frame <- frames do
@@ -82,7 +82,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
 
       terminal =
         ~s(data: {"type":"response.completed","usage":) <>
-          Jason.encode!(usage(16, 5, 21)) <> ~s(,"service_tier":"priority"}\n\n)
+          CodexPooler.JSON.encode!(usage(16, 5, 21)) <> ~s(,"service_tier":"priority"}\n\n)
 
       stream = String.replace(prior <> terminal, "\n", newline)
 
@@ -542,15 +542,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
 
   defp terminal_event_with_usage_before_tail(usage, tail) do
     payload =
-      ~s({"type":"response.completed","response":{"service_tier":#{Jason.encode!(usage.service_tier)},"usage":) <>
-        Jason.encode!(%{
+      ~s({"type":"response.completed","response":{"service_tier":#{CodexPooler.JSON.encode!(usage.service_tier)},"usage":) <>
+        CodexPooler.JSON.encode!(%{
           "input_tokens" => usage.input_tokens,
           "cached_input_tokens" => usage.cached_input_tokens,
           "output_tokens" => usage.output_tokens,
           "reasoning_tokens" => usage.reasoning_tokens,
           "total_tokens" => usage.total_tokens
         }) <>
-        ~s(,"output":#{Jason.encode!(tail)}}})
+        ~s(,"output":#{CodexPooler.JSON.encode!(tail)}}})
 
     "event: response.completed\ndata: " <> payload <> "\n\n"
   end
@@ -558,14 +558,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
   defp terminal_event_with_tier_after_usage(usage) do
     payload =
       ~s({"type":"response.completed","response":{"usage":) <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "input_tokens" => usage.input_tokens,
           "cached_input_tokens" => usage.cached_input_tokens,
           "output_tokens" => usage.output_tokens,
           "reasoning_tokens" => usage.reasoning_tokens,
           "total_tokens" => usage.total_tokens
         }) <>
-        ~s(,"service_tier":#{Jason.encode!(usage.service_tier)}}})
+        ~s(,"service_tier":#{CodexPooler.JSON.encode!(usage.service_tier)}}})
 
     "event: response.completed\ndata: " <> payload <> "\n\n"
   end
@@ -588,7 +588,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
   end
 
   defp sse_event(event, payload) do
-    "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
+    "event: " <> event <> "\n" <> "data: " <> CodexPooler.JSON.encode!(payload) <> "\n\n"
   end
 
   defp marker_offset(event, marker) do

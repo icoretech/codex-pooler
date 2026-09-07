@@ -75,7 +75,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataTest do
 
     for {_case_label, metadata, current_value, legacy_value, capability?} <- cases do
       payload = model_payload(metadata)
-      encoded_payload = payload |> Jason.encode!() |> Jason.decode!()
+      encoded_payload = payload |> CodexPooler.JSON.encode!() |> CodexPooler.JSON.decode!()
 
       assert Map.get(payload, "supports_reasoning_summary_parameter") == current_value
       assert Map.get(payload, "supports_reasoning_summaries") == legacy_value

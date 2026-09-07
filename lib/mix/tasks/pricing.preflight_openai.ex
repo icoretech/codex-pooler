@@ -23,7 +23,7 @@ defmodule Mix.Tasks.Pricing.PreflightOpenai do
   def run(args) do
     path = parse_path!(args)
     result = OpenAIPricingPreflight.validate_file(path)
-    Mix.shell().info(Jason.encode!(result, pretty: true))
+    Mix.shell().info(CodexPooler.JSON.encode!(result, pretty: true))
 
     unless result.compatible? do
       Mix.raise("pricing preflight failed for #{path}")

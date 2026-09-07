@@ -98,7 +98,7 @@ defmodule CodexPooler.Gateway.Runtime.WebsocketBridgeBindingTest do
       },
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "synthetic-token",
-      upstream_payload: Jason.encode!(payload),
+      upstream_payload: CodexPooler.JSON.encode!(payload),
       routing_hint_authorized?: false
     }
 

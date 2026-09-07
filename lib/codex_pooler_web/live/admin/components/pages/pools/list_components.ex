@@ -931,19 +931,19 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       request_total_unit: request_total_unit(request_total),
       total_label:
         "#{Format.token_count(token_total)} tokens / #{format_request_count(request_total)}",
-      categories: Jason.encode!(Enum.map(points, & &1.label)),
+      categories: CodexPooler.JSON.encode!(Enum.map(points, & &1.label)),
       series:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           %{name: "Tokens", type: "column", data: token_values},
           %{name: "Requests", type: "line", data: request_values}
         ]),
-      units: Jason.encode!(["tokens", "requests"]),
+      units: CodexPooler.JSON.encode!(["tokens", "requests"]),
       yaxis:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           %{seriesName: "Tokens", title: "tokens"},
           %{seriesName: "Requests", title: "requests", opposite: true}
         ]),
-      colors: Jason.encode!(["var(--color-primary)", "var(--color-info)"]),
+      colors: CodexPooler.JSON.encode!(["var(--color-primary)", "var(--color-info)"]),
       points: points,
       empty?: token_total == 0 and request_total == 0,
       aria_label:

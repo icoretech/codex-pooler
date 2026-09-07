@@ -612,7 +612,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     |> Enum.flat_map(fn block ->
       with [event] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
            [data] <- Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
-        [%{"event" => event, "data" => Jason.decode!(data)}]
+        [%{"event" => event, "data" => CodexPooler.JSON.decode!(data)}]
       else
         _missing -> []
       end
@@ -625,7 +625,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     |> Enum.find_value(fn block ->
       with ["error"] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
            [data] <- Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
-        Jason.decode!(data)
+        CodexPooler.JSON.decode!(data)
       else
         _missing -> nil
       end

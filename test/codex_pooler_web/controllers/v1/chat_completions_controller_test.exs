@@ -1051,7 +1051,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         }
       }
 
-    raw_failed = "event: \t \ndata: " <> Jason.encode!(failed) <> "\n\n"
+    raw_failed = "event: \t \ndata: " <> CodexPooler.JSON.encode!(failed) <> "\n\n"
 
     late_completed =
       {"response.completed",
@@ -2983,7 +2983,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
       flunk("expected successful Chat response status")
     end
 
-    case Jason.decode(response.resp_body) do
+    case CodexPooler.JSON.decode(response.resp_body) do
       {:ok, %{"id" => ^expected_id}} ->
         :ok
 
@@ -3199,7 +3199,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     |> Enum.filter(&String.starts_with?(&1, "data: "))
     |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
     |> Enum.reject(&(&1 == "[DONE]"))
-    |> Enum.map(&Jason.decode!/1)
+    |> Enum.map(&CodexPooler.JSON.decode!/1)
   end
 
   defp synthetic_terminal_error do

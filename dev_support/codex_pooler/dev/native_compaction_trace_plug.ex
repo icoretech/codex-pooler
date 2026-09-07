@@ -29,7 +29,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.Plug do
 
   def call(%Plug.Conn{method: "POST", path_info: ["start"]} = conn, _opts) do
     with {:ok, body, conn} <- read_body(conn),
-         {:ok, %{"run" => run} = decoded} <- Jason.decode(body),
+         {:ok, %{"run" => run} = decoded} <- CodexPooler.JSON.decode(body),
          true <- valid_start_keys?(decoded),
          limit when is_integer(limit) and limit > 0 <- Map.get(decoded, "limit", 512),
          {:ok, mode} <- parse_mode(Map.get(decoded, "mode", "safe")),
@@ -120,6 +120,6 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.Plug do
     conn
     |> put_resp_header("x-native-compaction-trace", "pooler-native-compaction-trace-v1")
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> send_resp(status, CodexPooler.JSON.encode!(body))
   end
 end

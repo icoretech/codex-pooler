@@ -139,7 +139,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
 
   defp decode_canonical(value)
        when is_binary(value) and byte_size(value) <= @max_metadata_bytes do
-    case Jason.decode(value) do
+    case CodexPooler.JSON.decode(value) do
       {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
       {:ok, _other} -> invalid(:malformed_canonical, @canonical_param)
       {:error, _reason} -> invalid(:malformed_canonical, @canonical_param)

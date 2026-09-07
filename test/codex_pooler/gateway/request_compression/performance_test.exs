@@ -78,7 +78,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
     test "skips long-run compressible candidates within the local dispatch budget" do
       sentinel = "SANITIZED_LONG_RUN_SENTINEL"
       long_run = String.duplicate("a", 10_000) <> sentinel
-      output = "[\n  " <> Jason.encode!(long_run) <> "\n]"
+      output = "[\n  " <> CodexPooler.JSON.encode!(long_run) <> "\n]"
 
       body =
         encode_request([
@@ -164,7 +164,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
 
       compressed_outputs =
         compressed_body
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> Map.fetch!("input")
         |> Enum.filter(&Map.has_key?(&1, "output"))
         |> Map.new(&{Map.fetch!(&1, "call_id"), Map.fetch!(&1, "output")})
@@ -226,7 +226,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
 
       skipped_output =
         "[\n  " <>
-          Jason.encode!(
+          CodexPooler.JSON.encode!(
             String.duplicate("a", TokenCounter.max_input_bytes() + 1) <>
               "SANITIZED_NEAR_LIMIT_SKIP_SENTINEL"
           ) <> "\n]"
@@ -256,7 +256,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
 
       decoded_outputs =
         compressed_body
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> Map.fetch!("input")
         |> Enum.filter(&Map.has_key?(&1, "output"))
         |> Map.new(&{&1["call_id"], &1["output"]})
@@ -453,7 +453,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
   defp extra_byte(_index, _extra_candidates), do: 0
 
   defp encode_request(input) do
-    Jason.encode!(%{"model" => @supported_model, "input" => input})
+    CodexPooler.JSON.encode!(%{"model" => @supported_model, "input" => input})
   end
 
   defp finite_elapsed_ms?(metadata) do

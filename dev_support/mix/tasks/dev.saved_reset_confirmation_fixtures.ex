@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Dev.SavedResetConfirmationFixtures do
       end
 
     case result do
-      {:ok, receipt} -> Mix.shell().info(Jason.encode!(receipt))
+      {:ok, receipt} -> Mix.shell().info(CodexPooler.JSON.encode!(receipt))
       {:error, message} -> Mix.raise(message)
     end
   end

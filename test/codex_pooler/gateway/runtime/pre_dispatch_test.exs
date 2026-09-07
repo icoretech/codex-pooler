@@ -188,7 +188,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       | extra: Map.put(request_options.extra, :payload_validation_observer, observer)
     }
 
-    raw_payload = Map.put(valid_payload, "type", "response.create") |> Jason.encode!()
+    raw_payload = Map.put(valid_payload, "type", "response.create") |> CodexPooler.JSON.encode!()
 
     assert {:ok, codec_prepared} =
              WebsocketCodec.prepare_frame(raw_payload, codec_options, fn _frame -> :ok end)
@@ -1740,7 +1740,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              )
 
     assert response.status == 200
-    assert %{"id" => "resp_healthy_partition"} = Jason.decode!(response.raw_body)
+    assert %{"id" => "resp_healthy_partition"} = CodexPooler.JSON.decode!(response.raw_body)
     assert FakeUpstream.count(starved.healthy_upstream) == 1
     assert FakeUpstream.count(starved.exhausted_upstream) == 0
 
@@ -1869,7 +1869,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              )
 
     assert response.status == 200
-    assert %{"id" => "resp_healthy_partition"} = Jason.decode!(response.raw_body)
+    assert %{"id" => "resp_healthy_partition"} = CodexPooler.JSON.decode!(response.raw_body)
     assert FakeUpstream.count(starved.healthy_upstream) == 1
     assert FakeUpstream.count(starved.exhausted_upstream) == 0
 
@@ -1961,7 +1961,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert {:ok, response} = Gateway.execute(auth, @endpoint_path, payload, options)
 
     assert response.status == 200
-    assert %{"id" => "resp_healthy_partition"} = Jason.decode!(response.raw_body)
+    assert %{"id" => "resp_healthy_partition"} = CodexPooler.JSON.decode!(response.raw_body)
     assert FakeUpstream.count(starved.healthy_upstream) == 1
     assert FakeUpstream.count(starved.exhausted_upstream) == 0
 

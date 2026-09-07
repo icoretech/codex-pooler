@@ -1449,13 +1449,13 @@ defmodule CodexPooler.UpstreamsTest do
 
       auth_json =
         auth_json_fixture(account_id: "acct_workspace_label_only", id_token: id_token)
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> Map.merge(%{
           "workspace_id" => "untrusted_payload_workspace",
           "workspace_label" => "Untrusted Payload Workspace",
           "seat_type" => "untrusted-seat"
         })
-        |> Jason.encode!()
+        |> CodexPooler.JSON.encode!()
 
       assert {:ok, %{identity: identity}} =
                Upstreams.import_codex_auth_json(scope, pool, auth_json)
@@ -2172,7 +2172,7 @@ defmodule CodexPooler.UpstreamsTest do
 
       invalid_cases = [
         {"not-json", "Codex auth.json is malformed"},
-        {Jason.encode!(%{"OPENAI_API_KEY" => sensitive_token}),
+        {CodexPooler.JSON.encode!(%{"OPENAI_API_KEY" => sensitive_token}),
          "Codex API-key auth.json is not supported"},
         {auth_json_fixture(access_token: jwt_token(%{"exp" => past_unix()})),
          "Codex auth.json access token is expired"},
@@ -2207,12 +2207,12 @@ defmodule CodexPooler.UpstreamsTest do
       unsupported_message = "Codex personal access token auth.json is not supported in this cycle"
 
       payloads = [
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "auth_mode" => "personalAccessToken",
           "personalAccessToken" => personal_access_token
         }),
-        Jason.encode!(%{"personalAccessToken" => personal_access_token}),
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{"personalAccessToken" => personal_access_token}),
+        CodexPooler.JSON.encode!(%{
           "tokens" => %{
             "access_token" => personal_access_token,
             "id_token" => id_token_fixture(),
@@ -13241,7 +13241,7 @@ defmodule CodexPooler.UpstreamsTest do
       "tokens" => tokens,
       "last_refresh" => "2026-05-03T00:00:00Z"
     }
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp id_token_fixture do
@@ -13257,7 +13257,7 @@ defmodule CodexPooler.UpstreamsTest do
 
   defp jwt_token(payload) do
     header = %{"alg" => "none", "typ" => "JWT"}
-    encode = &Base.url_encode64(Jason.encode!(&1), padding: false)
+    encode = &Base.url_encode64(CodexPooler.JSON.encode!(&1), padding: false)
 
     Enum.join([encode.(header), encode.(payload), Base.url_encode64("sig", padding: false)], ".")
   end

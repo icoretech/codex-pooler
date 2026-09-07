@@ -67,7 +67,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
   def parse(_content, _now), do: parse_error(:invalid_auth_json, "Codex auth.json is required")
 
   defp decode_json(content) do
-    case Jason.decode(content) do
+    case CodexPooler.JSON.decode(content) do
       {:ok, %{} = payload} -> {:ok, payload}
       {:ok, _value} -> parse_error(:invalid_auth_json, "Codex auth.json must be a JSON object")
       {:error, _reason} -> parse_error(:invalid_auth_json, "Codex auth.json is malformed")

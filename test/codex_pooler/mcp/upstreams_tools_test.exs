@@ -301,7 +301,7 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
 
     assert [%{"id" => visible_id}] = list_result["structuredContent"]["items"]
     assert visible_id == visible_identity.id
-    refute Jason.encode!(list_result["structuredContent"]) =~ hidden_identity.id
+    refute CodexPooler.JSON.encode!(list_result["structuredContent"]) =~ hidden_identity.id
 
     assert {:ok, hidden_result} =
              ToolDispatch.call(
@@ -379,8 +379,8 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     assert item["id"] == identity.id
     assert item["assignment_summary"]["count"] == 1
     assert item["assignment_summary"]["summary"] == "1 active of 1 Pool assignments"
-    refute Jason.encode!(result["structuredContent"]) =~ hidden_pool.id
-    refute Jason.encode!(result["structuredContent"]) =~ hidden_assignment.id
+    refute CodexPooler.JSON.encode!(result["structuredContent"]) =~ hidden_pool.id
+    refute CodexPooler.JSON.encode!(result["structuredContent"]) =~ hidden_assignment.id
     assert :ok = Redaction.assert_mcp_output_safe!(result)
   end
 end

@@ -42,7 +42,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
     :ok = NativePreAttemptDrain.arm(setup.pool.id)
 
     payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
         "input" => [],

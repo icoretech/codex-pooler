@@ -216,7 +216,7 @@ defmodule CodexPooler.MCP.Redaction do
   defp assert_text_not_structured_mirror!(nil, _text), do: :ok
 
   defp assert_text_not_structured_mirror!(structured, text) do
-    encoded = Jason.encode!(structured)
+    encoded = CodexPooler.JSON.encode!(structured)
 
     if String.contains?(text, encoded) do
       raise_assertion("text content mirrors structuredContent")

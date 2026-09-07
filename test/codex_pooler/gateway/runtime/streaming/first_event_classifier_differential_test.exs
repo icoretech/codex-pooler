@@ -160,7 +160,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
 
       assert state_projection(sse_state) == %{classified?: false, buffer: ""}
 
-      direct = Jason.encode!(%{"type" => type})
+      direct = CodexPooler.JSON.encode!(%{"type" => type})
 
       assert {:buffered, direct_state} =
                StreamAttempt.classify_first_event(direct, StreamAttempt.first_event_state())
@@ -181,7 +181,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
   test "unknown Codex controls commit visible output in SSE and direct JSON" do
     type = "codex.future_control"
 
-    for data <- [sse_event(type, %{"type" => type}), Jason.encode!(%{"type" => type})] do
+    for data <- [sse_event(type, %{"type" => type}), CodexPooler.JSON.encode!(%{"type" => type})] do
       assert {{:write, ^data}, state} =
                StreamAttempt.classify_first_event(data, StreamAttempt.first_event_state())
 
@@ -201,7 +201,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
   test "standalone-CR terminal framing commits the first event immediately" do
     terminal =
       "event: response.completed\rdata: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{"id" => "resp_first_cr", "status" => "completed"}
         }) <>
@@ -602,7 +602,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
   end
 
   defp stream_for(:direct, payload) do
-    Jason.encode!(%{"type" => "response.output_text.delta", "delta" => payload})
+    CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => payload})
   end
 
   defp stream_for(:rate_limit, payload) do
@@ -631,7 +631,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
   defp stream_for(:leading_empty, payload), do: "\n\n" <> stream_for(:sse, payload)
 
   defp sse_event(event, payload) do
-    "event: " <> event <> "\ndata: " <> Jason.encode!(payload) <> "\n\n"
+    "event: " <> event <> "\ndata: " <> CodexPooler.JSON.encode!(payload) <> "\n\n"
   end
 
   defp random_chunking(rng, stream) do

@@ -96,7 +96,7 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
           {"/backend-api/codex/responses", 400},
           {"/backend-api/codex/v1/responses", 403}
         ] do
-      rejection_body = Jason.encode!(payload)
+      rejection_body = CodexPooler.JSON.encode!(payload)
 
       upstream =
         start_upstream(
@@ -225,7 +225,7 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
     provider_message = " \t\n"
 
     rejection_body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "error" => %{
           "code" => @code,
           "message" => provider_message,

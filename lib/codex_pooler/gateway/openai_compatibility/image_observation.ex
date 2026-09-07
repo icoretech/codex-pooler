@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImageObservation do
 
   @spec from_http(pos_integer(), binary()) :: map()
   def from_http(status, body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{"error" => %{} = error}} ->
         %{
           http_status: status,

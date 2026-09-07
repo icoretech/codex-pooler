@@ -15,15 +15,18 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
     alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
 
     def normalize_json_message(data) do
-      case Jason.decode(data) do
+      case CodexPooler.JSON.decode(data) do
         {:ok, %{"type" => "response.failed"} = decoded} ->
           "response.failed"
           |> PublicResponses.normalize_terminal_errors(decoded)
-          |> Jason.encode!()
+          |> CodexPooler.JSON.encode!()
 
         {:ok, %{} = decoded} ->
           prepared = suppress_incomplete_provider_error_types(decoded)
-          canonical_input = if prepared == decoded, do: data, else: Jason.encode!(prepared)
+
+          canonical_input =
+            if prepared == decoded, do: data, else: CodexPooler.JSON.encode!(prepared)
+
           normalize_canonical_message(canonical_input, data)
 
         _invalid ->
@@ -32,7 +35,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
     end
 
     def sse_block(text) do
-      case Jason.decode(text) do
+      case CodexPooler.JSON.decode(text) do
         {:ok, %{"type" => type}} when is_binary(type) and type != "" ->
           "event: " <> type <> "\ndata: " <> text <> "\n\n"
 
@@ -44,11 +47,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
     defp normalize_canonical_message(canonical_input, original_data) do
       canonical_data = StreamProtocol.canonicalize_codex_responses_json_message(canonical_input)
 
-      case Jason.decode(canonical_data) do
+      case CodexPooler.JSON.decode(canonical_data) do
         {:ok, %{} = canonical} ->
           type = clean_string(Map.get(canonical, "type"))
           normalized = PublicResponses.normalize_terminal_errors(type, canonical)
-          if normalized == canonical, do: canonical_data, else: Jason.encode!(normalized)
+
+          if normalized == canonical,
+            do: canonical_data,
+            else: CodexPooler.JSON.encode!(normalized)
 
         _invalid ->
           original_data

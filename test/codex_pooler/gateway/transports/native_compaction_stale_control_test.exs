@@ -117,7 +117,7 @@ defmodule CodexPooler.Gateway.NativeCompactionStaleControlTest do
 
   defp with_owner(fun) do
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_ordinary_fixture", "status" => "completed"}
       })

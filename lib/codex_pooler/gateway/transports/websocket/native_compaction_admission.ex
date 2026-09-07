@@ -227,7 +227,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
            } <- request,
            {:ok, request_id} <- Ecto.UUID.cast(request.request_id),
            {:ok, attempt_id} <- Ecto.UUID.cast(request.attempt_id),
-           {:ok, %{"model" => model}} when is_binary(model) <- Jason.decode(request.payload),
+           {:ok, %{"model" => model}} when is_binary(model) <-
+             CodexPooler.JSON.decode(request.payload),
            {:ok, %{compaction_item: item}} <-
              CompactionResultCollector.collect_websocket_body(result.body),
            {:ok, serving_mode} <- mode(request.effective_serving_mode),
@@ -268,7 +269,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
     def request_identity(
           %{native_compaction_metadata: %NativeCodexTurnMetadata{} = metadata} = request
         ) do
-      with {:ok, %{"model" => model}} when is_binary(model) <- Jason.decode(request.payload),
+      with {:ok, %{"model" => model}} when is_binary(model) <-
+             CodexPooler.JSON.decode(request.payload),
            {:ok, mode} <- mode(request.effective_serving_mode) do
         {request.request_id, request.attempt_id, metadata.semantic_turn_key,
          metadata.window_id_digest, metadata.context_window_id_digest, metadata.window_number,

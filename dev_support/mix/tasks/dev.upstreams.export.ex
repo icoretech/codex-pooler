@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Dev.Upstreams.Export do
     # invoke only this top-level task call dynamically so its real success path
     # remains representable without suppressing warnings.
     case apply(UpstreamAccountBundle, :run_export, [args]) do
-      {:ok, receipt} -> Mix.shell().info(Jason.encode!(receipt))
+      {:ok, receipt} -> Mix.shell().info(CodexPooler.JSON.encode!(receipt))
       {:error, message} -> Mix.raise(message)
     end
   end

@@ -477,5 +477,5 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     {settings, log}
   end
 
-  defp string_keyed_map(map), do: map |> Jason.encode!() |> Jason.decode!()
+  defp string_keyed_map(map), do: map |> CodexPooler.JSON.encode!() |> CodexPooler.JSON.decode!()
 end

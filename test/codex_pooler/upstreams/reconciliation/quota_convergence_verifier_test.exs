@@ -37,7 +37,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.QuotaConvergenceVerifierTest do
     assert {:ok, second} = run_with_samples("stable", samples)
     refute first.selector_fingerprint == second.selector_fingerprint
 
-    encoded = Jason.encode!(first)
+    encoded = CodexPooler.JSON.encode!(first)
 
     for forbidden <-
           ~w(account_id assignment_id descriptor_id identity_id raw_ selector_value api_key authorization bearer token cookie payload label workspace email uuid) do

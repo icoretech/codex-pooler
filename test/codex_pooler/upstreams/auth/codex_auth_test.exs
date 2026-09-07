@@ -726,6 +726,6 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
   end
 
   defp jwt(payload) do
-    "e30." <> Base.url_encode64(Jason.encode!(payload), padding: false) <> ".signature"
+    "e30." <> Base.url_encode64(CodexPooler.JSON.encode!(payload), padding: false) <> ".signature"
   end
 end

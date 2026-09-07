@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Dev.CodexCompactionSmokeFixture do
     with {:ok, action, options} <- CodexCompactionSmokeFixture.parse_args(args),
          result <- run_action(action, options) do
       case result do
-        {:ok, status} -> Mix.shell().info(Jason.encode!(status))
+        {:ok, status} -> Mix.shell().info(CodexPooler.JSON.encode!(status))
         {:error, message} -> Mix.raise(message)
       end
     else

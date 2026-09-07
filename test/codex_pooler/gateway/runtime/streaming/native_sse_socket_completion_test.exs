@@ -29,7 +29,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSESocketCompletionTest do
 
     completed =
       "event: response.completed\ndata: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "id" => "resp_socket_complete",
@@ -65,7 +65,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSESocketCompletionTest do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, mode: :passive)
 
     body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "model" => fixture.model.exposed_model_id,
         "input" => native_text_input("synthetic socket stream"),
         "stream" => true

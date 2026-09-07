@@ -78,10 +78,10 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
     assert File.exists?(Path.join(probe_dir, "metrics-after.txt"))
 
     query_summary =
-      probe_dir |> Path.join("query-summary.json") |> File.read!() |> Jason.decode!()
+      probe_dir |> Path.join("query-summary.json") |> File.read!() |> CodexPooler.JSON.decode!()
 
     request_summary =
-      probe_dir |> Path.join("request-summary.json") |> File.read!() |> Jason.decode!()
+      probe_dir |> Path.join("request-summary.json") |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert query_summary["run_id"] == "probe-test"
     assert query_summary["scenario"] == "backend-short-10c"
@@ -174,10 +174,10 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
     probe_dir = Path.join([root, "probe-matrix-test", "probe"])
 
     query_summary =
-      probe_dir |> Path.join("query-summary.json") |> File.read!() |> Jason.decode!()
+      probe_dir |> Path.join("query-summary.json") |> File.read!() |> CodexPooler.JSON.decode!()
 
     request_summary =
-      probe_dir |> Path.join("request-summary.json") |> File.read!() |> Jason.decode!()
+      probe_dir |> Path.join("request-summary.json") |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert query_summary["request_count"] == 2
     assert query_summary["measured_request_count"] == 2
@@ -288,7 +288,7 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
       root
       |> Path.join("probe-budget-test/probe/query-summary.json")
       |> File.read!()
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
 
     assert query_summary["budget_status"] == %{
              "actual_qpr" => 4.0,
@@ -385,10 +385,10 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
     probe_dir = Path.join([root, "probe-phase-test", "probe"])
 
     query_summary =
-      probe_dir |> Path.join("query-summary.json") |> File.read!() |> Jason.decode!()
+      probe_dir |> Path.join("query-summary.json") |> File.read!() |> CodexPooler.JSON.decode!()
 
     request_summary =
-      probe_dir |> Path.join("request-summary.json") |> File.read!() |> Jason.decode!()
+      probe_dir |> Path.join("request-summary.json") |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert query_summary["scenario"] == "short-25c"
     assert query_summary["phase"] == "measured"

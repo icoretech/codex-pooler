@@ -295,7 +295,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
 
   defp json_field(%{body: body}, path) when byte_size(body) <= @max_json_bytes do
     body
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> get_in(Enum.map(path, &Access.key/1))
   end
 

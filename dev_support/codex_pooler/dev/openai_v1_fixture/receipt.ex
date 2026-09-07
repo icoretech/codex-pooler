@@ -24,7 +24,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Receipt do
     reject_symlink!(path)
 
     temporary = path <> ".tmp-" <> random_suffix()
-    payload = Jason.encode!(setup) <> "\n"
+    payload = CodexPooler.JSON.encode!(setup) <> "\n"
 
     try do
       {:ok, file} = File.open(temporary, [:write, :exclusive, :binary])
@@ -94,7 +94,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Receipt do
   end
 
   defp decode(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, %{} = setup} -> {:ok, setup}
       _invalid -> {:error, "OpenAI V1 fixture receipt is invalid"}
     end

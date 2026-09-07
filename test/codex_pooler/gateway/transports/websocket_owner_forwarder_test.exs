@@ -405,7 +405,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     %{session: session, token: token} = owner_session_fixture(auth, local_node_string)
 
     terminal_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_local_recovery_options"}
       })
@@ -866,7 +866,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     %{session: session, token: token} = owner_session_fixture(auth, remote_node_string)
 
     terminal_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{
           "id" => "resp_recovered_owner",
@@ -980,7 +980,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     %{session: session, token: token} = owner_session_fixture(auth, remote_node_string)
 
     terminal_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_remote_bridge", "status" => "completed"}
       })
@@ -1418,7 +1418,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       WebsocketOwnerSession.attach_downstream(owner_pid, downstream("reconnect-timeout-a"))
 
     payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => "gpt-example",
         "input" => [],
@@ -1658,7 +1658,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       owner_session_fixture(auth, remote_node_string, "structured")
 
     structured_error = %{
-      body: Jason.encode!(%{"type" => "response.failed"}),
+      body: CodexPooler.JSON.encode!(%{"type" => "response.failed"}),
       reason: {:auth_refresh_first_event, %{code: "invalid_api_key"}},
       headers: [],
       upstream_error_param: "reasoning.effort",
@@ -2493,7 +2493,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     private_marker = "synthetic-private-previous-response"
 
     legacy_request =
-      Jason.encode!(%{"previous_response_id" => private_marker})
+      CodexPooler.JSON.encode!(%{"previous_response_id" => private_marker})
       |> request(FakeUpstream.url(upstream))
       |> Map.delete(:connection_bound_continuation?)
 
@@ -2692,7 +2692,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       owner_session_fixture(auth, Atom.to_string(node()), "real-peer-recovery")
 
     recovery_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_recovery_setting"}
       })
@@ -3324,7 +3324,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
   defp native_request(turn_id) do
     %{
-      request(Jason.encode!(%{"type" => "response.create", "turn_id" => turn_id}))
+      request(CodexPooler.JSON.encode!(%{"type" => "response.create", "turn_id" => turn_id}))
       | message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
     }
   end
@@ -3481,7 +3481,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
   defp websocket_success_without_id do
     FakeUpstream.websocket_text_frames([
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed"}
       })
@@ -3489,7 +3489,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   end
 
   defp native_retry_terminal do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "error",
       "status" => 400,
       "error" => %{
@@ -3516,7 +3516,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   end
 
   defp terminal_frame(response_id) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.completed",
       "response" => %{"id" => response_id, "status" => "completed"}
     })

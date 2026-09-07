@@ -58,7 +58,11 @@ defmodule CodexPoolerWeb.DevFeaturesTest do
 
     test "ignores a handshake file that carries no usable port or token", %{tmp_dir: tmp_dir} do
       enable_live!()
-      File.write!(Path.join(tmp_dir, "server.json"), Jason.encode!(%{pid: 42, port: 0}))
+
+      File.write!(
+        Path.join(tmp_dir, "server.json"),
+        CodexPooler.JSON.encode!(%{pid: 42, port: 0})
+      )
 
       assert DevFeatures.impeccable_live_script_src() == nil
       assert DevFeatures.impeccable_live_status() == :helper_missing
@@ -118,7 +122,7 @@ defmodule CodexPoolerWeb.DevFeaturesTest do
   defp write_helper!(dir, opts) do
     File.write!(
       Path.join(dir, "server.json"),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         pid: System.pid() |> String.to_integer(),
         port: Keyword.fetch!(opts, :port),
         token: Keyword.fetch!(opts, :token)
@@ -131,7 +135,7 @@ defmodule CodexPoolerWeb.DevFeaturesTest do
   defp write_injected_layout!(dir) do
     layout = Path.join(dir, "root.html.heex")
     File.write!(layout, "<body>\n<!-- impeccable-live-start -->\n</body>\n")
-    File.write!(Path.join(dir, "config.json"), Jason.encode!(%{files: [layout]}))
+    File.write!(Path.join(dir, "config.json"), CodexPooler.JSON.encode!(%{files: [layout]}))
   end
 
   defp listening_port do

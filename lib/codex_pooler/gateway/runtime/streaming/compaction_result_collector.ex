@@ -70,7 +70,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
          %{
            status: 200,
            headers: [{"content-type", "application/json"}],
-           raw_body: Jason.encode!(response),
+           raw_body: CodexPooler.JSON.encode!(response),
            compaction_item: collection.item
          }}
 
@@ -222,7 +222,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
       |> StreamProtocol.normalize_sse_event_label()
 
     with data when is_binary(data) <- StreamProtocol.sse_field(buffer, "data"),
-         {:ok, %{} = decoded} <- Jason.decode(data),
+         {:ok, %{} = decoded} <- CodexPooler.JSON.decode(data),
          data_type when is_binary(data_type) <- Map.get(decoded, "type"),
          true <- event_type in [nil, data_type] do
       {:ok, event_type, decoded}

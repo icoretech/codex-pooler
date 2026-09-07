@@ -251,7 +251,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp assert_completed_only_arbitration(order) do
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{
           "id" => "resp_completed_only_arbitration",
@@ -370,7 +370,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     if frame == terminal do
       socket
     else
-      assert Jason.decode!(frame)["type"] == "codex.response.metadata"
+      assert CodexPooler.JSON.decode!(frame)["type"] == "codex.response.metadata"
       receive_completed_only_arbitration_terminal(socket, terminal)
     end
   end
@@ -497,7 +497,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       else
         base
       end
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
     end
 
     try do
@@ -516,14 +516,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
 
       assert %{"response" => %{"id" => "resp_owner_collect_anchor"}} =
-               Jason.decode!(anchor_frame)
+               CodexPooler.JSON.decode!(anchor_frame)
 
       assert {:push, {:text, anchor_terminal_frame}, state} = receive_owner_socket_push(state)
-      assert %{"type" => "response.completed"} = Jason.decode!(anchor_terminal_frame)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(anchor_terminal_frame)
       assert {:ok, state} = receive_socket_done(state)
 
       compact_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => "resp_owner_collect_anchor",
@@ -550,7 +550,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, done_frame}, state} = receive_native_collect_socket_push(state)
 
       assert %{"type" => "response.output_item.done", "item" => ^compact_item} =
-               Jason.decode!(done_frame)
+               CodexPooler.JSON.decode!(done_frame)
 
       assert {:push, {:text, completed_frame}, state} = receive_native_collect_socket_push(state)
       assert {:ok, state} = receive_socket_done(state)
@@ -558,7 +558,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "type" => "response.completed",
                "response" => %{"output" => [^compact_item]}
-             } = Jason.decode!(completed_frame)
+             } = CodexPooler.JSON.decode!(completed_frame)
 
       assert [anchor_request, compact_request] = FakeUpstream.requests(upstream)
       assert anchor_request.method == "WEBSOCKET"
@@ -599,7 +599,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                :pending_final
 
       final_metadata =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "turn_id" => native_turn_id,
           "window_id" => "owner-native-collect-final-window",
           "context_window_id" => "00000000-0000-4000-8000-000000000506",
@@ -816,7 +816,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, state)
 
       assert {:push, {:text, first_frame}, state} = receive_owner_socket_push(state)
-      assert %{"id" => "resp_owner_first"} = Jason.decode!(first_frame)
+      assert %{"id" => "resp_owner_first"} = CodexPooler.JSON.decode!(first_frame)
       assert {:ok, state} = receive_socket_done(state)
 
       second_payload = websocket_payload(setup, "second")
@@ -825,7 +825,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({second_payload, [opcode: :text]}, state)
 
       assert {:push, {:text, second_frame}, state} = receive_owner_socket_push(state)
-      assert %{"id" => "resp_owner_second"} = Jason.decode!(second_frame)
+      assert %{"id" => "resp_owner_second"} = CodexPooler.JSON.decode!(second_frame)
       assert {:ok, _state} = receive_socket_done(state)
 
       assert FakeUpstream.websocket_connection_count(upstream) == 1
@@ -924,7 +924,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     state = owner_output_state(task_pid, "ws-owner-output-after-data")
     downstream = state.websocket_owner_downstream
-    frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
+
+    frame =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
 
     assert {:push, {:text, ^frame}, state} =
              CodexResponsesSocket.handle_info(
@@ -945,7 +947,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, error_frame}, failed_state} = result
 
     assert %{"type" => "error", "error" => %{"code" => "owner_drained"}} =
-             Jason.decode!(error_frame)
+             CodexPooler.JSON.decode!(error_frame)
 
     assert failed_state.native_turn_output_task_pids == MapSet.new()
     assert_native_owner_turn_log!(logs, "ws-owner-output-after-data", "after_visible_output")
@@ -969,7 +971,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, error_frame}, failed_state} = result
 
     assert %{"type" => "error", "error" => %{"code" => "owner_drained"}} =
-             Jason.decode!(error_frame)
+             CodexPooler.JSON.decode!(error_frame)
 
     assert failed_state.native_turn_output_task_pids == MapSet.new()
     assert_native_owner_turn_log!(logs, "ws-owner-output-before-data", "before_visible_output")
@@ -983,7 +985,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     downstream = state.websocket_owner_downstream
 
     metadata_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "codex.response.metadata",
         "headers" => %{"x-models-etag" => ~s(W/"owner-turn-etag")}
       })
@@ -1008,7 +1010,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert failed_state.native_turn_output_task_pids == MapSet.new()
     assert_native_owner_turn_log!(logs, "ws-owner-metadata-pre-visible", "before_visible_output")
 
-    unknown_frame = Jason.encode!(%{"type" => "codex.future_control"})
+    unknown_frame = CodexPooler.JSON.encode!(%{"type" => "codex.future_control"})
 
     assert {:push, {:text, ^unknown_frame}, visible_state} =
              CodexResponsesSocket.handle_info(
@@ -1027,7 +1029,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     state = owner_output_state(first_task_pid, "ws-owner-output-second-turn")
     downstream = state.websocket_owner_downstream
-    frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "first"})
+
+    frame =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "first"})
 
     assert {:push, {:text, ^frame}, state} =
              CodexResponsesSocket.handle_info(
@@ -1063,7 +1067,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     downstream = state.websocket_owner_downstream
 
     rate_limit_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "codex.rate_limits",
         "rate_limits" => %{"primary" => %{"used_percent" => 42}}
       })
@@ -1074,7 +1078,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                state
              )
 
-    assert %{"type" => "codex.rate_limits"} = Jason.decode!(normalized_frame)
+    assert %{"type" => "codex.rate_limits"} = CodexPooler.JSON.decode!(normalized_frame)
     refute state.public_turn_output_committed?
 
     {result, logs} =
@@ -1102,7 +1106,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     downstream = state.websocket_owner_downstream
 
     metadata_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "codex.response.metadata",
         "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")}
       })
@@ -1113,7 +1117,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                state
              )
 
-    assert Jason.decode!(normalized_frame) == %{
+    assert CodexPooler.JSON.decode!(normalized_frame) == %{
              "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")},
              "sequence_number" => 0,
              "type" => "codex.response.metadata"
@@ -1129,7 +1133,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     state = owner_output_state(task_pid, "ws-owner-output-stale-epoch", 2)
     active_downstream = state.websocket_owner_downstream
     stale_downstream = %{active_downstream | epoch: 1}
-    stale_frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "stale"})
+
+    stale_frame =
+      CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "stale"})
 
     assert {:ok, ^state} =
              CodexResponsesSocket.handle_info(
@@ -1177,7 +1183,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                  "message" => @reasoning_denial_message,
                  "param" => "reasoning.effort"
                }
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
       assert FakeUpstream.count(upstream) == 0
@@ -1244,7 +1250,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
           assert {:push, {:text, terminal_frame}, state} = receive_owner_socket_push(state)
-          assert %{"type" => "response.failed"} = Jason.decode!(terminal_frame)
+          assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(terminal_frame)
           assert {:ok, completed_state} = receive_socket_done(state)
           assert :ok = CodexResponsesSocket.terminate(:closed, completed_state)
           assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
@@ -1354,7 +1360,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
           assert {:push, {:text, terminal_frame}, state} = receive_owner_socket_push(state)
-          assert %{"type" => "response.failed"} = Jason.decode!(terminal_frame)
+          assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(terminal_frame)
           assert {:ok, completed_state} = receive_socket_done(state)
           assert :ok = CodexResponsesSocket.terminate(:closed, completed_state)
           assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
@@ -1448,12 +1454,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, partial_frame}, state} = receive_owner_socket_push(state)
 
     assert %{"type" => ^raw_event_type, "delta" => @sentinel} =
-             Jason.decode!(partial_frame)
+             CodexPooler.JSON.decode!(partial_frame)
 
     assert {:push, {:text, owner_error_frame}, state} = receive_owner_socket_push(state)
 
     assert %{"type" => "error", "error" => %{"code" => "server_error"}} =
-             Jason.decode!(owner_error_frame)
+             CodexPooler.JSON.decode!(owner_error_frame)
 
     assert {:push, {:text, error_frame}, failed_state} = receive_socket_done(state)
 
@@ -1461,7 +1467,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:ok, failed_state} = CodexResponsesSocket.handle_info(owner_complete, failed_state)
 
     assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
-             Jason.decode!(error_frame)
+             CodexPooler.JSON.decode!(error_frame)
 
     assert failed_state.websocket_owner_active_turn_reconnect? == false
     assert FakeUpstream.count(upstream) == 1
@@ -1574,7 +1580,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                )
 
       assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
-      assert %{"id" => "resp_owner_auth_retry_success"} = Jason.decode!(frame)
+      assert %{"id" => "resp_owner_auth_retry_success"} = CodexPooler.JSON.decode!(frame)
       assert {:ok, _state} = receive_socket_done(state)
       assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
 
@@ -1707,7 +1713,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                )
 
       assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
-      assert %{"id" => "resp_owner_assignment_model_fallback_success"} = Jason.decode!(frame)
+
+      assert %{"id" => "resp_owner_assignment_model_fallback_success"} =
+               CodexPooler.JSON.decode!(frame)
+
       assert {:ok, _state} = receive_socket_done(state)
 
       assert FakeUpstream.count(upstream) == 2
@@ -1843,7 +1852,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                )
 
       assert {:push, {:text, frame}, remote_state} = receive_owner_socket_push(remote_state)
-      assert %{"id" => "resp_owner_remote_node_success"} = Jason.decode!(frame)
+      assert %{"id" => "resp_owner_remote_node_success"} = CodexPooler.JSON.decode!(frame)
       assert {:ok, _state} = receive_owner_socket_complete(remote_state)
 
       assert_remote_submit_request_v1!(remote_state, remote_node, :success)
@@ -1931,7 +1940,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              reason: "synthetic remote replay disconnect"
            ),
            FakeUpstream.websocket_text_frames([
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{
                "type" => "response.completed",
                "response" => %{
                  "id" => "resp_remote_replay_complete",
@@ -1987,7 +1996,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         %{
           "client_metadata" => %{
             "x-codex-turn-metadata" =>
-              Jason.encode!(%{
+              CodexPooler.JSON.encode!(%{
                 "session_id" => thread_id,
                 "thread_id" => thread_id,
                 "turn_id" => "remote-replay-turn",
@@ -2055,7 +2064,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_receive {:replay_remote_owner_call, ^remote_node, :remote_submit_request_v4}
 
     assert {:push, {:text, replay_frame}, replay_state} = receive_owner_socket_push(replay_state)
-    assert %{"type" => "response.completed"} = Jason.decode!(replay_frame)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(replay_frame)
     assert {:ok, replay_state} = receive_owner_socket_complete(replay_state)
     assert {:ok, replay_state} = receive_socket_done(replay_state)
 
@@ -2128,7 +2137,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              reason: "synthetic real peer replay disconnect"
            ),
            FakeUpstream.websocket_text_frames([
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{
                "type" => "response.completed",
                "response" => %{
                  "id" => "resp_real_peer_replay_complete",
@@ -2185,7 +2194,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         %{
           "client_metadata" => %{
             "x-codex-turn-metadata" =>
-              Jason.encode!(%{
+              CodexPooler.JSON.encode!(%{
                 "session_id" => thread_id,
                 "thread_id" => thread_id,
                 "turn_id" => "real-peer-replay-turn",
@@ -2237,7 +2246,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, replay_frame}, replay_state} =
              receive_owner_socket_push(replay_state)
 
-    assert %{"type" => "response.completed"} = Jason.decode!(replay_frame)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(replay_frame)
     assert {:ok, replay_state} = receive_owner_socket_complete(replay_state)
     assert {:ok, replay_state} = receive_socket_done(replay_state)
 
@@ -2286,7 +2295,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, duplicate_frame}, duplicate_state} =
              receive_socket_done(duplicate_state)
 
-    assert Jason.decode!(duplicate_frame)["error"]["code"] == "duplicate_turn"
+    assert CodexPooler.JSON.decode!(duplicate_frame)["error"]["code"] == "duplicate_turn"
     assert FakeUpstream.count(upstream) == 2
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 2
 
@@ -2305,7 +2314,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     release_ref = make_ref()
 
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{
           "id" => "resp_client_retry_owner_race",
@@ -2366,7 +2375,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         %{
           "client_metadata" => %{
             "x-codex-turn-metadata" =>
-              Jason.encode!(%{
+              CodexPooler.JSON.encode!(%{
                 "session_id" => thread_id,
                 "thread_id" => thread_id,
                 "turn_id" => "client-retry-owner-race",
@@ -2464,7 +2473,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     loser_result = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, first_state)
 
     assert {:push, {:text, loser_error}, _loser_state} = loser_result
-    assert Jason.decode!(loser_error)["error"]["code"] in ["duplicate_turn", "owner_busy"]
+
+    assert CodexPooler.JSON.decode!(loser_error)["error"]["code"] in [
+             "duplicate_turn",
+             "owner_busy"
+           ]
 
     send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
     assert {:push, {:text, _frame}, current_state} = receive_owner_socket_push(current_state)
@@ -2603,7 +2616,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           assert {:push, {:text, terminal}, state} = receive_owner_socket_push(state)
 
-          assert %{"id" => "resp_owner_observer_failure"} = Jason.decode!(terminal)
+          assert %{"id" => "resp_owner_observer_failure"} = CodexPooler.JSON.decode!(terminal)
           assert {:ok, state} = receive_owner_socket_complete(state)
           flush_socket_done(state)
         after
@@ -2719,7 +2732,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     response_id = "resp_native_proxy_predispatch_#{System.unique_integer([:positive])}"
 
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => response_id, "status" => "completed"}
       })
@@ -2795,7 +2808,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   test "native proxy turn replaces the attach timeout with the full request budget" do
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_owner_turn_budget", "status" => "completed"}
       })
@@ -2993,7 +3006,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "type" => "codex.response.metadata",
                "headers" => %{"x-models-etag" => ^models_etag}
-             } = Jason.decode!(local_metadata)
+             } = CodexPooler.JSON.decode!(local_metadata)
 
       assert {:push, {:text, local_response}, local_state} =
                receive_owner_socket_raw_push(local_state)
@@ -3094,12 +3107,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, created_frame}, remote_state} =
                receive_owner_socket_push(remote_state)
 
-      assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+      assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
 
       assert {:push, {:text, completed_frame}, remote_state} =
                receive_owner_socket_push(remote_state)
 
-      assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(completed_frame)
       assert {:ok, _state} = receive_owner_socket_complete(remote_state)
 
       assert_remote_submit_request_v1!(remote_state, remote_node, :success)
@@ -3230,12 +3243,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, created_frame}, remote_state} =
                receive_owner_socket_push(remote_state)
 
-      assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+      assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
 
       assert {:push, {:text, completed_frame}, remote_state} =
                receive_owner_socket_push(remote_state)
 
-      assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(completed_frame)
       assert {:ok, _state} = receive_owner_socket_complete(remote_state)
       assert_remote_submit_request_v1!(remote_state, remote_node, :success)
     after
@@ -3313,7 +3326,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           assert {:push, {:text, terminal_frame}, remote_state} =
                    receive_owner_socket_push(remote_state)
 
-          assert %{"type" => "response.failed"} = Jason.decode!(terminal_frame)
+          assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(terminal_frame)
           assert {:ok, _state} = receive_owner_socket_complete(remote_state)
 
           assert_remote_submit_request_v1!(remote_state, remote_node, :success)
@@ -3553,7 +3566,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "type" => "codex.response.metadata",
                "headers" => %{"x-models-etag" => _models_etag}
-             } = Jason.decode!(recovered_metadata_frame)
+             } = CodexPooler.JSON.decode!(recovered_metadata_frame)
 
       assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch,
                       {:data, recovered_frame}},
@@ -3631,7 +3644,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     old_owner_ref = Process.monitor(old_owner_pid)
     parent = self()
 
-    stale_frame = Jason.encode!(%{"id" => "resp_stale_owner_attachment"})
+    stale_frame = CodexPooler.JSON.encode!(%{"id" => "resp_stale_owner_attachment"})
 
     assert {:ok, ^remote_state} =
              CodexResponsesSocket.handle_info(
@@ -4064,7 +4077,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     [anchor_task_pid] = MapSet.to_list(state.tasks)
     assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
-    assert %{"id" => "resp_owner_live_anchor"} = Jason.decode!(anchor_frame)
+    assert %{"id" => "resp_owner_live_anchor"} = CodexPooler.JSON.decode!(anchor_frame)
     assert {:ok, state} = receive_owner_socket_complete(state)
     assert {:ok, state} = acknowledge_response_task_delivery_if_pending(state, anchor_task_pid)
     assert {:ok, state} = receive_socket_done(state)
@@ -4093,7 +4106,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:ok, state} = CodexResponsesSocket.handle_info(output_commit_probe, state)
 
     assert {:push, {:text, failed_frame}, state} = receive_socket_push(state)
-    assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
+    assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(failed_frame)
     assert MapSet.size(state.tasks) == 1
     assert {:ok, state} = acknowledge_response_task_delivery_if_pending(state, response_task_pid)
 
@@ -4177,7 +4190,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         end)
 
       assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
-      assert %{"id" => "resp_owner_auth_handshake_retry_success"} = Jason.decode!(frame)
+
+      assert %{"id" => "resp_owner_auth_handshake_retry_success"} =
+               CodexPooler.JSON.decode!(frame)
+
       assert {:ok, _state} = receive_socket_done(state)
       assert_receive {:stream_outcome, telemetry_metadata}
       refute inspect(telemetry_metadata) =~ initial_residency
@@ -4281,7 +4297,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
     assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
-    assert %{"id" => "resp_owner_processed"} = Jason.decode!(first_frame)
+    assert %{"id" => "resp_owner_processed"} = CodexPooler.JSON.decode!(first_frame)
     assert {:ok, first_state} = receive_owner_socket_complete(first_state)
     assert {:ok, first_state} = receive_socket_done(first_state)
     assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
@@ -4298,7 +4314,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     try do
       processed_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.processed",
           "response_id" => "resp_owner_processed"
         })
@@ -4355,7 +4371,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, anchor_frame}, target_state} =
              receive_owner_socket_push(target_state)
 
-    assert %{"id" => "resp_owner_immediate_retarget_anchor"} = Jason.decode!(anchor_frame)
+    assert %{"id" => "resp_owner_immediate_retarget_anchor"} =
+             CodexPooler.JSON.decode!(anchor_frame)
+
     assert {:ok, target_state} = receive_socket_done(target_state)
     assert :ok = CodexResponsesSocket.terminate(:closed, target_state)
 
@@ -4365,7 +4383,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     origin_session = origin_state.codex_session
 
     continuation_payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
         "input" => [
@@ -4395,7 +4413,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, retarget_frame}, retargeted_state} =
              receive_owner_socket_push(retargeted_state)
 
-    assert %{"id" => "resp_owner_immediate_retarget_success"} = Jason.decode!(retarget_frame)
+    assert %{"id" => "resp_owner_immediate_retarget_success"} =
+             CodexPooler.JSON.decode!(retarget_frame)
+
     assert {:ok, retargeted_state} = receive_socket_done(retargeted_state)
 
     assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
@@ -4458,7 +4478,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, anchor_frame}, target_state} =
              receive_owner_socket_push(target_state)
 
-    assert %{"id" => "resp_owner_turn_state_retarget_anchor"} = Jason.decode!(anchor_frame)
+    assert %{"id" => "resp_owner_turn_state_retarget_anchor"} =
+             CodexPooler.JSON.decode!(anchor_frame)
+
     assert {:ok, target_state} = receive_socket_done(target_state)
     assert :ok = CodexResponsesSocket.terminate(:closed, target_state)
 
@@ -4486,7 +4508,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, retarget_frame}, retargeted_state} =
              receive_owner_socket_push(retargeted_state)
 
-    assert %{"id" => "resp_owner_turn_state_retarget_success"} = Jason.decode!(retarget_frame)
+    assert %{"id" => "resp_owner_turn_state_retarget_success"} =
+             CodexPooler.JSON.decode!(retarget_frame)
+
     assert {:ok, retargeted_state} = receive_socket_done(retargeted_state)
 
     assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
@@ -4550,7 +4574,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert {:push, {:text, anchor_frame}, target_state} =
                  receive_owner_socket_push(target_state)
 
-        assert %{"id" => "resp_owner_retarget_cleanup_anchor"} = Jason.decode!(anchor_frame)
+        assert %{"id" => "resp_owner_retarget_cleanup_anchor"} =
+                 CodexPooler.JSON.decode!(anchor_frame)
+
         assert {:ok, target_state} = receive_socket_done(target_state)
         target_state
       after
@@ -4606,7 +4632,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert {:push, {:text, retarget_frame}, retargeted_state} =
                  receive_owner_socket_push(retargeted_state)
 
-        assert %{"id" => "resp_owner_retarget_cleanup_success"} = Jason.decode!(retarget_frame)
+        assert %{"id" => "resp_owner_retarget_cleanup_success"} =
+                 CodexPooler.JSON.decode!(retarget_frame)
+
         assert {:ok, retargeted_state} = receive_socket_done(retargeted_state)
         retargeted_state
       after
@@ -4928,7 +4956,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                    CodexResponsesSocket.handle_in({continuation_payload, [opcode: :text]}, state)
 
           assert {:push, {:text, guard_terminal}, state} = receive_owner_socket_push(state)
-          assert Jason.decode!(guard_terminal) == Jason.decode!(native_owner_retry_terminal())
+
+          assert CodexPooler.JSON.decode!(guard_terminal) ==
+                   CodexPooler.JSON.decode!(native_owner_retry_terminal())
+
           assert {:ok, state} = receive_socket_done(state)
           refute_received {:websocket_owner_frame, _, _, {:data, ^guard_terminal}}
           state
@@ -5144,7 +5175,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     send(first_upstream_pid, {:fake_upstream_release_chunk, first_submission_ref})
 
     assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
-    assert %{"id" => "resp_owner_tool_first"} = Jason.decode!(first_frame)
+    assert %{"id" => "resp_owner_tool_first"} = CodexPooler.JSON.decode!(first_frame)
     assert {:ok, first_state} = receive_owner_socket_complete(first_state)
     assert {:ok, first_state} = receive_socket_done(first_state)
     assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
@@ -5160,14 +5191,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     try do
-      schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
-      unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+      schema_bound_output =
+        CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+
+      unbound_output = CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
 
       assert byte_size(schema_bound_output) > 512
       assert byte_size(unbound_output) > 512
 
       tool_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "tools" => [
@@ -5224,7 +5257,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, second_frame}, second_state} =
                receive_owner_socket_push(second_state)
 
-      assert %{"id" => "resp_owner_tool_second"} = Jason.decode!(second_frame)
+      assert %{"id" => "resp_owner_tool_second"} = CodexPooler.JSON.decode!(second_frame)
       assert {:ok, _second_state} = receive_socket_done(second_state)
 
       assert [^first_request, ^second_request] = FakeUpstream.requests(upstream)
@@ -5243,9 +5276,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         end)
 
       assert schema_bound_item["output"] == schema_bound_output
-      assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+
+      assert CodexPooler.JSON.decode!(schema_bound_item["output"]) ==
+               CodexPooler.JSON.decode!(schema_bound_output)
+
       assert unbound_item["output"] != unbound_output
-      assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
+      assert CodexPooler.JSON.decode!(unbound_item["output"]) ==
+               CodexPooler.JSON.decode!(unbound_output)
 
       assert [first_log, second_log] = request_logs(setup.pool.id)
       assert first_log.status == "succeeded"
@@ -5317,7 +5355,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
       assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
-      assert %{"id" => "resp_owner_chain_first"} = Jason.decode!(first_frame)
+      assert %{"id" => "resp_owner_chain_first"} = CodexPooler.JSON.decode!(first_frame)
       assert {:ok, _first_state} = receive_socket_done(first_state)
     after
       CodexResponsesSocket.terminate(:closed, first_state)
@@ -5327,7 +5365,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     try do
       processed_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.processed",
           "response_id" => "resp_owner_chain_first",
           "request_id" => "ws-owner-chain-processed"
@@ -5348,7 +5386,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     try do
       tool_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [
@@ -5368,7 +5406,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({tool_payload, [opcode: :text]}, tool_state)
 
       assert {:push, {:text, tool_frame}, tool_state} = receive_owner_socket_push(tool_state)
-      assert %{"id" => "resp_owner_chain_tool"} = Jason.decode!(tool_frame)
+      assert %{"id" => "resp_owner_chain_tool"} = CodexPooler.JSON.decode!(tool_frame)
       assert {:ok, _tool_state} = receive_socket_done(tool_state)
     after
       CodexResponsesSocket.terminate(:closed, tool_state)
@@ -5423,7 +5461,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
       assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
-      assert %{"id" => "resp_owner_queue_first"} = Jason.decode!(first_frame)
+      assert %{"id" => "resp_owner_queue_first"} = CodexPooler.JSON.decode!(first_frame)
       assert {:ok, _first_state} = receive_socket_done(first_state)
 
       ensure_previous_response_alias!(
@@ -5439,14 +5477,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     try do
       processed_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.processed",
           "response_id" => "resp_owner_queue_first",
           "request_id" => "ws-owner-queue-processed"
         })
 
       tool_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [
@@ -5481,7 +5519,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                      @queued_owner_upstream_start_timeout_ms
 
       assert {:push, {:text, tool_frame}, queued_state} = receive_owner_socket_push(queued_state)
-      assert %{"id" => "resp_owner_queue_tool"} = Jason.decode!(tool_frame)
+      assert %{"id" => "resp_owner_queue_tool"} = CodexPooler.JSON.decode!(tool_frame)
       assert {:ok, _queued_state} = receive_socket_done(queued_state)
     after
       CodexResponsesSocket.terminate(:closed, queued_state)
@@ -5547,7 +5585,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert {:push, {:text, anchor_a_frame}, target_a_state} =
                  receive_owner_socket_push(target_a_state)
 
-        assert %{"id" => "resp_owner_queue_alias_anchor_a"} = Jason.decode!(anchor_a_frame)
+        assert %{"id" => "resp_owner_queue_alias_anchor_a"} =
+                 CodexPooler.JSON.decode!(anchor_a_frame)
+
         assert {:ok, _target_a_state} = receive_socket_done(target_a_state)
 
         ensure_previous_response_alias!(
@@ -5580,7 +5620,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert {:push, {:text, anchor_b_frame}, target_b_state} =
                  receive_owner_socket_push(target_b_state)
 
-        assert %{"id" => "resp_owner_queue_alias_anchor_b"} = Jason.decode!(anchor_b_frame)
+        assert %{"id" => "resp_owner_queue_alias_anchor_b"} =
+                 CodexPooler.JSON.decode!(anchor_b_frame)
+
         assert {:ok, _target_b_state} = receive_socket_done(target_b_state)
 
         ensure_previous_response_alias!(
@@ -5655,7 +5697,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert {:push, {:text, queued_a_frame}, queued_a_state} =
                  receive_owner_socket_push(queued_a_state)
 
-        assert %{"id" => "resp_owner_queue_alias_a"} = Jason.decode!(queued_a_frame)
+        assert %{"id" => "resp_owner_queue_alias_a"} = CodexPooler.JSON.decode!(queued_a_frame)
         assert {:ok, queued_b_state} = receive_socket_done(queued_a_state)
         assert queued_b_state.codex_session.id == target_b_session.id
         refute queued_b_state.codex_session.id == target_a_session.id
@@ -5664,7 +5706,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert {:push, {:text, queued_b_frame}, queued_b_state} =
                  receive_owner_socket_push(queued_b_state)
 
-        assert %{"id" => "resp_owner_queue_alias_b"} = Jason.decode!(queued_b_frame)
+        assert %{"id" => "resp_owner_queue_alias_b"} = CodexPooler.JSON.decode!(queued_b_frame)
         assert {:ok, queued_b_state} = receive_socket_done(queued_b_state)
 
         {queued_a_state, queued_b_state}
@@ -5727,7 +5769,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
       assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
-      assert %{"id" => "resp_owner_queue_first"} = Jason.decode!(first_frame)
+      assert %{"id" => "resp_owner_queue_first"} = CodexPooler.JSON.decode!(first_frame)
       assert {:ok, _first_state} = receive_socket_done(first_state)
     after
       CodexResponsesSocket.terminate(:closed, first_state)
@@ -5736,7 +5778,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     {:ok, processed_state} = owner_socket(auth, "ws-owner-processed-close", turn_state)
 
     processed_payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.processed",
         "response_id" => "resp_owner_queue_first",
         "request_id" => "ws-owner-processed-close"
@@ -5766,7 +5808,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                reconnect_state
              )
 
-    assert Jason.decode!(native_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(native_error)["error"]["code"] == "owner_busy"
 
     assert {:push, {:text, processed_error}, ^reconnect_state} =
              CodexResponsesSocket.handle_in(
@@ -5774,7 +5816,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                reconnect_state
              )
 
-    assert Jason.decode!(processed_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(processed_error)["error"]["code"] == "owner_busy"
     assert length(request_logs(setup.pool.id)) == row_count
     CodexResponsesSocket.terminate(:closed, reconnect_state)
 
@@ -5821,7 +5863,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         "client_metadata" => %{
           "turn_id" => "ws-owner-active-reconnect-first",
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "turn_id" => "ws-owner-active-reconnect-first",
               "request_kind" => "turn"
             })
@@ -5859,7 +5901,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         end)
 
       assert {:push, {:text, duplicate_error}, ^second_state} = replay_result
-      assert Jason.decode!(duplicate_error)["error"]["code"] == "duplicate_turn"
+      assert CodexPooler.JSON.decode!(duplicate_error)["error"]["code"] == "duplicate_turn"
 
       assert event_count(replay_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
                1
@@ -5879,7 +5921,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, terminal_frame}, first_state} =
                receive_owner_socket_push(first_state)
 
-      assert Jason.decode!(terminal_frame)["type"] == "response.completed"
+      assert CodexPooler.JSON.decode!(terminal_frame)["type"] == "response.completed"
       assert {:ok, first_state} = receive_owner_socket_complete(first_state)
       first_state = receive_receiver_delivery_gap_result(response_task_pid, first_state)
 
@@ -5899,7 +5941,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     upstream =
       start_upstream(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.created",
             "response" => %{"id" => "resp_router_v2"}
           })
@@ -5916,7 +5958,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         "client_metadata" => %{
           "turn_id" => "router-v2-typed-options",
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "turn_id" => "router-v2-typed-options",
               "request_kind" => "turn"
             })
@@ -5933,7 +5975,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     {_retry_conn, _retry_ws, error} =
       public_websocket_receive_text!(retry_conn, retry_ws, retry_ref)
 
-    assert Jason.decode!(error)["error"]["code"] == "duplicate_turn"
+    assert CodexPooler.JSON.decode!(error)["error"]["code"] == "duplicate_turn"
 
     Mint.HTTP.close(first_conn)
     Mint.HTTP.close(retry_conn)
@@ -6023,7 +6065,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, cancelled_equal_error}, ^replacement_state} =
              cancelled_equal_result
 
-    assert Jason.decode!(cancelled_equal_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(cancelled_equal_error)["error"]["code"] == "owner_busy"
 
     assert event_count(
              cancelled_equal_log,
@@ -6071,7 +6113,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert {:push, {:text, third_error}, ^pending_state} = third_result
 
-    assert Jason.decode!(third_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(third_error)["error"]["code"] == "owner_busy"
     assert event_count(third_log, WebsocketConnectionLogger.reconnect_disposition_message()) == 1
     assert third_log =~ "reconnect_disposition=owner_busy"
     assert length(request_logs(setup.pool.id)) == 1
@@ -6381,7 +6423,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       end)
 
     assert {:push, {:text, timeout_error}, timeout_state} = timeout_result
-    assert Jason.decode!(timeout_error)["error"]["code"] == "owner_forward_timeout"
+    assert CodexPooler.JSON.decode!(timeout_error)["error"]["code"] == "owner_forward_timeout"
     assert timeout_state.websocket_owner_pending_handoff == nil
     assert event_count(timeout_log, WebsocketConnectionLogger.handoff_outcome_message()) == 1
     assert timeout_log =~ "handoff_outcome=timeout"
@@ -6416,7 +6458,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
         assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
-        assert %{"id" => "resp_owner_admission"} = Jason.decode!(frame)
+        assert %{"id" => "resp_owner_admission"} = CodexPooler.JSON.decode!(frame)
         assert {:ok, _state} = receive_socket_done(state)
 
         assert [_request] = FakeUpstream.requests(upstream)
@@ -6464,7 +6506,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                      "param" => nil,
                      "type" => "server_error"
                    }
-                 } = Jason.decode!(error_frame)
+                 } = CodexPooler.JSON.decode!(error_frame)
 
           refute error_frame =~ internal_reason
           assert FakeUpstream.requests(upstream) == []
@@ -6530,7 +6572,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
       assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
-      assert %{"id" => "resp_owner_priced_gpt55"} = Jason.decode!(frame)
+      assert %{"id" => "resp_owner_priced_gpt55"} = CodexPooler.JSON.decode!(frame)
       assert {:ok, _state} = receive_socket_done(state)
     after
       CodexResponsesSocket.terminate(:closed, state)
@@ -6592,7 +6634,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     try do
       processed_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.processed",
           "response_id" => "resp_owner_unavailable"
         })
@@ -6605,7 +6647,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "type" => "error",
                "error" => %{"code" => "upstream_websocket_forward_failed", "message" => message}
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       assert message =~ "owner_unavailable"
       refute error_frame =~ "pinned_continuation_reauth_required"
@@ -6638,7 +6680,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                  "code" => "stale_owner",
                  "message" => "websocket owner lease is stale"
                }
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       assert FakeUpstream.count(upstream) == 0
       assert FakeUpstream.websocket_connection_count(upstream) == 0
@@ -6668,7 +6710,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     try do
       processed_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.processed",
           "response_id" => "resp_owner_guard_processed"
         })
@@ -6681,7 +6723,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "status" => 502,
                "error" => %{"code" => "upstream_websocket_forward_failed", "message" => message}
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       assert message =~ "stale_owner"
       assert FakeUpstream.count(upstream) == 0
@@ -7265,7 +7307,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, error_frame}, _state} = receive_socket_done(stale_state)
 
       assert %{"error" => %{"code" => "stale_owner", "message" => message}} =
-               Jason.decode!(error_frame)
+               CodexPooler.JSON.decode!(error_frame)
 
       assert message == "websocket owner lease is stale"
       assert FakeUpstream.count(upstream) == 0
@@ -7556,7 +7598,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
     assert {:push, {:text, terminal_frame}, state} = receive_owner_socket_push(state)
-    assert %{"type" => "response.completed"} = Jason.decode!(terminal_frame)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(terminal_frame)
     assert {:ok, state} = receive_owner_socket_complete(state)
     assert {:ok, state} = receive_socket_done(state)
 
@@ -8041,7 +8083,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                session,
                session.owner_lease_token,
                %{pid: self(), epoch: 1, correlation_id: "corr-nodedown"},
-               Jason.encode!(%{"type" => "response.processed", "response_id" => "resp_nodedown"}),
+               CodexPooler.JSON.encode!(%{
+                 "type" => "response.processed",
+                 "response_id" => "resp_nodedown"
+               }),
                opts
              )
 
@@ -8396,7 +8441,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                worker_session,
                worker_session.owner_lease_token,
                downstream_target("corr-role-worker"),
-               Jason.encode!(%{
+               CodexPooler.JSON.encode!(%{
                  "type" => "response.processed",
                  "response_id" => "resp_role_worker"
                }),
@@ -8408,7 +8453,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                scheduler_session,
                scheduler_session.owner_lease_token,
                downstream_target("corr-role-scheduler"),
-               Jason.encode!(%{
+               CodexPooler.JSON.encode!(%{
                  "type" => "response.processed",
                  "response_id" => "resp_role_scheduler"
                }),
@@ -8463,7 +8508,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({payload, [opcode: :text]}, second_state)
 
       assert {:push, {:text, frame}, second_state} = receive_owner_socket_push(second_state)
-      assert %{"id" => "resp_owner_stale"} = Jason.decode!(frame)
+      assert %{"id" => "resp_owner_stale"} = CodexPooler.JSON.decode!(frame)
       assert {:ok, _second_state} = receive_socket_done(second_state)
     after
       CodexResponsesSocket.terminate(:closed, second_state)
@@ -8499,7 +8544,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         end)
 
       assert warning_logs == ""
-      assert %{"id" => "resp_owner_dispatch_takeover"} = Jason.decode!(frame)
+      assert %{"id" => "resp_owner_dispatch_takeover"} = CodexPooler.JSON.decode!(frame)
       assert active_owner_lease(session.id).lease_token == old_lease.lease_token
       assert active_owner_lease(session.id).owner_instance_id == Atom.to_string(node())
       assert [request] = await_upstream_requests(upstream, 1)
@@ -8545,7 +8590,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
           assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
-          assert %{"id" => "resp_owner_dispatch_drain_takeover"} = Jason.decode!(frame)
+          assert %{"id" => "resp_owner_dispatch_drain_takeover"} = CodexPooler.JSON.decode!(frame)
           assert {:ok, _state} = receive_socket_done(state)
 
           active_lease = active_owner_lease(session.id)
@@ -8623,7 +8668,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({payload, [opcode: :text]}, second_state)
 
       assert {:push, {:text, frame}, second_state} = receive_owner_socket_push(second_state)
-      assert %{"id" => "resp_owner_stale_upstream"} = Jason.decode!(frame)
+      assert %{"id" => "resp_owner_stale_upstream"} = CodexPooler.JSON.decode!(frame)
       assert {:ok, _second_state} = receive_socket_done(second_state)
 
       assert [request] = await_upstream_requests(upstream, 1)
@@ -8738,7 +8783,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
             assert {:push, {:text, first_frame}, first_state} =
                      receive_owner_socket_push(first_state)
 
-            assert %{"id" => "resp_owner_leak_first"} = Jason.decode!(first_frame)
+            assert %{"id" => "resp_owner_leak_first"} = CodexPooler.JSON.decode!(first_frame)
             assert {:ok, first_state} = receive_socket_done(first_state)
             first_state
           after
@@ -8749,7 +8794,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         try do
           processed_payload =
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "type" => "response.processed",
               "response_id" => "resp_owner_leak_first",
               "client_context" => @sentinel
@@ -8771,7 +8816,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         try do
           tool_payload =
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "type" => "response.create",
               "model" => setup.model.exposed_model_id,
               "input" => [
@@ -8790,7 +8835,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                    CodexResponsesSocket.handle_in({tool_payload, [opcode: :text]}, tool_state)
 
           assert {:push, {:text, tool_frame}, tool_state} = receive_owner_socket_push(tool_state)
-          assert %{"id" => "resp_owner_leak_tool"} = Jason.decode!(tool_frame)
+          assert %{"id" => "resp_owner_leak_tool"} = CodexPooler.JSON.decode!(tool_frame)
           assert {:ok, _tool_state} = receive_socket_done(tool_state)
         after
           CodexResponsesSocket.terminate(:closed, tool_state)
@@ -8846,7 +8891,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           assert %{
                    "type" => "response.failed",
                    "error" => %{"code" => "synthetic_upstream_failure"}
-                 } = Jason.decode!(error_frame)
+                 } = CodexPooler.JSON.decode!(error_frame)
 
           assert {:ok, _state} = receive_socket_done(state)
         after
@@ -9217,7 +9262,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           assert {:push, {:text, recovered_frame}, recovered_state} =
                    receive_owner_socket_push(recovered_state)
 
-          assert %{"id" => "resp_owner_timeline_recovered"} = Jason.decode!(recovered_frame)
+          assert %{"id" => "resp_owner_timeline_recovered"} =
+                   CodexPooler.JSON.decode!(recovered_frame)
+
           assert {:ok, _recovered_state} = receive_socket_done(recovered_state)
         after
           CodexResponsesSocket.terminate(:closed, recovered_state)
@@ -9393,7 +9440,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           assert %{
                    "type" => "error",
                    "error" => %{"code" => "websocket_response_task_failed"}
-                 } = Jason.decode!(error_frame)
+                 } = CodexPooler.JSON.decode!(error_frame)
         after
           CodexResponsesSocket.terminate(:closed, state)
         end
@@ -9435,7 +9482,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     metadata = %{
       "turn_id" => "synthetic-history-turn",
       "x-codex-turn-metadata" =>
-        Jason.encode!(%{"turn_id" => "synthetic-history-turn", "request_kind" => "turn"})
+        CodexPooler.JSON.encode!(%{
+          "turn_id" => "synthetic-history-turn",
+          "request_kind" => "turn"
+        })
     }
 
     history = [%{"type" => "compaction", "encrypted_content" => "synthetic-history-summary"}]
@@ -9449,7 +9499,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              CodexResponsesSocket.handle_in({payload, [opcode: :text]}, first_state)
 
     assert {:push, {:text, frame}, first_state} = receive_owner_socket_push(first_state)
-    assert [received_call] = Jason.decode!(frame)["output"]
+    assert [received_call] = CodexPooler.JSON.decode!(frame)["output"]
     assert received_call == call
     assert {:ok, first_state} = receive_socket_done(first_state)
     assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
@@ -9476,7 +9526,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                RequestOptions.build(
                  %{codex_session: next_state.codex_session, api_key_runtime_epoch: 0},
                  "/backend-api/codex/responses",
-                 Jason.decode!(next_payload)
+                 CodexPooler.JSON.decode!(next_payload)
                ),
                fn _ -> :ok end
              )
@@ -9507,7 +9557,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_in({next_payload, [opcode: :text]}, next_state)
 
       assert {:push, {:text, retry_frame}, retry_state} = receive_owner_socket_push(retry_state)
-      assert Jason.decode!(retry_frame)["error"]["code"] == "duplicate_turn"
+      assert CodexPooler.JSON.decode!(retry_frame)["error"]["code"] == "duplicate_turn"
       assert MapSet.size(retry_state.tasks) == 0
       assert :ok = CodexResponsesSocket.terminate(:closed, retry_state)
       assert [first, second] = request_logs(setup.pool.id)
@@ -9569,7 +9619,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       "generate" => true
     }
     |> Map.merge(extra)
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp public_stream_payload(setup, input) do
@@ -9740,7 +9790,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     |> Enum.map(fn block ->
       assert [event] = Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first)
       assert [data] = Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first)
-      %{"event" => event, "data" => Jason.decode!(data)}
+      %{"event" => event, "data" => CodexPooler.JSON.decode!(data)}
     end)
   end
 
@@ -9996,13 +10046,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       {:websocket_owner_frame, "owner-helper-control", 41, wrong_task_pid, :complete},
       {:websocket_owner_frame, "owner-helper-control", 41, task_pid, {:invalid, "ignored"}},
       {:websocket_owner_frame, "owner-helper-control", 41, task_pid,
-       {:data, Jason.encode!(%{"type" => "response.output_text.delta"})}},
+       {:data, CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta"})}},
       {:websocket_owner_output_commit_probe, "owner-helper-control", 41, task_pid,
        active_turn_ref, self(), probe_ref},
       {:websocket_response_activity, task_pid, token},
       {:codex_response_done, task_pid, :ok},
       {:websocket_owner_frame, "owner-helper-control", 41, task_pid,
-       {:data, Jason.encode!(%{"type" => "response.completed"})}},
+       {:data, CodexPooler.JSON.encode!(%{"type" => "response.completed"})}},
       {:websocket_response_delivery_complete, task_pid, token},
       {:websocket_owner_frame, "owner-helper-control", 41, task_pid, :complete}
     ]
@@ -10228,7 +10278,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                end)
 
       assert {:push, {:text, retry_terminal}, state} = receive_owner_socket_push(state)
-      assert Jason.decode!(retry_terminal) == Jason.decode!(native_owner_retry_terminal())
+
+      assert CodexPooler.JSON.decode!(retry_terminal) ==
+               CodexPooler.JSON.decode!(native_owner_retry_terminal())
+
       assert {:ok, state} = receive_owner_socket_complete(state)
       refute_received {:websocket_owner_frame, _, _, {:data, ^retry_terminal}}
       refute_received {:websocket_owner_frame, _, _, :complete}
@@ -10297,15 +10350,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     response_id = "resp_receiver_delivery_gap_#{order}_#{System.unique_integer([:positive])}"
 
     frames = [
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => response_id, "status" => "in_progress"}
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_item.done",
         "item" => %{"id" => "item_receiver_delivery_gap", "type" => "message"}
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{
           "id" => response_id,
@@ -10454,8 +10507,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     receive do
       {:codex_response_chunk, ^task_pid, data} = message ->
         assert {:push, {:text, pushed}, state} = CodexResponsesSocket.handle_info(message, state)
-        assert Jason.decode!(pushed) == Jason.decode!(data)
-        event = Jason.decode!(pushed)["type"]
+        assert CodexPooler.JSON.decode!(pushed) == CodexPooler.JSON.decode!(data)
+        event = CodexPooler.JSON.decode!(pushed)["type"]
 
         events =
           if event in ["response.created", "response.output_item.done", "response.completed"],
@@ -10549,7 +10602,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     owner_pid = reconnect_state.websocket_owner_pid
     before_owner = :sys.get_state(owner_pid)
 
-    prewarm = Jason.encode!(%{"generate" => false, "model" => setup.model.exposed_model_id})
+    prewarm =
+      CodexPooler.JSON.encode!(%{"generate" => false, "model" => setup.model.exposed_model_id})
 
     {prewarm_result, prewarm_log} =
       with_info_log(fn ->
@@ -10565,12 +10619,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, created}, prewarm_state} =
              receive_native_collect_socket_push(prewarm_state)
 
-    assert Jason.decode!(created)["type"] == "response.created"
+    assert CodexPooler.JSON.decode!(created)["type"] == "response.created"
 
     assert {:push, {:text, completed}, prewarm_state} =
              receive_native_collect_socket_push(prewarm_state)
 
-    assert Jason.decode!(completed)["type"] == "response.completed"
+    assert CodexPooler.JSON.decode!(completed)["type"] == "response.completed"
     assert {:ok, prewarm_state} = receive_socket_done(prewarm_state)
 
     missing = websocket_payload(setup, private_sentinel)
@@ -10581,7 +10635,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       end)
 
     assert {:push, {:text, missing_error}, ^prewarm_state} = missing_result
-    assert Jason.decode!(missing_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(missing_error)["error"]["code"] == "owner_busy"
 
     assert event_count(missing_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
              1
@@ -10602,7 +10656,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert {:push, {:text, different_error}, ^prewarm_state} = different_result
 
-    assert Jason.decode!(different_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(different_error)["error"]["code"] == "owner_busy"
 
     assert event_count(different_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
              1
@@ -10625,7 +10679,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, malformed_error}, ^prewarm_state} = malformed_result
 
     assert %{"status" => 400, "error" => %{"code" => "invalid_request", "param" => param}} =
-             Jason.decode!(malformed_error)
+             CodexPooler.JSON.decode!(malformed_error)
 
     assert param == "client_metadata.turn_id"
 
@@ -10636,12 +10690,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     refute malformed_log =~ private_sentinel
 
     processed =
-      Jason.encode!(%{"type" => "response.processed", "response_id" => "resp_active_matrix"})
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.processed",
+        "response_id" => "resp_active_matrix"
+      })
 
     assert {:push, {:text, processed_error}, ^prewarm_state} =
              CodexResponsesSocket.handle_in({processed, [opcode: :text]}, prewarm_state)
 
-    assert Jason.decode!(processed_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(processed_error)["error"]["code"] == "owner_busy"
 
     public_opts =
       reconnect_state.opts
@@ -10651,7 +10708,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     public_state = %{prewarm_state | opts: public_opts}
 
     public_payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
         "input" => private_sentinel
@@ -10660,7 +10717,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, public_error}, ^public_state} =
              CodexResponsesSocket.handle_in({public_payload, [opcode: :text]}, public_state)
 
-    assert Jason.decode!(public_error)["error"]["code"] == "owner_busy"
+    assert CodexPooler.JSON.decode!(public_error)["error"]["code"] == "owner_busy"
     assert length(request_logs(setup.pool.id)) == 1
 
     send(worker_pid, {:blocking_owner_upstream_release, release_ref})
@@ -10722,7 +10779,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     pending_before = pending_state.websocket_owner_pending_handoff
     owner_pending_before = :sys.get_state(owner_pid).pending_handoff
-    prewarm = Jason.encode!(%{"generate" => false, "model" => setup.model.exposed_model_id})
+
+    prewarm =
+      CodexPooler.JSON.encode!(%{"generate" => false, "model" => setup.model.exposed_model_id})
 
     {prewarm_result, prewarm_log} =
       with_info_log(fn ->
@@ -10741,12 +10800,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, created}, prewarm_state} =
              receive_native_collect_socket_push(prewarm_state)
 
-    assert Jason.decode!(created)["type"] == "response.created"
+    assert CodexPooler.JSON.decode!(created)["type"] == "response.created"
 
     assert {:push, {:text, completed}, prewarm_state} =
              receive_native_collect_socket_push(prewarm_state)
 
-    assert Jason.decode!(completed)["type"] == "response.completed"
+    assert CodexPooler.JSON.decode!(completed)["type"] == "response.completed"
     assert {:ok, prewarm_state} = receive_socket_done(prewarm_state)
     assert prewarm_state.websocket_owner_pending_handoff == pending_before
     assert length(request_logs(setup.pool.id)) == 1
@@ -10758,7 +10817,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   defp owner_node_opts(state, :proxy), do: state.opts.websocket_owner_forwarder_opts
 
   defp native_owner_retry_terminal do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "error",
       "status" => 400,
       "error" => %{
@@ -10920,7 +10979,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp owner_response_id(frame) do
-    decoded = Jason.decode!(frame)
+    decoded = CodexPooler.JSON.decode!(frame)
     decoded["id"] || get_in(decoded, ["response", "id"])
   end
 
@@ -11912,11 +11971,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp synthetic_access_token(residency) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
 
     payload =
       Base.url_encode64(
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "https://api.openai.com/auth" => %{
             "chatgpt_compute_residency" => residency
           }
@@ -12082,7 +12141,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   defp assert_process_messages_hidden!(_pid, 0), do: flunk("sensitive process exposed mailbox")
 
   defp assert_stale_owner_downstream_ignored(owner_pid, stale_downstream, state) do
-    stale_payload = Jason.encode!(%{"id" => "resp_owner_retarget_stale_origin_frame"})
+    stale_payload = CodexPooler.JSON.encode!(%{"id" => "resp_owner_retarget_stale_origin_frame"})
 
     stale_message =
       {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch,
@@ -12131,7 +12190,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         case {count, upstream_payload} do
           {1, %CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request{}} ->
-            frame = Jason.encode!(%{"id" => "resp_owner_queue_first", "object" => "response"})
+            frame =
+              CodexPooler.JSON.encode!(%{
+                "id" => "resp_owner_queue_first",
+                "object" => "response"
+              })
+
             writer.(frame, TerminalDiscriminator.classify(frame))
             :ok
 
@@ -12146,7 +12210,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           {3, %CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request{}} ->
             send(test_pid, {:chained_owner_upstream_tool_started, release_ref})
-            frame = Jason.encode!(%{"id" => "resp_owner_queue_tool", "object" => "response"})
+
+            frame =
+              CodexPooler.JSON.encode!(%{"id" => "resp_owner_queue_tool", "object" => "response"})
+
             writer.(frame, TerminalDiscriminator.classify(frame))
             :ok
         end
@@ -12185,7 +12252,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         receive do
           {:blocking_owner_upstream_release, ^release_ref} ->
             frame =
-              Jason.encode!(%{
+              CodexPooler.JSON.encode!(%{
                 "type" => "response.completed",
                 "response" => %{
                   "id" => "resp_owner_active_reconnect",
@@ -12195,7 +12262,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                 }
               })
 
-            decoded = Jason.decode!(frame)
+            decoded = CodexPooler.JSON.decode!(frame)
 
             cond do
               is_function(request.frame_observer, 2) -> request.frame_observer.(frame, decoded)
@@ -12250,9 +12317,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       start: fn -> Agent.start_link(fn -> :ready end) end,
       send: fn _upstream_pid, request, writer ->
         frame =
-          Jason.encode!(%{"id" => "resp_owner_visible_before_crash", "object" => "response"})
+          CodexPooler.JSON.encode!(%{
+            "id" => "resp_owner_visible_before_crash",
+            "object" => "response"
+          })
 
-        decoded = Jason.decode!(frame)
+        decoded = CodexPooler.JSON.decode!(frame)
 
         cond do
           is_function(request.frame_observer, 2) -> request.frame_observer.(frame, decoded)

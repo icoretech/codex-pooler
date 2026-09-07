@@ -108,7 +108,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Journal do
       {:ok, file} = :file.open(String.to_charlist(temporary), [:write, :binary, :raw, :exclusive])
 
       try do
-        :ok = :file.write(file, Jason.encode!(value) <> "\n")
+        :ok = :file.write(file, CodexPooler.JSON.encode!(value) <> "\n")
         :ok = :file.sync(file)
       after
         :ok = :file.close(file)
@@ -126,7 +126,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Journal do
     expected_uid = Keyword.get(options, :expected_uid, current_uid())
 
     with {:ok, body} <- descriptor_read(paths.root, Path.basename(path), expected_uid),
-         {:ok, %{} = value} <- Jason.decode(body),
+         {:ok, %{} = value} <- CodexPooler.JSON.decode(body),
          ^run_id <- value["run_id"],
          :ok <- validate_schema(kind, value) do
       {:ok, value}

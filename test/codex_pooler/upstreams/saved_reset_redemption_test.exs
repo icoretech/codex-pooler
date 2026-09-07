@@ -86,7 +86,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         refute Map.has_key?(redemption, key)
       end
 
-      metadata_json = Jason.encode!(persisted.metadata)
+      metadata_json = CodexPooler.JSON.encode!(persisted.metadata)
       refute metadata_json =~ "credit_1"
       refute metadata_json =~ redeem_request_id
     end
@@ -321,7 +321,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert redemption["provider_replay"]["provider_dispatches"] == 1
       assert is_binary(locator)
 
-      metadata_json = Jason.encode!(metadata)
+      metadata_json = CodexPooler.JSON.encode!(metadata)
       refute metadata_json =~ "credit_original"
       refute metadata_json =~ "credit_other"
 
@@ -1951,7 +1951,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         claim = Repo.reload!(identity).metadata["saved_reset_redemption"]
         assert claim["status"] == "redeeming"
         assert claim["trigger_detail"] == detail
-        refute Jason.encode!(claim) =~ "caller-controlled-provider-token"
+        refute CodexPooler.JSON.encode!(claim) =~ "caller-controlled-provider-token"
 
         send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -1971,7 +1971,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           end
 
         assert persisted["trigger_detail"] == detail
-        refute Jason.encode!(persisted) =~ "caller-controlled-provider-token"
+        refute CodexPooler.JSON.encode!(persisted) =~ "caller-controlled-provider-token"
       end
     end
 
@@ -2029,7 +2029,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       # The key is a deterministic function of the persisted attempt id and
       # generation, so the same attempt reproduces it without persisting a
       # raw secret in the identity metadata.
-      refute Jason.encode!(persisted.metadata) =~ first_key
+      refute CodexPooler.JSON.encode!(persisted.metadata) =~ first_key
 
       expected =
         :sha256
@@ -2248,7 +2248,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert saved_resets["expires_refresh_attempted_at"] == "2026-07-24T03:00:00Z"
       assert persisted.saved_reset_first_seen_ledger == ledger
 
-      metadata_json = Jason.encode!(persisted.metadata)
+      metadata_json = CodexPooler.JSON.encode!(persisted.metadata)
 
       refute metadata_json =~ "used_credit"
       refute metadata_json =~ "redeem_request_id"
@@ -6046,7 +6046,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert run_unboxed(fn -> Repo.get!(UpstreamIdentity, target_id).metadata end) ==
                before_target
 
-      refute Jason.encode!(before_target) =~ "acct_cohort_lock"
+      refute CodexPooler.JSON.encode!(before_target) =~ "acct_cohort_lock"
     end
 
     test "threshold sibling capacity gate rejects unusable evidence without false vetoes" do

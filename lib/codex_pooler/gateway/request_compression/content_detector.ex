@@ -145,7 +145,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   def normalize_concatenated_json_objects(content) when is_binary(content) do
     with {:ok, rows} <- decode_concatenated_json_objects(content),
          row_count when row_count >= 2 <- length(rows),
-         {:ok, normalized} <- Jason.encode(rows) do
+         {:ok, normalized} <- CodexPooler.JSON.encode(rows) do
       {:ok, normalized, row_count}
     else
       _not_concatenated -> :error
@@ -161,7 +161,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   end
 
   defp json_kind(content) do
-    case Jason.decode(content) do
+    case CodexPooler.JSON.decode(content) do
       {:ok, value} when is_list(value) -> {:ok, :json_array}
       {:ok, value} when is_map(value) -> {:ok, :json_document}
       {:error, _reason} -> concatenated_json_kind(content)
@@ -205,8 +205,8 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   defp decode_leading_json_object(<<?{, _rest::binary>> = content) do
     with {:ok, byte_end} <- json_object_byte_end(content),
          object_json = binary_part(content, 0, byte_end),
-         {:ok, %Jason.OrderedObject{} = row} <-
-           Jason.decode(object_json, objects: :ordered_objects) do
+         {:ok, %CodexPooler.JSON.OrderedObject{} = row} <-
+           CodexPooler.JSON.decode(object_json, objects: :ordered_objects) do
       rest = binary_part(content, byte_end, byte_size(content) - byte_end)
       {:ok, row, rest}
     else

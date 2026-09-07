@@ -135,7 +135,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
     with false <- declared_over_limit?(response, max_bytes),
          false <- Req.Response.get_private(response, @body_limit_exceeded_key, false),
          %{chunks: chunks} <- Req.Response.get_private(response, @body_state_key),
-         {:ok, body} <- chunks |> Enum.reverse() |> IO.iodata_to_binary() |> Jason.decode() do
+         {:ok, body} <-
+           chunks |> Enum.reverse() |> IO.iodata_to_binary() |> CodexPooler.JSON.decode() do
       {:ok, body}
     else
       _invalid_or_oversized -> :error

@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Dev.SavedResetSafetyProbe do
   def run(args) do
     with {:ok, command} <- SavedResetSafetyProbe.parse_args(args),
          {:ok, receipt} <- SavedResetSafetyProbe.execute(command) do
-      Mix.shell().info(Jason.encode!(receipt))
+      Mix.shell().info(CodexPooler.JSON.encode!(receipt))
     else
       {:error, message} -> Mix.raise(message)
     end

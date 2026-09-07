@@ -118,7 +118,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
   defp plan_details(_json, _opts), do: {:error, :invalid_json}
 
   defp decode_json(json) do
-    case Jason.decode(json) do
+    case CodexPooler.JSON.decode(json) do
       {:ok, payload} -> {:ok, payload}
       {:error, _error} -> {:error, :invalid_json}
     end

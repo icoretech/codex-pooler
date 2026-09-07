@@ -234,7 +234,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
         "input" => [%{"type" => "compaction_trigger"}],
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "compaction" => %{"implementation" => "responses_compaction_v2"}
             })
         }
@@ -293,7 +293,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.payload_context.compaction_projection_context == context
       assert options.extra == %{}
       assert inspect(context) == "#CompactionProjectionContext<redacted>"
-      assert {:error, %Protocol.UndefinedError{}} = Jason.encode(context)
+      assert {:error, %Protocol.UndefinedError{}} = CodexPooler.JSON.encode(context)
 
       assert {safe, finalized_options} =
                CompactionProjectionContext.finalize(options, compact)

@@ -483,7 +483,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
   defp decode_json_body(conn, body) do
     case content_type(conn) do
       {:json, _content_type} ->
-        case Jason.decode(body) do
+        case CodexPooler.JSON.decode(body) do
           {:ok, params} when is_map(params) ->
             {:ok, params}
 

@@ -342,7 +342,7 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
 
       assert metadata["next_expires_at"] == "2026-07-18T00:40:11.968726Z"
 
-      encoded = Jason.encode!(metadata)
+      encoded = CodexPooler.JSON.encode!(metadata)
 
       refute encoded =~ "provider-credit"
       refute encoded =~ "Provider Title"
@@ -416,7 +416,7 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
                }
              ]
 
-      encoded = Jason.encode!(metadata)
+      encoded = CodexPooler.JSON.encode!(metadata)
 
       refute encoded =~ "provider-credit"
       refute encoded =~ "Provider Title"
@@ -785,7 +785,7 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
                row |> Map.keys() |> Enum.sort() == ["expires_at", "first_seen_at"]
              end)
 
-      encoded = Jason.encode!(metadata)
+      encoded = CodexPooler.JSON.encode!(metadata)
 
       refute encoded =~ "1999-01-01T00:00:00Z"
       refute encoded =~ "1998-01-01T00:00:00Z"

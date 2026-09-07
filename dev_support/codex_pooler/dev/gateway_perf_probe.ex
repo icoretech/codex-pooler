@@ -344,12 +344,12 @@ defmodule CodexPooler.Dev.GatewayPerfProbe do
 
     File.write!(
       Path.join(run.dir, "query-summary.json"),
-      Jason.encode_to_iodata!(query_summary(run), pretty: true)
+      CodexPooler.JSON.encode_to_iodata!(query_summary(run), pretty: true)
     )
 
     File.write!(
       Path.join(run.dir, "request-summary.json"),
-      Jason.encode_to_iodata!(request_summary(run), pretty: true)
+      CodexPooler.JSON.encode_to_iodata!(request_summary(run), pretty: true)
     )
 
     File.write!(

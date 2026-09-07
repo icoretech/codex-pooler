@@ -215,7 +215,7 @@ defmodule CodexPooler.Accounting.PricingResolution.Costing do
 
   defp estimate_tokens(payload) do
     payload
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
     |> byte_size()
     |> then(&ceil_div(&1, 4))
   end

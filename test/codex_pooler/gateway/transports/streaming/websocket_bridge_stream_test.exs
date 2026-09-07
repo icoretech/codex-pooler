@@ -254,7 +254,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     owner_frame(
       stream,
       {:data,
-       Jason.encode!(%{
+       CodexPooler.JSON.encode!(%{
          "type" => "response.incomplete",
          "response" => %{
            "status" => "incomplete",
@@ -276,7 +276,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     owner_frame(
       stream,
       {:data,
-       Jason.encode!(%{
+       CodexPooler.JSON.encode!(%{
          "type" => "response.incomplete",
          "response" => %{
            "status" => "incomplete",
@@ -478,7 +478,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     assert_receive {:submit_task, task_pid}, @detection_timeout_ms
 
     completed =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_latched", "status" => "completed"}
       })
@@ -540,7 +540,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     owner_frame(
       stream,
       {:data,
-       Jason.encode!(%{
+       CodexPooler.JSON.encode!(%{
          "type" => "response.completed",
          "response" => %{"id" => "resp_metadata", "status" => "completed"}
        })}
@@ -908,7 +908,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     owner_frame(
       stream,
       {:data,
-       Jason.encode!(%{
+       CodexPooler.JSON.encode!(%{
          "type" => "response.completed",
          "response" => %{"id" => "resp_invalid_metadata", "status" => "completed"}
        })}
@@ -984,7 +984,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     Enum.each(1..65, fn sequence ->
       owner_frame(
         stream,
-        {:data, Jason.encode!(%{"type" => "response.created", "sequence" => sequence})}
+        {:data, CodexPooler.JSON.encode!(%{"type" => "response.created", "sequence" => sequence})}
       )
     end)
 
@@ -1007,7 +1007,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     Enum.each(1..64, fn sequence ->
       owner_frame(
         within_limit,
-        {:data, Jason.encode!(%{"type" => "response.created", "sequence" => sequence})}
+        {:data, CodexPooler.JSON.encode!(%{"type" => "response.created", "sequence" => sequence})}
       )
     end)
 
@@ -1024,7 +1024,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     Enum.each(1..65, fn sequence ->
       owner_frame(
         over_limit,
-        {:data, Jason.encode!(%{"type" => "response.created", "sequence" => sequence})}
+        {:data, CodexPooler.JSON.encode!(%{"type" => "response.created", "sequence" => sequence})}
       )
     end)
 
@@ -1124,7 +1124,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   defp terminal_frame(response_id) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.completed",
       "response" => %{"id" => response_id, "status" => "completed"}
     })

@@ -74,7 +74,7 @@ defmodule CodexPooler.Dev.CodexVscodeAppServerMisalignmentFixture do
   end
 
   defp redacted?(rows, forbidden_keys) do
-    encoded = Jason.encode!(rows)
+    encoded = CodexPooler.JSON.encode!(rows)
     Enum.all?(forbidden_keys, &(not String.contains?(encoded, &1)))
   end
 end

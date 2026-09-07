@@ -905,11 +905,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> reset_owner_turn_output()
       |> schedule_active_response_task_delivery()
 
-    {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, state}
   end
 
   defp handle_non_public_owner_payload({:error, _reason, payload}, state) do
-    {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, state}
   end
 
   defp handle_non_public_owner_payload(:complete, state) do
@@ -1076,7 +1076,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
-    {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
+    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(reason))}, state}
   end
 
   defp handle_non_public_response_done(
@@ -1092,7 +1092,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
-    {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
+    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(reason))}, state}
   end
 
   defp handle_non_public_response_done(pid, {:error, reason}, state) do
@@ -1104,7 +1104,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
-    {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
+    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(reason))}, state}
   end
 
   defp handle_non_public_response_done(pid, _result, state) do
@@ -1402,7 +1402,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp decode_native_metadata_for_class(value) when is_map(value), do: {:ok, value}
 
   defp decode_native_metadata_for_class(value) when is_binary(value) do
-    case Jason.decode(value) do
+    case CodexPooler.JSON.decode(value) do
       {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
       _invalid -> :error
     end
@@ -1761,7 +1761,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     do: :forwarded_owner
 
   defp decode_trace_frame(text) when is_binary(text) do
-    case Jason.decode(text) do
+    case CodexPooler.JSON.decode(text) do
       {:ok, decoded} -> decoded
       {:error, _reason} -> :not_json
     end
@@ -2152,7 +2152,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       reason
       |> Adapter.websocket_error()
       |> maybe_put_public_stream_id(Map.get(state, :public_response_stream_id))
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     _trace =
       NativeCompactionTrace.emit_full(:downstream_websocket_frame_sent, %{
@@ -2316,7 +2316,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        do: true
 
   defp continuity_ordered_prepared?(%PreparedWebsocketFrame{payload: payload}) do
-    WebsocketCodec.continuity_ordered_payload?(Jason.encode!(payload))
+    WebsocketCodec.continuity_ordered_payload?(CodexPooler.JSON.encode!(payload))
   end
 
   defp start_or_queue_prepared_response(prepared, state) do
@@ -2394,7 +2394,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp start_tracked_response_task(%PreparedWebsocketFrame{} = prepared, state) do
     state = activate_prepared_public_context(state, prepared)
 
-    case Adapter.maybe_retarget_before_start(Jason.encode!(prepared.payload), state) do
+    case Adapter.maybe_retarget_before_start(CodexPooler.JSON.encode!(prepared.payload), state) do
       {:ok, state} ->
         state =
           state
@@ -2506,7 +2506,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     decoded_payload
     |> Map.put("client_metadata", client_metadata)
-    |> Jason.encode()
+    |> CodexPooler.JSON.encode()
     |> case do
       {:ok, encoded_payload} -> encoded_payload
       {:error, _reason} -> payload
@@ -2927,7 +2927,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> reset_owner_turn_output()
         |> schedule_response_task_delivery(pid, :aborted)
 
-      {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+      {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, state}
     end
   end
 
@@ -3072,7 +3072,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     decoded
     |> Map.delete("stream_id")
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp put_public_response_context(state, stream_id) do
@@ -3091,7 +3091,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     reason
     |> Adapter.websocket_error()
     |> maybe_put_public_stream_id(Map.get(state, :public_response_stream_id))
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp maybe_put_public_stream_id(payload, stream_id) when is_binary(stream_id) do
@@ -3304,7 +3304,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           :error,
           exception,
           __STACKTRACE__,
-          Jason.encode!(prepared.payload),
+          CodexPooler.JSON.encode!(prepared.payload),
           state,
           opts
         )
@@ -3319,7 +3319,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
             kind,
             reason,
             __STACKTRACE__,
-            Jason.encode!(prepared.payload),
+            CodexPooler.JSON.encode!(prepared.payload),
             state,
             opts
           )
@@ -3770,7 +3770,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp session_id(_session), do: nil
 
   defp safe_payload_metadata(payload) when is_binary(payload) do
-    case Jason.decode(payload) do
+    case CodexPooler.JSON.decode(payload) do
       {:ok, %{} = decoded} ->
         [
           payload_type: safe_payload_field(decoded, "type"),

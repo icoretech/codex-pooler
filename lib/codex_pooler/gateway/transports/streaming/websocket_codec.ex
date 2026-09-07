@@ -46,7 +46,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   @spec decode_payload(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode_payload(payload) when is_binary(payload) do
-    case Jason.decode(payload) do
+    case CodexPooler.JSON.decode(payload) do
       {:ok, decoded} when is_map(decoded) ->
         {:ok, decoded}
 
@@ -701,12 +701,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp scrub_canonical_metadata_turn_id(%{"x-codex-turn-metadata" => encoded} = client_metadata)
        when is_binary(encoded) do
-    case Jason.decode(encoded) do
+    case CodexPooler.JSON.decode(encoded) do
       {:ok, metadata} when is_map(metadata) ->
         Map.put(
           client_metadata,
           "x-codex-turn-metadata",
-          metadata |> Map.delete("turn_id") |> Jason.encode!()
+          metadata |> Map.delete("turn_id") |> CodexPooler.JSON.encode!()
         )
 
       _validated_earlier ->
@@ -760,7 +760,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   def deliver_result(%{websocket_messages: messages}, push_frame) do
-    Enum.each(messages, fn message -> push_frame.(Jason.encode!(message)) end)
+    Enum.each(messages, fn message -> push_frame.(CodexPooler.JSON.encode!(message)) end)
     :ok
   end
 
@@ -770,7 +770,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   def deliver_result(%{body: body}, push_frame) do
-    push_frame.(Jason.encode!(body))
+    push_frame.(CodexPooler.JSON.encode!(body))
     :ok
   end
 
@@ -969,7 +969,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   defp canonical_metadata_map(metadata) when is_map(metadata), do: metadata
 
   defp canonical_metadata_map(metadata) when is_binary(metadata) do
-    case Jason.decode(metadata) do
+    case CodexPooler.JSON.decode(metadata) do
       {:ok, decoded} when is_map(decoded) -> decoded
       _invalid -> %{}
     end
@@ -1029,10 +1029,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp restore_custom_tool_call_namespaces(data, namespaces) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         restored = Responses.restore_custom_tool_call_namespaces(decoded, namespaces)
-        if restored === decoded, do: data, else: Jason.encode!(restored)
+        if restored === decoded, do: data, else: CodexPooler.JSON.encode!(restored)
 
       _invalid ->
         data
@@ -1121,7 +1121,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp canonical_sse_data_message(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         {canonical, _decoded} =
           StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)
@@ -1137,7 +1137,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp direct_json_message(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         {canonical, _decoded} =
           StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)

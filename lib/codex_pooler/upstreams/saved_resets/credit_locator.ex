@@ -51,7 +51,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CreditLocator do
     with {:ok, normalized} <- normalize_binding(binding),
          :ok <- validate_envelope_aad(envelope, normalized),
          {:ok, plaintext} <- SecretBox.decrypt_envelope(envelope),
-         {:ok, payload} <- Jason.decode(plaintext),
+         {:ok, payload} <- CodexPooler.JSON.decode(plaintext),
          :ok <- validate_payload(payload, normalized),
          credit_id when is_binary(credit_id) <- payload["credit_id"],
          :ok <- validate_credit_id(credit_id) do
@@ -98,7 +98,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CreditLocator do
     binding
     |> payload_fields()
     |> Map.put("credit_id", credit_id)
-    |> Jason.encode()
+    |> CodexPooler.JSON.encode()
   end
 
   defp validate_payload(payload, binding) when is_map(payload) do
@@ -130,7 +130,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CreditLocator do
 
   defp validate_envelope_aad(envelope, binding) do
     with {:ok, %{"aad" => %{"key_version" => key_version} = envelope_aad}} <-
-           Jason.decode(envelope),
+           CodexPooler.JSON.decode(envelope),
          true <- is_binary(key_version) and byte_size(key_version) in 1..64,
          true <- Map.delete(envelope_aad, "key_version") == aad(binding) do
       :ok

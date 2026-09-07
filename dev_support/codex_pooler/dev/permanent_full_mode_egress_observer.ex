@@ -242,7 +242,7 @@ defmodule CodexPooler.Dev.PermanentFullModeEgressObserver do
       conn
       |> put_resp_header(name, value)
       |> put_resp_content_type("application/json")
-      |> send_resp(status, Jason.encode!(body))
+      |> send_resp(status, CodexPooler.JSON.encode!(body))
     end
   end
 end

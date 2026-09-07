@@ -52,7 +52,7 @@ defmodule CodexPooler.Gateway.Transports.MisalignmentPolicyViolation do
   def classify_http(status, body, %RequestOptions{} = request_options)
       when status in [400, 403] and is_binary(body) do
     with true <- eligible_route?(request_options),
-         {:ok, %{"error" => error}} when is_map(error) <- Jason.decode(body),
+         {:ok, %{"error" => error}} when is_map(error) <- CodexPooler.JSON.decode(body),
          @code <- Map.get(error, "code") do
       summary = %{code: @code, message: normalize_message(Map.get(error, "message"))}
 

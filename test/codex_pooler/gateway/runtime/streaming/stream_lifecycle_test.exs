@@ -540,7 +540,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       %Req.Response{
         status: 503,
         headers: replay_rate_limit_headers("91"),
-        body: Jason.encode!(replay_rate_limit_error("92"))
+        body: CodexPooler.JSON.encode!(replay_rate_limit_error("92"))
       }
 
     assert {:ok, %{stale_generation?: true}} =
@@ -680,7 +680,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                %Req.Response{
                  status: 200,
                  headers: replay_rate_limit_headers("41"),
-                 body: Jason.encode!(%{"id" => "resp_current_observer"})
+                 body: CodexPooler.JSON.encode!(%{"id" => "resp_current_observer"})
                },
                context,
                finalization_callbacks()
@@ -797,9 +797,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   @tag :replay_generation_race
   test "stale 401 and misalignment responses run no route effect before authority" do
     for {status, body} <- [
-          {401, Jason.encode!(%{"error" => %{"code" => "invalid_api_key"}})},
+          {401, CodexPooler.JSON.encode!(%{"error" => %{"code" => "invalid_api_key"}})},
           {403,
-           Jason.encode!(%{
+           CodexPooler.JSON.encode!(%{
              "error" => %{
                "code" => MisalignmentPolicyViolation.code(),
                "message" => "synthetic policy rejection"
@@ -2737,7 +2737,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       }
     }
 
-    "event: codex.rate_limits\ndata: #{Jason.encode!(event)}\n\n"
+    "event: codex.rate_limits\ndata: #{CodexPooler.JSON.encode!(event)}\n\n"
   end
 
   defp stale_invalid_response(:invalid_json, context) do
@@ -2762,7 +2762,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     {%Req.Response{
        status: 200,
        headers: [{"content-type", ["application/json"]}],
-       body: Jason.encode!(%{"status" => "completed", "output" => []})
+       body: CodexPooler.JSON.encode!(%{"status" => "completed", "output" => []})
      },
      %{
        context
@@ -2846,7 +2846,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       "provider_sibling" => "private-sibling"
     }
 
-    ~s(event: response.failed\ndata: #{Jason.encode!(%{"type" => "response.failed", "error" => error, "response" => %{"status" => "failed", "error" => error}})}\n\n)
+    ~s(event: response.failed\ndata: #{CodexPooler.JSON.encode!(%{"type" => "response.failed", "error" => error, "response" => %{"status" => "failed", "error" => error}})}\n\n)
   end
 
   defp misalignment_half_open_circuit!(setup) do
@@ -2969,8 +2969,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     "event: response.in_progress\ndata: " <>
       ~s({"type":"response.in_progress","response":{"usage":) <>
-      Jason.encode!(usage) <>
-      ~s(,"output":#{Jason.encode!(tail)}}}) <>
+      CodexPooler.JSON.encode!(usage) <>
+      ~s(,"output":#{CodexPooler.JSON.encode!(tail)}}}) <>
       "\n\n"
   end
 

@@ -69,13 +69,13 @@ defmodule CodexPooler.Events.PostgresBridge do
   end
 
   defp local_origin?(payload) do
-    with {:ok, attrs} <- Jason.decode(payload) do
+    with {:ok, attrs} <- CodexPooler.JSON.decode(payload) do
       {:ok, attrs["origin_id"] == Events.origin_id()}
     end
   end
 
   defp decode_event(payload) do
-    with {:ok, attrs} <- Jason.decode(payload),
+    with {:ok, attrs} <- CodexPooler.JSON.decode(payload),
          {:ok, emitted_at} <- decode_emitted_at(attrs["emitted_at"]),
          {:ok, topics} <- decode_topics(attrs["topics"]),
          {:ok, payload} <- decode_payload(attrs["payload"]),

@@ -51,7 +51,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                "type" => "server_error"
              }
 
-      refute Jason.encode!(normalized_error) =~ internal_reason
+      refute CodexPooler.JSON.encode!(normalized_error) =~ internal_reason
     end
   end
 
@@ -794,7 +794,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              "arguments" => arguments
            } = function_call
 
-    assert Jason.decode!(arguments) == %{"commands" => ["printf fixture"]}
+    assert CodexPooler.JSON.decode!(arguments) == %{"commands" => ["printf fixture"]}
 
     assert function_output == %{
              "type" => "function_call_output",

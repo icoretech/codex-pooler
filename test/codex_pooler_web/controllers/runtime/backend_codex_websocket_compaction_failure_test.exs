@@ -83,12 +83,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
       assert_receive {:native_frame, completed_frame}, 15_000
 
       assert %{"type" => "response.output_item.done", "item" => ^expected_item} =
-               Jason.decode!(done_frame)
+               CodexPooler.JSON.decode!(done_frame)
 
       assert %{
                "type" => "response.completed",
                "response" => %{"output" => [^expected_item]}
-             } = Jason.decode!(completed_frame)
+             } = CodexPooler.JSON.decode!(completed_frame)
 
       refute done_frame =~ @raw_sentinel
       refute completed_frame =~ @raw_sentinel
@@ -643,7 +643,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   end
 
   defp compact_payload(setup, anchor) do
-    Jason.encode!(
+    CodexPooler.JSON.encode!(
       %{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
@@ -655,7 +655,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
         "generate" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "turn_id" => "native-compact-#{setup.pool.id}",
               "window_id" => "native-window-#{setup.pool.id}",
               "context_window_id" => setup.pool.id,
@@ -677,7 +677,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
   defp native_options(session, payload, attrs \\ %{}) do
     assert {:ok, %NativeCodexTurnMetadata{request_kind: :compaction} = metadata} =
-             NativeCodexTurnMetadata.parse(Jason.decode!(payload), session.id)
+             NativeCodexTurnMetadata.parse(CodexPooler.JSON.decode!(payload), session.id)
 
     for digest <- [
           metadata.semantic_turn_key,
@@ -695,7 +695,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   end
 
   defp ordinary_payload(setup, response_id) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
       "input" => [%{"type" => "message", "role" => "user", "content" => "synthetic lineage"}],

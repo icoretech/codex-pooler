@@ -304,7 +304,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp maybe_project_turn_metadata_header("x-codex-turn-metadata", value) do
-    case Jason.decode(value) do
+    case CodexPooler.JSON.decode(value) do
       {:ok, %{"code_mode_tool_names" => _value} = metadata} ->
         encode_projected_turn_metadata(metadata, value)
 
@@ -318,7 +318,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp encode_projected_turn_metadata(metadata, original) do
     case metadata
          |> Map.delete("code_mode_tool_names")
-         |> Jason.encode(escape: :unicode_safe) do
+         |> CodexPooler.JSON.encode(escape: :unicode_safe) do
       {:ok, projected} -> projected
       {:error, _error} -> original
     end
@@ -680,7 +680,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp egress_websocket_client_metadata(:none), do: :none
 
   defp egress_websocket_client_metadata(payload) do
-    case Jason.decode(IO.iodata_to_binary(payload)) do
+    case CodexPooler.JSON.decode(IO.iodata_to_binary(payload)) do
       {:ok, %{"client_metadata" => client_metadata}} when is_map(client_metadata) ->
         {:keys, Map.keys(client_metadata)}
 
@@ -999,7 +999,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             session,
             owner_lease_token,
             downstream,
-            Jason.encode!(response_processed_upstream_payload(payload)),
+            CodexPooler.JSON.encode!(response_processed_upstream_payload(payload)),
             forwarder_opts
           )
 
@@ -1017,7 +1017,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
          {:ok, :sent} <-
            UpstreamWebsocketSession.send_request_frame(
              pid,
-             Jason.encode!(response_processed_upstream_payload(payload))
+             CodexPooler.JSON.encode!(response_processed_upstream_payload(payload))
            ) do
       :ok
     else
@@ -1619,7 +1619,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
          }
        )
        when endpoint in @regular_runtime_metadata_endpoints and is_binary(body) do
-    with {:ok, %{} = payload} <- Jason.decode(body),
+    with {:ok, %{} = payload} <- CodexPooler.JSON.decode(body),
          {:ok, model} <- routing_hint_component(Map.get(payload, "model")),
          {:ok, service_tier} <- routing_hint_service_tier(payload) do
       case service_tier do

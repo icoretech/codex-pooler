@@ -330,7 +330,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
 
   @spec decode_response_body(term()) :: term()
   defp decode_response_body(body) when is_binary(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, decoded} -> decoded
       _invalid -> body
     end
@@ -434,7 +434,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   defp decode_usage_body(%{} = payload), do: {:ok, payload}
 
   defp decode_usage_body(payload) when is_binary(payload) do
-    case Jason.decode(payload) do
+    case CodexPooler.JSON.decode(payload) do
       {:ok, %{} = decoded} -> {:ok, decoded}
       _invalid -> :error
     end

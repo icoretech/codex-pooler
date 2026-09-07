@@ -248,7 +248,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       terminal =
         "event: response.completed\r" <>
           "data: " <>
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.completed",
             "response" => %{"id" => "resp_chat_cr", "status" => "completed", "output" => []}
           }) <>
@@ -269,7 +269,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
         [
           "event: response.output_text.delta\n",
           "data: ",
-          Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "split answer"})
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.output_text.delta",
+            "delta" => "split answer"
+          })
         ]
         |> IO.iodata_to_binary()
 
@@ -289,7 +292,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
         [
           "event: response.created\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.created",
             "response" => %{
               "id" => "resp_split_created",
@@ -327,7 +330,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
         [
           "event: response.created\n",
           "data: ",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.created",
             "response" => %{
               "id" => "resp_pathological_created",
@@ -356,7 +359,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
         [
           "event: response.output_text.delta\n",
           "data: ",
-          Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "after overflow"}),
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.output_text.delta",
+            "delta" => "after overflow"
+          }),
           "\n\n"
         ]
         |> IO.iodata_to_binary()
@@ -558,7 +564,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
           IO.iodata_to_binary([
             event_line,
             "data: ",
-            Jason.encode!(failed),
+            CodexPooler.JSON.encode!(failed),
             "\n\n",
             sse_event("response.completed", %{
               "type" => "response.completed",
@@ -574,7 +580,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       end
 
       state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
-      mismatch = "event: response.completed\ndata: " <> Jason.encode!(failed) <> "\n\n"
+      mismatch = "event: response.completed\ndata: " <> CodexPooler.JSON.encode!(failed) <> "\n\n"
       assert {"", state} = ChatCompletions.normalize_stream_data(mismatch, state)
       refute state.terminal_seen?
     end
@@ -643,13 +649,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
     end
   end
 
-  defp sse_event(type, data), do: ["event: ", type, "\n", "data: ", Jason.encode!(data), "\n\n"]
+  defp sse_event(type, data),
+    do: ["event: ", type, "\n", "data: ", CodexPooler.JSON.encode!(data), "\n\n"]
 
   defp normalized_sse_payloads(normalized) do
     normalized
     |> String.split("\n\n", trim: true)
     |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
     |> Enum.reject(&String.contains?(&1, "[DONE]"))
-    |> Enum.map(&Jason.decode!/1)
+    |> Enum.map(&CodexPooler.JSON.decode!/1)
   end
 end

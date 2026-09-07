@@ -105,7 +105,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionResumeTest do
 
   defp with_direct(fun) do
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_ordinary_fixture", "status" => "completed"}
       })
@@ -234,7 +234,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionResumeTest do
 
   defp reserve_forwarded(owner, downstream, instance, lease) do
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_ordinary_fixture", "status" => "completed"}
       })

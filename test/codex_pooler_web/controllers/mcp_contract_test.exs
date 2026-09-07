@@ -75,7 +75,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> put_req_header("content-type", "text/plain")
         |> put_req_header("accept", "application/json, text/event-stream")
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 415)["error"]["message"] ==
                "content-type must be application/json"
@@ -87,7 +87,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> put_req_header("content-type", "application/json")
         |> put_req_header("accept", "application/json")
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 406)["error"]["message"] ==
                "accept must include application/json and text/event-stream"
@@ -98,7 +98,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("mcp-protocol-version", "2025-03-26")
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 400)["error"]["message"] ==
                "unsupported MCP protocol version"
@@ -112,7 +112,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> json_rpc_conn()
         |> put_req_header("mcp-protocol-version", @mcp_version)
         |> put_req_header("origin", "https://untrusted.example")
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 403)["error"]["message"] == "origin is not allowed"
     end
@@ -124,7 +124,7 @@ defmodule CodexPoolerWeb.McpContractTest do
       conn =
         conn
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       response = json_response(conn, 200)
       assert response["result"]["protocolVersion"] == @mcp_version
@@ -139,7 +139,7 @@ defmodule CodexPoolerWeb.McpContractTest do
       conn =
         conn
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       response = json_response(conn, 200)
 
@@ -161,7 +161,7 @@ defmodule CodexPoolerWeb.McpContractTest do
           conn
           |> recycle()
           |> authenticated_json_rpc_conn(raw_token)
-          |> post("/mcp", Jason.encode!(initialize_request(version)))
+          |> post("/mcp", CodexPooler.JSON.encode!(initialize_request(version)))
 
         assert json_response(checked_conn, 200)["result"]["protocolVersion"] == version
       end
@@ -180,7 +180,7 @@ defmodule CodexPoolerWeb.McpContractTest do
           |> recycle()
           |> authenticated_json_rpc_conn(raw_token)
           |> put_req_header("mcp-protocol-version", header_version)
-          |> post("/mcp", Jason.encode!(initialize_request(body_version)))
+          |> post("/mcp", CodexPooler.JSON.encode!(initialize_request(body_version)))
 
         assert json_response(checked_conn, 200)["result"]["protocolVersion"] == body_version
       end
@@ -195,7 +195,7 @@ defmodule CodexPoolerWeb.McpContractTest do
       conn =
         conn
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       assert json_rpc_error(conn, 400)["error"]["message"] ==
                "unsupported initialize protocol version"
@@ -212,7 +212,7 @@ defmodule CodexPoolerWeb.McpContractTest do
       conn =
         conn
         |> authenticated_json_rpc_conn(raw_token)
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       assert json_rpc_error(conn, 400)["error"]["message"] ==
                "unsupported initialize protocol version"
@@ -228,7 +228,7 @@ defmodule CodexPoolerWeb.McpContractTest do
           |> recycle()
           |> authenticated_json_rpc_conn(raw_token)
           |> maybe_put_protocol_header(version)
-          |> post("/mcp", Jason.encode!(ping_request()))
+          |> post("/mcp", CodexPooler.JSON.encode!(ping_request()))
 
         assert json_response(checked_conn, 200) == %{
                  "jsonrpc" => "2.0",
@@ -246,7 +246,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         conn
         |> authenticated_json_rpc_conn(raw_token)
         |> put_req_header("mcp-protocol-version", "2025-03-26")
-        |> post("/mcp", Jason.encode!(ping_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(ping_request()))
 
       assert json_rpc_error(conn, 400)["error"]["message"] ==
                "unsupported MCP protocol version"
@@ -263,7 +263,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "tools-1",
             "method" => "tools/list",
@@ -288,7 +288,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "call-1",
             "method" => "tools/call",
@@ -312,7 +312,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "method" => "notifications/initialized",
             "params" => %{}
@@ -331,7 +331,11 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{"jsonrpc" => "2.0", "id" => "server-request-1", "result" => %{}})
+          CodexPooler.JSON.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => "server-request-1",
+            "result" => %{}
+          })
         )
 
       assert response(conn, 202) == ""
@@ -342,7 +346,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!([initialize_request()]))
+        |> post("/mcp", CodexPooler.JSON.encode!([initialize_request()]))
 
       assert json_rpc_error(conn, 400)["error"]["message"] == "batch JSON-RPC is not supported"
     end
@@ -368,7 +372,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       assert json_rpc_error(conn, 400)["error"]["message"] ==
                "request id must be a string or number"
@@ -381,7 +385,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       assert json_rpc_error(conn, 400)["error"]["message"] == "params must be an object"
     end
@@ -393,7 +397,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> put_req_header("mcp-protocol-version", @mcp_version)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "mixed",
             "method" => "ping",
@@ -414,7 +418,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> authenticated_json_rpc_conn(raw_token)
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "unsupported-1",
             "method" => "resources/list",
@@ -442,7 +446,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> put_req_header("content-type", "application/json")
         |> put_req_header("accept", "application/json")
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 406)["error"]["message"] ==
                "accept must include application/json and text/event-stream"
@@ -457,7 +461,7 @@ defmodule CodexPoolerWeb.McpContractTest do
         |> put_req_header("content-type", "application/json")
         |> put_req_header("accept", "application/json")
         |> put_req_header("mcp-protocol-version", @mcp_version)
-        |> post("/mcp", Jason.encode!(initialize_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
 
       assert json_rpc_error(conn, 406)["error"]["message"] ==
                "accept must include application/json and text/event-stream"
@@ -479,7 +483,7 @@ defmodule CodexPoolerWeb.McpContractTest do
           |> put_req_header(header_name, header_value)
           |> put_req_header("content-type", "application/json")
           |> put_req_header("accept", "application/json, text/event-stream")
-          |> post("/mcp?token=query-token", Jason.encode!(initialize_request()))
+          |> post("/mcp?token=query-token", CodexPooler.JSON.encode!(initialize_request()))
 
         assert json_rpc_error(checked_conn, 401)["error"]["message"] ==
                  "MCP bearer token is required"

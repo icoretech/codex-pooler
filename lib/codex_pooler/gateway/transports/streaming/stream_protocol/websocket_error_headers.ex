@@ -16,7 +16,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
 
   @spec websocket_error_frame_headers(term()) :: headers()
   def websocket_error_frame_headers(data) when is_binary(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         websocket_error_frame_headers(decoded)
 

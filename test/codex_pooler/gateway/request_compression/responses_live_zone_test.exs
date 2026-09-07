@@ -14,7 +14,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
             "type" => "function_call",
             "call_id" => "call_build_log",
             "name" => "run_command",
-            "arguments" => Jason.encode!(%{"cmd" => "mix compile"})
+            "arguments" => CodexPooler.JSON.encode!(%{"cmd" => "mix compile"})
           },
           %{
             "type" => "function_call_output",
@@ -108,7 +108,8 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
               "type" => "function_call",
               "call_id" => call_id,
               "name" => "arbitrary_tool_#{index}",
-              "arguments" => Jason.encode!(%{command_key => "cat src/example-#{index}.ex"})
+              "arguments" =>
+                CodexPooler.JSON.encode!(%{command_key => "cat src/example-#{index}.ex"})
             },
             %{"type" => "function_call_output", "call_id" => call_id, "output" => output}
           ]
@@ -305,7 +306,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
           "type" => "function_call",
           "call_id" => private_call_id,
           "name" => "arbitrary_reader",
-          "arguments" => Jason.encode!(%{"cmd" => private_command})
+          "arguments" => CodexPooler.JSON.encode!(%{"cmd" => private_command})
         },
         %{
           "type" => "function_call_output",
@@ -465,14 +466,14 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
                 candidates: [^candidate]
               }} = ResponsesLiveZone.plan(json, min_bytes: @min_candidate_bytes)
 
-      assert Jason.decode!(json)["input"] == input
+      assert CodexPooler.JSON.decode!(json)["input"] == input
     end
 
     test "handles item key order differences" do
       output = large_output("order")
 
       json =
-        ~s({"model":"gpt-fixture","input":[{"output":#{Jason.encode!(output)},"call_id":"call_order","type":"local_shell_call_output"}]})
+        ~s({"model":"gpt-fixture","input":[{"output":#{CodexPooler.JSON.encode!(output)},"call_id":"call_order","type":"local_shell_call_output"}]})
 
       assert {:ok, [candidate]} =
                ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
@@ -504,7 +505,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
         ~S({"model":"gpt-fixture","input":null}),
         ~S({"model":"gpt-fixture","input":{"type":"function_call_output","output":"ignored"}}),
         ~S({"model":"gpt-fixture","input":"ignored"}),
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "gpt-fixture",
           "input" => [
             %{
@@ -639,11 +640,11 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
     end
 
     test "skips only outputs bound to a function tool with an output schema" do
-      schema_bound_output = Jason.encode!(%{"items" => Enum.to_list(1..180)})
+      schema_bound_output = CodexPooler.JSON.encode!(%{"items" => Enum.to_list(1..180)})
       unbound_output = large_output("unbound schema-adjacent output")
 
       json =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "gpt-fixture",
           "tools" => [
             %{
@@ -715,7 +716,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       ]
 
       for payload <- payloads do
-        json = Jason.encode!(Map.put(payload, "model", "gpt-fixture"))
+        json = CodexPooler.JSON.encode!(Map.put(payload, "model", "gpt-fixture"))
 
         assert {:ok, [candidate]} =
                  ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
@@ -726,7 +727,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
 
     test "retains the existing fail-closed behavior for an unmatched output call id" do
       json =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "gpt-fixture",
           "tools" => [%{"type" => "function", "name" => "schema_bound", "output_schema" => %{}}],
           "input" => [
@@ -825,7 +826,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
             ]
           ]
         }
-        |> Jason.encode!()
+        |> CodexPooler.JSON.encode!()
 
       assert {:ok, [candidate]} =
                ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
@@ -990,7 +991,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
   end
 
   defp encode_request(input) do
-    Jason.encode!(%{"model" => "gpt-fixture", "input" => input})
+    CodexPooler.JSON.encode!(%{"model" => "gpt-fixture", "input" => input})
   end
 
   defp large_output(label) do
@@ -1013,13 +1014,13 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       "marker" => marker,
       "rows" => Enum.map(1..48, &%{"id" => &1, "status" => "synthetic"})
     }
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp large_json_array_output(marker) do
     1..64
     |> Enum.map(&%{"id" => &1, "marker" => marker})
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp large_diff_output(marker) do
@@ -1036,7 +1037,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
 
   defp large_embedded_json_output(marker) do
     "synthetic prefix\n" <>
-      Jason.encode!(%{"rows" => Enum.map(1..48, &%{"id" => &1, "marker" => marker})},
+      CodexPooler.JSON.encode!(%{"rows" => Enum.map(1..48, &%{"id" => &1, "marker" => marker})},
         pretty: true
       ) <> "\nsynthetic suffix"
   end
@@ -1052,7 +1053,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
           }
         end)
     }
-    |> Jason.encode!(pretty: true)
+    |> CodexPooler.JSON.encode!(pretty: true)
   end
 
   defp external_retrieval_tool_name(prefix \\ "") do

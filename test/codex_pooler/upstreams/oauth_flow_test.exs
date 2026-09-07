@@ -142,7 +142,7 @@ defmodule CodexPooler.Upstreams.OAuthFlowTest do
                 "ciphertext" => ciphertext,
                 "nonce" => nonce,
                 "aad" => %{"domain" => "upstream_oauth_flow"}
-              }} = Jason.decode(flow.code_verifier_ciphertext)
+              }} = CodexPooler.JSON.decode(flow.code_verifier_ciphertext)
 
       assert is_binary(ciphertext)
       assert is_binary(nonce)

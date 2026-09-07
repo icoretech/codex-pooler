@@ -241,7 +241,7 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     lite_body = %{"models" => [lite]}
 
     assert CodexCatalog.etag(full_body) ==
-             CodexCatalog.etag(Jason.decode!(Jason.encode!(full_body)))
+             CodexCatalog.etag(CodexPooler.JSON.decode!(CodexPooler.JSON.encode!(full_body)))
 
     refute CodexCatalog.etag(full_body) == CodexCatalog.etag(lite_body)
   end

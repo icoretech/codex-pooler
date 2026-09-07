@@ -76,7 +76,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       }
     }
 
-    chunk = ["data: ", Jason.encode!(payload), "\n\n"] |> IO.iodata_to_binary()
+    chunk = ["data: ", CodexPooler.JSON.encode!(payload), "\n\n"] |> IO.iodata_to_binary()
 
     {chunk, %{state | terminal_seen?: true}}
   end
@@ -365,7 +365,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp terminal_stream_chunk(type, decoded, %{role_sent?: false} = state)
        when type in ["response.failed", "error"] do
     state = sync_response_state(state, decoded)
-    {["data: ", Jason.encode!(%{"error" => public_error(decoded)}), "\n\n"], state}
+    {["data: ", CodexPooler.JSON.encode!(%{"error" => public_error(decoded)}), "\n\n"], state}
   end
 
   defp terminal_stream_chunk(_type, decoded, state), do: terminal_stream_chunk(decoded, state)
@@ -398,7 +398,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       }
       |> put_if_present("service_tier", state.service_tier)
 
-    {["data: ", Jason.encode!(payload), "\n\n"], mark_visible(state)}
+    {["data: ", CodexPooler.JSON.encode!(payload), "\n\n"], mark_visible(state)}
   end
 
   defp chat_sse_chunk(delta, finish_reason, state) do
@@ -431,7 +431,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       }
       |> put_if_present("service_tier", state.service_tier)
 
-    ["data: ", Jason.encode!(payload), "\n\n"]
+    ["data: ", CodexPooler.JSON.encode!(payload), "\n\n"]
   end
 
   defp initial_state(chat_payload) do
@@ -468,7 +468,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
           }
           |> put_if_present("service_tier", state.service_tier)
 
-        ["data: ", Jason.encode!(payload), "\n\n"]
+        ["data: ", CodexPooler.JSON.encode!(payload), "\n\n"]
 
       _usage ->
         []

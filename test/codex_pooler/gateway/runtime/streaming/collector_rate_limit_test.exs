@@ -239,5 +239,5 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CollectorRateLimitTest do
     }
   end
 
-  defp sse(event), do: "event: codex.rate_limits\ndata: #{Jason.encode!(event)}\n\n"
+  defp sse(event), do: "event: codex.rate_limits\ndata: #{CodexPooler.JSON.encode!(event)}\n\n"
 end

@@ -48,16 +48,18 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
     series = column_series ++ [%{name: "Requests", type: "line", data: request_values}]
 
     %{
-      categories: Jason.encode!(labels),
-      series: Jason.encode!(series),
-      units: Jason.encode!(List.duplicate("tokens", length(column_series)) ++ ["requests"]),
-      value_kinds: Jason.encode!(List.duplicate("tokens", length(column_series)) ++ ["integer"]),
+      categories: CodexPooler.JSON.encode!(labels),
+      series: CodexPooler.JSON.encode!(series),
+      units:
+        CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["requests"]),
+      value_kinds:
+        CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["integer"]),
       yaxis:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           %{seriesName: token_axis_series, title: "tokens", valueKind: "tokens"},
           %{seriesName: "Requests", title: "requests", opposite: true, valueKind: "integer"}
         ]),
-      colors: Jason.encode!(colors),
+      colors: CodexPooler.JSON.encode!(colors),
       points: points,
       total_label:
         "#{Format.token_count(token_total)} tokens / #{Format.integer(request_total)} requests"

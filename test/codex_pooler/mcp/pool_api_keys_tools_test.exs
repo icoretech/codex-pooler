@@ -276,7 +276,7 @@ defmodule CodexPooler.MCP.PoolApiKeysToolsTest do
 
     assert [%{"id" => visible_id}] = list_result["structuredContent"]["items"]
     assert visible_id == visible_key.id
-    refute Jason.encode!(list_result["structuredContent"]) =~ hidden_key.id
+    refute CodexPooler.JSON.encode!(list_result["structuredContent"]) =~ hidden_key.id
 
     assert {:ok, hidden_result} =
              ToolDispatch.call("codex_pooler_get_pool_api_key", %{"selector" => hidden_key.id}, %{

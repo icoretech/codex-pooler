@@ -15,9 +15,9 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonDocumentLossless
   def compress(content, opts \\ [])
 
   def compress(content, opts) when is_binary(content) do
-    with {:ok, %Jason.OrderedObject{} = document} <-
-           Jason.decode(content, objects: :ordered_objects),
-         {:ok, compressed} <- Jason.encode(document) do
+    with {:ok, %CodexPooler.JSON.OrderedObject{} = document} <-
+           CodexPooler.JSON.decode(content, objects: :ordered_objects),
+         {:ok, compressed} <- CodexPooler.JSON.encode(document) do
       Strategies.finalize(
         @strategy,
         content,
@@ -32,5 +32,5 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonDocumentLossless
 
   def compress(_content, _opts), do: :skip
 
-  defp top_level_key_count(%Jason.OrderedObject{values: values}), do: length(values)
+  defp top_level_key_count(%CodexPooler.JSON.OrderedObject{values: values}), do: length(values)
 end

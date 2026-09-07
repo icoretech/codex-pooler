@@ -21,7 +21,7 @@ defmodule Mix.Tasks.Dev.Upstreams.Import do
     # Match the export task's narrow Dialyzer boundary. Parsing and environment
     # gating above remain direct and execute before application boot.
     case apply(UpstreamAccountBundle, :run_import, [args]) do
-      {:ok, receipt} -> Mix.shell().info(Jason.encode!(receipt))
+      {:ok, receipt} -> Mix.shell().info(CodexPooler.JSON.encode!(receipt))
       {:error, message} -> Mix.raise(message)
     end
   end

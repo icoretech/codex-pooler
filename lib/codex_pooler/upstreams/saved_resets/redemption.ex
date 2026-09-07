@@ -1003,7 +1003,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
                  :post
                )
              ),
-           json: body,
+           body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
            receive_timeout: recovery.receive_timeout
          )
@@ -2285,7 +2285,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
                  :post
                )
              ),
-           json: body,
+           body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
            receive_timeout: reserved_claim.receive_timeout
          )

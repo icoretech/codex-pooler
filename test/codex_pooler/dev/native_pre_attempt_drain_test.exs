@@ -20,7 +20,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainTest do
       |> DrainPlug.call([])
 
     assert response.status == 409
-    assert Jason.decode!(response.resp_body) == %{"error" => "idle_owner_required"}
+    assert CodexPooler.JSON.decode!(response.resp_body) == %{"error" => "idle_owner_required"}
     refute NativePreAttemptDrain.status().captured
     refute NativePreAttemptDrain.status().armed
   end
@@ -32,7 +32,11 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainTest do
       |> DrainPlug.call([])
 
     assert response.status == 409
-    assert Jason.decode!(response.resp_body) == %{"error" => "visible_attempt_required"}
+
+    assert CodexPooler.JSON.decode!(response.resp_body) == %{
+             "error" => "visible_attempt_required"
+           }
+
     refute NativePreAttemptDrain.status().captured
     refute NativePreAttemptDrain.status().armed
   end
@@ -68,7 +72,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainTest do
       |> DrainPlug.call([])
 
     assert response.status == 409
-    assert Jason.decode!(response.resp_body) == %{"error" => "capture_required"}
+    assert CodexPooler.JSON.decode!(response.resp_body) == %{"error" => "capture_required"}
 
     for route <- [
           "/drain",
@@ -85,7 +89,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainTest do
         |> DrainPlug.call([])
 
       assert response.status == 400
-      assert Jason.decode!(response.resp_body) == %{"error" => "invalid_control"}
+      assert CodexPooler.JSON.decode!(response.resp_body) == %{"error" => "invalid_control"}
     end
   end
 

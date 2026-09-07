@@ -1091,7 +1091,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.raw_response(
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "error" => %{
               "code" => nil,
               "message" => raw_message,
@@ -1164,7 +1164,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> Plug.Conn.send_chunked(200)
 
     assert {:ok, stream_conn} = stream.(stream_conn)
-    assert Jason.decode!(stream_conn.resp_body) == @canonical_full_failure_body
+    assert CodexPooler.JSON.decode!(stream_conn.resp_body) == @canonical_full_failure_body
 
     assert full_failure_sentinels_absent?([stream_conn.resp_body], sentinels)
     assert FakeUpstream.count(failing_upstream) == 1
@@ -3020,7 +3020,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "private_marker" => "backend private json output sentinel",
         "rows" => Enum.map(1..64, &%{"id" => &1, "state" => "synthetic"})
       }
-      |> Jason.encode!(pretty: true)
+      |> CodexPooler.JSON.encode!(pretty: true)
 
     conn =
       conn
@@ -3193,9 +3193,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream, supported_compression_model_opts())
     enable_request_compression!(setup.pool)
     schema_bound_rows = compression_rows_fixture()
-    schema_bound_output = Jason.encode!(schema_bound_rows, pretty: true)
+    schema_bound_output = CodexPooler.JSON.encode!(schema_bound_rows, pretty: true)
     unbound_rows = Enum.reverse(schema_bound_rows)
-    unbound_output = Jason.encode!(unbound_rows, pretty: true)
+    unbound_output = CodexPooler.JSON.encode!(unbound_rows, pretty: true)
 
     assert byte_size(schema_bound_output) > 512
     assert byte_size(unbound_output) > 512
@@ -3255,9 +3255,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       end)
 
     assert schema_bound_item["output"] == schema_bound_output
-    assert Jason.decode!(schema_bound_item["output"]) == schema_bound_rows
+    assert CodexPooler.JSON.decode!(schema_bound_item["output"]) == schema_bound_rows
     assert unbound_item["output"] != unbound_output
-    assert Jason.decode!(unbound_item["output"]) == unbound_rows
+    assert CodexPooler.JSON.decode!(unbound_item["output"]) == unbound_rows
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_json"
@@ -3284,8 +3284,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     enable_request_compression!(setup.pool)
     {_server, port} = start_public_endpoint_with_server!()
 
-    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
-    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+    schema_bound_output =
+      CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+
+    unbound_output = CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
 
     {headers, _response_body} =
       curl_json_request!(
@@ -3343,9 +3345,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       end)
 
     assert schema_bound_item["output"] == schema_bound_output
-    assert is_map(Jason.decode!(schema_bound_item["output"]))
+    assert is_map(CodexPooler.JSON.decode!(schema_bound_item["output"]))
     assert unbound_item["output"] != unbound_output
-    assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
+    assert CodexPooler.JSON.decode!(unbound_item["output"]) ==
+             CodexPooler.JSON.decode!(unbound_output)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
@@ -3375,7 +3379,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     enable_request_compression!(setup.pool)
     prefix = "synthetic report begins\n"
     suffix = "\nsynthetic report ends"
-    original_json = Jason.encode!(%{"rows" => compression_rows_fixture()}, pretty: true)
+
+    original_json =
+      CodexPooler.JSON.encode!(%{"rows" => compression_rows_fixture()}, pretty: true)
+
     original_output = prefix <> original_json <> suffix
     call_id = "call_backend_embedded_json_compressed"
 
@@ -3418,7 +3425,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         byte_size(compressed_output) - byte_size(prefix) - byte_size(suffix)
       )
 
-    assert Jason.decode!(compressed_json) == Jason.decode!(original_json)
+    assert CodexPooler.JSON.decode!(compressed_json) == CodexPooler.JSON.decode!(original_json)
     assert byte_size(compressed_json) < byte_size(original_json)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -3810,7 +3817,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert ["event: error", "data: " <> data] = String.split(error_block, "\n")
 
-    decoded = Jason.decode!(data)
+    decoded = CodexPooler.JSON.decode!(data)
 
     assert Map.keys(decoded) |> Enum.sort() ==
              ~w(code error message param sequence_number type)
@@ -4274,7 +4281,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       conn.resp_body
       |> String.split("\n\n", trim: true)
       |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
-      |> Enum.map(&Jason.decode!/1)
+      |> Enum.map(&CodexPooler.JSON.decode!/1)
 
     assert [
              %{"choices" => [%{"delta" => %{"role" => "assistant"}}]},
@@ -4319,7 +4326,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         }
       }
 
-    raw_failed = "event: \t \ndata: " <> Jason.encode!(failed) <> "\n\n"
+    raw_failed = "event: \t \ndata: " <> CodexPooler.JSON.encode!(failed) <> "\n\n"
 
     late_completed =
       {"response.completed",
@@ -4350,7 +4357,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              conn.resp_body
              |> String.split("\n\n", trim: true)
              |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
-             |> Enum.map(&Jason.decode!/1)
+             |> Enum.map(&CodexPooler.JSON.decode!/1)
 
     assert error["code"] == "context_length_exceeded"
     assert error["message"] == "upstream request failed"
@@ -4697,7 +4704,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert conn.status == 200
-    assert conn.resp_body == Jason.encode!(provider_payload)
+    assert conn.resp_body == CodexPooler.JSON.encode!(provider_payload)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.json["service_tier"] == "priority"
   end
@@ -5981,7 +5988,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                }
              )
 
-    assert %{"id" => "resp_openai_compat"} = Jason.decode!(body)
+    assert %{"id" => "resp_openai_compat"} = CodexPooler.JSON.decode!(body)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     refute Map.has_key?(captured.json, "max_output_tokens")
@@ -6041,8 +6048,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                boundary_request_options
              )
 
-    assert %{"id" => "resp_request_options_boundary"} = Jason.decode!(typed_body)
-    assert %{"id" => "resp_request_options_boundary"} = Jason.decode!(boundary_body)
+    assert %{"id" => "resp_request_options_boundary"} = CodexPooler.JSON.decode!(typed_body)
+    assert %{"id" => "resp_request_options_boundary"} = CodexPooler.JSON.decode!(boundary_body)
 
     assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
              "/backend-api/codex/responses",
@@ -9181,8 +9188,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(successful_attempt.response_metadata, "upstream_error_param")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    refute Jason.encode!(request.request_metadata || %{}) =~ "raw-message-sentinel"
-    refute Jason.encode!(failed_attempt.response_metadata) =~ "raw-message-sentinel"
+    refute CodexPooler.JSON.encode!(request.request_metadata || %{}) =~ "raw-message-sentinel"
+    refute CodexPooler.JSON.encode!(failed_attempt.response_metadata) =~ "raw-message-sentinel"
   end
 
   @tag :invalid_upstream_error_param
@@ -10810,7 +10817,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert response.status == 503
 
     assert response.resp_body ==
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{
                "error" => %{
                  "code" => "no_eligible_backend",
                  "message" => "no healthy eligible backend is currently available",
@@ -11975,7 +11982,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     large_entry = String.duplicate("a", 8_100_000)
 
     body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "model" => setup.model.exposed_model_id,
         "input" => large_entry
       })
@@ -14342,7 +14349,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     %{
       turn_metadata:
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "forked_from_thread_id" => forked_thread_id,
           "request_kind" => request_kind,
           "window_id" => window_id,
@@ -14372,7 +14379,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     sentinel = "client-metadata-sentinel-#{label}"
 
     turn_metadata =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "forked_from_thread_id" => forked_thread_id,
         "window_id" => window_id,
         "sentinel" => sentinel
@@ -14409,7 +14416,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "unrelated" => "code-mode-unrelated-field"
     }
 
-    turn_metadata = Jason.encode!(turn_metadata_object)
+    turn_metadata = CodexPooler.JSON.encode!(turn_metadata_object)
 
     lineage_metadata_fixture("code-mode-turn-metadata-projection")
     |> Map.merge(%{
@@ -14509,11 +14516,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   defp synthetic_access_jwt(residency) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
 
     payload =
       Base.url_encode64(
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "https://api.openai.com/auth" => %{"chatgpt_compute_residency" => residency}
         }),
         padding: false
@@ -14609,13 +14616,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert projected != metadata.turn_metadata
     assert byte_size(projected) < byte_size(metadata.turn_metadata)
     assert ascii_only?(projected)
-    assert Jason.decode!(projected) == expected
+    assert CodexPooler.JSON.decode!(projected) == expected
 
-    assert get_in(Jason.decode!(projected), ["nested", "code_mode_tool_names"]) == %{
+    assert get_in(CodexPooler.JSON.decode!(projected), ["nested", "code_mode_tool_names"]) == %{
              "nested-tool" => metadata.nested_sentinel
            }
 
-    assert Jason.decode!(projected)["non_ascii"] == metadata.non_ascii_sentinel
+    assert CodexPooler.JSON.decode!(projected)["non_ascii"] == metadata.non_ascii_sentinel
   end
 
   defp assert_code_mode_client_metadata_preserved!(captured, metadata) do
@@ -14624,13 +14631,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert client_metadata == metadata.client_metadata
     assert client_metadata["x-codex-turn-metadata"] == metadata.turn_metadata
 
-    assert Jason.decode!(client_metadata["x-codex-turn-metadata"]) ==
+    assert CodexPooler.JSON.decode!(client_metadata["x-codex-turn-metadata"]) ==
              metadata.turn_metadata_object
 
-    assert Jason.decode!(client_metadata["x-codex-turn-metadata"])["code_mode_tool_names"] ==
+    assert CodexPooler.JSON.decode!(client_metadata["x-codex-turn-metadata"])[
+             "code_mode_tool_names"
+           ] ==
              metadata.code_mode_tool_names
 
-    assert get_in(Jason.decode!(client_metadata["x-codex-turn-metadata"]), [
+    assert get_in(CodexPooler.JSON.decode!(client_metadata["x-codex-turn-metadata"]), [
              "nested",
              "code_mode_tool_names"
            ]) == %{"nested-tool" => metadata.nested_sentinel}
@@ -14850,7 +14859,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   defp post_json_runtime_with_headers(conn, path, payload, headers) do
-    post_raw_runtime(conn, path, Jason.encode!(payload), "application/json", headers)
+    post_raw_runtime(conn, path, CodexPooler.JSON.encode!(payload), "application/json", headers)
   end
 
   defp post_raw_runtime(conn, path, body, content_type, headers \\ []) do
@@ -14898,7 +14907,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              Gateway.register_codex_session_continuity(
                session,
                %{},
-               Jason.encode!(%{"id" => previous_response_id})
+               CodexPooler.JSON.encode!(%{"id" => previous_response_id})
              )
 
     session
@@ -15184,11 +15193,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   defp canonical_full_failure_response?(response, status) do
     response.status == status and
-      Jason.decode(response.resp_body) == {:ok, @canonical_full_failure_body}
+      CodexPooler.JSON.decode(response.resp_body) == {:ok, @canonical_full_failure_body}
   end
 
   defp unchanged_upstream_body?(response, upstream_body) do
-    response.resp_body == Jason.encode!(upstream_body)
+    response.resp_body == CodexPooler.JSON.encode!(upstream_body)
   end
 
   defp legacy_compatibility_failure_body do

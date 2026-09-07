@@ -161,7 +161,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
                  :response
                )
 
-      item = adapted.raw_body |> Jason.decode!() |> get_in(["output", Access.at(0)])
+      item = adapted.raw_body |> CodexPooler.JSON.decode!() |> get_in(["output", Access.at(0)])
 
       if expected_id == :absent do
         refute Map.has_key?(item, "id")
@@ -206,7 +206,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
                :response
              )
 
-    assert get_in(Jason.decode!(adapted.raw_body), ["output", Access.at(0)]) ==
+    assert get_in(CodexPooler.JSON.decode!(adapted.raw_body), ["output", Access.at(0)]) ==
              expected_public_item()
   end
 
@@ -235,7 +235,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
       put_in(
         request_without_marker,
         ["client_metadata", "x-codex-turn-metadata"],
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "compaction" => %{"implementation" => "responses_compaction_v2"},
           "additive" => %{"ignored" => true}
         })
@@ -247,7 +247,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
       put_in(
         request_without_marker,
         ["client_metadata", "x-codex-turn-metadata"],
-        Jason.encode!(%{"compaction" => %{"implementation" => "other"}})
+        CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
       )
 
     assert CompactionTrigger.compaction_result_transport(request_with_wrong_marker) == :buffered
@@ -265,7 +265,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
                :response
              )
 
-    assert get_in(Jason.decode!(adapted.raw_body), ["output", Access.at(0)]) == %{
+    assert get_in(CodexPooler.JSON.decode!(adapted.raw_body), ["output", Access.at(0)]) == %{
              "type" => "compaction",
              "encrypted_content" => "opaque-separation-content",
              "id" => "cmp_separation"
@@ -277,7 +277,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
      %{
        status: 200,
        headers: [{"content-type", "application/json"}],
-       raw_body: Jason.encode!(body)
+       raw_body: CodexPooler.JSON.encode!(body)
      }}
   end
 
@@ -328,7 +328,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
   end
 
   defp public_result(%{raw_body: body}, :response) do
-    response = Jason.decode!(body)
+    response = CodexPooler.JSON.decode!(body)
     {response, response["output"]}
   end
 
@@ -354,7 +354,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
       block
       |> String.split("\n")
       |> Enum.find_value(fn
-        "data: " <> data -> Jason.decode!(data)
+        "data: " <> data -> CodexPooler.JSON.decode!(data)
         _line -> nil
       end)
     end)

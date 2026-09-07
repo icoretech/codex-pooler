@@ -1136,7 +1136,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         |> compressed_post(
           "/backend-api/codex/responses",
           "gzip",
-          :zlib.gzip(Jason.encode!(body))
+          :zlib.gzip(CodexPooler.JSON.encode!(body))
         )
 
       assert %{"id" => "gzip_ok"} = json_response(conn, 200)
@@ -1153,7 +1153,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         conn
         |> auth(setup)
         |> put_req_header("content-type", "application/json")
-        |> post("/backend-api/codex/responses", Jason.encode!(gateway_body(setup)))
+        |> post("/backend-api/codex/responses", CodexPooler.JSON.encode!(gateway_body(setup)))
 
       assert %{"id" => "plain_json_ok"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
@@ -1279,7 +1279,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_one_mib_ok"}))
       setup = gateway_setup(upstream)
       body = fixed_size_gateway_body(setup, 1_048_576)
-      encoded = Jason.encode!(body)
+      encoded = CodexPooler.JSON.encode!(body)
 
       assert byte_size(encoded) == 1_048_576
 
@@ -1395,7 +1395,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         |> compressed_post(
           "/backend-api/codex/responses",
           "gzip",
-          :zlib.gzip(Jason.encode!(payload))
+          :zlib.gzip(CodexPooler.JSON.encode!(payload))
         )
 
       assert json_response(conn, 413)["error"]["code"] == "decompressed_request_too_large"
@@ -1403,7 +1403,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
     test "updated decompressed limits affect subsequent compressed requests", %{conn: conn} do
       payload = %{"model" => "x", "input" => native_text_input(String.duplicate("a", 200))}
-      compressed = :zlib.gzip(Jason.encode!(payload))
+      compressed = :zlib.gzip(CodexPooler.JSON.encode!(payload))
 
       setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 16})
       setup = active_api_key_fixture()
@@ -1428,7 +1428,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
           "/backend-api/codex/responses",
           "gzip",
           :zlib.gzip(
-            Jason.encode!(gateway_body(gateway_setup) |> Map.put("input", payload["input"]))
+            CodexPooler.JSON.encode!(
+              gateway_body(gateway_setup)
+              |> Map.put("input", payload["input"])
+            )
           )
         )
 
@@ -1446,7 +1449,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       setup = gateway_setup(upstream)
       large_input = :crypto.strong_rand_bytes(1_200_000) |> Base.encode16(case: :lower)
       body = gateway_body(setup) |> Map.put("input", native_text_input(large_input))
-      compressed = :zlib.gzip(Jason.encode!(body))
+      compressed = :zlib.gzip(CodexPooler.JSON.encode!(body))
 
       assert byte_size(compressed) > 1_000_000
 
@@ -1490,7 +1493,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         |> compressed_post(
           "/backend-api/codex/responses",
           "gzip",
-          :zlib.gzip(Jason.encode!(payload))
+          :zlib.gzip(CodexPooler.JSON.encode!(payload))
         )
 
       assert json_response(conn, 413)["error"]["code"] == "decompressed_request_too_large"
@@ -1512,7 +1515,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         |> compressed_post(
           "/backend-api/codex/responses",
           "gzip",
-          :zlib.gzip(Jason.encode!(payload))
+          :zlib.gzip(CodexPooler.JSON.encode!(payload))
         )
 
       assert json_response(conn, 413)["error"]["code"] == "decompression_ratio_exceeded"
@@ -1719,10 +1722,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     |> post(path, body)
   end
 
-  defp deflate(body) when is_map(body), do: body |> Jason.encode!() |> :zlib.compress()
+  defp deflate(body) when is_map(body), do: body |> CodexPooler.JSON.encode!() |> :zlib.compress()
 
   defp zstd(body) when is_map(body) do
-    body |> Jason.encode!() |> zstd_encoded()
+    body |> CodexPooler.JSON.encode!() |> zstd_encoded()
   end
 
   defp zstd_encoded(body), do: body |> :zstd.compress() |> IO.iodata_to_binary()
@@ -1752,7 +1755,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
   defp fixed_size_gateway_body(setup, target_bytes) do
     body = gateway_body(setup) |> Map.put("input", native_text_input(""))
-    padding_bytes = target_bytes - byte_size(Jason.encode!(body))
+    padding_bytes = target_bytes - byte_size(CodexPooler.JSON.encode!(body))
     Map.put(body, "input", native_text_input(String.duplicate("a", padding_bytes)))
   end
 

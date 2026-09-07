@@ -35,7 +35,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLosslessTes
       assert {:ok, %{content: compressed, metadata: metadata}} =
                JsonArrayLossless.compress(original, model: @model)
 
-      assert Jason.decode!(compressed) == Jason.decode!(original)
+      assert CodexPooler.JSON.decode!(compressed) == CodexPooler.JSON.decode!(original)
       assert byte_size(compressed) < byte_size(original)
       assert {:ok, original_tokens, _token_metadata} = TokenCounter.count(@model, original)
       assert {:ok, compressed_tokens, _token_metadata} = TokenCounter.count(@model, compressed)
@@ -80,8 +80,8 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLosslessTes
 
       assert {:ok, %{content: compressed}} = JsonArrayLossless.compress(original, model: @model)
 
-      decoded_original = Jason.decode!(original)
-      decoded_compressed = Jason.decode!(compressed)
+      decoded_original = CodexPooler.JSON.decode!(original)
+      decoded_compressed = CodexPooler.JSON.decode!(compressed)
 
       assert decoded_compressed == decoded_original
       assert length(decoded_compressed) == 2
@@ -107,11 +107,11 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLosslessTes
 
       assert {:ok, %{content: compressed}} = JsonArrayLossless.compress(original, model: @model)
 
-      assert Jason.decode!(compressed, objects: :ordered_objects) ==
-               Jason.decode!(original, objects: :ordered_objects)
+      assert CodexPooler.JSON.decode!(compressed, objects: :ordered_objects) ==
+               CodexPooler.JSON.decode!(original, objects: :ordered_objects)
 
-      [%Jason.OrderedObject{values: values}] =
-        Jason.decode!(compressed, objects: :ordered_objects)
+      [%CodexPooler.JSON.OrderedObject{values: values}] =
+        CodexPooler.JSON.decode!(compressed, objects: :ordered_objects)
 
       assert Enum.count(values, fn {key, _value} -> key == "repeat" end) == 2
     end
@@ -135,7 +135,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLosslessTes
       assert {:ok, %{content: compressed, metadata: metadata}} =
                JsonArrayLossless.compress(original, model: @model)
 
-      assert Jason.decode!(compressed) == [
+      assert CodexPooler.JSON.decode!(compressed) == [
                %{
                  "row" => 1,
                  "title" => "first result",
@@ -173,8 +173,11 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLosslessTes
 
       assert {:ok, %{content: compressed}} = JsonArrayLossless.compress(original, model: @model)
 
-      [%Jason.OrderedObject{values: first_values}, %Jason.OrderedObject{values: second_values}] =
-        Jason.decode!(compressed, objects: :ordered_objects)
+      [
+        %CodexPooler.JSON.OrderedObject{values: first_values},
+        %CodexPooler.JSON.OrderedObject{values: second_values}
+      ] =
+        CodexPooler.JSON.decode!(compressed, objects: :ordered_objects)
 
       assert Enum.count(first_values, fn {key, _value} -> key == "repeat" end) == 2
       assert Enum.count(second_values, fn {key, _value} -> key == "repeat" end) == 2
@@ -245,7 +248,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLosslessTes
       assert {:ok, %{content: compressed}} =
                JsonArrayLossless.compress(compressible, model: @model)
 
-      assert Jason.decode!(compressed) == Jason.decode!(compressible)
+      assert CodexPooler.JSON.decode!(compressed) == CodexPooler.JSON.decode!(compressible)
       assert :skip = JsonArrayLossless.compress("ordinary text", model: @model)
     end
   end

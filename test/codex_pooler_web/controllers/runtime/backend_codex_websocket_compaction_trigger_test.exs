@@ -73,8 +73,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
          [
            websocket_completed_response("resp_queued_lite_seed"),
            FakeUpstream.websocket_text_frames([
-             Jason.encode!(%{"type" => "response.output_item.done", "item" => item}),
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => item}),
+             CodexPooler.JSON.encode!(%{
                "type" => "response.completed",
                "response" => %{
                  "id" => "resp_queued_lite_compact",
@@ -118,7 +118,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       assert {:push, {:text, _created}, state} = receive_queued_lite_message(state)
       assert {:push, {:text, terminal}, state} = receive_queued_lite_message(state)
       Process.put(:queued_lite_socket_state, state)
-      assert %{"type" => "response.completed"} = Jason.decode!(terminal)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(terminal)
       assert MapSet.size(state.tasks) == 1
 
       assert is_nil(Adapter.response_options(state, true, nil).routing.model_serving_mode)
@@ -153,7 +153,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
       compact =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => "resp_queued_lite_seed",
@@ -175,15 +175,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       assert Process.delete(:queued_lite_reserved) == flip?
 
       if flip? do
-        assert %{"type" => "error"} = Jason.decode!(first)
+        assert %{"type" => "error"} = CodexPooler.JSON.decode!(first)
         assert FakeUpstream.count(upstream) == 1
         assert Repo.aggregate(Request, :count) == before_requests
         assert Repo.aggregate(Attempt, :count) == before_attempts
       else
-        assert %{"type" => "response.output_item.done", "item" => ^item} = Jason.decode!(first)
+        assert %{"type" => "response.output_item.done", "item" => ^item} =
+                 CodexPooler.JSON.decode!(first)
+
         assert {:push, {:text, done}, next} = receive_queued_lite_message(next)
         Process.put(:queued_lite_socket_state, next)
-        assert %{"type" => "response.completed"} = Jason.decode!(done)
+        assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(done)
         assert FakeUpstream.count(upstream) == 2
         assert Repo.aggregate(Attempt, :count) == before_attempts + 1
 
@@ -243,8 +245,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
          [
            websocket_completed_response("resp_final_digest_anchor"),
            FakeUpstream.websocket_text_frames([
-             Jason.encode!(%{"type" => "response.output_item.done", "item" => item}),
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => item}),
+             CodexPooler.JSON.encode!(%{
                "type" => "response.completed",
                "response" => %{
                  "id" => "resp_final_digest_compact",
@@ -281,7 +283,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
 
       compact =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => "resp_final_digest_anchor",
@@ -301,12 +303,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       metadata =
         native_turn_metadata(turn, "00000000-0000-4000-8000-000000000992", :turn)
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> Map.merge(%{"window_id" => "final-window", "window_number" => 2})
-        |> Jason.encode!()
+        |> CodexPooler.JSON.encode!()
 
       final =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{item | "encrypted_content" => "different-synthetic"}],
@@ -316,7 +318,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, final)
       {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"type" => "error"} = Jason.decode!(frame)
+      assert %{"type" => "error"} = CodexPooler.JSON.decode!(frame)
       assert FakeUpstream.count(upstream) == 2
     after
       Mint.HTTP.close(conn)
@@ -335,8 +337,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
          [
            websocket_completed_response("resp_final_digest_anchor"),
            FakeUpstream.websocket_text_frames([
-             Jason.encode!(%{"type" => "response.output_item.done", "item" => item}),
-             Jason.encode!(%{
+             CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => item}),
+             CodexPooler.JSON.encode!(%{
                "type" => "response.completed",
                "response" => %{
                  "id" => "resp_final_digest_compact",
@@ -373,7 +375,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
 
       compact =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => "resp_final_digest_anchor",
@@ -392,30 +394,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {conn, websocket, _} = public_websocket_receive_text!(conn, websocket, ref)
 
       prewarm =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "generate" => false,
           "input" => [],
           "client_metadata" => %{
-            "x-codex-turn-metadata" => Jason.encode!(%{"request_kind" => "prewarm"})
+            "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"request_kind" => "prewarm"})
           }
         })
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, prewarm)
       {conn, websocket, _prewarm_created} = public_websocket_receive_text!(conn, websocket, ref)
       {conn, websocket, prewarm_completed} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"type" => "response.completed"} = Jason.decode!(prewarm_completed)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(prewarm_completed)
       assert FakeUpstream.count(upstream) == 2
 
       metadata =
         native_turn_metadata(turn, "00000000-0000-4000-8000-000000000992", :turn)
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> Map.merge(%{"window_id" => "final-window", "window_number" => 2})
-        |> Jason.encode!()
+        |> CodexPooler.JSON.encode!()
 
       final =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [%{item | "encrypted_content" => "synthetic-incremental-final-digest-check"}],
@@ -425,9 +427,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, final)
       {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"type" => "response.created"} = Jason.decode!(frame)
+      assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(frame)
       {_conn, _websocket, terminal} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"type" => "response.completed"} = Jason.decode!(terminal)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(terminal)
       assert FakeUpstream.count(upstream) == 3
     after
       Mint.HTTP.close(conn)
@@ -504,7 +506,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         public_websocket_receive_text!(conn, websocket, ref)
 
       assert %{"type" => "response.completed", "response" => %{"id" => ^response_id}} =
-               Jason.decode!(lineage_terminal)
+               CodexPooler.JSON.decode!(lineage_terminal)
 
       compact_payload =
         source_frame
@@ -523,12 +525,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {conn, _websocket, completed_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
       assert %{"type" => "response.output_item.done", "item" => ^compact_item} =
-               Jason.decode!(done_frame)
+               CodexPooler.JSON.decode!(done_frame)
 
       assert %{
                "type" => "response.completed",
                "response" => %{"status" => "completed", "output" => [^compact_item]}
-             } = Jason.decode!(completed_frame)
+             } = CodexPooler.JSON.decode!(completed_frame)
 
       assert FakeUpstream.websocket_connection_count(upstream) == 1
       assert [ordinary_request, compact_request] = FakeUpstream.requests(upstream)
@@ -604,7 +606,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       )
 
     invalid_payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
         "input" => [],
@@ -614,7 +616,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     try do
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, invalid_payload)
       {conn, _websocket, error_frame} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"status" => 400, "error" => %{"param" => param}} = Jason.decode!(error_frame)
+
+      assert %{"status" => 400, "error" => %{"param" => param}} =
+               CodexPooler.JSON.decode!(error_frame)
+
       assert param =~ "x-codex-turn-metadata"
       assert FakeUpstream.count(upstream) == 0
 
@@ -691,12 +696,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
         item = fixture.expected_item
 
-        assert Jason.decode!(done_frame) == %{
+        assert CodexPooler.JSON.decode!(done_frame) == %{
                  "type" => "response.output_item.done",
                  "item" => item
                }
 
-        assert Jason.decode!(completed_frame) == %{
+        assert CodexPooler.JSON.decode!(completed_frame) == %{
                  "type" => "response.completed",
                  "response" => %{
                    "id" => fixture.response_id,
@@ -804,7 +809,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {_conn, _websocket, follow_up_frame} =
           public_websocket_receive_text!(conn, websocket, ref)
 
-        assert %{"id" => follow_up_response_id} = Jason.decode!(follow_up_frame)
+        assert %{"id" => follow_up_response_id} = CodexPooler.JSON.decode!(follow_up_frame)
         assert follow_up_response_id == fixture.follow_up_response_id
 
         assert [^compact_request, ordinary_request] = FakeUpstream.requests(upstream)
@@ -926,11 +931,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {conn, websocket, lineage_terminal_frame} =
           public_websocket_receive_text!(conn, websocket, ref)
 
-        assert %{"response" => %{"id" => response_id}} = Jason.decode!(lineage_frame)
+        assert %{"response" => %{"id" => response_id}} = CodexPooler.JSON.decode!(lineage_frame)
         assert response_id == fixture["provider_response_id"]
 
         assert %{"type" => "response.completed", "response" => %{"id" => ^response_id}} =
-                 Jason.decode!(lineage_terminal_frame)
+                 CodexPooler.JSON.decode!(lineage_terminal_frame)
 
         setup = activate_assignment_b(setup)
 
@@ -954,7 +959,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {conn, websocket, done_frame} = public_websocket_receive_text!(conn, websocket, ref)
         {conn, websocket, completed_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-        assert Jason.decode!(done_frame) == %{
+        assert CodexPooler.JSON.decode!(done_frame) == %{
                  "type" => "response.output_item.done",
                  "item" => compact_item
                }
@@ -962,7 +967,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert %{
                  "type" => "response.completed",
                  "response" => %{"status" => "completed", "output" => [^compact_item]}
-               } = Jason.decode!(completed_frame)
+               } = CodexPooler.JSON.decode!(completed_frame)
 
         authorization_counts = NativeCompactionAuthorizationObserver.captures()["counts"]
 
@@ -1015,7 +1020,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                } =
                  source_frame
                  |> get_in(["client_metadata", "x-codex-turn-metadata"])
-                 |> Jason.decode!()
+                 |> CodexPooler.JSON.decode!()
 
         assert FakeUpstream.count(assignment_b_upstream) == 0
 
@@ -1115,7 +1120,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {_conn, _websocket, follow_up_frame} =
           public_websocket_receive_text!(conn, websocket, ref)
 
-        assert %{"id" => "resp_follow_up_" <> ^scenario_name} = Jason.decode!(follow_up_frame)
+        assert %{"id" => "resp_follow_up_" <> ^scenario_name} =
+                 CodexPooler.JSON.decode!(follow_up_frame)
 
         assert [^lineage_request, ^compact_request, follow_up_request] =
                  FakeUpstream.requests(assignment_a_upstream)
@@ -1190,11 +1196,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {conn, websocket, lineage_terminal_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"response" => %{"id" => response_id}} = Jason.decode!(lineage_frame)
+      assert %{"response" => %{"id" => response_id}} = CodexPooler.JSON.decode!(lineage_frame)
       assert response_id == fixture["provider_response_id"]
 
       assert %{"type" => "response.completed", "response" => %{"id" => ^response_id}} =
-               Jason.decode!(lineage_terminal_frame)
+               CodexPooler.JSON.decode!(lineage_terminal_frame)
 
       setup = activate_assignment_b(setup)
       source_frame = Map.put(source_frame, "previous_response_id", response_id)
@@ -1211,7 +1217,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                  "type" => "invalid_request_error",
                  "param" => "input"
                }
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       refute error_frame =~ provider_message
       assert [lineage_request, compact_request] = FakeUpstream.requests(assignment_a_upstream)
@@ -1260,7 +1266,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {_conn, _websocket, follow_up_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"id" => "resp_after_compact_provider_400"} = Jason.decode!(follow_up_frame)
+      assert %{"id" => "resp_after_compact_provider_400"} =
+               CodexPooler.JSON.decode!(follow_up_frame)
 
       assert [^lineage_request, ^compact_request, follow_up_request] =
                FakeUpstream.requests(assignment_a_upstream)
@@ -1322,11 +1329,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {conn, websocket, lineage_terminal_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"response" => %{"id" => response_id}} = Jason.decode!(lineage_frame)
+      assert %{"response" => %{"id" => response_id}} = CodexPooler.JSON.decode!(lineage_frame)
       assert response_id == fixture["provider_response_id"]
 
       assert %{"type" => "response.completed", "response" => %{"id" => ^response_id}} =
-               Jason.decode!(lineage_terminal_frame)
+               CodexPooler.JSON.decode!(lineage_terminal_frame)
 
       setup = activate_assignment_b(setup)
       source_frame = Map.put(source_frame, "previous_response_id", response_id)
@@ -1344,7 +1351,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                  "param" => "input",
                  "message" => "upstream rejected the compact request"
                }
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       refute error_frame =~ provider_message
       assert FakeUpstream.count(assignment_b_upstream) == 0
@@ -1430,11 +1437,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {conn, websocket, lineage_terminal_frame} =
           public_websocket_receive_text!(conn, websocket, ref)
 
-        assert %{"response" => %{"id" => response_id}} = Jason.decode!(lineage_frame)
+        assert %{"response" => %{"id" => response_id}} = CodexPooler.JSON.decode!(lineage_frame)
         assert response_id == fixture["provider_response_id"]
 
         assert %{"type" => "response.completed", "response" => %{"id" => ^response_id}} =
-                 Jason.decode!(lineage_terminal_frame)
+                 CodexPooler.JSON.decode!(lineage_terminal_frame)
 
         setup = activate_assignment_b(setup)
         source_frame = Map.put(source_frame, "previous_response_id", response_id)
@@ -1457,7 +1464,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                    "type" => "invalid_request_error",
                    "param" => "previous_response_id"
                  }
-               } = Jason.decode!(error_frame)
+               } = CodexPooler.JSON.decode!(error_frame)
 
         refute error_frame =~ provider_message
         assert [lineage_request, compact_request] = FakeUpstream.requests(assignment_a_upstream)
@@ -1563,7 +1570,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                      1_000
 
       {conn, websocket, lineage_frame} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"response" => %{"id" => response_id}} = Jason.decode!(lineage_frame)
+      assert %{"response" => %{"id" => response_id}} = CodexPooler.JSON.decode!(lineage_frame)
       assert response_id == fixture["provider_response_id"]
 
       setup = activate_assignment_b(setup)
@@ -1593,7 +1600,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {conn, websocket, lineage_terminal_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"type" => "response.completed"} = Jason.decode!(lineage_terminal_frame)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(lineage_terminal_frame)
 
       {_conn, _websocket, error_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
@@ -1601,7 +1608,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                "type" => "error",
                "status" => 503,
                "error" => %{"code" => "pinned_continuation_unavailable"}
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       assert [_lineage_request] = FakeUpstream.requests(assignment_a_upstream)
       assert FakeUpstream.count(assignment_b_upstream) == 0
@@ -1671,7 +1678,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
              )
 
     assert_receive {:frame, frame}, @detection_timeout_ms
-    assert %{"id" => "resp_ordinary_permissive_turn_state"} = Jason.decode!(frame)
+    assert %{"id" => "resp_ordinary_permissive_turn_state"} = CodexPooler.JSON.decode!(frame)
     assert FakeUpstream.count(upstream) == 1
   end
 
@@ -1712,7 +1719,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                )
 
       assert {:push, {:text, frame}, state} = receive_socket_message(state)
-      assert %{"id" => "resp_after_invalid_bridge_turn_state"} = Jason.decode!(frame)
+      assert %{"id" => "resp_after_invalid_bridge_turn_state"} = CodexPooler.JSON.decode!(frame)
       assert {:ok, _state} = receive_socket_done(state)
       assert FakeUpstream.count(upstream) == 1
     after
@@ -1786,7 +1793,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                )
 
       assert {:push, {:text, frame}, state} = receive_socket_message(state)
-      assert %{"id" => "resp_owner_after_invalid_bridge_turn_state"} = Jason.decode!(frame)
+
+      assert %{"id" => "resp_owner_after_invalid_bridge_turn_state"} =
+               CodexPooler.JSON.decode!(frame)
+
       assert {:ok, _state} = receive_socket_completion(state)
       assert FakeUpstream.count(upstream) == 1
     after
@@ -1832,12 +1842,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       assert {:push, {:text, completed_frame}, state} = receive_socket_message(state)
       assert {:ok, _state} = receive_socket_done(state)
 
-      assert %{"type" => "response.output_item.done", "item" => item} = Jason.decode!(done_frame)
+      assert %{"type" => "response.output_item.done", "item" => item} =
+               CodexPooler.JSON.decode!(done_frame)
 
       assert %{
                "type" => "response.completed",
                "response" => %{"output" => [^item]}
-             } = Jason.decode!(completed_frame)
+             } = CodexPooler.JSON.decode!(completed_frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "POST"
@@ -1962,7 +1973,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       {conn, websocket, error_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-      assert Jason.decode!(error_frame) == %{
+      assert CodexPooler.JSON.decode!(error_frame) == %{
                "type" => "error",
                "status" => 503,
                "error" => %{
@@ -1987,7 +1998,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {_conn, _websocket, follow_up_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"id" => "resp_after_native_compact_saturation"} = Jason.decode!(follow_up_frame)
+      assert %{"id" => "resp_after_native_compact_saturation"} =
+               CodexPooler.JSON.decode!(follow_up_frame)
+
       assert FakeUpstream.count(upstream) == 1
 
       assert [request] = Repo.all(Request)
@@ -2031,7 +2044,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                    "type" => "error",
                    "status" => 400,
                    "error" => %{"code" => "invalid_request", "param" => "input"}
-                 } = Jason.decode!(frame)
+                 } = CodexPooler.JSON.decode!(frame)
 
           assert_no_invalid_turn_state_side_effects(upstream)
           {conn, websocket}
@@ -2043,7 +2056,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {_conn, _websocket, follow_up_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"id" => "resp_after_malformed_native_compact"} = Jason.decode!(follow_up_frame)
+      assert %{"id" => "resp_after_malformed_native_compact"} =
+               CodexPooler.JSON.decode!(follow_up_frame)
+
       assert FakeUpstream.count(upstream) == 1
     after
       Mint.HTTP.close(conn)
@@ -2105,7 +2120,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         client_metadata
       end
 
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
       "input" => [
@@ -2123,7 +2138,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     |> Map.put("model", setup.model.exposed_model_id)
     |> Map.put("generate", true)
     |> Map.put("request_id", request_id)
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp canonical_incremental_pair(setup, source_frame, turn_id) do
@@ -2147,7 +2162,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   end
 
   defp native_turn_metadata(turn_id, context_window_id, :turn) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "turn_id" => turn_id,
       "window_id" => "window-#{turn_id}",
       "context_window_id" => context_window_id,
@@ -2157,7 +2172,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   end
 
   defp native_turn_metadata(turn_id, context_window_id, :compaction) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "turn_id" => turn_id,
       "window_id" => "window-#{turn_id}",
       "context_window_id" => context_window_id,
@@ -2176,7 +2191,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   defp incremental_compaction_fixture! do
     @incremental_compaction_fixture_path
     |> File.read!()
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> Map.fetch!("contract")
   end
 
@@ -2281,7 +2296,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   defp remote_compaction_v2_client_metadata do
     @remote_compaction_v2_fixture_path
     |> File.read!()
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> get_in(["request", "client_metadata"])
   end
 
@@ -2294,7 +2309,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       "generate" => true
     }
     |> Map.merge(extra)
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp buffered_native_compaction_response(response_id, encrypted_content, :output) do
@@ -2349,7 +2364,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
           [visible, trigger, visible],
           [visible, trigger, trigger]
         ] do
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => setup.model.exposed_model_id,
         "input" => input,
@@ -2366,7 +2381,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                "code" => "invalid_request",
                "param" => @turn_state_param
              }
-           } = Jason.decode!(frame)
+           } = CodexPooler.JSON.decode!(frame)
 
     refute frame =~ "wrong-type"
     refute frame =~ "control"

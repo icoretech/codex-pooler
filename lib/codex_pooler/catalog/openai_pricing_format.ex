@@ -73,7 +73,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
 
   @spec decode(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode(raw) when is_binary(raw) do
-    with {:ok, value} <- Jason.decode(raw, objects: :ordered_objects),
+    with {:ok, value} <- CodexPooler.JSON.decode(raw, objects: :ordered_objects),
          {:ok, payload} <- ordered_to_maps(value) do
       {:ok, payload}
     else
@@ -639,7 +639,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
   defp exact_object(_value, _fields, path, state),
     do: {:error, add_error(state, :invalid_object_shape, "value must be an object", path)}
 
-  defp ordered_to_maps(%Jason.OrderedObject{values: values}) do
+  defp ordered_to_maps(%CodexPooler.JSON.OrderedObject{values: values}) do
     keys = Enum.map(values, &elem(&1, 0))
 
     if length(keys) == MapSet.size(MapSet.new(keys)) do

@@ -38,7 +38,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTerminalCloseTest do
               receive do
                 {:deliver, type} ->
                   data =
-                    Jason.encode!(%{
+                    CodexPooler.JSON.encode!(%{
                       "type" => type,
                       "response" => %{"id" => "resp_terminal_close"}
                     })
@@ -147,7 +147,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTerminalCloseTest do
       end
 
       defp completed_terminal do
-        Jason.encode!(%{"type" => "response.completed", "response" => %{"id" => "resp_stale"}})
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_stale"}
+        })
       end
     end
   end
@@ -293,7 +296,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTerminalCloseTest do
     if frames == [] do
       receive_frames(conn, websocket, ref)
     else
-      {conn, Enum.map(frames, fn {:text, data} -> Jason.decode!(data)["type"] end)}
+      {conn, Enum.map(frames, fn {:text, data} -> CodexPooler.JSON.decode!(data)["type"] end)}
     end
   end
 end

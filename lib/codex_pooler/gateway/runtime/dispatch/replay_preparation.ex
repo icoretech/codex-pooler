@@ -46,7 +46,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
        when is_map(metadata), do: {:ok, metadata}
 
   defp canonical_metadata(%{"client_metadata" => %{"x-codex-turn-metadata" => metadata}})
-       when is_binary(metadata), do: Jason.decode(metadata)
+       when is_binary(metadata), do: CodexPooler.JSON.decode(metadata)
 
   defp canonical_metadata(_payload), do: {:error, :invalid_final_window}
 

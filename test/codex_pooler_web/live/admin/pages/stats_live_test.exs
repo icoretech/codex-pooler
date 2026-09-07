@@ -108,7 +108,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       |> LazyHTML.query("#stats-traffic-chart-plot")
       |> LazyHTML.attribute("data-chart-series")
       |> List.first()
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
 
     assert Enum.map(traffic_series, & &1["name"]) == [
              "model-a",
@@ -2222,7 +2222,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     |> LazyHTML.from_fragment()
     |> LazyHTML.attribute(attribute)
     |> case do
-      [value] -> Jason.decode!(value)
+      [value] -> CodexPooler.JSON.decode!(value)
       [] -> flunk("missing #{attribute} in chart HTML")
     end
   end
@@ -2237,7 +2237,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     |> LazyHTML.query("##{chart_id}")
     |> LazyHTML.attribute(attribute)
     |> case do
-      [value] -> Jason.decode!(value)
+      [value] -> CodexPooler.JSON.decode!(value)
       [] -> flunk("missing #{attribute} in #{chart_id} HTML")
     end
   end

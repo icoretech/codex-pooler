@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         conn
         |> modern_discovery_conn()
         |> put_req_header("authorization", "Bearer #{raw_token}")
-        |> post("/mcp", Jason.encode!(discovery_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(discovery_request()))
 
       response = json_response(conn, 200)
       server_version = app_version()
@@ -70,7 +70,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
       conn =
         conn
         |> modern_discovery_conn()
-        |> post("/mcp", Jason.encode!(discovery_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(discovery_request()))
 
       response = json_response(conn, 401)
       assert response["error"]["code"] == -32_000
@@ -87,7 +87,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
       conn =
         conn
         |> modern_discovery_conn()
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       response = json_response(conn, 400)
       assert response["error"]["code"] == -32_602
@@ -105,7 +105,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
       conn =
         conn
         |> modern_discovery_conn()
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       response = json_response(conn, 400)
       assert response["error"]["code"] == -32_020
@@ -124,7 +124,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("authorization", "Bearer #{raw_token}")
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       response = json_response(conn, 200)
       assert response["error"]["code"] == -32_601
@@ -143,13 +143,13 @@ defmodule CodexPoolerWeb.McpModernContractTest do
       conn =
         conn
         |> modern_discovery_conn()
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       response = json_response(conn, 400)
       assert response["error"]["code"] == -32_022
       assert response["error"]["data"] == %{"supported" => Protocol.supported_protocol_versions()}
       refute Map.has_key?(response["error"]["data"], "requested")
-      refute response |> Jason.encode!() |> String.contains?(caller_version)
+      refute response |> CodexPooler.JSON.encode!() |> String.contains?(caller_version)
     end
 
     test "Given an unsupported protocol header without metadata When posted Then only the supported versions are returned",
@@ -168,7 +168,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("mcp-protocol-version", caller_version)
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       response = json_response(conn, 400)
 
@@ -179,7 +179,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
              }
 
       assert response["id"] == request_id
-      refute response |> Jason.encode!() |> String.contains?(caller_version)
+      refute response |> CodexPooler.JSON.encode!() |> String.contains?(caller_version)
     end
 
     test "Given a matched modern version without Mcp-Method When posted Then header mismatch precedes authentication",
@@ -188,7 +188,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         conn
         |> json_rpc_conn()
         |> put_req_header("mcp-protocol-version", @modern_version)
-        |> post("/mcp", Jason.encode!(discovery_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(discovery_request()))
 
       response = json_response(conn, 400)
       assert response["error"]["code"] == -32_020
@@ -200,7 +200,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         conn
         |> modern_discovery_conn()
         |> put_req_header("origin", "https://untrusted.example")
-        |> post("/mcp", Jason.encode!(discovery_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(discovery_request()))
 
       response = json_response(conn, 403)
       assert response["error"]["code"] == -32_600
@@ -215,7 +215,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         conn
         |> modern_discovery_conn()
         |> put_req_header("authorization", "Bearer #{raw_token}")
-        |> post("/mcp", Jason.encode!(discovery_request()))
+        |> post("/mcp", CodexPooler.JSON.encode!(discovery_request()))
         |> json_response(200)
 
       advertised_versions = discovery["result"]["supportedVersions"]
@@ -249,7 +249,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
           |> put_req_header("authorization", "Bearer #{raw_token}")
           |> put_req_header("mcp-protocol-version", version)
           |> put_req_header("mcp-method", "tools/list")
-          |> post("/mcp", Jason.encode!(request))
+          |> post("/mcp", CodexPooler.JSON.encode!(request))
           |> json_response(200)
 
         assert response["result"]["resultType"] == "complete"
@@ -274,7 +274,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
           |> json_rpc_conn()
           |> put_req_header("authorization", "Bearer #{raw_token}")
           |> put_req_header("mcp-protocol-version", version)
-          |> post("/mcp", Jason.encode!(request))
+          |> post("/mcp", CodexPooler.JSON.encode!(request))
           |> json_response(200)
 
         assert response["result"]["protocolVersion"] == version
@@ -289,14 +289,14 @@ defmodule CodexPoolerWeb.McpModernContractTest do
       first =
         conn
         |> modern_request_conn(raw_token, "tools/list")
-        |> post("/mcp", Jason.encode!(modern_request("list-1", "tools/list", %{})))
+        |> post("/mcp", CodexPooler.JSON.encode!(modern_request("list-1", "tools/list", %{})))
         |> json_response(200)
 
       second =
         conn
         |> recycle()
         |> modern_request_conn(raw_token, "tools/list")
-        |> post("/mcp", Jason.encode!(modern_request("list-2", "tools/list", %{})))
+        |> post("/mcp", CodexPooler.JSON.encode!(modern_request("list-2", "tools/list", %{})))
         |> json_response(200)
 
       assert first["result"]["resultType"] == "complete"
@@ -317,7 +317,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> modern_request_conn(raw_token, "tools/call", tool_name)
         |> post(
           "/mcp",
-          Jason.encode!(
+          CodexPooler.JSON.encode!(
             modern_request("call-success", "tools/call", %{
               "name" => tool_name,
               "arguments" => %{}
@@ -343,7 +343,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> modern_request_conn(raw_token, "tools/call", tool_name)
         |> post(
           "/mcp",
-          Jason.encode!(
+          CodexPooler.JSON.encode!(
             modern_request("call-error", "tools/call", %{
               "name" => tool_name,
               "arguments" => %{"unexpected" => true}
@@ -369,7 +369,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> modern_request_conn(raw_token, "tools/call", encoded_name)
         |> post(
           "/mcp",
-          Jason.encode!(
+          CodexPooler.JSON.encode!(
             modern_request("call-base64", "tools/call", %{
               "name" => tool_name,
               "arguments" => %{}
@@ -431,13 +431,13 @@ defmodule CodexPoolerWeb.McpModernContractTest do
       for {marker, request_conn, request} <- cases do
         response =
           request_conn
-          |> post("/mcp", Jason.encode!(request))
+          |> post("/mcp", CodexPooler.JSON.encode!(request))
           |> json_response(400)
 
         assert response["error"] == %{"code" => -32_020, "message" => "header mismatch"}
 
         if marker do
-          refute response |> Jason.encode!() |> String.contains?(marker)
+          refute response |> CodexPooler.JSON.encode!() |> String.contains?(marker)
         end
       end
     end
@@ -449,7 +449,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
           conn
           |> recycle()
           |> modern_request_conn(raw_token, method)
-          |> post("/mcp", Jason.encode!(modern_request("unknown-modern", method, %{})))
+          |> post("/mcp", CodexPooler.JSON.encode!(modern_request("unknown-modern", method, %{})))
 
         response = json_response(conn, 404)
         assert response["error"] == %{"code" => -32_601, "message" => "method not found"}
@@ -468,7 +468,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> json_rpc_conn()
         |> put_req_header("authorization", "Bearer #{raw_token}")
         |> put_req_header("mcp-method", "initialize")
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       response = json_response(conn, 400)
       assert response["error"]["code"] == -32_600
@@ -493,7 +493,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> json_rpc_conn()
         |> put_req_header("authorization", "Bearer #{raw_token}")
         |> put_req_header("mcp-protocol-version", @modern_version)
-        |> post("/mcp", Jason.encode!(request))
+        |> post("/mcp", CodexPooler.JSON.encode!(request))
 
       response = json_response(conn, 400)
 
@@ -511,7 +511,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> put_req_header("authorization", "Bearer #{raw_token}")
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "id" => "legacy-ping",
             "method" => "ping"
@@ -561,7 +561,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
           |> recycle()
           |> json_rpc_conn()
           |> put_req_header("authorization", "Bearer #{raw_token}")
-          |> post("/mcp", Jason.encode!(request))
+          |> post("/mcp", CodexPooler.JSON.encode!(request))
           |> json_response(200)
           |> Map.fetch!("result")
         end
@@ -585,7 +585,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> put_req_header("last-event-id", "ignored-event")
         |> post(
           "/mcp",
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "jsonrpc" => "2.0",
             "method" => "notifications/initialized",
             "params" => %{}
@@ -604,7 +604,10 @@ defmodule CodexPoolerWeb.McpModernContractTest do
         |> modern_request_conn(raw_token, "tools/list")
         |> put_req_header("mcp-session-id", "ignored-session")
         |> put_req_header("last-event-id", "ignored-event")
-        |> post("/mcp", Jason.encode!(modern_request("ignored-headers", "tools/list", %{})))
+        |> post(
+          "/mcp",
+          CodexPooler.JSON.encode!(modern_request("ignored-headers", "tools/list", %{}))
+        )
 
       assert json_response(conn, 200)["result"]["resultType"] == "complete"
       assert get_resp_header(conn, "mcp-session-id") == []

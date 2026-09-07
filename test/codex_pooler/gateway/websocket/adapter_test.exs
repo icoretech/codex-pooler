@@ -70,14 +70,16 @@ defmodule CodexPooler.Gateway.Websocket.AdapterTest do
   end
 
   test "continuation frames are ordered while warmups do not produce request rows" do
-    assert Adapter.continuity_ordered_payload?(Jason.encode!(%{"type" => "response.processed"}))
+    assert Adapter.continuity_ordered_payload?(
+             CodexPooler.JSON.encode!(%{"type" => "response.processed"})
+           )
 
     assert Adapter.request_row_producing_response_payload?(
-             Jason.encode!(%{"type" => "response.create"})
+             CodexPooler.JSON.encode!(%{"type" => "response.create"})
            )
 
     refute Adapter.request_row_producing_response_payload?(
-             Jason.encode!(%{"type" => "response.create", "generate" => false})
+             CodexPooler.JSON.encode!(%{"type" => "response.create", "generate" => false})
            )
 
     refute Adapter.continuity_ordered_payload?("invalid-json")

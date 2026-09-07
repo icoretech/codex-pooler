@@ -80,57 +80,57 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
 
     tampered =
       bundle
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> Map.update!("ciphertext", fn ciphertext ->
         <<first, rest::binary>> = Base.decode64!(ciphertext)
         Base.encode64(<<Bitwise.bxor(first, 1), rest::binary>>)
       end)
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     assert {:error, %{code: :bundle_decryption_failed}} =
              UpstreamAccountBundle.import_bundle(tampered, target_pool, scope, @password)
 
     unsupported =
       bundle
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> Map.put("version", 999)
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     assert {:error, %{code: :bundle_unsupported_version}} =
              UpstreamAccountBundle.import_bundle(unsupported, target_pool, scope, @password)
 
     legacy =
       bundle
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> Map.put("version", 1)
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     assert {:error, %{code: :bundle_unsupported_version}} =
              UpstreamAccountBundle.import_bundle(legacy, target_pool, scope, @password)
 
     unversioned =
       bundle
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> Map.delete("version")
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     assert {:error, %{code: :bundle_malformed}} =
              UpstreamAccountBundle.import_bundle(unversioned, target_pool, scope, @password)
 
     downgraded_kdf =
       bundle
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> update_in(["kdf", "t_cost"], &(&1 - 1))
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     assert {:error, %{code: :bundle_unsupported_kdf}} =
              UpstreamAccountBundle.import_bundle(downgraded_kdf, target_pool, scope, @password)
 
     injected_header =
       bundle
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> Map.put("owner_email", "prompt-injection@example.com")
-      |> Jason.encode!()
+      |> CodexPooler.JSON.encode!()
 
     assert {:error, injected_error} =
              UpstreamAccountBundle.import_bundle(injected_header, target_pool, scope, @password)
@@ -795,7 +795,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
   end
 
   defp reseal_first_account(bundle, mutation) do
-    header = Jason.decode!(bundle)
+    header = CodexPooler.JSON.decode!(bundle)
     kdf = header["kdf"]
     salt = Base.decode64!(kdf["salt"])
     nonce = Base.decode64!(header["nonce"])
@@ -806,15 +806,15 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     plaintext =
       :crypto.crypto_one_time_aead(:aes_256_gcm, key, nonce, ciphertext, aad, tag, false)
 
-    %{"accounts" => [account]} = payload = Jason.decode!(plaintext)
-    encoded = Jason.encode!(%{payload | "accounts" => [mutation.(account)]})
+    %{"accounts" => [account]} = payload = CodexPooler.JSON.decode!(plaintext)
+    encoded = CodexPooler.JSON.encode!(%{payload | "accounts" => [mutation.(account)]})
 
     {ciphertext, tag} =
       :crypto.crypto_one_time_aead(:aes_256_gcm, key, nonce, encoded, aad, true)
 
     header
     |> Map.put("ciphertext", Base.encode64(tag <> ciphertext))
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp bundle_key(salt, kdf) do
@@ -837,13 +837,13 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
       map
       |> Enum.sort_by(fn {key, _value} -> key end)
       |> Enum.map_join(",", fn {key, value} ->
-        [Jason.encode!(key), ":", canonical_json(value)]
+        [CodexPooler.JSON.encode!(key), ":", canonical_json(value)]
       end),
       "}"
     ]
   end
 
-  defp canonical_json(value), do: Jason.encode!(value)
+  defp canonical_json(value), do: CodexPooler.JSON.encode!(value)
 
   defp private_tmp_dir! do
     path =

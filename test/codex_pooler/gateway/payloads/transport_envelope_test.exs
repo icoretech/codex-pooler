@@ -323,11 +323,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"x-openai-subagent", "subagent-redacted"}
              ] = forwarded_headers
 
-      expected = Map.delete(Jason.decode!(original), "code_mode_tool_names")
-      expected_duplicate = Map.delete(Jason.decode!(duplicate), "code_mode_tool_names")
+      expected = Map.delete(CodexPooler.JSON.decode!(original), "code_mode_tool_names")
+      expected_duplicate = Map.delete(CodexPooler.JSON.decode!(duplicate), "code_mode_tool_names")
 
-      assert Jason.decode!(projected) == expected
-      assert Jason.decode!(projected_duplicate) == expected_duplicate
+      assert CodexPooler.JSON.decode!(projected) == expected
+      assert CodexPooler.JSON.decode!(projected_duplicate) == expected_duplicate
       assert projected != original
       assert projected_duplicate != duplicate
       assert byte_size(projected) < byte_size(original)
@@ -335,11 +335,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       assert ascii_only?(projected)
       assert ascii_only?(projected_duplicate)
 
-      assert get_in(Jason.decode!(projected), ["nested", "code_mode_tool_names"]) == %{
+      assert get_in(CodexPooler.JSON.decode!(projected), ["nested", "code_mode_tool_names"]) == %{
                "nested-tool" => "nested sentinel"
              }
 
-      assert Jason.decode!(projected)["non_ascii"] == "cafe \u2615"
+      assert CodexPooler.JSON.decode!(projected)["non_ascii"] == "cafe \u2615"
       assert options.transport.forwarded_metadata_headers == input_headers
 
       regular_headers =
@@ -374,7 +374,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     @tag :code_mode_turn_metadata_projection
     test "removes every JSON top-level code mode tool-name value" do
       for value <- [%{}, [], "scalar", 42, true, nil] do
-        metadata = Jason.encode!(%{"code_mode_tool_names" => value})
+        metadata = CodexPooler.JSON.encode!(%{"code_mode_tool_names" => value})
 
         assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
                  runtime_options("/backend-api/codex/responses",
@@ -460,7 +460,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   end
 
   defp turn_metadata(label) do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "code_mode_tool_names" =>
         Map.new(1..256, fn index -> {"tool_#{index}", "#{label}-handler-#{index}"} end),
       "nested" => %{"code_mode_tool_names" => %{"nested-tool" => "nested sentinel"}},
@@ -480,8 +480,8 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   end
 
   defp access_token(claims) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
-    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(CodexPooler.JSON.encode!(claims), padding: false)
     "#{header}.#{payload}.signature"
   end
 

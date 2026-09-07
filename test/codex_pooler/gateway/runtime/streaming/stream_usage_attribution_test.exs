@@ -12,7 +12,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageAttributionTest do
       "attribution" => [%{"category" => String.duplicate("x", 100_000)}]
     }
 
-    frame = "event: response.completed\ndata: " <> Jason.encode!(%{"usage" => usage}) <> "\n\n"
+    frame =
+      "event: response.completed\ndata: " <>
+        CodexPooler.JSON.encode!(%{"usage" => usage}) <> "\n\n"
 
     for chunk_size <- [1, 17, 4096, byte_size(frame)] do
       state = feed(frame, chunk_size)
@@ -28,16 +30,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageAttributionTest do
   test "only root and direct response aggregate paths provide usage and owning context" do
     measured = %{"input_tokens" => 10, "output_tokens" => 2, "total_tokens" => 12}
     fake = %{"input_tokens" => 1000, "output_tokens" => 200, "total_tokens" => 1200}
-    nested = Jason.encode!(%{"usage" => fake, "service_tier" => "priority"})
-    aggregate = Jason.encode!(measured)
+    nested = CodexPooler.JSON.encode!(%{"usage" => fake, "service_tier" => "priority"})
+    aggregate = CodexPooler.JSON.encode!(measured)
 
     bodies = [
       ~s({"type":"response.completed","response":{"service_tier":"default","output":[#{nested}],"usage":#{aggregate}}}),
       ~s({"response":{"attribution":#{nested},"usage":#{aggregate},"service_tier":"default"},"type":"response.completed"}),
-      ~s({"service_tier":"default","usage":#{aggregate},"response":{"usage":#{Jason.encode!(fake)},"service_tier":"priority"},"type":"response.completed"})
+      ~s({"service_tier":"default","usage":#{aggregate},"response":{"usage":#{CodexPooler.JSON.encode!(fake)},"service_tier":"priority"},"type":"response.completed"})
     ]
 
-    later = "data: " <> Jason.encode!(%{"usage" => fake, "type" => "response.created"}) <> "\n\n"
+    later =
+      "data: " <>
+        CodexPooler.JSON.encode!(%{"usage" => fake, "type" => "response.created"}) <> "\n\n"
 
     for body <- bodies, chunk_size <- [1, 37, byte_size(body)] do
       state = feed("data: " <> body <> "\n\n" <> later, chunk_size)
@@ -83,7 +87,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageAttributionTest do
 
     for value <- values do
       body =
-        ~s({"usage":{"attribu\\u0074ion":#{Jason.encode!(value)},"input_tokens":10,"output_tokens":2,"total_tokens":12}})
+        ~s({"usage":{"attribu\\u0074ion":#{CodexPooler.JSON.encode!(value)},"input_tokens":10,"output_tokens":2,"total_tokens":12}})
 
       frame = "data: " <> body <> "\n\n"
 
@@ -157,12 +161,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageAttributionTest do
         "total_tokens" => 12
       }
 
-      json = Jason.encode!(raw)
+      json = CodexPooler.JSON.encode!(raw)
 
       {:done, projected, "tail"} =
         UsageProjection.feed(UsageProjection.new(16_384), json <> "tail")
 
-      assert Jason.decode!(projected) == Map.put(raw, "attribution", nil)
+      assert CodexPooler.JSON.decode!(projected) == Map.put(raw, "attribution", nil)
     end
   end
 
@@ -204,7 +208,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageAttributionTest do
 
     for last <- [~s({}), ~s({"type":"response.created"})], chunk_size <- [1, 37, 4096] do
       body = ~s({#{first},"response":#{last}})
-      assert Jason.decode!(body)["response"]["usage"]["total_tokens"] == 12
+      assert CodexPooler.JSON.decode!(body)["response"]["usage"]["total_tokens"] == 12
       state = feed("data: " <> body <> "\n\n", chunk_size)
       assert StreamUsageObserver.usage(state).total_tokens == 12
       assert StreamUsageObserver.usage(state).service_tier == "priority"
@@ -319,7 +323,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageAttributionTest do
       ]
 
       for body <- bodies do
-        decoded = Jason.decode!(body)
+        decoded = CodexPooler.JSON.decode!(body)
         state = feed("data: " <> body <> "\n\n", chunk_size)
         expected_tier = if is_binary(decoded["service_tier"]), do: decoded["service_tier"]
         assert StreamUsageObserver.usage(state).service_tier == expected_tier
@@ -336,7 +340,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageAttributionTest do
       state = feed("data: " <> body <> "\n\n", chunk_size)
 
       assert StreamUsageObserver.result(state).status == "usage_known" ==
-               is_map(Jason.decode!(body)["usage"])
+               is_map(CodexPooler.JSON.decode!(body)["usage"])
     end
   end
 

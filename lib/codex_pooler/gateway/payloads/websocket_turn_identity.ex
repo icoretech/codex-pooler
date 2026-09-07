@@ -159,7 +159,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   defp decode_canonical_metadata(value) when is_map(value), do: {:ok, value}
 
   defp decode_canonical_metadata(value) when is_binary(value) do
-    case Jason.decode(value) do
+    case CodexPooler.JSON.decode(value) do
       {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
       {:ok, _invalid} -> invalid(@canonical_metadata_param)
       {:error, _reason} -> invalid(@canonical_metadata_param)

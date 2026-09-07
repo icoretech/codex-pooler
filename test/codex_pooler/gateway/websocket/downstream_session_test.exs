@@ -18,6 +18,14 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
 
   @remote_node :"codex_pooler@remote-detach-owner.example"
 
+  test "malformed JSON never retargets an attached downstream" do
+    state = %{websocket_owner_downstream: %{}}
+
+    for payload <- ["{", "{invalid}", ~S({"value":"\uD800"})] do
+      assert {:ok, ^state} = DownstreamSession.maybe_retarget_before_start(payload, state)
+    end
+  end
+
   setup do
     setup = accounting_setup()
 

@@ -40,7 +40,7 @@ defmodule CodexPooler.Dev.NativeCompletionDrainTest do
 
       {:ok, state} =
         CodexResponsesSocket.handle_in(
-          {Jason.encode!(payload(setup, metadata())), [opcode: :text]},
+          {CodexPooler.JSON.encode!(payload(setup, metadata())), [opcode: :text]},
           state
         )
 

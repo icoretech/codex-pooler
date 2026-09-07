@@ -92,7 +92,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.AudioTestSupport do
       flunk("expected sanitized audio validation status")
     end
 
-    case Jason.decode(response.resp_body) do
+    case CodexPooler.JSON.decode(response.resp_body) do
       {:ok, decoded} ->
         unless decoded == %{"error" => expected_error} do
           flunk("expected exact OpenAI-shaped sanitized audio validation error")

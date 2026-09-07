@@ -88,7 +88,11 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     counts = runtime_counts()
 
@@ -155,7 +159,11 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     request =
       CodexPooler.PoolerFixtures.request_fixture(auth, %{
@@ -232,7 +240,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
     assert {:ok, changed} =
              Service.prepare_websocket_response(
-               Jason.encode!(changed_payload),
+               CodexPooler.JSON.encode!(changed_payload),
                opts,
                fn _frame -> :ok end
              )
@@ -250,7 +258,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     upstream =
       start_upstream(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.done",
             "response" => %{"id" => "resp_successor123456789", "status" => "completed"}
           })
@@ -282,7 +290,11 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     assert {:ok, %{request: request}} =
              Accounting.claim_websocket_turn(auth, setup.model, %{
@@ -416,9 +428,13 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.put_runtime_context(api_key_runtime_epoch: 1)
 
     assert {:ok, stale_prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), stale_opts, fn _frame ->
-               :ok
-             end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               stale_opts,
+               fn _frame ->
+                 :ok
+               end
+             )
 
     counts = runtime_counts()
 
@@ -451,7 +467,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     upstream =
       start_upstream(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.done",
             "response" => %{
               "id" => "resp_claimsuccessor123456789",
@@ -483,7 +499,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     {:ok, prepared} =
-      Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _ -> :ok end)
+      Service.prepare_websocket_response(CodexPooler.JSON.encode!(payload), opts, fn _ -> :ok end)
 
     {:ok, %{request: request}} =
       Accounting.claim_websocket_turn(auth, setup.model, %{
@@ -502,7 +518,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
     {:ok, changed} =
       Service.prepare_websocket_response(
-        Jason.encode!(Map.put(payload, "temperature", 0.5)),
+        CodexPooler.JSON.encode!(Map.put(payload, "temperature", 0.5)),
         opts,
         fn _ -> :ok end
       )
@@ -514,7 +530,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
     {:ok, other} =
       Service.prepare_websocket_response(
-        Jason.encode!(payload),
+        CodexPooler.JSON.encode!(payload),
         RequestOptions.put_continuity(opts, codex_session: other_session),
         fn _ -> :ok end
       )
@@ -561,7 +577,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     assert Repo.all(from e in LedgerEntry, where: e.request_id == ^request.id) == original_ledger
 
     {:ok, retry} =
-      Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _ -> :ok end)
+      Service.prepare_websocket_response(CodexPooler.JSON.encode!(payload), opts, fn _ -> :ok end)
 
     assert {:error, %{code: "duplicate_turn"}} = Service.prepare_replay_intent(auth, retry)
   end
@@ -666,7 +682,11 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     tampered_epoch =
       update_in(prepared.request_options.runtime.api_key_runtime_epoch, fn _epoch -> 1 end)
@@ -712,7 +732,11 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     other_pool = CodexPooler.PoolerFixtures.pool_fixture()
 
@@ -754,7 +778,11 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     assert {:ok, prepared} =
-             Service.prepare_websocket_response(Jason.encode!(payload), opts, fn _frame -> :ok end)
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
 
     parent = self()
     release_ref = make_ref()

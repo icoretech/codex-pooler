@@ -930,7 +930,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   end
 
   defp append_evidence(path, record) do
-    File.write!(path, Jason.encode!(record) <> "\n", [:append])
+    File.write!(path, CodexPooler.JSON.encode!(record) <> "\n", [:append])
   end
 
   defp parameter_sha256(params), do: params |> :erlang.term_to_binary() |> sha256()

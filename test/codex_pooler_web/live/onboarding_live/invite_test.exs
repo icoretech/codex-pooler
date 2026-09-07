@@ -870,7 +870,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
       )
 
     header = Base.url_encode64(~s({"alg":"none"}), padding: false)
-    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    payload = Base.url_encode64(CodexPooler.JSON.encode!(claims), padding: false)
     header <> "." <> payload <> ".signature"
   end
 

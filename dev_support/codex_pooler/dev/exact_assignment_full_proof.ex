@@ -636,21 +636,23 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
       Req.post!("http://127.0.0.1:#{@pooler_port}#{@responses_endpoint}",
         headers: [
           {"authorization", "Bearer " <> raw_key},
+          {"content-type", "application/json"},
           {"x-request-id", correlator},
           {"accept", "text/event-stream"}
         ],
-        json: %{
-          "model" => @model_id,
-          "instructions" => "You are a bounded loopback control.",
-          "input" => [
-            %{
-              "type" => "message",
-              "role" => "user",
-              "content" => [%{"type" => "input_text", "text" => "hello"}]
-            }
-          ],
-          "stream" => true
-        },
+        body:
+          CodexPooler.JSON.encode_to_iodata!(%{
+            "model" => @model_id,
+            "instructions" => "You are a bounded loopback control.",
+            "input" => [
+              %{
+                "type" => "message",
+                "role" => "user",
+                "content" => [%{"type" => "input_text", "text" => "hello"}]
+              }
+            ],
+            "stream" => true
+          }),
         retry: false,
         decode_body: false,
         receive_timeout: @traffic_deadline_ms
@@ -674,7 +676,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   # body itself is deliberately never rendered or retained.
   defp http_failure_reason(status, body) do
     summary =
-      with {:ok, %{"error" => error}} when is_map(error) <- Jason.decode(body),
+      with {:ok, %{"error" => error}} when is_map(error) <- CodexPooler.JSON.decode(body),
            code when is_binary(code) <- Map.get(error, "code"),
            type when is_binary(type) <- Map.get(error, "type"),
            true <- bounded_error_token?(code),
@@ -700,7 +702,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
     ]
 
     payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => @model_id,
         "instructions" => "You are a bounded loopback control.",
@@ -848,7 +850,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   defp websocket_terminal_in(frames) do
     Enum.find_value(frames, fn
       {:text, text} ->
-        case Jason.decode(text) do
+        case CodexPooler.JSON.decode(text) do
           {:ok, %{"type" => "response.completed"}} -> "response.completed"
           _other -> nil
         end
@@ -1064,8 +1066,12 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   defp lite_negative_control(fake_url) do
     response =
       Req.post!(fake_url <> @responses_endpoint,
-        headers: [{@lite_http_header, "true"}],
-        json: %{"model" => @model_id},
+        headers: [
+          {@lite_http_header, "true"},
+          {"content-type", "application/json"},
+          {"accept", "application/json"}
+        ],
+        body: CodexPooler.JSON.encode_to_iodata!(%{"model" => @model_id}),
         retry: false,
         decode_body: false,
         receive_timeout: 10_000

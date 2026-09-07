@@ -31,7 +31,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileInputTypesTest do
         |> Map.put(field, value)
 
       conn =
-        Plug.Test.conn("POST", "/backend-api/files", Jason.encode!(params))
+        Plug.Test.conn("POST", "/backend-api/files", CodexPooler.JSON.encode!(params))
         |> put_req_header("content-type", "application/json")
         |> auth(setup)
         |> @endpoint.call(@endpoint.init([]))

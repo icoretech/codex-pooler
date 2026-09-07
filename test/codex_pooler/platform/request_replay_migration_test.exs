@@ -91,7 +91,7 @@ defmodule CodexPooler.RequestReplayMigrationTest do
     output
     |> String.split("\n", trim: true)
     |> Enum.filter(&String.starts_with?(&1, "{"))
-    |> Enum.map(&Jason.decode!/1)
+    |> Enum.map(&CodexPooler.JSON.decode!/1)
   end
 
   defp receipt(receipts, stage), do: Enum.find(receipts, &(&1["stage"] == stage))

@@ -225,7 +225,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControlTest do
                "safety_buffering" => %{"model" => "safe-model"}
              }
 
-      encoded = Jason.encode!(sanitized)
+      encoded = CodexPooler.JSON.encode!(sanitized)
       refute encoded =~ "hostile-top-request-id-sentinel"
       refute encoded =~ "hostile-nested-etag-sentinel"
     end

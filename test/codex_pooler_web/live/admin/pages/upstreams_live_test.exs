@@ -8001,7 +8001,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       Pools.create_pool(scope, %{slug: "auth-json-invalid", name: "auth.json Invalid"})
 
     sensitive_token = runtime_secret("auth-json-invalid")
-    invalid_auth_json = Jason.encode!(%{"OPENAI_API_KEY" => sensitive_token})
+    invalid_auth_json = CodexPooler.JSON.encode!(%{"OPENAI_API_KEY" => sensitive_token})
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
@@ -8035,7 +8035,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     personal_access_token = "at-admin-pat-do-not-render-#{System.unique_integer([:positive])}"
 
     unsupported_auth_json =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "auth_mode" => "personalAccessToken",
         "personalAccessToken" => personal_access_token
       })
@@ -8827,7 +8827,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       "tokens" => tokens,
       "last_refresh" => "2026-05-03T00:00:00Z"
     }
-    |> Jason.encode!()
+    |> CodexPooler.JSON.encode!()
   end
 
   defp id_token_fixture do
@@ -8843,7 +8843,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   defp jwt_token(payload) do
     header = %{"alg" => "none", "typ" => "JWT"}
-    encode = &Base.url_encode64(Jason.encode!(&1), padding: false)
+    encode = &Base.url_encode64(CodexPooler.JSON.encode!(&1), padding: false)
 
     Enum.join([encode.(header), encode.(payload), Base.url_encode64("sig", padding: false)], ".")
   end

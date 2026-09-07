@@ -141,7 +141,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
     do: %{state | usage_error: error, projection: nil, usage: nil}
 
   defp project(state, {:done, json, _rest}) do
-    case Jason.decode(json) do
+    case CodexPooler.JSON.decode(json) do
       {:ok, usage} -> %{state | projection: nil, usage: usage}
       _invalid -> fail(state, :malformed)
     end
@@ -155,7 +155,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
   defp advance(%{stack: [frame | tail]} = state, :string)
        when frame.kind == :object and frame.phase in [:first, :key] do
     key =
-      case state.key && Jason.decode(state.key) do
+      case state.key && CodexPooler.JSON.decode(state.key) do
         {:ok, key} -> key
         _other -> nil
       end
@@ -261,7 +261,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
 
   defp store_context(state, path) do
     value =
-      case state.capture && Jason.decode(state.capture) do
+      case state.capture && CodexPooler.JSON.decode(state.capture) do
         {:ok, value} when is_binary(value) and byte_size(value) <= @context_bytes -> value
         _other -> nil
       end

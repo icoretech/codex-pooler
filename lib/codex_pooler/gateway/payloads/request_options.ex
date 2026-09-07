@@ -889,7 +889,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec json_request_bytes(term()) :: non_neg_integer() | nil
   def json_request_bytes(payload) when is_map(payload) do
-    case Jason.encode(payload) do
+    case CodexPooler.JSON.encode(payload) do
       {:ok, encoded} -> byte_size(encoded)
       {:error, _reason} -> nil
     end

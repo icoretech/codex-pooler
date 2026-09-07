@@ -63,7 +63,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
     assert request.user_agent == "sample-client"
     assert request.request_metadata["response_processed"]
     assert request.request_metadata["requested_stream"] == false
-    assert request.request_metadata["request_bytes"] == byte_size(Jason.encode!(frame))
+    assert request.request_metadata["request_bytes"] == byte_size(CodexPooler.JSON.encode!(frame))
     assert request.request_metadata["codex_session_id"] == codex_session.id
     assert request.request_metadata["codex_session_key"] == codex_session.session_key
     refute Map.has_key?(request.request_metadata, "response_id")

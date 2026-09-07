@@ -57,7 +57,7 @@ defmodule CodexPooler.Access.InviteOnboarding do
          {:ok, identity, assignment} <- load_invite_account(invite, pool, upstream_account_id),
          {:ok, state_json} <-
            Secrets.decrypt_active_secret(identity, "device_code"),
-         {:ok, state} <- Jason.decode(state_json),
+         {:ok, state} <- CodexPooler.JSON.decode(state_json),
          {:ok, tokens} <- CodexAuth.poll_device_authorization(state) do
       complete_onboarding(invite, pool, identity, assignment, tokens, "device")
     end
@@ -74,7 +74,7 @@ defmodule CodexPooler.Access.InviteOnboarding do
         # credo:disable-for-next-line Credo.Check.Refactor.Nesting
         case SecretStore.store_encrypted_secret(identity, %{
                secret_kind: "device_code",
-               plaintext: Jason.encode!(auth_state)
+               plaintext: CodexPooler.JSON.encode!(auth_state)
              }) do
           {:ok, _secret} -> %{identity: identity, assignment: assignment}
           {:error, reason} -> Repo.rollback(reason)

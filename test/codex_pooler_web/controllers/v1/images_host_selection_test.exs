@@ -133,6 +133,6 @@ defmodule CodexPoolerWeb.V1.ImagesHostSelectionTest do
       }
     }
 
-    {:sse, ["event: response.completed\ndata: #{Jason.encode!(payload)}\n\n"]}
+    {:sse, ["event: response.completed\ndata: #{CodexPooler.JSON.encode!(payload)}\n\n"]}
   end
 end

@@ -49,7 +49,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   def compaction_result_transport(%{"client_metadata" => %{} = metadata}) do
     case metadata["x-codex-turn-metadata"] do
       turn_metadata when is_binary(turn_metadata) ->
-        case Jason.decode(turn_metadata) do
+        case CodexPooler.JSON.decode(turn_metadata) do
           {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}} -> :sse
           _result -> :buffered
         end
@@ -326,7 +326,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp maybe_put_stream(payload, :buffered), do: Map.delete(payload, "stream")
 
   defp decode_result(%{raw_body: body}) when is_binary(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
       _result -> {:error, :invalid_json}
     end
@@ -486,7 +486,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     %{
       status: 200,
       headers: json_headers(result),
-      raw_body: Jason.encode!(response)
+      raw_body: CodexPooler.JSON.encode!(response)
     }
   end
 
@@ -532,7 +532,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp maybe_put_usage(response, _decoded), do: response
 
   defp sse_block(event, data) do
-    ["event: ", event, "\n", "data: ", Jason.encode!(data), "\n\n"]
+    ["event: ", event, "\n", "data: ", CodexPooler.JSON.encode!(data), "\n\n"]
   end
 
   defp stream_headers(result) do

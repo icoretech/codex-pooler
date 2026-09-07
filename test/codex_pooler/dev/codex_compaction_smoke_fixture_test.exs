@@ -342,7 +342,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert receipt.logical_turn_fingerprints == []
     assert receipt.request_fingerprints == []
 
-    encoded = Jason.encode!(receipt)
+    encoded = CodexPooler.JSON.encode!(receipt)
     refute encoded =~ context.run_id
     refute encoded =~ context.root
     refute encoded =~ "pool_id"
@@ -390,7 +390,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     refute encoded =~ ~r/"(?:root|journal|secret|path|paths)"/
   end
 
-  defp public_json(status), do: Jason.encode!(status)
+  defp public_json(status), do: CodexPooler.JSON.encode!(status)
 
   defp current_uid do
     {value, 0} = System.cmd("id", ["-u"])

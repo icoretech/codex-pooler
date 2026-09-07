@@ -25,7 +25,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
     first = payload(setup, metadata)
 
     assert {:ok, state} =
-             CodexResponsesSocket.handle_in({Jason.encode!(first), [opcode: :text]}, state)
+             CodexResponsesSocket.handle_in(
+               {CodexPooler.JSON.encode!(first), [opcode: :text]},
+               state
+             )
 
     {anchor, call_id, state} = receive_completed_tool(state)
     assert FakeUpstream.count(upstream) == 1
@@ -39,7 +42,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
       })
 
     assert {:ok, state} =
-             CodexResponsesSocket.handle_in({Jason.encode!(continuation), [opcode: :text]}, state)
+             CodexResponsesSocket.handle_in(
+               {CodexPooler.JSON.encode!(continuation), [opcode: :text]},
+               state
+             )
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
                    @budget
@@ -118,7 +124,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
     end)
 
     assert {:ok, retry} =
-             CodexResponsesSocket.handle_in({Jason.encode!(continuation), [opcode: :text]}, retry)
+             CodexResponsesSocket.handle_in(
+               {CodexPooler.JSON.encode!(continuation), [opcode: :text]},
+               retry
+             )
 
     retry = receive_until(retry, {:error, "duplicate_turn"})
     assert :ok = CodexResponsesSocket.terminate(:closed, retry)
@@ -137,7 +146,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
     first = payload(setup, metadata())
 
     assert {:ok, state} =
-             CodexResponsesSocket.handle_in({Jason.encode!(first), [opcode: :text]}, state)
+             CodexResponsesSocket.handle_in(
+               {CodexPooler.JSON.encode!(first), [opcode: :text]},
+               state
+             )
 
     {_anchor, call_id, state} = receive_completed_tool(state)
 
@@ -147,7 +159,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
       ])
 
     assert {:ok, state} =
-             CodexResponsesSocket.handle_in({Jason.encode!(unanchored), [opcode: :text]}, state)
+             CodexResponsesSocket.handle_in(
+               {CodexPooler.JSON.encode!(unanchored), [opcode: :text]},
+               state
+             )
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
                    @budget

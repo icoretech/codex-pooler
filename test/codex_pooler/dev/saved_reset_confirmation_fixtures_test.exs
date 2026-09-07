@@ -136,7 +136,9 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
     assert {:ok, %{"email" => email, "password" => password}} =
              receipt.browser_auth_path
              |> File.read()
-             |> then(fn result -> with {:ok, auth} <- result, do: Jason.decode(auth) end)
+             |> then(fn result ->
+               with {:ok, auth} <- result, do: CodexPooler.JSON.decode(auth)
+             end)
 
     assert {:ok, %{user: %User{id: ^user_id}}} =
              Accounts.login_user(%{"email" => email, "password" => password})
@@ -164,7 +166,10 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
     journal = Fixtures.read_journal!(receipt.journal_path)
     [user_id] = journal["actor_user_ids"]
 
-    File.write!(receipt.journal_path, Jason.encode!(Map.delete(journal, "browser_auth_path")))
+    File.write!(
+      receipt.journal_path,
+      CodexPooler.JSON.encode!(Map.delete(journal, "browser_auth_path"))
+    )
 
     assert {:error, "invalid saved-reset confirmation fixture journal"} =
              Fixtures.cleanup(receipt.journal_path, fixture_opts(root))
@@ -173,7 +178,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
 
     File.write!(
       receipt.journal_path,
-      Jason.encode!(Map.put(journal, "browser_auth_path", "foreign.browser-auth.json"))
+      CodexPooler.JSON.encode!(Map.put(journal, "browser_auth_path", "foreign.browser-auth.json"))
     )
 
     assert {:error, "invalid saved-reset confirmation fixture browser auth file"} =
@@ -181,7 +186,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
 
     assert Repo.get(User, user_id)
 
-    File.write!(receipt.journal_path, Jason.encode!(journal))
+    File.write!(receipt.journal_path, CodexPooler.JSON.encode!(journal))
 
     assert {:ok, %{cleanup: "exact_owned_rows_removed"}} =
              Fixtures.cleanup(receipt.journal_path, fixture_opts(root))

@@ -129,7 +129,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
     request = %Request{
       url: "ws://localhost/replay-test",
       headers: [],
-      payload: Jason.encode!(%{"type" => "response.create"}),
+      payload: CodexPooler.JSON.encode!(%{"type" => "response.create"}),
       timeouts: %{connect: 1_000, receive: 1_000},
       message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1,
       native_replay_binding: binding,
@@ -165,7 +165,9 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
       queries = drain_query_count(ref, 0)
 
       if System.get_env("CODEX_POOLER_TEST_DIAGNOSTICS") == "1" do
-        IO.puts(Jason.encode!(%{cleanup: label, duration_us: duration_us, queries: queries}))
+        IO.puts(
+          CodexPooler.JSON.encode!(%{cleanup: label, duration_us: duration_us, queries: queries})
+        )
       end
 
       result

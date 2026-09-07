@@ -2473,7 +2473,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       |> put_req_header("accept", "application/json, text/event-stream")
       |> put_req_header("mcp-protocol-version", @mcp_version)
       |> put_req_header("authorization", "Bearer #{raw_token}")
-      |> post("/mcp", Jason.encode!(initialize_request()))
+      |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
       |> json_response(expected_status)
 
     if expected_status == 200 do

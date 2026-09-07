@@ -136,5 +136,5 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageProjection do
   end
 
   defp attribution_key?(nil), do: false
-  defp attribution_key?(key), do: Jason.decode(key) == {:ok, "attribution"}
+  defp attribution_key?(key), do: CodexPooler.JSON.decode(key) == {:ok, "attribution"}
 end

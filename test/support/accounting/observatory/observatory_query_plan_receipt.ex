@@ -32,7 +32,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanReceipt do
     case System.get_env("OBSERVATORY_QUERY_PLAN_RECEIPT") do
       path when is_binary(path) and path != "" ->
         File.mkdir_p!(Path.dirname(path))
-        File.write!(path, [Jason.encode_to_iodata!(receipt, pretty: true), "\n"])
+        File.write!(path, [CodexPooler.JSON.encode_to_iodata!(receipt, pretty: true), "\n"])
 
       _unset ->
         :ok

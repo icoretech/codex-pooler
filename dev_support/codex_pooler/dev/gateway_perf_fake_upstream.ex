@@ -181,7 +181,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   plug Plug.Parsers,
     parsers: [:json],
     pass: ["*/*"],
-    json_decoder: Jason,
+    json_decoder: CodexPooler.JSON,
     length: 50_000_000
 
   plug :dispatch
@@ -362,7 +362,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   @spec write_manifest!(String.t(), [profile()]) :: :ok
   def write_manifest!(path, profiles) when is_binary(path) and is_list(profiles) do
     path |> Path.dirname() |> File.mkdir_p!()
-    File.write!(path, Jason.encode_to_iodata!(manifest_entries(profiles), pretty: true))
+    File.write!(path, CodexPooler.JSON.encode_to_iodata!(manifest_entries(profiles), pretty: true))
   end
 
   @spec profiles_from_selector(String.t()) :: {:ok, [profile()]} | {:error, String.t()}
@@ -598,7 +598,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
 
   defp native_turn_metadata(%{"client_metadata" => %{"x-codex-turn-metadata" => value}})
        when is_binary(value) do
-    case Jason.decode(value) do
+    case CodexPooler.JSON.decode(value) do
       {:ok, metadata} when is_map(metadata) -> metadata
       _invalid -> nil
     end
@@ -1207,7 +1207,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   end
 
   defp sse_chunk(event, payload),
-    do: ["event: ", event, "\n", "data: ", Jason.encode!(payload), "\n\n"]
+    do: ["event: ", event, "\n", "data: ", CodexPooler.JSON.encode!(payload), "\n\n"]
 
   defp delta_payload(index, profile) do
     %{
@@ -1269,7 +1269,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   defp json(conn, payload) do
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(conn.status || 200, Jason.encode!(payload))
+    |> send_resp(conn.status || 200, CodexPooler.JSON.encode!(payload))
   end
 
   defp wait_ms(0), do: :ok
@@ -1330,7 +1330,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
 
     @impl WebSock
     def handle_in({payload, [opcode: :text]}, %{profile: profile} = state) do
-      case Jason.decode(payload) do
+      case CodexPooler.JSON.decode(payload) do
         {:ok, decoded} ->
           :ok = record_request_observation(state, decoded)
 
@@ -1345,7 +1345,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
             status ->
               {:push,
                {:text,
-                Jason.encode!(%{
+                CodexPooler.JSON.encode!(%{
                   "type" => "error",
                   "status" => status,
                   "error" => %{"code" => "rate_limit_exceeded"}
@@ -1390,7 +1390,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       messages =
         profile
         |> GatewayPerfFakeUpstream.stream_event_payloads(payload)
-        |> Enum.map(&Jason.encode!/1)
+        |> Enum.map(&CodexPooler.JSON.encode!/1)
 
       messages = maybe_limit_failure_messages(messages, profile)
 
@@ -1400,7 +1400,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
           {:push, Enum.map(messages, &{:text, &1}), state}
 
         "upstream_error" ->
-          {:push, Enum.map(messages ++ [Jason.encode!(websocket_error_payload())], &{:text, &1}),
+          {:push, Enum.map(messages ++ [CodexPooler.JSON.encode!(websocket_error_payload())], &{:text, &1}),
            state}
 
         _mode ->

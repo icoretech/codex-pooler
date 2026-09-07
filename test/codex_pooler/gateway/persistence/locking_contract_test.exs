@@ -413,7 +413,7 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
     if System.get_env("CODEX_POOLER_LOCKING_CONTRACT_REPORT") == "1" do
       IO.puts(
         "LOCKING_CONTRACT " <>
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             lock_id: lock_id,
             caller: caller,
             primary_key_hash: :crypto.hash(:sha256, id) |> Base.encode16(case: :lower),

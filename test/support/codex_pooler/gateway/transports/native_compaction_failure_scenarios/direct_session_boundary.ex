@@ -413,7 +413,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
     %Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [],
-      payload: Jason.encode!(%{"model" => "gpt-test"}),
+      payload: CodexPooler.JSON.encode!(%{"model" => "gpt-test"}),
       request_id: Ecto.UUID.generate(),
       attempt_id: Ecto.UUID.generate(),
       effective_serving_mode: "full",
@@ -497,7 +497,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
 
   defp terminal_failure_mode do
     FakeUpstream.websocket_text_frames([
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.failed",
         "response" => %{"status" => "failed", "error" => %{"code" => "server_error"}}
       })
@@ -505,7 +505,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
   end
 
   defp completed_frame do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "response.completed",
       "response" => %{"id" => "resp_direct_boundary", "status" => "completed"}
     })

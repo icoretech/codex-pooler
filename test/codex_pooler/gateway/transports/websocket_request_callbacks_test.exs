@@ -16,8 +16,11 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
 
   test "maps every discriminator to the exact current mapper output" do
     messages = [
-      Jason.encode!(%{"type" => "response.completed", "response" => %{"id" => "resp_example"}}),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_example"}
+      }),
+      CodexPooler.JSON.encode!(%{
         "type" => "response.failed",
         "response" => %{"error" => %{"code" => "server_error"}}
       })
@@ -188,12 +191,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
     assert {:ok, request} = WebsocketRequestCallbacks.materialize(envelope, writer)
 
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_abcdefghijklmnop"}
       })
 
-    assert request.frame_observer.(frame, Jason.decode!(frame)) == :ok
+    assert request.frame_observer.(frame, CodexPooler.JSON.decode!(frame)) == :ok
     assert request.writer.(frame, :terminal) == :writer_result
     assert_receive {:written, ^frame, :terminal}
 

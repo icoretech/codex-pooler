@@ -233,12 +233,17 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     {conn, websocket, ref} = websocket_connect!(server.url, "/backend-api/codex/responses")
 
     {conn, websocket} =
-      websocket_send_text!(conn, websocket, ref, Jason.encode!(%{"model" => "gpt-example"}))
+      websocket_send_text!(
+        conn,
+        websocket,
+        ref,
+        CodexPooler.JSON.encode!(%{"model" => "gpt-example"})
+      )
 
     {_conn, _websocket, text} = websocket_receive_text!(conn, websocket, ref)
 
     assert %{"type" => "response.output_text.delta", "profile" => "short-ok"} =
-             Jason.decode!(text)
+             CodexPooler.JSON.decode!(text)
   end
 
   test "opencode text profile emits one internally consistent AI SDK response" do
@@ -384,7 +389,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
              "logicalTurnFingerprint" => nil
            }
 
-    encoded = Jason.encode!(observation)
+    encoded = CodexPooler.JSON.encode!(observation)
     refute encoded =~ "encrypted_content"
     refute encoded =~ "authorization"
     refute encoded =~ "client_metadata"
@@ -396,10 +401,11 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
 
     metadata_cases = [
       {%{"turn_id" => "abc"}, "ba7816bf8f01cfea"},
-      {%{"x-codex-turn-metadata" => Jason.encode!(%{"turn_id" => "abc"})}, "ba7816bf8f01cfea"},
+      {%{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => "abc"})},
+       "ba7816bf8f01cfea"},
       {%{
          "turn_id" => "xyz",
-         "x-codex-turn-metadata" => Jason.encode!(%{"turn_id" => "abc"})
+         "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => "abc"})
        }, "3608bca1e44ea6c4"},
       {%{"turn_id" => "  "}, nil},
       {%{"turn_id" => 123}, nil},
@@ -443,7 +449,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
         connection_a,
         websocket_a,
         ref_a,
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "input" => [%{"type" => "message", "content" => "RAW_NESTED_SENTINEL"}],
           "store" => false,
           "stream" => true
@@ -458,7 +464,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
         connection_b,
         websocket_b,
         ref_b,
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "input" => [
             %{"type" => "function_call_output", "output" => "RAW_NESTED_SENTINEL"},
             %{"type" => "compaction_trigger"}
@@ -477,7 +483,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
         connection_a,
         websocket_a,
         ref_a,
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "input" => [%{"type" => "compaction"}],
           "store" => false,
           "stream" => true
@@ -530,7 +536,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     assert Enum.all?(connection_ids, &Regex.match?(~r/\Aws_[a-f0-9]{12}\z/, &1))
     assert length(connection_ids) == 2
 
-    encoded = Jason.encode!(observations)
+    encoded = CodexPooler.JSON.encode!(observations)
     refute encoded =~ "RAW_NESTED_SENTINEL"
     refute encoded =~ "resp_synthetic_anchor"
     refute encoded =~ "function_call_output\",\"output"
@@ -549,7 +555,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
 
     GatewayPerfFakeUpstream.write_manifest!(manifest_path, [profile])
 
-    assert [decoded] = manifest_path |> File.read!() |> Jason.decode!()
+    assert [decoded] = manifest_path |> File.read!() |> CodexPooler.JSON.decode!()
     assert MapSet.new(Map.keys(decoded)) == MapSet.new(@manifest_keys)
     assert decoded["name"] == "short-ok"
     refute File.read!(manifest_path) =~ "authorization"

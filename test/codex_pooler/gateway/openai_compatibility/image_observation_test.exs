@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImageObservationTest do
 
   test "HTTP JSON errors retain safe code type and param before body disposal" do
     body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "error" => %{
           "code" => "unsupported_parameter",
           "type" => "invalid_request_error",
@@ -33,7 +33,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImageObservationTest do
 
   test "malformed JSON error identifiers become fingerprints and arbitrary fields drop" do
     body =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "error" => %{
           "code" => "private\ncode",
           "type" => ["private"],
@@ -61,7 +61,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImageObservationTest do
         ] do
       body =
         "data: " <>
-          Jason.encode!(%{"type" => "response.completed", "response" => %{"output" => output}}) <>
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.completed",
+            "response" => %{"output" => output}
+          }) <>
           "\n\n"
 
       observation = ImageObservation.from_sse(body)
@@ -74,7 +77,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImageObservationTest do
   test "retains only fixed type counters for a tool-only response" do
     body =
       "data: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "output" => [
@@ -103,7 +106,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImageObservationTest do
   test "counts refusals and caps duplicate observations without retaining refusal text" do
     event =
       "data: " <>
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.output_item.done",
           "item" => %{
             "type" => "message",

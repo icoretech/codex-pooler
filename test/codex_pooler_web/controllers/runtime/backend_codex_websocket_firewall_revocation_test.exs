@@ -51,7 +51,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       assert_cache_applied!(allowed_settings.lock_version)
 
       payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => native_text_input("allowed firewall update"),
@@ -62,7 +62,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
       {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-      assert %{"type" => "response.completed"} = Jason.decode!(frame)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(frame)
       assert FakeUpstream.count(upstream) == 1
     after
       Mint.HTTP.close(conn)
@@ -133,7 +133,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
     try do
       first_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => native_text_input("admitted turn"),
@@ -145,7 +145,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
 
       queued_payload =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
           "input" => [
@@ -177,7 +177,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
             assert_public_websocket_queue_length!(server, 0)
 
             new_payload =
-              Jason.encode!(%{
+              CodexPooler.JSON.encode!(%{
                 "type" => "response.create",
                 "model" => setup.model.exposed_model_id,
                 "input" => native_text_input("new work after revocation"),
@@ -199,7 +199,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
         receive_public_websocket_frames_until_close!(conn, websocket, ref)
 
       assert [{:text, final_frame}, {:close, 1008, "client IP is no longer allowed"}] = frames
-      assert %{"type" => "response.completed"} = Jason.decode!(final_frame)
+      assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(final_frame)
       assert FakeUpstream.count(upstream) == 1
 
       assert Repo.aggregate(
@@ -708,7 +708,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
     do: metadata_control_frame?(frame)
 
   defp metadata_control_frame?(frame) when is_binary(frame) do
-    match?({:ok, %{"type" => "codex.response.metadata"}}, Jason.decode(frame))
+    match?({:ok, %{"type" => "codex.response.metadata"}}, CodexPooler.JSON.decode(frame))
   end
 
   defp metadata_control_frame?(_frame), do: false

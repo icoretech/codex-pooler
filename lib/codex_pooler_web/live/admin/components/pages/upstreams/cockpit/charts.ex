@@ -370,15 +370,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
 
     %{
       points: points,
-      categories: Jason.encode!(Enum.map(points, & &1.label)),
+      categories: CodexPooler.JSON.encode!(Enum.map(points, & &1.label)),
       series:
-        Jason.encode!([
+        CodexPooler.JSON.encode!([
           %{name: "Succeeded", type: "column", data: success_values},
           %{name: "Failed", type: "column", data: failure_values}
         ]),
-      units: Jason.encode!(["requests", "failures"]),
-      yaxis: Jason.encode!([%{seriesName: "Succeeded", title: "requests"}]),
-      colors: Jason.encode!(["var(--color-success)", "var(--color-error)"]),
+      units: CodexPooler.JSON.encode!(["requests", "failures"]),
+      yaxis: CodexPooler.JSON.encode!([%{seriesName: "Succeeded", title: "requests"}]),
+      colors: CodexPooler.JSON.encode!(["var(--color-success)", "var(--color-error)"]),
       failure_rate_label: rate_percent_label(chart.kpis.failure_rate_24h),
       p50_latency_label: latency_label(chart.kpis.p50_latency_ms_24h),
       error_breakdown: Enum.map(chart.kpis.error_breakdown_24h, &error_breakdown_entry/1),

@@ -106,7 +106,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     request = %{
       websocket_request(FakeUpstream.url(upstream))
       | headers: [{"x-private-status", header_marker}],
-        payload: Jason.encode!(%{"input" => payload_marker})
+        payload: CodexPooler.JSON.encode!(%{"input" => payload_marker})
     }
 
     assert {:ok, %{terminal: "response.completed"}} =
@@ -851,7 +851,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     request = %{
       websocket_request(FakeUpstream.url(upstream))
       | headers: [{"x-private-crash", header_marker}],
-        payload: Jason.encode!(%{"input" => payload_marker}),
+        payload: CodexPooler.JSON.encode!(%{"input" => payload_marker}),
         writer: fn _text -> raise "synthetic writer crash" end
     }
 
@@ -908,7 +908,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive {:mapped_terminal_frame, frame}
 
     assert %{"type" => "response.failed", "error" => %{"code" => "upstream_terminal_failure"}} =
-             Jason.decode!(frame)
+             CodexPooler.JSON.decode!(frame)
 
     assert body =~ "upstream_terminal_failure"
     refute body =~ "synthetic terminal detail"
@@ -917,7 +917,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   @tag :websocket_owner_regression
   test "RED-R01 response.done followed by clean close completes before close classification" do
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.done",
         "response" => %{"id" => "resp_red_done", "status" => "completed"}
       })
@@ -937,13 +937,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "malformed response.done stays nonterminal until a valid terminal arrives" do
     malformed =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.done",
         "response" => %{"id" => "resp_malformed_done", "status" => "failed"}
       })
 
     completed =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_after_malformed", "status" => "completed"}
       })
@@ -976,7 +976,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       }
     }
 
-    upstream = start_upstream(FakeUpstream.websocket_text_frames([Jason.encode!(frame)]))
+    upstream =
+      start_upstream(FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(frame)]))
+
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
     parent = self()
@@ -992,7 +994,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     expected_frame = Map.delete(frame, "headers")
 
     assert Map.take(result, [:body, :status, :terminal, :websocket_frame_headers]) == %{
-             body: "data: #{Jason.encode!(frame)}\n\n",
+             body: "data: #{CodexPooler.JSON.encode!(frame)}\n\n",
              status: 200,
              terminal: "response.failed",
              websocket_frame_headers: %{
@@ -1009,7 +1011,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
            end)
 
     assert_receive {:characterization_writer_frame, downstream_frame}
-    assert Jason.decode!(downstream_frame) == expected_frame
+    assert CodexPooler.JSON.decode!(downstream_frame) == expected_frame
     refute downstream_frame =~ "private-header-characterization"
   end
 
@@ -1018,7 +1020,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     malformed = ~s({"type":"response.output_text.delta")
 
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.failed",
         "response" => %{
           "id" => "resp_decoded_observer",
@@ -1066,7 +1068,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "mapper and writer callback failures remain terminal for the upstream session" do
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_mandatory_callback_failure", "status" => "completed"}
       })
@@ -1118,7 +1120,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "observer exception throw and exit are contained before exactly-once terminal delivery" do
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_optional_observer_failure", "status" => "completed"}
       })
@@ -1192,7 +1194,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "two-argument writers receive the mapped terminal discriminator" do
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_writer_discriminator", "status" => "completed"}
       })
@@ -1217,7 +1219,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "native snapshot emits metadata before a sanitized terminal failure while observers retain raw data" do
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.failed",
         "headers" => %{
           "openai-model" => "frame-model",
@@ -1255,7 +1257,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert metadata_event(metadata) == %{"x-models-etag" => "pooler-etag"}
     assert_receive {:native_metadata_frame, sanitized_terminal}
 
-    assert Jason.decode!(sanitized_terminal) == %{
+    assert CodexPooler.JSON.decode!(sanitized_terminal) == %{
              "type" => "response.failed",
              "headers" => %{"openai-model" => "frame-model"},
              "response" => %{
@@ -1306,7 +1308,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
            }
 
     assert_receive {:upstream_websocket_frame, accepted}
-    assert %{"id" => _id} = Jason.decode!(accepted)
+    assert %{"id" => _id} = CodexPooler.JSON.decode!(accepted)
     refute metadata =~ "provider-etag"
     refute metadata =~ "hostile-cookie"
     refute metadata =~ "hostile-request-id"
@@ -1316,13 +1318,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive {:upstream_websocket_frame, reused_metadata}
     assert metadata_event(reused_metadata) == metadata_event(metadata)
     assert_receive {:upstream_websocket_frame, reused_accepted}
-    assert %{"id" => _id} = Jason.decode!(reused_accepted)
+    assert %{"id" => _id} = CodexPooler.JSON.decode!(reused_accepted)
     refute_received {:upstream_websocket_frame, _extra}
   end
 
   test "native snapshot removes malformed top-level and nested header containers" do
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "headers" => ["invalid-container"],
         "response" => %{"status" => "completed", "headers" => "invalid-container"}
@@ -1347,7 +1349,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert metadata_event(metadata) == %{"x-models-etag" => "pooler-etag"}
     assert_receive {:malformed_metadata_frame, sanitized}
 
-    assert Jason.decode!(sanitized) == %{
+    assert CodexPooler.JSON.decode!(sanitized) == %{
              "type" => "response.completed",
              "response" => %{"status" => "completed"}
            }
@@ -1360,7 +1362,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "native snapshot emits none for retryable first output and once for later accepted output" do
     retryable =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "error",
         "status" => 400,
         "headers" => %{"authorization" => "retry-hostile-auth"},
@@ -1372,7 +1374,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       })
 
     accepted =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed"}
       })
@@ -1441,7 +1443,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert_receive {:native_child_delta_frame, ^child_delta}
     assert_receive {:native_child_delta_frame, terminal_frame}
-    assert %{"type" => "response.completed"} = Jason.decode!(terminal_frame)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(terminal_frame)
   end
 
   test "same-key requests reuse one FakeUpstream connection and process replacement opens another" do
@@ -1568,7 +1570,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
     assert_receive {:controlled_terminal_frame, frame}, 1_000
-    assert %{"type" => "response.completed"} = Jason.decode!(frame)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(frame)
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              Task.await(request_task, 1_000)
@@ -1824,7 +1826,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     :ok = :gen_tcp.close(socket)
 
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_ws_coalesced_terminal", "status" => "completed"}
       })
@@ -1836,7 +1838,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert body =~ "resp_ws_coalesced_terminal"
     assert_receive {:coalesced_frame, frame}, 1_000
-    assert %{"type" => "response.completed"} = Jason.decode!(frame)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(frame)
     assert Process.alive?(session)
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -1872,7 +1874,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     :ok = :gen_tcp.close(socket)
 
     delta =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_text.delta",
         "delta" => "coalesced partial output"
       })
@@ -2141,7 +2143,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     request = %{
       websocket_request(FakeUpstream.url(upstream))
-      | payload: Jason.encode!(%{"type" => "response.create", "input" => [handoff]})
+      | payload: CodexPooler.JSON.encode!(%{"type" => "response.create", "input" => [handoff]})
     }
 
     initial_lifecycle = lifecycle_state(session)
@@ -2755,7 +2757,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
         headers: [{"authorization", "Bearer synthetic-upstream-token"}],
         payload:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "model" => "upstream-test-model",
             "input" => [%{"type" => "message", "role" => "user", "content" => "sample"}],
             "stream" => true
@@ -2780,7 +2782,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       Task.async(fn ->
         UpstreamWebsocketSession.send_request_frame(
           session,
-          Jason.encode!(%{"type" => "response.processed", "response_id" => "resp_ws_mailbox"})
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.processed",
+            "response_id" => "resp_ws_mailbox"
+          })
         )
       end)
 
@@ -2820,7 +2825,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         url: url,
         headers: [{"authorization", "Bearer #{bearer}"}],
         payload:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "model" => "upstream-test-model",
             "input" => [%{"type" => "message", "role" => "user", "content" => content}],
             "stream" => true
@@ -2838,7 +2843,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              )
 
     assert_receive {:upstream_websocket_frame, :old_token_turn, old_frame}, 1_000
-    assert %{"id" => "resp_ws_old_token"} = Jason.decode!(old_frame)
+    assert %{"id" => "resp_ws_old_token"} = CodexPooler.JSON.decode!(old_frame)
     generation_one = %{initial_lifecycle | generation: 1}
     assert lifecycle_state(session) == generation_one
     assert_connection_metadata(old_key_result, generation_one, false, false)
@@ -2850,7 +2855,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              )
 
     assert_receive {:upstream_websocket_frame, :new_token_turn, new_frame}, 1_000
-    assert %{"id" => "resp_ws_new_token"} = Jason.decode!(new_frame)
+    assert %{"id" => "resp_ws_new_token"} = CodexPooler.JSON.decode!(new_frame)
     generation_two = %{initial_lifecycle | generation: 2}
     assert lifecycle_state(session) == generation_two
     assert_connection_metadata(new_key_result, generation_two, false, false)
@@ -3040,7 +3045,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              UpstreamWebsocketSession.request(session, request)
 
     assert_receive {:upstream_websocket_frame, terminal_frame}, 1_000
-    assert %{"id" => _id} = Jason.decode!(terminal_frame)
+    assert %{"id" => _id} = CodexPooler.JSON.decode!(terminal_frame)
 
     assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
     assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, 1_000
@@ -3050,7 +3055,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     request_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
     assert_receive {:upstream_websocket_frame, created_frame}, 1_000
-    assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+    assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
 
     result =
       case Task.yield(request_task, 600) do
@@ -3253,7 +3258,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [{"authorization", "Bearer synthetic-upstream-token"}],
       payload:
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "upstream-test-model",
           "input" => [%{"type" => "message", "role" => "user", "content" => "sample"}],
           "stream" => true
@@ -3266,12 +3271,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     request_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
     assert_receive {:upstream_websocket_frame, created_frame}, 1_000
-    assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+    assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
     refute Task.yield(request_task, 50)
 
     assert {:ok, %{terminal: "response.completed", status: 200}} = Task.await(request_task, 1_000)
     assert_receive {:upstream_websocket_frame, completed_frame}, 1_000
-    assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
+    assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(completed_frame)
   end
 
   test "returns only bounded retained body while writing every upstream websocket frame" do
@@ -3317,7 +3322,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [{"authorization", "Bearer synthetic-upstream-token"}],
       payload:
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "upstream-test-model",
           "input" => [%{"type" => "message", "role" => "user", "content" => "sample"}],
           "stream" => true
@@ -3337,7 +3342,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         frame
       end)
 
-    assert Enum.map(written_frames, &Jason.decode!/1) == events
+    assert Enum.map(written_frames, &CodexPooler.JSON.decode!/1) == events
 
     full_body =
       written_frames
@@ -3353,15 +3358,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     response_id = "response-identity-early"
 
     frames = [
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => response_id}
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_text.delta",
         "delta" => String.duplicate("x", 70_000)
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed"}
       })
@@ -3385,7 +3390,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
         frames =
           [
-            Jason.encode!(%{
+            CodexPooler.JSON.encode!(%{
               "type" => type,
               "response" => %{"id" => "  #{response_id}  ", "status" => "completed"}
             })
@@ -3401,7 +3406,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     response_id = "response-identity-done"
 
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.done",
         "response" => %{"id" => response_id, "status" => "completed"}
       })
@@ -3418,26 +3423,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       ~s({"type":"response.metadata","response_id":"metadata-response-id"}),
       ~s({"response_id":"typeless-response-id"}),
       ~s({"type":"response.created","response":{"id":"   "}}),
-      Jason.encode!(%{"type" => "response.created", "response" => %{"id" => 1}}),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{"type" => "response.created", "response" => %{"id" => 1}}),
+      CodexPooler.JSON.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => String.duplicate("x", 1_025)}
       }),
       ~s({"type":"response.created","response":{"id":"unterminated"),
       ~s(["not-an-object"]),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => first_response_id}
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.in_progress",
         "response" => %{"id" => first_response_id}
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.queued",
         "response" => %{"id" => "response-identity-conflict"}
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed"}
       })
@@ -3448,18 +3453,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "captures a typeless whole-response id but omits identities from failures" do
     typeless_id = "response-identity-typeless"
-    typeless_frame = Jason.encode!(%{"id" => "  #{typeless_id}  "})
+    typeless_frame = CodexPooler.JSON.encode!(%{"id" => "  #{typeless_id}  "})
 
     assert {:ok, %{response_id: ^typeless_id, terminal: "response.completed"}} =
              request_websocket_frames([typeless_frame])
 
     created =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => "response-identity-failure"}
       })
 
-    upstream = start_upstream(FakeUpstream.websocket_sse_then_close([Jason.decode!(created)]))
+    upstream =
+      start_upstream(FakeUpstream.websocket_sse_then_close([CodexPooler.JSON.decode!(created)]))
+
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
@@ -3480,11 +3487,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       ],
       fn {type, status} ->
         frames = [
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.created",
             "response" => %{"id" => "response-identity-semantic-#{status}"}
           }),
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => type,
             "response" => %{"status" => status}
           })
@@ -3501,18 +3508,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     response_id = "response-identity-raw"
 
     mapper = fn text ->
-      case Jason.decode!(text) do
+      case CodexPooler.JSON.decode!(text) do
         %{"type" => "response.created"} -> ~s({"type":"response.created"})
         _frame -> text
       end
     end
 
     frames = [
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => response_id}
       }),
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed"}
       })
@@ -3526,7 +3533,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "completes without a response identity when no valid identity was captured" do
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed"}
       })
@@ -3622,7 +3629,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     request = %{
       request
       | payload:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "previous_response_id" => "resp_old",
             "input" => [
@@ -3650,7 +3657,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     request = %{
       request
       | payload:
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "input" => [
               %{"type" => "message", "role" => "user", "content" => "synthetic"},
@@ -3671,13 +3678,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   @tag :collect_compaction
   test "collect compaction retains frames without a writer on a reused matching-mode connection" do
     item =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_item.done",
         "item" => %{"type" => "compaction", "encrypted_content" => "opaque-compact"}
       })
 
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_collect_matching", "status" => "completed"}
       })
@@ -4085,7 +4092,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   defp native_retry_terminal do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "type" => "error",
       "status" => 400,
       "error" => %{
@@ -4119,7 +4126,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp websocket_success_without_id do
     FakeUpstream.websocket_text_frames([
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed"}
       })
@@ -4150,7 +4157,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   defp maybe_append_terminal_frame(frames, _type) do
     frames ++
       [
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{"status" => "completed"}
         })
@@ -4176,7 +4183,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   defp metadata_event(frame) do
-    assert %{"type" => "codex.response.metadata", "headers" => headers} = Jason.decode!(frame)
+    assert %{"type" => "codex.response.metadata", "headers" => headers} =
+             CodexPooler.JSON.decode!(frame)
+
     headers
   end
 
@@ -4187,11 +4196,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   defp ordinary_request(%Request{} = request) do
-    payload = request.payload |> Jason.decode!() |> Map.put_new("model", "upstream-test-model")
+    payload =
+      request.payload |> CodexPooler.JSON.decode!() |> Map.put_new("model", "upstream-test-model")
 
     %{
       request
-      | payload: Jason.encode!(payload),
+      | payload: CodexPooler.JSON.encode!(payload),
         request_id: Ecto.UUID.generate(),
         attempt_id: Ecto.UUID.generate(),
         effective_serving_mode: "full"
@@ -4474,7 +4484,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       url: url,
       headers: [{"authorization", "Bearer synthetic-upstream-token"}],
       payload:
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "upstream-test-model",
           "input" => [%{"type" => "message", "role" => "user", "content" => "sample"}],
           "stream" => true
@@ -4941,11 +4951,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
           "response" => %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
         }
 
-        :gen_tcp.send(socket, raw_websocket_server_text_frame(Jason.encode!(response)))
+        :gen_tcp.send(socket, raw_websocket_server_text_frame(CodexPooler.JSON.encode!(response)))
 
       :terminal ->
         response = %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
-        :gen_tcp.send(socket, raw_websocket_server_text_frame(Jason.encode!(response)))
+        :gen_tcp.send(socket, raw_websocket_server_text_frame(CodexPooler.JSON.encode!(response)))
     end
   end
 

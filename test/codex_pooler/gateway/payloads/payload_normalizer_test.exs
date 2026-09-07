@@ -46,7 +46,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["previous_response_id"] == "resp_projection_anchor_a"
+      assert CodexPooler.JSON.decode!(encoded)["previous_response_id"] ==
+               "resp_projection_anchor_a"
+
       assert normalized_options.payload_context.compaction_projection_context == nil
 
       assert normalized_options.payload_context.compaction_projection["action"] == "preserved"
@@ -79,7 +81,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           compact
         )
 
-      assert {:error, %Protocol.UndefinedError{protocol: Jason.Encoder}} =
+      assert {:error, %Protocol.UndefinedError{protocol: JSON.Encoder}} =
                PayloadNormalizer.prepare_upstream_payload(
                  compact,
                  %Model{upstream_model_id: "provider-model"},
@@ -135,7 +137,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded) == %{
+      assert CodexPooler.JSON.decode!(encoded) == %{
                "model" => "provider-model",
                "prompt_cache_key" => "cache-key-fixture",
                "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
@@ -223,7 +225,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
 
         refute Map.has_key?(upstream, "prompt_cache_options"), message: label
         refute prompt_cache_breakpoint_present?(upstream), message: label
@@ -288,9 +290,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
 
-      assert upstream["input"] == Jason.decode!(Jason.encode!(payload))["input"]
+      assert upstream["input"] ==
+               CodexPooler.JSON.decode!(CodexPooler.JSON.encode!(payload))["input"]
+
       refute updated_options.runtime.prompt_cache_controls_downgraded
     end
 
@@ -366,7 +370,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         refute get_in(upstream, ["reasoning", "effort"])
         refute Map.has_key?(upstream, "reasoning_effort")
         refute Map.has_key?(upstream, "reasoningEffort")
@@ -388,7 +392,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
 
       assert get_in(upstream, ["tools", Access.at(0), "parameters", "properties", "message"]) ==
                %{
@@ -428,7 +432,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
       assert upstream["type"] == "response.create"
 
       refute Map.has_key?(
@@ -472,7 +476,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
 
-        parameters = Jason.decode!(encoded) |> get_in(["tools", Access.at(0), "parameters"])
+        parameters =
+          CodexPooler.JSON.decode!(encoded) |> get_in(["tools", Access.at(0), "parameters"])
 
         refute Map.has_key?(parameters, "encrypted"), "unexpected root marker for #{transport}"
 
@@ -545,7 +550,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
 
-        parameters = Jason.decode!(encoded) |> get_in(["tools", Access.at(0), "parameters"])
+        parameters =
+          CodexPooler.JSON.decode!(encoded) |> get_in(["tools", Access.at(0), "parameters"])
 
         assert Map.has_key?(parameters["properties"], "encrypted")
         assert Map.has_key?(parameters["$defs"], "encrypted")
@@ -569,7 +575,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
 
         assert get_in(upstream, ["tools", Access.at(0), "parameters"]) ==
                  lowered_tool_schema()
@@ -628,7 +634,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["tools"] == [strict_tool]
+        assert CodexPooler.JSON.decode!(encoded)["tools"] == [strict_tool]
       end
     end
 
@@ -649,7 +655,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         assert Enum.at(upstream["tools"], 0) == namespace_tool
 
         assert get_in(upstream, ["tools", Access.at(1), "parameters"]) ==
@@ -702,7 +708,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
 
       assert upstream["input"] == [
                %{"type" => "message", "role" => "user", "content" => "hello"},
@@ -758,7 +764,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
 
       assert upstream["input"] == [
                %{"type" => "message", "role" => "user", "content" => "hello"},
@@ -815,7 +821,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
 
       assert Enum.map(upstream["input"], &Map.fetch!(&1, "type")) == [
                "message",
@@ -861,8 +867,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       refute Map.has_key?(Map.from_struct(http_options.continuity), :protected_replay?)
       refute Map.has_key?(Map.from_struct(websocket_options.continuity), :protected_replay?)
-      assert Jason.decode!(http_encoded)["input"] == [reasoning]
-      assert Jason.decode!(websocket_encoded)["input"] == [reasoning]
+      assert CodexPooler.JSON.decode!(http_encoded)["input"] == [reasoning]
+      assert CodexPooler.JSON.decode!(websocket_encoded)["input"] == [reasoning]
     end
 
     @tag :encrypted_reasoning_continuity
@@ -912,7 +918,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                      options
                    )
 
-          assert Jason.decode!(encoded)["input"] == []
+          assert CodexPooler.JSON.decode!(encoded)["input"] == []
         end)
       end)
     end
@@ -956,7 +962,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
 
       assert Enum.map(upstream["input"], &Map.fetch!(&1, "type")) == [
                "agent_message",
@@ -1108,7 +1114,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, options)
 
-        assert Jason.decode!(encoded)["tools"] == namespace_tools
+        assert CodexPooler.JSON.decode!(encoded)["tools"] == namespace_tools
       end
     end
 
@@ -1131,7 +1137,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
 
-        assert Jason.decode!(encoded)["input"] == [v1_handoff]
+        assert CodexPooler.JSON.decode!(encoded)["input"] == [v1_handoff]
       end
     end
 
@@ -1161,7 +1167,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        refute Map.has_key?(Jason.decode!(encoded), "service_tier")
+        refute Map.has_key?(CodexPooler.JSON.decode!(encoded), "service_tier")
       end
 
       for tier <- ["priority", " PRIORITY ", "flex", "scale", "latency_preview", " "] do
@@ -1181,7 +1187,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["service_tier"] == tier
+        assert CodexPooler.JSON.decode!(encoded)["service_tier"] == tier
       end
 
       for tier <- ["fast", " FAST ", "Fast"] do
@@ -1201,7 +1207,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["service_tier"] == "priority"
+        assert CodexPooler.JSON.decode!(encoded)["service_tier"] == "priority"
       end
 
       for tier <- [123, nil, ["fast"], %{"id" => "fast"}] do
@@ -1221,7 +1227,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["service_tier"] == tier
+        assert CodexPooler.JSON.decode!(encoded)["service_tier"] == tier
       end
     end
 
@@ -1251,7 +1257,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  http_options
                )
 
-      refute Map.has_key?(Jason.decode!(http_encoded), "previous_response_id")
+      refute Map.has_key?(CodexPooler.JSON.decode!(http_encoded), "previous_response_id")
       assert normalized_http_options.continuity.previous_response_id == previous_response_id
 
       websocket_options = RequestOptions.for_websocket(http_options, payload)
@@ -1264,7 +1270,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  websocket_options
                )
 
-      assert Jason.decode!(websocket_encoded)["previous_response_id"] == previous_response_id
+      assert CodexPooler.JSON.decode!(websocket_encoded)["previous_response_id"] ==
+               previous_response_id
+
       assert normalized_websocket_options.continuity.previous_response_id == previous_response_id
     end
 
@@ -1304,8 +1312,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    options
                  )
 
-        assert Map.has_key?(Jason.decode!(encoded), "previous_response_id") == final_id_present?,
-          message: "case: #{label}"
+        assert Map.has_key?(CodexPooler.JSON.decode!(encoded), "previous_response_id") ==
+                 final_id_present?,
+               message: "case: #{label}"
 
         assert normalized_options.continuity.upstream_previous_response_id? == expected_marker,
           message: "case: #{label}"
@@ -1381,7 +1390,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["model"] == "provider-model"
+      assert CodexPooler.JSON.decode!(encoded)["model"] == "provider-model"
 
       assert %{
                "request_id" => "payload-debug-explicit",
@@ -1411,7 +1420,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
 
-        assert Jason.decode!(encoded)["model"] == effective_model
+        assert CodexPooler.JSON.decode!(encoded)["model"] == effective_model
       end
     end
 
@@ -1432,7 +1441,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
 
-        assert Jason.decode!(encoded)["model"] == "provider-text-model"
+        assert CodexPooler.JSON.decode!(encoded)["model"] == "provider-text-model"
       end
     end
 
@@ -1634,7 +1643,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+        assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "max"}
       end
     end
 
@@ -1656,7 +1665,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "low"}
+      assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "low"}
     end
 
     test "passes none reasoning effort through unchanged" do
@@ -1677,7 +1686,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "none"}
+      assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "none"}
     end
 
     test "maps client-facing ultra reasoning effort to max for backend Codex HTTP, compact, and websocket JSON" do
@@ -1702,7 +1711,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+        assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "max"}
       end
     end
 
@@ -1741,7 +1750,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
 
         assert upstream["reasoning"] == %{
                  "context" => "all_turns",
@@ -1771,7 +1780,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
       assert upstream["reasoning"] == %{"context" => "all_turns"}
       assert upstream["parallel_tool_calls"] == false
     end
@@ -1809,7 +1818,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, options)
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         label = "#{endpoint}, #{name}"
 
         assert Map.has_key?(upstream, "parallel_tool_calls") ==
@@ -1897,7 +1906,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         assert upstream["parallel_tool_calls"] == false
         assert get_in(upstream, ["reasoning", "context"]) == "all_turns"
 
@@ -1937,7 +1946,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  options
                )
 
-      upstream = Jason.decode!(encoded)
+      upstream = CodexPooler.JSON.decode!(encoded)
       assert upstream["parallel_tool_calls"] == true
       assert upstream["instructions"] == payload["instructions"]
       assert upstream["tools"] == payload["tools"]
@@ -2003,7 +2012,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         label = "#{capability_name}, #{include_name}"
 
         assert upstream["include"] == expected_include, label
@@ -2031,7 +2040,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         assert upstream["reasoning"] == %{}
         assert upstream["include"] == ["reasoning.encrypted_content"]
       end
@@ -2072,7 +2081,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    options
                  )
 
-        first = Jason.decode!(first_encoded)
+        first = CodexPooler.JSON.decode!(first_encoded)
 
         second_options =
           RequestOptions.build(
@@ -2089,7 +2098,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    second_options
                  )
 
-        assert Jason.decode!(second_encoded) == first
+        assert CodexPooler.JSON.decode!(second_encoded) == first
         assert first["include"] == ["output_text.logprobs", "reasoning.encrypted_content"]
         assert is_map(first["reasoning"])
 
@@ -2280,7 +2289,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
 
         assert [
                  %{
@@ -2320,7 +2329,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         assert upstream["tools"] == [custom_tool]
         assert upstream["tool_choice"] == tool_choice
         refute Enum.any?(upstream["input"], &(&1["type"] == "additional_tools"))
@@ -2364,7 +2373,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         assert upstream["tool_choice"] == "auto"
       end
     end
@@ -2437,7 +2446,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  alias_options
                )
 
-      assert Jason.decode!(alias_encoded) == first
+      assert CodexPooler.JSON.decode!(alias_encoded) == first
     end
 
     test "preserves incremental compact input exactly when projecting Responses Lite" do
@@ -2579,7 +2588,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "medium"}
+      assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "medium"}
 
       assert updated_options.runtime.reasoning_effort_snapshot == %{
                "applied_effort" => "medium",
@@ -2624,8 +2633,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    options
                  )
 
-        assert Jason.decode!(encoded)["reasoning"] == expected_reasoning
-        assert Jason.decode!(encoded)["include"] == ["reasoning.encrypted_content"]
+        assert CodexPooler.JSON.decode!(encoded)["reasoning"] == expected_reasoning
+        assert CodexPooler.JSON.decode!(encoded)["include"] == ["reasoning.encrypted_content"]
       end
     end
 
@@ -2666,7 +2675,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    options
                  )
 
-        upstream_reasoning = Jason.decode!(encoded)["reasoning"]
+        upstream_reasoning = CodexPooler.JSON.decode!(encoded)["reasoning"]
         snapshot = updated_options.runtime.reasoning_effort_snapshot
 
         assert get_in(upstream_reasoning || %{}, ["effort"]) == requested
@@ -2704,7 +2713,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  options
                )
 
-      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+      assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "max"}
     end
 
     test "maps legacy directly-normalized enforced ultra effort to backend max" do
@@ -2731,7 +2740,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+      assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "max"}
     end
 
     test "captures reasoning effort snapshot variants on request options" do
@@ -2829,7 +2838,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        refute Map.has_key?(Jason.decode!(encoded), "service_tier")
+        refute Map.has_key?(CodexPooler.JSON.decode!(encoded), "service_tier")
       end
     end
 
@@ -2856,7 +2865,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        refute Map.has_key?(Jason.decode!(encoded), "service_tier")
+        refute Map.has_key?(CodexPooler.JSON.decode!(encoded), "service_tier")
       end
     end
 
@@ -2886,7 +2895,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["service_tier"] == "priority"
+      assert CodexPooler.JSON.decode!(encoded)["service_tier"] == "priority"
     end
 
     test "canonicalizes an enforced binary fast tier after it overrides the client tier" do
@@ -2911,7 +2920,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert Jason.decode!(encoded)["service_tier"] == "priority"
+      assert CodexPooler.JSON.decode!(encoded)["service_tier"] == "priority"
     end
 
     test "sanitizes backend Codex optional response item IDs for HTTP and websocket" do
@@ -2977,7 +2986,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        upstream = Jason.decode!(encoded)
+        upstream = CodexPooler.JSON.decode!(encoded)
         assert upstream["input"] == expected_input, "unexpected #{transport} input"
       end
     end
@@ -3031,7 +3040,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["input"] == expected_public_input
+        assert CodexPooler.JSON.decode!(encoded)["input"] == expected_public_input
       end
 
       native_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
@@ -3049,7 +3058,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                    request_options
                  )
 
-        assert Jason.decode!(encoded)["input"] == expected_native_input
+        assert CodexPooler.JSON.decode!(encoded)["input"] == expected_native_input
       end
     end
 
@@ -3075,7 +3084,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             assert {:error, %{status: 400, code: "invalid_request", param: "input"}} = result
           else
             assert {:ok, encoded} = result
-            refute Map.has_key?(Jason.decode!(encoded), "input")
+            refute Map.has_key?(CodexPooler.JSON.decode!(encoded), "input")
           end
         end
       end
@@ -3100,7 +3109,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
 
-        assert Jason.decode!(encoded)["input"] == payload["input"],
+        assert CodexPooler.JSON.decode!(encoded)["input"] == payload["input"],
                "unexpected #{transport} input"
       end
     end
@@ -3444,7 +3453,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                request_options
              )
 
-    Jason.decode!(encoded)
+    CodexPooler.JSON.decode!(encoded)
   end
 
   defp prepare_incremental_lite_compact(source_payload) do
@@ -3466,7 +3475,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                request_options
              )
 
-    first = Jason.decode!(first_encoded)
+    first = CodexPooler.JSON.decode!(first_encoded)
 
     assert {:ok, second_encoded} =
              PayloadNormalizer.upstream_payload(
@@ -3476,7 +3485,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                request_options
              )
 
-    {first, Jason.decode!(second_encoded), request_options}
+    {first, CodexPooler.JSON.decode!(second_encoded), request_options}
   end
 
   defp native_text_input(text) do

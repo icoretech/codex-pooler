@@ -677,7 +677,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                "exhausted"
 
       assert log =~ "trigger_kind=gateway_auto trigger_detail=exhausted"
-      metadata_json = Jason.encode!(persisted.metadata)
+      metadata_json = CodexPooler.JSON.encode!(persisted.metadata)
       refute metadata_json =~ consume_request.json["redeem_request_id"]
       refute metadata_json =~ "credit_id"
     end
@@ -732,7 +732,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
         redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
         assert redemption["trigger_detail"] == detail
         assert log =~ "trigger_kind=gateway_auto trigger_detail=#{detail}"
-        refute Jason.encode!(redemption) =~ provider_code_sentinel
+        refute CodexPooler.JSON.encode!(redemption) =~ provider_code_sentinel
         refute log =~ provider_code_sentinel
         refute log =~ "provider-sensitive-body"
 

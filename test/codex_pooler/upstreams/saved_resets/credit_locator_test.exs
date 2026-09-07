@@ -85,9 +85,9 @@ defmodule CodexPooler.Upstreams.SavedResets.CreditLocatorTest do
 
       tampered =
         locator
-        |> Jason.decode!()
+        |> CodexPooler.JSON.decode!()
         |> put_in(["aad", "endpoint_family"], "codex_api")
-        |> Jason.encode!()
+        |> CodexPooler.JSON.encode!()
 
       assert {:error, %{code: :saved_reset_credit_locator_invalid}} =
                CreditLocator.open(tampered, binding)

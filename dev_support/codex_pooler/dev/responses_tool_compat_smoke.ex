@@ -166,15 +166,25 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          path <- Path.join(run_dir, @manifest_name),
          :ok <- require_regular_file(path),
          {:ok, content} <- File.read(path),
-         {:ok, journal} when is_map(journal) <- Jason.decode(content),
+         {:ok, journal} when is_map(journal) <- CodexPooler.JSON.decode(content),
          ^run_id <- journal["run_id"],
          :ok <- validate_journal_targets(journal) do
       {:ok, journal}
     else
-      {:error, %Jason.DecodeError{}} -> {:error, "run manifest is invalid"}
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, _reason} -> {:error, "run manifest could not be read"}
-      _other -> {:error, "run manifest does not own the requested run id"}
+      {:error, {:unexpected_end, _offset}} ->
+        {:error, "run manifest is invalid"}
+
+      {:error, {kind, _offset, _value}} when kind in [:invalid_byte, :unexpected_sequence] ->
+        {:error, "run manifest is invalid"}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, _reason} ->
+        {:error, "run manifest could not be read"}
+
+      _other ->
+        {:error, "run manifest does not own the requested run id"}
     end
   end
 
@@ -1021,8 +1031,15 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          before_counts <- lifecycle_counts(fixture.pool.id),
          result <-
            Req.post(url,
-             headers: [{"authorization", "Bearer #{fixture.raw_key}"}],
-             json: Map.put(smoke_case.payload, "model", model.exposed_model_id),
+             headers: [
+               {"authorization", "Bearer #{fixture.raw_key}"},
+               {"content-type", "application/json"},
+               {"accept", "application/json"}
+             ],
+             body:
+               CodexPooler.JSON.encode_to_iodata!(
+                 Map.put(smoke_case.payload, "model", model.exposed_model_id)
+               ),
              retry: false,
              receive_timeout: 300_000
            ) do
@@ -1176,7 +1193,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     do: {:error, "provider terminal shape was invalid"}
 
   defp validate_lite_typed_choice_rejection(body, fixture, smoke_case, before_counts) do
-    error = if is_binary(body), do: Jason.decode(body), else: {:ok, body}
+    error = if is_binary(body), do: CodexPooler.JSON.decode(body), else: {:ok, body}
 
     with true <- is_map(smoke_case.payload["tool_choice"]),
          {:ok,
@@ -1470,7 +1487,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       name: name,
       output_type: "function_call",
       payload: %{
-        "input" => "Call the required tool with #{Jason.encode!(expected_arguments)}.",
+        "input" => "Call the required tool with #{CodexPooler.JSON.encode!(expected_arguments)}.",
         "stream" => true,
         "tools" => [
           %{"type" => "function", "name" => name, "strict" => true, "parameters" => schema}
@@ -1478,7 +1495,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         "tool_choice" => %{"type" => "function", "name" => name}
       },
       validate: fn item ->
-        case Jason.decode(item["arguments"] || "") do
+        case CodexPooler.JSON.decode(item["arguments"] || "") do
           {:ok, ^expected_arguments} -> :ok
           _other -> {:error, "function arguments did not match the certified schema"}
         end
@@ -1600,7 +1617,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          {:ok, conn, websocket} <- new_websocket.(conn, ref, 101, response_headers),
          before_counts <- baseline.(),
          {:ok, websocket, encoded} <-
-           Mint.WebSocket.encode(websocket, {:text, Jason.encode!(frame_payload)}),
+           Mint.WebSocket.encode(websocket, {:text, CodexPooler.JSON.encode!(frame_payload)}),
          {:ok, conn} <- Mint.WebSocket.stream_request_body(conn, ref, encoded),
          {:ok, _conn, _websocket, {terminal, frames}} <-
            receive_websocket_terminal(conn, websocket, ref, []) do
@@ -1678,7 +1695,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
                     decoded =
                       decoded_frames
                       |> Enum.flat_map(fn
-                        {:text, text} -> [Jason.decode!(text)]
+                        {:text, text} -> [CodexPooler.JSON.decode!(text)]
                         _frame -> []
                       end)
 
@@ -3044,7 +3061,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     "#{timestamp}-#{suffix}"
   end
 
-  defp canonical_json(value), do: Jason.encode_to_iodata!(canonicalize(value))
+  defp canonical_json(value), do: CodexPooler.JSON.encode_to_iodata!(canonicalize(value))
 
   defp canonicalize(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp canonicalize(%Decimal{} = value), do: Decimal.normalize(value) |> Decimal.to_string()

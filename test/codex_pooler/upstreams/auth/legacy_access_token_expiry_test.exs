@@ -196,7 +196,8 @@ defmodule CodexPooler.Upstreams.Auth.LegacyAccessTokenExpiryTest do
 
   defp jwt(deadline) do
     payload =
-      Jason.encode!(%{"exp" => DateTime.to_unix(deadline)}) |> Base.url_encode64(padding: false)
+      CodexPooler.JSON.encode!(%{"exp" => DateTime.to_unix(deadline)})
+      |> Base.url_encode64(padding: false)
 
     "synthetic." <> payload <> ".signature"
   end

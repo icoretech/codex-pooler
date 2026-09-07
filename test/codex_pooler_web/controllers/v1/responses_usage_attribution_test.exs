@@ -42,10 +42,15 @@ defmodule CodexPoolerWeb.V1.ResponsesUsageAttributionTest do
       conn: conn
     } do
       attribution =
-        Jason.encode!(%{"items" => List.duplicate(%{"bytes" => String.duplicate("x", 200)}, 500)})
+        CodexPooler.JSON.encode!(%{
+          "items" => List.duplicate(%{"bytes" => String.duplicate("x", 200)}, 500)
+        })
 
       counters =
-        @usage |> Jason.encode!() |> String.trim_leading("{") |> String.trim_trailing("}")
+        @usage
+        |> CodexPooler.JSON.encode!()
+        |> String.trim_leading("{")
+        |> String.trim_trailing("}")
 
       usage =
         case unquote(position) do
@@ -79,11 +84,11 @@ defmodule CodexPoolerWeb.V1.ResponsesUsageAttributionTest do
         assert response.status == 200
         assert length(FakeUpstream.requests(upstream)) == 1
         received = completed_data(response.resp_body)
-        decoded = Jason.decode!(received)
+        decoded = CodexPooler.JSON.decode!(received)
         assert is_integer(decoded["sequence_number"])
 
-        assert digest(Jason.encode!(Map.delete(decoded, "sequence_number"))) ==
-                 digest(Jason.encode!(Jason.decode!(terminal)))
+        assert digest(CodexPooler.JSON.encode!(Map.delete(decoded, "sequence_number"))) ==
+                 digest(CodexPooler.JSON.encode!(CodexPooler.JSON.decode!(terminal)))
 
         assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
         assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
@@ -132,7 +137,7 @@ defmodule CodexPoolerWeb.V1.ResponsesUsageAttributionTest do
     |> String.split("\n")
     |> Enum.find_value(fn
       "data: " <> json ->
-        case Jason.decode(json) do
+        case CodexPooler.JSON.decode(json) do
           {:ok, %{"type" => "response.completed"}} -> json
           _other -> nil
         end

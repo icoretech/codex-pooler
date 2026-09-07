@@ -978,7 +978,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
       File.mkdir_p!(@receipt_root)
       File.chmod!(@receipt_root, 0o700)
       path = Path.join(@receipt_root, "#{run_id}.json")
-      File.write!(path, Jason.encode!(receipt))
+      File.write!(path, CodexPooler.JSON.encode!(receipt))
       File.chmod!(path, 0o600)
       {:ok, receipt}
     end
@@ -1126,7 +1126,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
 
     @type t :: %{agent: pid(), provider_key: pos_integer(), server: pid(), url: String.t()}
 
-    plug Plug.Parsers, parsers: [:json], pass: ["*/*"], json_decoder: Jason
+    plug Plug.Parsers, parsers: [:json], pass: ["*/*"], json_decoder: CodexPooler.JSON
     plug :match
     plug :dispatch
 
@@ -1308,13 +1308,13 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
       do:
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+        |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
 
     defp respond(conn, {:barrier, payload}),
       do:
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(payload))
+        |> Plug.Conn.send_resp(200, CodexPooler.JSON.encode!(payload))
 
     defp respond(_conn, :close), do: Process.exit(self(), :kill)
     defp credit(suffix), do: %{"id" => "dev-credit-#{suffix}", "status" => "available"}

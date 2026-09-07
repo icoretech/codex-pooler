@@ -276,7 +276,7 @@ defmodule CodexPooler.Events do
     |> Map.from_struct()
     |> Map.update!(:emitted_at, &DateTime.to_iso8601/1)
     |> Map.put(:origin_id, event_origin_id)
-    |> Jason.encode()
+    |> CodexPooler.JSON.encode()
   end
 
   defp normalize_topics(topics), do: validate_topics(topics)

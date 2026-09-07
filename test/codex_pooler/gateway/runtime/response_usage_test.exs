@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
   describe "from_json/1" do
     test "extracts flat usage from JSON responses" do
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "service_tier" => "priority",
           "usage" => %{
             "input_tokens" => 10,
@@ -84,7 +84,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
       }
 
       assert ResponseUsage.from_decoded(decoded) ==
-               ResponseUsage.from_json(Jason.encode!(decoded))
+               ResponseUsage.from_json(CodexPooler.JSON.encode!(decoded))
     end
 
     test "preserves absent, zero, and positive Responses cache-write counters" do
@@ -97,7 +97,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
             else: Map.put(details, "cache_write_tokens", reported)
 
         body =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "usage" => %{
               "input_tokens" => 10,
               "input_tokens_details" => details,
@@ -119,7 +119,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
 
     test "preserves current absent cache-write behavior" do
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "usage" => %{
             "input_tokens" => 10,
             "input_tokens_details" => %{"cached_tokens" => 4},
@@ -136,7 +136,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
 
     test "extracts nested response usage from output items" do
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "output" => [
             %{"type" => "message"},
             %{
@@ -181,7 +181,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
                source: "json_decode_failed"
              }
 
-      body = Jason.encode!(%{"usage" => %{"input_tokens" => 1.2}})
+      body = CodexPooler.JSON.encode!(%{"usage" => %{"input_tokens" => 1.2}})
 
       assert ResponseUsage.from_json(body) == %{
                status: "usage_unknown",
@@ -190,7 +190,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
 
       for invalid <- [-1, 1.5, "9", "not-an-integer", nil] do
         body =
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "usage" => %{
               "input_tokens" => 10,
               "input_tokens_details" => %{
@@ -280,7 +280,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
             %{"input_tokens" => 21, "output_tokens" => 41, "total_tokens" => 62},
             %{"input_tokens" => 21, "output_tokens" => 41, "total_tokens" => 99}
           ] do
-        retained = prefix <> ~s(,"usage":) <> Jason.encode!(usage) <> "}}\n\n"
+        retained = prefix <> ~s(,"usage":) <> CodexPooler.JSON.encode!(usage) <> "}}\n\n"
 
         assert %{status: "usage_unknown", source: "sse_usage_missing"} =
                  ResponseUsage.from_sse(retained)
@@ -391,8 +391,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     test "extracts nested response.completed usage from newline-delimited websocket JSON messages" do
       body =
         [
-          Jason.encode!(%{"type" => "response.created"}),
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{"type" => "response.created"}),
+          CodexPooler.JSON.encode!(%{
             "type" => "response.completed",
             "response" => %{
               "service_tier" => "default",
@@ -423,8 +423,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     test "extracts direct response payload usage from newline-delimited websocket JSON messages" do
       body =
         [
-          Jason.encode!(%{"type" => "response.in_progress"}),
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{"type" => "response.in_progress"}),
+          CodexPooler.JSON.encode!(%{
             "id" => "resp_sample",
             "service_tier" => "flex",
             "usage" => %{
@@ -451,7 +451,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
 
     test "extracts top-level usage envelope from direct websocket JSON messages" do
       body =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "usage" => %{
             "input_tokens" => 31,
             "cached_input_tokens" => 8,
@@ -477,8 +477,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
       body =
         [
           "not json",
-          Jason.encode!(%{"type" => "response.created"}),
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{"type" => "response.created"}),
+          CodexPooler.JSON.encode!(%{
             "type" => "response.completed",
             "response" => %{
               "usage" => %{
@@ -507,8 +507,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     test "marks non-terminal websocket frames without usage as websocket usage missing" do
       body =
         [
-          Jason.encode!(%{"type" => "response.created"}),
-          Jason.encode!(%{"type" => "response.in_progress"})
+          CodexPooler.JSON.encode!(%{"type" => "response.created"}),
+          CodexPooler.JSON.encode!(%{"type" => "response.in_progress"})
         ]
         |> Enum.join("\n")
 
@@ -518,7 +518,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
 
     test "marks terminal websocket frames without usage as websocket usage missing" do
       body =
-        Jason.encode!(%{"type" => "response.completed", "response" => %{"id" => "resp_empty"}})
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_empty"}
+        })
 
       assert ResponseUsage.from_websocket_body(body) ==
                %{status: "usage_unknown", source: "websocket_usage_missing"}
@@ -526,13 +529,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
   end
 
   defp sse_event(event, payload) do
-    "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
+    "event: " <> event <> "\n" <> "data: " <> CodexPooler.JSON.encode!(payload) <> "\n\n"
   end
 
   defp chat_usage_body(reported) do
     details = cache_write_details(reported)
 
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "usage" => %{
         "prompt_tokens" => 10,
         "prompt_tokens_details" => details,
@@ -546,7 +549,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     sse_event("response.completed", terminal_usage_payload(reported))
   end
 
-  defp terminal_websocket_usage(reported), do: Jason.encode!(terminal_usage_payload(reported))
+  defp terminal_websocket_usage(reported),
+    do: CodexPooler.JSON.encode!(terminal_usage_payload(reported))
 
   defp terminal_usage_payload(reported) do
     %{

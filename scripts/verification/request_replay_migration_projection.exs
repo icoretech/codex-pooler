@@ -231,5 +231,7 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
   defp result_class({:error, code}), do: Atom.to_string(code)
   defp result_class({:ok, _result}), do: "committed"
   defp query(sql, params \\ []), do: Repo.query!(sql, params, log: false, timeout: @budget)
-  defp receipt(stage, values), do: IO.puts(Jason.encode!(Map.put(values, :stage, stage)))
+
+  defp receipt(stage, values),
+    do: IO.puts(CodexPooler.JSON.encode!(Map.put(values, :stage, stage)))
 end

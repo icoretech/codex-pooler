@@ -183,5 +183,5 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
     })
   end
 
-  defp event(type, payload), do: "event: #{type}\ndata: #{Jason.encode!(payload)}\n\n"
+  defp event(type, payload), do: "event: #{type}\ndata: #{CodexPooler.JSON.encode!(payload)}\n\n"
 end

@@ -561,7 +561,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     do: update_relay_target(conn, &Plug.Conn.chunk(&1, body))
 
   defp stream_candidate_result({:ok, %{body: body}}, conn) when is_map(body),
-    do: update_relay_target(conn, &Plug.Conn.chunk(&1, Jason.encode!(body)))
+    do: update_relay_target(conn, &Plug.Conn.chunk(&1, CodexPooler.JSON.encode!(body)))
 
   defp stream_candidate_result({:ok, _result}, conn), do: {:ok, conn}
   defp stream_candidate_result({:error, reason}, _conn), do: {:error, reason}

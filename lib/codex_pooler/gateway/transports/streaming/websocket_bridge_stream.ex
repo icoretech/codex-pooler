@@ -742,7 +742,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   defp terminal_class(%{terminal?: false}), do: :nonterminal
 
   defp frame_context(text) do
-    case Jason.decode(text) do
+    case CodexPooler.JSON.decode(text) do
       {:ok, %{} = decoded} ->
         terminal_outcome = StreamProtocol.terminal_outcome(nil, decoded)
         terminal? = terminal_outcome?(terminal_outcome)

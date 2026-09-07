@@ -326,7 +326,7 @@ defmodule CodexPooler.FakeUpstream do
   @spec websocket_terminal_then_close_barrier(map() | binary(), keyword()) :: mode()
   def websocket_terminal_then_close_barrier(terminal, opts)
       when (is_map(terminal) or is_binary(terminal)) and is_list(opts) do
-    terminal = if is_map(terminal), do: Jason.encode!(terminal), else: terminal
+    terminal = if is_map(terminal), do: CodexPooler.JSON.encode!(terminal), else: terminal
 
     {:websocket_terminal_then_close_barrier, terminal, Keyword.get(opts, :code, 1000),
      Keyword.get(opts, :reason, "synthetic terminal close"), Keyword.fetch!(opts, :notify),
@@ -342,7 +342,7 @@ defmodule CodexPooler.FakeUpstream do
 
   def websocket_terminal_failure(code \\ "server_error") when is_binary(code) do
     websocket_text_frames([
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.failed",
         "response" => %{
           "status" => "failed",
@@ -456,7 +456,7 @@ defmodule CodexPooler.FakeUpstream do
 
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
   defp handle_websocket(
@@ -522,7 +522,7 @@ defmodule CodexPooler.FakeUpstream do
   defp respond(_pid, conn, {:json, status, payload}, _request) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
   defp respond(_pid, conn, {:json_headers, status, payload, headers}, _request) do
@@ -533,7 +533,7 @@ defmodule CodexPooler.FakeUpstream do
 
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
   defp respond(_pid, conn, {:raw_body, status, body, headers}, _request) do
@@ -564,7 +564,7 @@ defmodule CodexPooler.FakeUpstream do
 
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
   defp respond(pid, conn, {:path_json, routes}, request) do
@@ -572,12 +572,12 @@ defmodule CodexPooler.FakeUpstream do
       {status, payload} ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+        |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
 
       nil ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(404, Jason.encode!(%{"error" => "not found"}))
+        |> Plug.Conn.send_resp(404, CodexPooler.JSON.encode!(%{"error" => "not found"}))
 
       mode ->
         respond(pid, conn, mode, request)
@@ -601,7 +601,7 @@ defmodule CodexPooler.FakeUpstream do
             |> Plug.Conn.put_resp_content_type("application/json")
             |> Plug.Conn.send_resp(
               404,
-              Jason.encode!(%{"error" => %{"code" => "file_not_found"}})
+              CodexPooler.JSON.encode!(%{"error" => %{"code" => "file_not_found"}})
             )
         end
 
@@ -611,13 +611,16 @@ defmodule CodexPooler.FakeUpstream do
         else
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(404, Jason.encode!(%{"error" => %{"code" => "file_not_found"}}))
+          |> Plug.Conn.send_resp(
+            404,
+            CodexPooler.JSON.encode!(%{"error" => %{"code" => "file_not_found"}})
+          )
         end
 
       _other ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(404, Jason.encode!(%{"error" => "not found"}))
+        |> Plug.Conn.send_resp(404, CodexPooler.JSON.encode!(%{"error" => "not found"}))
     end
   end
 
@@ -631,11 +634,11 @@ defmodule CodexPooler.FakeUpstream do
     if is_map(request.json) and Map.has_key?(request.json, field) do
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(error_status, Jason.encode!(error_payload))
+      |> Plug.Conn.send_resp(error_status, CodexPooler.JSON.encode!(error_payload))
     else
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(success_status, Jason.encode!(success_payload))
+      |> Plug.Conn.send_resp(success_status, CodexPooler.JSON.encode!(success_payload))
     end
   end
 
@@ -649,11 +652,11 @@ defmodule CodexPooler.FakeUpstream do
     if is_map(request.json) and Map.has_key?(request.json, field) do
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(success_status, Jason.encode!(success_payload))
+      |> Plug.Conn.send_resp(success_status, CodexPooler.JSON.encode!(success_payload))
     else
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(error_status, Jason.encode!(error_payload))
+      |> Plug.Conn.send_resp(error_status, CodexPooler.JSON.encode!(error_payload))
     end
   end
 
@@ -765,7 +768,7 @@ defmodule CodexPooler.FakeUpstream do
   defp respond(_pid, conn, {:json_error, status, payload}, _request) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
   defp respond(_pid, conn, {:non_json_error, status, body}, _request) do
@@ -779,7 +782,7 @@ defmodule CodexPooler.FakeUpstream do
 
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(200, Jason.encode!(%{"late" => true}))
+    |> Plug.Conn.send_resp(200, CodexPooler.JSON.encode!(%{"late" => true}))
   end
 
   defp respond(_pid, conn, {:timeout_after_sse_headers, notify, release_ref}, _request) do
@@ -810,11 +813,11 @@ defmodule CodexPooler.FakeUpstream do
   defp sse_chunk(chunk) when is_binary(chunk), do: chunk
 
   defp sse_chunk({event, payload}) when is_binary(event) do
-    "event: #{event}\ndata: #{Jason.encode!(payload)}\n\n"
+    "event: #{event}\ndata: #{CodexPooler.JSON.encode!(payload)}\n\n"
   end
 
   defp sse_chunk(payload) when is_map(payload) do
-    "data: #{Jason.encode!(payload)}\n\n"
+    "data: #{CodexPooler.JSON.encode!(payload)}\n\n"
   end
 
   defp start_sse_response(conn) do
@@ -827,7 +830,7 @@ defmodule CodexPooler.FakeUpstream do
   defp decode_json(""), do: nil
 
   defp decode_json(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, payload} -> payload
       {:error, _} -> nil
     end
@@ -865,7 +868,7 @@ defmodule CodexPooler.FakeUpstream do
   defp file_protocol_create_response(conn, %{mode: :unauthorized, unauthorized_payload: payload}) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(401, Jason.encode!(payload))
+    |> Plug.Conn.send_resp(401, CodexPooler.JSON.encode!(payload))
   end
 
   defp file_protocol_create_response(conn, %{mode: :non_json_error, error_body: body}) do
@@ -879,7 +882,7 @@ defmodule CodexPooler.FakeUpstream do
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(
       200,
-      Jason.encode!(%{"file_id" => config.file_id, "upload_url" => config.upload_url})
+      CodexPooler.JSON.encode!(%{"file_id" => config.file_id, "upload_url" => config.upload_url})
     )
   end
 
@@ -891,7 +894,7 @@ defmodule CodexPooler.FakeUpstream do
        ) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(401, Jason.encode!(payload))
+    |> Plug.Conn.send_resp(401, CodexPooler.JSON.encode!(payload))
   end
 
   defp file_protocol_finalize_response(
@@ -911,7 +914,7 @@ defmodule CodexPooler.FakeUpstream do
     if finalize_call == 1 do
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{"status" => "retry"}))
+      |> Plug.Conn.send_resp(200, CodexPooler.JSON.encode!(%{"status" => "retry"}))
     else
       file_protocol_finalize_success(conn, config)
     end
@@ -926,7 +929,7 @@ defmodule CodexPooler.FakeUpstream do
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(
       200,
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "status" => "success",
         "download_url" => config.download_url,
         "file_name" => config.file_name,
@@ -1176,10 +1179,11 @@ defmodule CodexPooler.FakeUpstream do
 
     def handle_in({_payload, [opcode: :binary]}, state), do: {:stop, :unsupported_binary, state}
 
-    defp websocket_messages({:json, _status, payload}, _request), do: [Jason.encode!(payload)]
+    defp websocket_messages({:json, _status, payload}, _request),
+      do: [CodexPooler.JSON.encode!(payload)]
 
     defp websocket_messages({:json_headers, _status, payload, _headers}, _request),
-      do: [Jason.encode!(payload)]
+      do: [CodexPooler.JSON.encode!(payload)]
 
     defp websocket_messages(
            {:reject_json_field, field, _success_status, success_payload, error_status,
@@ -1188,14 +1192,14 @@ defmodule CodexPooler.FakeUpstream do
          ) do
       if is_map(request.json) and Map.has_key?(request.json, field) do
         [
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "error",
             "status" => error_status,
             "error" => error_payload["error"] || error_payload
           })
         ]
       else
-        [Jason.encode!(success_payload)]
+        [CodexPooler.JSON.encode!(success_payload)]
       end
     end
 
@@ -1205,10 +1209,10 @@ defmodule CodexPooler.FakeUpstream do
            request
          ) do
       if is_map(request.json) and Map.has_key?(request.json, field) do
-        [Jason.encode!(success_payload)]
+        [CodexPooler.JSON.encode!(success_payload)]
       else
         [
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "error",
             "status" => error_status,
             "error" => error_payload["error"] || error_payload
@@ -1282,7 +1286,7 @@ defmodule CodexPooler.FakeUpstream do
 
     defp websocket_messages({:json_error, status, payload}, _request),
       do: [
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "error",
           "status" => status,
           "error" => payload["error"] || payload
@@ -1291,7 +1295,11 @@ defmodule CodexPooler.FakeUpstream do
 
     defp websocket_messages({:non_json_error, status, body}, _request),
       do: [
-        Jason.encode!(%{"type" => "error", "status" => status, "error" => %{"message" => body}})
+        CodexPooler.JSON.encode!(%{
+          "type" => "error",
+          "status" => status,
+          "error" => %{"message" => body}
+        })
       ]
 
     defp websocket_messages(_mode, _request),
@@ -1348,7 +1356,7 @@ defmodule CodexPooler.FakeUpstream do
     defp decode_json(""), do: nil
 
     defp decode_json(body) do
-      case Jason.decode(body) do
+      case CodexPooler.JSON.decode(body) do
         {:ok, payload} -> payload
         {:error, _} -> nil
       end

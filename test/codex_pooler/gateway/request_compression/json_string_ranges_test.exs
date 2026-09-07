@@ -159,7 +159,7 @@ defmodule CodexPooler.Gateway.RequestCompression.JsonStringRangesTest do
         [first_replacement, second_replacement]
       )
 
-      assert Jason.decode!(replaced) == %{
+      assert CodexPooler.JSON.decode!(replaced) == %{
                "prefix" => "keep",
                "input" => [
                  %{

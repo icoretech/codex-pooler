@@ -220,7 +220,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
                  }
                },
                raw_frame_text:
-                 Jason.encode!(%{
+                 CodexPooler.JSON.encode!(%{
                    "type" => "response.completed",
                    "authorization" => "Bearer raw-secret",
                    "cookie" => "session=raw-cookie",
@@ -324,7 +324,10 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     for invalid <- [123, %{}, [], "", String.duplicate("x", 513)] do
       response = trace_start(%{"run" => invalid, "mode" => "full"})
       assert response.status == 400
-      assert Jason.decode!(response.resp_body) == %{"error" => "invalid_trace_run_label"}
+
+      assert CodexPooler.JSON.decode!(response.resp_body) == %{
+               "error" => "invalid_trace_run_label"
+             }
     end
   end
 
@@ -487,7 +490,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     assert :ok = NativeCompactionTrace.stop_scope()
 
     entries = read_entries(path)
-    rendered = Jason.encode!(entries)
+    rendered = CodexPooler.JSON.encode!(entries)
 
     for mfa <- [
           "#{inspect(RequestAdmission)}.new/3",
@@ -747,7 +750,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     {:ok, fake} =
       FakeUpstream.start_link(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(%{"id" => "resp_trace_connected", "object" => "response"})
+          CodexPooler.JSON.encode!(%{"id" => "resp_trace_connected", "object" => "response"})
         ])
       )
 
@@ -766,7 +769,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     request = %Request{
       url: FakeUpstream.url(fake) <> "/backend-api/codex/responses",
       headers: [],
-      payload: Jason.encode!(%{"type" => "response.create", "input" => []}),
+      payload: CodexPooler.JSON.encode!(%{"type" => "response.create", "input" => []}),
       timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000},
       writer: fn _frame -> :ok end,
       message_mapper: nil
@@ -1050,7 +1053,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
              )
 
     json_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "authorization" => "Bearer secret-auth",
         "cookie" => "session=secret-cookie",
@@ -1066,7 +1069,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     assert :ok =
              TraceEvent.emit_full(:downstream_websocket_frame_received, %{
                frame_text: json_frame,
-               frame_json: Jason.decode!(json_frame)
+               frame_json: CodexPooler.JSON.decode!(json_frame)
              })
 
     assert :ok =
@@ -1117,7 +1120,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       :post
       |> Plug.Test.conn(
         "/start",
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "run" => "endpoint-full",
           "mode" => "full",
           "includeModules" => [inspect(NativeAdmission)],
@@ -1128,7 +1131,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       |> TracePlug.call([])
 
     assert started.status == 200
-    body = Jason.decode!(started.resp_body)
+    body = CodexPooler.JSON.decode!(started.resp_body)
     assert body["traceModules"] == [inspect(NativeAdmission)]
     assert :ok = NativeCompactionTrace.stop_scope()
 
@@ -1147,7 +1150,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
 
     flushed = :post |> Plug.Test.conn("/flush") |> TracePlug.call([])
     assert flushed.status == 507
-    assert Jason.decode!(flushed.resp_body)["truncated"]
+    assert CodexPooler.JSON.decode!(flushed.resp_body)["truncated"]
   end
 
   test "dev trace endpoint locks the F3 happy preset module scope and budgets" do
@@ -1155,7 +1158,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       :post
       |> Plug.Test.conn(
         "/start",
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "run" => "f3-happy",
           "mode" => "safe",
           "preset" => "f3_happy",
@@ -1167,7 +1170,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       |> TracePlug.call([])
 
     assert started.status == 200
-    body = Jason.decode!(started.resp_body)
+    body = CodexPooler.JSON.decode!(started.resp_body)
     assert body["mode"] == "full"
     assert body["preset"] == "f3_happy"
     assert body["maxEvents"] == 250_000
@@ -1264,7 +1267,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       response = trace_start(%{"run" => "invalid-endpoint", "mode" => "full", field => value})
       assert response.status == 400
 
-      assert Jason.decode!(response.resp_body) == %{
+      assert CodexPooler.JSON.decode!(response.resp_body) == %{
                "error" => "invalid_trace_limit",
                "field" => Macro.underscore(field),
                "value" => value,
@@ -1288,7 +1291,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
         })
 
       assert response.status == 200
-      body = Jason.decode!(response.resp_body)
+      body = CodexPooler.JSON.decode!(response.resp_body)
       assert body["maxEvents"] == max_events
       assert body["maxBytes"] == max_bytes
       assert :ok = NativeCompactionTrace.stop_scope()
@@ -1302,7 +1305,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       })
 
     assert omitted.status == 200
-    omitted_body = Jason.decode!(omitted.resp_body)
+    omitted_body = CodexPooler.JSON.decode!(omitted.resp_body)
     assert omitted_body["maxEvents"] == 2_000_000
     assert omitted_body["maxBytes"] == 512 * 1024 * 1024
     assert :ok = NativeCompactionTrace.stop_scope()
@@ -1434,7 +1437,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     assert :ok = NativeCompactionTrace.flush()
     assert :ok = NativeCompactionTrace.stop_scope()
 
-    entries = path |> File.stream!() |> Enum.map(&Jason.decode!/1)
+    entries = path |> File.stream!() |> Enum.map(&CodexPooler.JSON.decode!/1)
     events = Enum.map(entries, & &1["event"])
 
     assert ordered?(events, [
@@ -1502,21 +1505,24 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
 
     started =
       :post
-      |> Plug.Test.conn("/start", Jason.encode!(%{"run" => "endpoint-run", "limit" => 3}))
+      |> Plug.Test.conn(
+        "/start",
+        CodexPooler.JSON.encode!(%{"run" => "endpoint-run", "limit" => 3})
+      )
       |> TracePlug.call([])
 
     assert started.status == 200
-    assert Jason.decode!(started.resp_body)["running"]
+    assert CodexPooler.JSON.decode!(started.resp_body)["running"]
     assert :ok = TraceEvent.emit(:prepared_frame, %{phase: :compact})
     _export = await_event(&(&1["event"] == "prepared_frame"))
 
     captured = :get |> Plug.Test.conn("/") |> TracePlug.call([])
     assert captured.status == 200
-    assert Jason.decode!(captured.resp_body)["eventCount"] == 1
+    assert CodexPooler.JSON.decode!(captured.resp_body)["eventCount"] == 1
 
     stopped = :post |> Plug.Test.conn("/stop") |> TracePlug.call([])
     assert stopped.status == 200
-    assert Jason.decode!(stopped.resp_body)["running"] == false
+    assert CodexPooler.JSON.decode!(stopped.resp_body)["running"] == false
   end
 
   test "dev trace endpoint rejects non-loopback callers" do
@@ -1527,7 +1533,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       |> TracePlug.call([])
 
     assert conn.status == 403
-    assert Jason.decode!(conn.resp_body) == %{"error" => "loopback_only"}
+    assert CodexPooler.JSON.decode!(conn.resp_body) == %{"error" => "loopback_only"}
   end
 
   defp beam_loop do
@@ -1610,11 +1616,11 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     root
   end
 
-  defp read_entries(path), do: path |> File.stream!() |> Enum.map(&Jason.decode!/1)
+  defp read_entries(path), do: path |> File.stream!() |> Enum.map(&CodexPooler.JSON.decode!/1)
 
   defp trace_start(body) do
     :post
-    |> Plug.Test.conn("/start", Jason.encode!(body))
+    |> Plug.Test.conn("/start", CodexPooler.JSON.encode!(body))
     |> TracePlug.call([])
   end
 

@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
 
   @spec from_json(binary()) :: usage()
   def from_json(body) when is_binary(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, decoded} -> from_decoded(decoded)
       {:error, _reason} -> %{status: "usage_unknown", source: "json_decode_failed"}
     end
@@ -62,7 +62,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
 
   @spec from_sse(binary()) :: usage()
   def from_sse(body) when is_binary(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, decoded} when is_map(decoded) -> from_stream_event(decoded)
       _framed_or_incomplete -> decode_stream_body(body, "sse_usage_missing", false)
     end
@@ -86,7 +86,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   end
 
   defp stream_record_usage({json, event_type}, previous) do
-    case Jason.decode(json) do
+    case CodexPooler.JSON.decode(json) do
       {:ok, decoded} when is_map(decoded) ->
         candidate = from_stream_event(decoded)
 

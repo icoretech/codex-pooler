@@ -225,7 +225,7 @@ defmodule CodexPooler.Jobs.AlertDeliveryJobTest do
            }
 
     encoded =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         payload: request.json,
         response_metadata: attempt.response_metadata,
         failure_metadata: attempt.failure_metadata
@@ -518,7 +518,7 @@ defmodule CodexPooler.Jobs.AlertDeliveryJobTest do
 
   defp assert_safe_job_args(args) do
     assert Map.keys(args) |> Enum.all?(&is_binary/1)
-    encoded_args = Jason.encode!(args)
+    encoded_args = CodexPooler.JSON.encode!(args)
 
     for fragment <- @forbidden_arg_fragments do
       refute encoded_args =~ fragment

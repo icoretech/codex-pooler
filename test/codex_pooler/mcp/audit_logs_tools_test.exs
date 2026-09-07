@@ -89,7 +89,7 @@ defmodule CodexPooler.MCP.AuditLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(result)
 
     assert [%{"type" => "text", "text" => text}] = result["content"]
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
 
     structured = result["structuredContent"]
 
@@ -280,7 +280,7 @@ defmodule CodexPooler.MCP.AuditLogsToolsTest do
       |> Enum.count(&String.starts_with?(&1, "- occurred_at="))
 
     assert row_count == 10
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
   end
 
   test "audit-log tool rejects malformed semantic filters without echoing date sentinels", %{
@@ -341,7 +341,7 @@ defmodule CodexPooler.MCP.AuditLogsToolsTest do
     assert result["isError"] == false
     assert :ok = Redaction.assert_mcp_output_safe!(result)
     assert [%{"type" => "text", "text" => text}] = result["content"]
-    refute text =~ Jason.encode!(result["structuredContent"])
+    refute text =~ CodexPooler.JSON.encode!(result["structuredContent"])
 
     assert %{"status" => "ok", "kind" => "audit_log", "item" => item} =
              result["structuredContent"]

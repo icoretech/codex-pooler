@@ -310,7 +310,9 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
   end
 
   defp query(sql, params \\ []), do: Repo.query!(sql, params, log: false, timeout: @budget)
-  defp receipt(stage, values), do: IO.puts(Jason.encode!(Map.put(values, :stage, stage)))
+
+  defp receipt(stage, values),
+    do: IO.puts(CodexPooler.JSON.encode!(Map.put(values, :stage, stage)))
 end
 
 CodexPooler.Verification.RequestReplayMigration.run(System.argv())

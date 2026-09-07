@@ -996,7 +996,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     request_path = Path.join(temp_root, "request.json")
     curl_config_path = Path.join(temp_root, "curl.conf")
 
-    File.write!(request_path, Jason.encode!(request_body))
+    File.write!(request_path, CodexPooler.JSON.encode!(request_body))
 
     File.write!(
       curl_config_path,
@@ -1403,7 +1403,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
       receive do
         {:websocket_frame, frame} ->
-          decoded_frame = Jason.decode!(frame)
+          decoded_frame = CodexPooler.JSON.decode!(frame)
           decoded_type = decoded_frame["type"]
           collected_types = [decoded_type | collected_types]
 

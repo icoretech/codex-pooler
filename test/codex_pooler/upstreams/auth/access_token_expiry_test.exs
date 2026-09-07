@@ -378,8 +378,8 @@ defmodule CodexPooler.Upstreams.Auth.AccessTokenExpiryTest do
   end
 
   defp jwt(claims) do
-    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
-    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    header = Base.url_encode64(CodexPooler.JSON.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(CodexPooler.JSON.encode!(claims), padding: false)
     header <> "." <> payload <> ".signature"
   end
 end

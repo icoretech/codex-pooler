@@ -386,7 +386,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
                    options
                  )
 
-        normalized_payload = Jason.decode!(encoded)
+        normalized_payload = CodexPooler.JSON.decode!(encoded)
 
         assert sha256_fingerprint(Map.fetch!(normalized_payload, "prompt_cache_key")) ==
                  prompt_cache_key_fingerprint

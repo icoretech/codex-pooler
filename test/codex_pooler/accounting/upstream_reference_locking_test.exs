@@ -1057,7 +1057,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
       File.mkdir_p!(Path.dirname(path))
 
       File.open!(path, [:append, :binary], fn io ->
-        IO.binwrite(io, Jason.encode!(record) <> "\n")
+        IO.binwrite(io, CodexPooler.JSON.encode!(record) <> "\n")
         :ok = :file.sync(io)
       end)
     end

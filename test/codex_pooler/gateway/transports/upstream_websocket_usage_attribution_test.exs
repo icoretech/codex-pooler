@@ -10,17 +10,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketUsageAttribu
 
   test "reused connection resets terminal aggregate and retains the original body cap" do
     marker = "synthetic-large-attribution"
-    large = Jason.encode!(%{"usage" => @usage, "attribution" => String.duplicate(marker, 4_000)})
+
+    large =
+      CodexPooler.JSON.encode!(%{
+        "usage" => @usage,
+        "attribution" => String.duplicate(marker, 4_000)
+      })
+
     # Attribution sits inside usage and exceeds both retained windows.
     large_usage =
-      String.trim_trailing(Jason.encode!(@usage), "}") <> ",\"attribution\":" <> large <> "}"
+      String.trim_trailing(CodexPooler.JSON.encode!(@usage), "}") <>
+        ",\"attribution\":" <> large <> "}"
 
     first =
       ~s({"type":"response.completed","response":{"status":"completed","usage":) <>
         large_usage <> "}}"
 
     second =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed", "usage" => nil}
       })
@@ -51,7 +58,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketUsageAttribu
     assert first_result.response_usage.total_tokens == 10
     assert byte_size(first_result.body) <= 65_536
     assert_receive {:frame_digest, first_digest}
-    assert first_digest == digest(Jason.encode!(Jason.decode!(first)))
+    assert first_digest == digest(CodexPooler.JSON.encode!(CodexPooler.JSON.decode!(first)))
     refute inspect(first_result.response_usage) =~ marker
     assert byte_size(:erlang.term_to_binary(first_result.response_usage)) < 512
 
@@ -66,13 +73,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketUsageAttribu
 
   test "mapped delivery preserves upstream aggregate counters without retaining attribution" do
     original =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed", "usage" => @usage}
       })
 
     mapped =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"status" => "completed", "usage" => nil}
       })
@@ -107,7 +114,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketUsageAttribu
           else: String.duplicate("x", unquote(tier_bytes))
 
       frame =
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
             "status" => "completed",

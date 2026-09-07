@@ -165,7 +165,7 @@ defmodule CodexPooler.MCP.RedactionTest do
     assert_raise ExUnit.AssertionError, ~r/text content mirrors structuredContent/, fn ->
       Redaction.assert_mcp_output_safe!(%{
         structuredContent: structured,
-        content: [%{"type" => "text", "text" => Jason.encode!(structured)}]
+        content: [%{"type" => "text", "text" => CodexPooler.JSON.encode!(structured)}]
       })
     end
   end

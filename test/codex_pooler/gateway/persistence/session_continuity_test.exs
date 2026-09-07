@@ -93,7 +93,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
                SessionContinuity.register_codex_session_continuity(
                  session,
                  %{},
-                 Jason.encode!(%{"id" => response_id}),
+                 CodexPooler.JSON.encode!(%{"id" => response_id}),
                  owner_request_options([])
                )
 

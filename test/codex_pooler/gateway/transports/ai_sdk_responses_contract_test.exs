@@ -194,12 +194,12 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
     |> String.split("\n\n", trim: true)
     |> Enum.map(fn block ->
       "data: " <> data = Enum.find(String.split(block, "\n"), &String.starts_with?(&1, "data: "))
-      Jason.decode!(data)
+      CodexPooler.JSON.decode!(data)
     end)
   end
 
   defp sse_event(type, data) do
-    "event: #{type}\ndata: #{Jason.encode!(data)}\n\n"
+    "event: #{type}\ndata: #{CodexPooler.JSON.encode!(data)}\n\n"
   end
 
   defp public_responses_stream_opts do

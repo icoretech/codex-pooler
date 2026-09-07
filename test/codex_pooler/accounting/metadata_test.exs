@@ -347,7 +347,7 @@ defmodule CodexPooler.Accounting.MetadataTest do
       assert summary["finish_class"] == nil
       assert summary["terminal_kind"] == nil
       assert summary["terminal_status"] == nil
-      refute Jason.encode!(summary) =~ raw_value
+      refute CodexPooler.JSON.encode!(summary) =~ raw_value
     end
 
     test "public Responses stream summary rejects a raw binary value" do
@@ -359,7 +359,7 @@ defmodule CodexPooler.Accounting.MetadataTest do
         })
 
       assert sanitized["public_openai_responses_stream"] == %{}
-      refute Jason.encode!(sanitized) =~ raw_value
+      refute CodexPooler.JSON.encode!(sanitized) =~ raw_value
     end
 
     test "public Responses stream summary rejects a raw list value" do
@@ -371,7 +371,7 @@ defmodule CodexPooler.Accounting.MetadataTest do
         })
 
       assert sanitized["public_openai_responses_stream"] == %{}
-      refute Jason.encode!(sanitized) =~ raw_value
+      refute CodexPooler.JSON.encode!(sanitized) =~ raw_value
     end
 
     test "public Responses stream summary rejects a scalar value" do

@@ -423,7 +423,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   test "forwarded admission controls authorize and record one trusted first compact collection",
        context do
     item =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_item.done",
         "item" => %{"type" => "compaction", "encrypted_content" => "synthetic-compact"}
       })
@@ -443,7 +443,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [],
       payload:
-        Jason.encode!(%{
+        CodexPooler.JSON.encode!(%{
           "model" => "sample-model",
           "input" => [
             %{"role" => "user", "content" => "sample"},
@@ -1626,7 +1626,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
   test "returns upstream request result while completing the active downstream", context do
     terminal_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{
           "id" => "resp_owner_result",
@@ -1989,14 +1989,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     end
 
     visible_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_text.delta",
         "delta" => "visible-before-overflow",
         "sequence_number" => PublicResponsesSequence.max_safe_integer() - 1
       })
 
     overflow_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_text.delta",
         "delta" => "overflow"
       })
@@ -2057,7 +2057,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
                socket_state
              )
 
-    assert Jason.decode!(visible_payload)["type"] == "response.output_text.delta"
+    assert CodexPooler.JSON.decode!(visible_payload)["type"] == "response.output_text.delta"
 
     assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
                     {:data, ^overflow_frame}}
@@ -2069,7 +2069,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
                socket_state
              )
 
-    assert Jason.decode!(overflow_payload)["error"]["code"] == "websocket_sequence_exhausted"
+    assert CodexPooler.JSON.decode!(overflow_payload)["error"]["code"] ==
+             "websocket_sequence_exhausted"
 
     assert_receive {:websocket_owner_output_commit_probe, "socket-overflow", 1, ^owner_turn_id,
                     active_turn_ref, ^owner, probe_ref} = probe
@@ -2086,7 +2087,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert length(Regex.scan(~r/websocket native turn failed/, logs)) == 1
     refute logs =~ "owner_forward_timeout"
-    refute Jason.encode!(safe_payload) =~ "owner_forward_timeout"
+    refute CodexPooler.JSON.encode!(safe_payload) =~ "owner_forward_timeout"
 
     assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, :complete} =
                      owner_complete
@@ -2888,7 +2889,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
   test "forwards a terminal failure body when the upstream request returns an error", context do
     terminal_frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.failed",
         "response" => %{
           "id" => "resp_owner_failure",
@@ -3285,7 +3286,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert {:ok, fresh_prepared} =
              Service.prepare_websocket_response(
-               Jason.encode!(fresh_payload),
+               CodexPooler.JSON.encode!(fresh_payload),
                fresh_options,
                fn _frame -> :ok end
              )
@@ -4744,7 +4745,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:reconnect_handoff_replacement_send, 2}
     assert_receive {:websocket_owner_frame, "stale-artifacts-b", 2, :complete}
 
-    stale_error = Jason.encode!(%{"type" => "error", "error" => %{"code" => "stale"}})
+    stale_error = CodexPooler.JSON.encode!(%{"type" => "error", "error" => %{"code" => "stale"}})
     stale_complete = terminal_frame("response.completed", "resp_stale_artifacts")
     probe_ref = make_ref()
 
@@ -5430,7 +5431,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   defp terminal_downstream_message?(_message), do: false
 
   defp terminal_payload?(payload) do
-    case Jason.decode(payload) do
+    case CodexPooler.JSON.decode(payload) do
       {:ok, %{"type" => type}} ->
         type in [
           "response.completed",
@@ -5865,7 +5866,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   defp native_websocket_request(turn_id) do
     %{
       websocket_request()
-      | payload: Jason.encode!(%{"type" => "response.create", "turn_id" => turn_id}),
+      | payload: CodexPooler.JSON.encode!(%{"type" => "response.create", "turn_id" => turn_id}),
         message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
     }
   end
@@ -6448,7 +6449,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         %{"id" => response_id, "status" => String.replace_prefix(type, "response.", "")}
       end
 
-    Jason.encode!(%{"type" => type, "response" => response})
+    CodexPooler.JSON.encode!(%{"type" => type, "response" => response})
   end
 
   defp terminal_result(terminal_frame, terminal) do

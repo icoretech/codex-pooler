@@ -91,7 +91,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
       |> LazyHTML.query("#observatory-traffic-mode-cumulative")
       |> LazyHTML.attribute("phx-click")
 
-    assert [["dispatch", dispatch]] = Jason.decode!(click_command)
+    assert [["dispatch", dispatch]] = CodexPooler.JSON.decode!(click_command)
     assert dispatch["event"] == "chart:set-mode"
     assert dispatch["to"] == "#observatory-traffic-plot"
     assert dispatch["detail"] == %{"mode" => "cumulative"}
@@ -104,7 +104,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
       |> LazyHTML.attribute("data-chart-series")
 
     assert series_json
-           |> Jason.decode!()
+           |> CodexPooler.JSON.decode!()
            |> Enum.any?(fn %{"data" => [first, second | _rest]} -> second < first end)
 
     view |> element("#showcase-toggle-paused") |> render_click()

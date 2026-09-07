@@ -285,7 +285,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "type" => "error",
                "status" => 503,
                "error" => %{"code" => "no_compatible_backend", "param" => "model"}
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert FakeUpstream.count(upstream) == 0
       assert Repo.aggregate(Attempt, :count) == 0
@@ -331,7 +331,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           conn,
           websocket,
           ref,
-          Jason.encode!(programmatic_replay_payload(setup))
+          CodexPooler.JSON.encode!(programmatic_replay_payload(setup))
         )
 
       {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
@@ -572,7 +572,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                    "message" => ^provider_wording
                  }
                }
-             } = Jason.decode!(failed_frame)
+             } = CodexPooler.JSON.decode!(failed_frame)
 
       refute failed_frame =~ "provider.policy.param"
       refute failed_frame =~ "provider_policy_type"
@@ -601,7 +601,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert %{
                "type" => "response.completed",
                "response" => %{"id" => "resp_after_public_policy_terminal"}
-             } = Jason.decode!(completed_frame)
+             } = CodexPooler.JSON.decode!(completed_frame)
 
       assert_receive {Events,
                       %{
@@ -715,7 +715,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           conn,
           websocket,
           ref,
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => "synthetic websocket filtered web search request",
@@ -731,7 +731,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert %{
                "type" => "response.completed",
                "response" => %{"id" => "resp_v1_websocket_web_search_domain_filters"}
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
@@ -889,7 +889,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
       {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-      assert Jason.decode!(frame) == %{
+      assert CodexPooler.JSON.decode!(frame) == %{
                "type" => "error",
                "status" => 400,
                "error" => %{
@@ -951,7 +951,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                  "message" => "Unsupported parameter: tool_choice",
                  "param" => "tool_choice"
                }
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert FakeUpstream.count(upstream) == 0
 
@@ -1203,7 +1203,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                  "code" => "unsupported_parameter",
                  "param" => "tool_choice"
                }
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert FakeUpstream.count(upstream) == 0
 
@@ -1334,7 +1334,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                  "code" => "unsupported_parameter",
                  "param" => "tool_choice"
                }
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert FakeUpstream.count(upstream) == 0
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -1459,7 +1459,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                  "code" => "invalid_request",
                  "param" => "tools"
                }
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       assert lifecycle_counts(upstream) == post_upgrade_baseline
       refute_received {Events, %{reason: "request_finalized"}}
@@ -1531,7 +1531,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                  "code" => "invalid_json_schema",
                  "param" => "text.format.schema"
                }
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert lifecycle_counts(upstream) == post_upgrade_baseline
       refute_received {Events, %{reason: "request_finalized"}}
@@ -1598,11 +1598,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
 
           {conn, websocket} =
-            public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
+            public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(payload))
 
           {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-          assert %{"type" => "error", "status" => 400, "error" => error} = Jason.decode!(frame)
+          assert %{"type" => "error", "status" => 400, "error" => error} =
+                   CodexPooler.JSON.decode!(frame)
+
           assert error["code"] == "invalid_request"
           assert error["param"] in ["input", "tools"]
           assert lifecycle_counts(upstream) == post_upgrade_baseline
@@ -1639,7 +1641,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           conn,
           websocket,
           ref,
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => [
@@ -1662,7 +1664,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "type" => "error",
                "status" => 400,
                "error" => %{"code" => "invalid_request", "param" => "input"}
-             } = Jason.decode!(error_frame)
+             } = CodexPooler.JSON.decode!(error_frame)
 
       assert lifecycle_counts(upstream) == post_upgrade_baseline
       refute_received {Events, %{reason: "request_finalized"}}
@@ -1717,7 +1719,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         {{conn, _websocket, frames}, log} =
           with_log(fn ->
             {conn, websocket} =
-              public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
+              public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(payload))
 
             {conn, websocket, frames} =
               receive_websocket_until_terminal!(conn, websocket, ref, [])
@@ -1986,7 +1988,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           conn,
           websocket,
           ref,
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => input,
@@ -2189,7 +2191,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
       {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-      assert Jason.decode!(frame) == %{
+      assert CodexPooler.JSON.decode!(frame) == %{
                "type" => "error",
                "status" => 400,
                "error" => %{
@@ -2247,7 +2249,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
       {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-      assert Jason.decode!(frame) == %{
+      assert CodexPooler.JSON.decode!(frame) == %{
                "type" => "error",
                "status" => 503,
                "error" => %{
@@ -2373,7 +2375,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
       {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-      assert Jason.decode!(frame) == %{
+      assert CodexPooler.JSON.decode!(frame) == %{
                "type" => "error",
                "status" => 502,
                "error" => %{
@@ -2461,7 +2463,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
           {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-          assert Jason.decode!(frame) == %{
+          assert CodexPooler.JSON.decode!(frame) == %{
                    "type" => "error",
                    "status" => 400,
                    "error" => %{
@@ -2524,12 +2526,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       {{conn, websocket, error_frame}, log} =
         with_log(fn ->
           {conn, websocket} =
-            public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
+            public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(payload))
 
           public_websocket_receive_text!(conn, websocket, ref)
         end)
 
-      assert Jason.decode!(error_frame) == %{
+      assert CodexPooler.JSON.decode!(error_frame) == %{
                "type" => "error",
                "status" => 400,
                "error" => %{
@@ -2565,7 +2567,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           conn,
           websocket,
           ref,
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => [hd(replay_proven_compaction_items()), compaction_replay_user_item()],
@@ -2640,7 +2642,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           conn,
           websocket,
           ref,
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => "synthetic interruption input",
@@ -2651,12 +2653,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       {conn, websocket, visible_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert Jason.decode!(visible_frame)["type"] == "response.output_text.delta"
+      assert CodexPooler.JSON.decode!(visible_frame)["type"] == "response.output_text.delta"
 
       {conn, websocket, error_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
 
-      assert Jason.decode!(error_frame) == %{
+      assert CodexPooler.JSON.decode!(error_frame) == %{
                "type" => "error",
                "status" => 502,
                "error" => %{
@@ -2740,7 +2742,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           {conn, websocket, error_frame} =
             public_websocket_receive_text!(conn, websocket, ref)
 
-          {conn, websocket, Jason.decode!(delta_frame), Jason.decode!(error_frame)}
+          {conn, websocket, CodexPooler.JSON.decode!(delta_frame),
+           CodexPooler.JSON.decode!(error_frame)}
         end)
 
       assert delta_frame["type"] == "response.output_text.delta"
@@ -2892,8 +2895,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     source_events = hosted_shell_response_events()
 
     provider_frames =
-      ["{", Jason.encode!(["not", "an", "object"])] ++
-        Enum.map(source_events, &Jason.encode!/1)
+      ["{", CodexPooler.JSON.encode!(["not", "an", "object"])] ++
+        Enum.map(source_events, &CodexPooler.JSON.encode!/1)
 
     upstream = start_upstream(FakeUpstream.websocket_text_frames(provider_frames))
     setup = gateway_setup(upstream)
@@ -2934,7 +2937,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                  "code" => "invalid_request",
                  "param" => "input"
                }
-             } = Jason.decode!(error_wire)
+             } = CodexPooler.JSON.decode!(error_wire)
 
       assert lifecycle_counts(upstream) == post_upgrade_baseline
       assert FakeUpstream.count(upstream) == 0
@@ -2969,7 +2972,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
       sse_source =
         Enum.map_join(source_events, fn event ->
-          "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n"
+          "event: #{event["type"]}\ndata: #{CodexPooler.JSON.encode!(event)}\n\n"
         end)
 
       {normalized_sse, _state} =
@@ -3118,7 +3121,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
               })
 
             {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-            decoded = Jason.decode!(frame)
+            decoded = CodexPooler.JSON.decode!(frame)
 
             assert decoded["type"] == "error"
             assert decoded["status"] == 400
@@ -3194,7 +3197,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
               })
 
             {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-            decoded = Jason.decode!(frame)
+            decoded = CodexPooler.JSON.decode!(frame)
 
             assert decoded["type"] == "error"
             assert decoded["status"] == 400
@@ -3290,8 +3293,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
       {conn, websocket, first_frame} = public_websocket_receive_text!(conn, websocket, ref)
       {conn, websocket, second_frame} = public_websocket_receive_text!(conn, websocket, ref)
-      first = Jason.decode!(first_frame)
-      second = Jason.decode!(second_frame)
+      first = CodexPooler.JSON.decode!(first_frame)
+      second = CodexPooler.JSON.decode!(second_frame)
 
       assert {first["type"], first["response"]["id"], first["stream_id"]} ==
                {"response.completed", "resp_fifo_first", stream_id}
@@ -3352,8 +3355,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         })
 
       {conn, websocket, second_frame} = public_websocket_receive_text!(conn, websocket, ref)
-      first = Jason.decode!(first_frame)
-      second = Jason.decode!(second_frame)
+      first = CodexPooler.JSON.decode!(first_frame)
+      second = CodexPooler.JSON.decode!(second_frame)
 
       assert {first["response"]["id"], first["stream_id"]} ==
                {"resp_different_first", first_id}
@@ -3403,7 +3406,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         attrs
       )
 
-    public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
+    public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(payload))
   end
 
   defp websocket_compaction_trigger_input(text) do
@@ -3591,12 +3594,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     if owner_forwarding?, do: enable_owner_forwarding!()
 
     completion =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_after_invalid_frames", "status" => "completed"}
       })
 
-    invalid_frames = ["{", Jason.encode!("string"), Jason.encode!([]), Jason.encode!(42), "null"]
+    invalid_frames = [
+      "{",
+      CodexPooler.JSON.encode!("string"),
+      CodexPooler.JSON.encode!([]),
+      CodexPooler.JSON.encode!(42),
+      "null"
+    ]
+
     upstream = start_upstream(FakeUpstream.websocket_text_frames(invalid_frames ++ [completion]))
     setup = gateway_setup(upstream)
     assert :ok = Events.subscribe_pool(setup.pool)
@@ -3615,7 +3625,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           conn,
           websocket,
           ref,
-          Jason.encode!(%{
+          CodexPooler.JSON.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
             "input" => "synthetic invalid provider frame input",
@@ -3629,7 +3639,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "type" => "response.completed",
                "sequence_number" => 0,
                "response" => %{"status" => "completed"}
-             } = Jason.decode!(frame)
+             } = CodexPooler.JSON.decode!(frame)
 
       assert_receive {Events,
                       %{
@@ -3702,7 +3712,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     data = lines |> Enum.find(&String.starts_with?(&1, "data: ")) |> strip_sse_prefix("data: ")
 
     if is_binary(event) and is_binary(data) and data != "[DONE]" do
-      %{"event" => event, "data" => Jason.decode!(data)}
+      %{"event" => event, "data" => CodexPooler.JSON.decode!(data)}
     end
   end
 
@@ -3711,7 +3721,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
   defp receive_websocket_until_terminal!(conn, websocket, ref, frames) do
     {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-    decoded = Jason.decode!(frame)
+    decoded = CodexPooler.JSON.decode!(frame)
     frames = [decoded | frames]
 
     if decoded["type"] == "response.completed" do
@@ -3723,7 +3733,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
   defp receive_websocket_until_terminal_or_error!(conn, websocket, ref, frames) do
     {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-    decoded = Jason.decode!(frame)
+    decoded = CodexPooler.JSON.decode!(frame)
     frames = [decoded | frames]
 
     if decoded["type"] in ["response.completed", "error"] do

@@ -198,7 +198,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
     assert conn.status == 403
 
     assert %{"error" => %{"code" => "api_key_policy_limit_exceeded"}} =
-             Jason.decode!(conn.resp_body)
+             CodexPooler.JSON.decode!(conn.resp_body)
 
     assert generation_count(upstream) == 0
     assert Repo.aggregate(Attempt, :count) == 0

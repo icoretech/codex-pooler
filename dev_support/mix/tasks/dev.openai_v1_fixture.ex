@@ -25,7 +25,7 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
          :ok <- maybe_start_application(action),
          result <- run_action(action, options) do
       case result do
-        {:ok, status} -> Mix.shell().info(Jason.encode!(status))
+        {:ok, status} -> Mix.shell().info(CodexPooler.JSON.encode!(status))
         {:error, message} -> Mix.raise(message)
       end
     else

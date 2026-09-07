@@ -57,7 +57,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
                Gateway.execute(auth, result.endpoint, result.payload, result.request_options)
 
       assert response.status == 200
-      assert %{"id" => "resp_accounting_success"} = Jason.decode!(response.raw_body)
+      assert %{"id" => "resp_accounting_success"} = CodexPooler.JSON.decode!(response.raw_body)
       assert FakeUpstream.count(upstream) == 1
 
       assert_exactly_once_accounting!(setup.pool.id,

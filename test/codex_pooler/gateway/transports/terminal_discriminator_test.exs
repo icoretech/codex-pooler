@@ -243,5 +243,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.TerminalDiscriminatorTest do
     end
   end
 
-  defp classify(event), do: event |> Jason.encode!() |> TerminalDiscriminator.classify()
+  defp classify(event),
+    do: event |> CodexPooler.JSON.encode!() |> TerminalDiscriminator.classify()
 end

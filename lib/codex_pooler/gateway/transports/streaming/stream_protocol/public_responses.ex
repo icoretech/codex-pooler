@@ -89,7 +89,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec normalize_json_message(binary()) :: binary()
   def normalize_json_message(data) when is_binary(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         {normalized, _decoded} = normalize_json_message(data, decoded)
         normalized
@@ -102,7 +102,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @spec normalize_json_message(binary(), map()) :: {binary(), map()}
   def normalize_json_message(_data, %{"type" => "response.failed"} = decoded) do
     normalized = normalize_terminal_errors("response.failed", decoded)
-    {Jason.encode!(normalized), normalized}
+    {CodexPooler.JSON.encode!(normalized), normalized}
   end
 
   def normalize_json_message(data, %{} = decoded) when is_binary(data) do
@@ -479,7 +479,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       event_type,
       "\n",
       "data: ",
-      Jason.encode!(Map.put_new(decoded, "type", event_type)),
+      CodexPooler.JSON.encode!(Map.put_new(decoded, "type", event_type)),
       "\n\n"
     ]
   end
@@ -578,7 +578,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         StreamProtocol.canonicalize_codex_responses_json_message(data, prepared)
 
       {:changed, prepared} ->
-        canonical_input = Jason.encode!(prepared)
+        canonical_input = CodexPooler.JSON.encode!(prepared)
         StreamProtocol.canonicalize_codex_responses_json_message(canonical_input, prepared)
     end
   end
@@ -588,7 +588,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
     case normalize_terminal_errors_with_change(type, decoded) do
       {:unchanged, normalized} -> {canonical_data, normalized}
-      {:changed, normalized} -> {Jason.encode!(normalized), normalized}
+      {:changed, normalized} -> {CodexPooler.JSON.encode!(normalized), normalized}
     end
   end
 
@@ -1004,7 +1004,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     if maybe_decodable_tail?(buffer) do
       data = StreamProtocol.sse_field(buffer, "data") || buffer
 
-      match?({:ok, %{}}, Jason.decode(data))
+      match?({:ok, %{}}, CodexPooler.JSON.decode(data))
     else
       false
     end

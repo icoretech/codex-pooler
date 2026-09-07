@@ -201,7 +201,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
         false
 
       {[], _remaining} ->
-        case Jason.decode(data) do
+        case CodexPooler.JSON.decode(data) do
           {:ok, %{} = decoded} -> internal_control_event?(decoded)
           _other -> false
         end
@@ -239,7 +239,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   def stream_data_visible?(_data), do: false
 
   defp direct_terminal_outcome(data) do
-    case Jason.decode(data) do
+    case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         terminal_outcome(nil, decoded) ||
           if(success_candidate?(nil, decoded),
@@ -342,7 +342,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   defp internal_control_sse_block?(block) do
     with data when is_binary(data) <- SSEParser.sse_field(block, "data"),
-         {:ok, %{} = decoded} <- Jason.decode(data) do
+         {:ok, %{} = decoded} <- CodexPooler.JSON.decode(data) do
       internal_control_event?(%{
         event_type: SSEParser.sse_field(block, "event"),
         data_type: Map.get(decoded, "type")

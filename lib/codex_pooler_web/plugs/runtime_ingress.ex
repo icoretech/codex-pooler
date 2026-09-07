@@ -229,7 +229,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   end
 
   defp decode_mcp_body(body) do
-    case Jason.decode(body) do
+    case CodexPooler.JSON.decode(body) do
       {:ok, value} when is_list(value) -> {:ok, %{"_json" => value}}
       {:ok, value} when is_map(value) -> {:ok, value}
       {:ok, _value} -> {:ok, %{"_json_scalar" => true}}
@@ -488,7 +488,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> send_resp(status, CodexPooler.JSON.encode!(body))
     |> halt()
   end
 
@@ -501,7 +501,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> send_resp(status, CodexPooler.JSON.encode!(body))
     |> halt()
   end
 end

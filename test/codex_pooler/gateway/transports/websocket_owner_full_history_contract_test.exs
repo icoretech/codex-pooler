@@ -73,7 +73,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
           %{"full_history_compaction?" => true}
         ] do
       assert {:error, {:invalid_field, :payload}} =
-               WebsocketOwnerRequestV6.new(Map.put(attrs(), :payload, Jason.encode!(payload)))
+               WebsocketOwnerRequestV6.new(
+                 Map.put(attrs(), :payload, CodexPooler.JSON.encode!(payload))
+               )
     end
   end
 
@@ -87,7 +89,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
       body = Map.put(payload(), "input", [item, %{"type" => "compaction_trigger"}])
 
       assert {:ok, _request} =
-               WebsocketOwnerRequestV6.new(Map.put(attrs(), :payload, Jason.encode!(body)))
+               WebsocketOwnerRequestV6.new(
+                 Map.put(attrs(), :payload, CodexPooler.JSON.encode!(body))
+               )
     end
   end
 
@@ -243,7 +247,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
       version: 6,
       url: "https://upstream.example.com/backend-api/codex/responses",
       headers: [],
-      payload: Jason.encode!(payload()),
+      payload: CodexPooler.JSON.encode!(payload()),
       timeouts: %TimeoutConfig{
         connect_timeout_ms: 1_000,
         pool_timeout_ms: 1_000,

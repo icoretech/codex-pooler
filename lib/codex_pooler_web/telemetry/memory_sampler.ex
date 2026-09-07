@@ -506,7 +506,7 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
 
   defp safe_stacktrace_line(_location), do: nil
 
-  defp json!(value), do: Jason.encode!(value)
+  defp json!(value), do: CodexPooler.JSON.encode!(value)
 
   defp monotonic_ms, do: System.monotonic_time(:millisecond)
 end

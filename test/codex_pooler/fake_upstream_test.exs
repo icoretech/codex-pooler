@@ -160,7 +160,7 @@ defmodule CodexPooler.FakeUpstreamTest do
                  "status" => "failed",
                  "error" => %{"code" => "server_error"}
                }
-             } = Jason.decode!(terminal)
+             } = CodexPooler.JSON.decode!(terminal)
 
       assert FakeUpstream.websocket_close() ==
                {:websocket_sse_then_close, [], 1011, "synthetic websocket close"}

@@ -333,7 +333,7 @@ defmodule CodexPooler.Dev.Seeds.Perf do
       "starter_rows" => result.starter_rows
     }
 
-    File.write!(@perf_summary_path, Jason.encode_to_iodata!(summary, pretty: true))
+    File.write!(@perf_summary_path, CodexPooler.JSON.encode_to_iodata!(summary, pretty: true))
   end
 
   defp write_perf_env!(%{pool: pool, raw_api_key: raw_api_key, metrics_token: metrics_token}) do

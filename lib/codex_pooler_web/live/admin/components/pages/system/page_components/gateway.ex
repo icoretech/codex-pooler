@@ -347,8 +347,8 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
   defp param_json_value(params, group, field, fallback) do
     case get_in(params, [group, field]) do
       value when is_binary(value) -> value
-      value when is_map(value) -> Jason.encode!(value, pretty: true)
-      _missing -> Jason.encode!(fallback || %{}, pretty: true)
+      value when is_map(value) -> CodexPooler.JSON.encode!(value, pretty: true)
+      _missing -> CodexPooler.JSON.encode!(fallback || %{}, pretty: true)
     end
   end
 

@@ -44,7 +44,7 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
       "input" => [%{"role" => "user", "content" => "synthetic"}],
-      "client_metadata" => %{"x-codex-turn-metadata" => Jason.encode!(metadata)}
+      "client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(metadata)}
     }
 
     continuation =
@@ -83,7 +83,10 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
       continuation
       |> Map.put("stream", true)
       |> Map.update!("input", &(&1 ++ [%{"type" => "compaction_trigger"}]))
-      |> put_in(["client_metadata", "x-codex-turn-metadata"], Jason.encode!(compact_metadata))
+      |> put_in(
+        ["client_metadata", "x-codex-turn-metadata"],
+        CodexPooler.JSON.encode!(compact_metadata)
+      )
 
     first = prepare(original, session, setup)
 
@@ -196,7 +199,7 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
       Owner.start_link([])
 
     frame =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_compact_seed", "status" => "completed"}
       })
@@ -213,7 +216,7 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
           %OwnerRequest{
             url: CodexPooler.FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
             headers: [],
-            payload: Jason.encode!(original),
+            payload: CodexPooler.JSON.encode!(original),
             request_id: request.id,
             attempt_id: attempt.id,
             effective_serving_mode: "full",
@@ -338,7 +341,7 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
     options = RequestOptions.put_payload_context(options, native_codex_turn_metadata: metadata)
 
     {:ok, prepared} =
-      WebsocketCodec.prepare_frame(Jason.encode!(payload), options, fn _ -> :ok end)
+      WebsocketCodec.prepare_frame(CodexPooler.JSON.encode!(payload), options, fn _ -> :ok end)
 
     prepared
   end

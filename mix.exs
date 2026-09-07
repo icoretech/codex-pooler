@@ -91,7 +91,6 @@ defmodule CodexPooler.MixProject do
       {:sobelow, "== 0.15.0", only: [:dev, :test], runtime: false},
       {:six, "== 0.4.1", only: :test},
       {:gettext, "== 1.0.2"},
-      {:jason, "== 1.4.5"},
       {:dns_cluster, "== 0.3.0"},
       {:websock, "== 0.5.3"},
       {:websock_adapter, "== 0.6.0"},

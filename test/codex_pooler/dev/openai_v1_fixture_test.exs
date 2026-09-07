@@ -46,7 +46,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert_private_mode(context.root, 0o700)
     assert_private_mode(context.receipt_path, 0o600)
 
-    setup = context.receipt_path |> File.read!() |> Jason.decode!()
+    setup = context.receipt_path |> File.read!() |> CodexPooler.JSON.decode!()
     assert setup["state"] == "ready"
     assert setup["leases"] == 1
     assert setup["upstream_base_url"] == "http://127.0.0.1:4057"
@@ -150,7 +150,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
        context do
     assert {:ok, %{status: "ready"}} = OpenAIV1Fixture.acquire(context.options)
 
-    setup = context.receipt_path |> File.read!() |> Jason.decode!()
+    setup = context.receipt_path |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert %Pool{} = pool = Repo.get_by(Pool, slug: @pool_slug)
 

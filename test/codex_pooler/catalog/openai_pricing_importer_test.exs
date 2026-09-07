@@ -215,7 +215,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   end
 
   test "imports the reviewed September 3 target as canonical revision 2 rows" do
-    payload = @target |> File.read!() |> Jason.decode!()
+    payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
 
@@ -274,7 +274,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   test "target checksum, exact rates, removals, and schema descriptors detect drift" do
     raw = File.read!(@target)
-    payload = Jason.decode!(raw)
+    payload = CodexPooler.JSON.decode!(raw)
     expected_rates = @reviewed_fast_long_context_rates["gpt-5.6-luna"] |> Enum.map(&Decimal.new/1)
 
     one_byte_path = write_raw!(raw <> " ")
@@ -290,7 +290,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     rate_path = write_json!(rate_mutation)
 
     refute source_rates(
-             Jason.decode!(File.read!(rate_path)),
+             CodexPooler.JSON.decode!(File.read!(rate_path)),
              "gpt-5.6-luna",
              "fast",
              "long_context"
@@ -305,7 +305,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     removal_path = write_json!(removal_mutation)
 
-    assert Map.keys(Jason.decode!(File.read!(removal_path))["models"])
+    assert Map.keys(CodexPooler.JSON.decode!(File.read!(removal_path))["models"])
            |> Enum.filter(&(&1 in @removed_identifiers)) == [hd(@removed_identifiers)]
 
     schema_mutation =
@@ -500,7 +500,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   test "duplicate raw JSON keys and normalized model collisions fail without writes" do
     duplicate =
       String.replace(
-        Jason.encode!(valid_payload()),
+        CodexPooler.JSON.encode!(valid_payload()),
         ~s("tools_count":1),
         ~s("tools_count":1,"tools_count":1)
       )
@@ -1144,7 +1144,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   defp shutdown_task(_task), do: :ok
 
-  defp write_json!(payload), do: payload |> Jason.encode!() |> write_raw!()
+  defp write_json!(payload), do: payload |> CodexPooler.JSON.encode!() |> write_raw!()
 
   defp write_raw!(raw) do
     path =

@@ -303,7 +303,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     }
 
     with {:ok, key} <- derive_key(password, salt, @kdf),
-         {:ok, plaintext} <- Jason.encode(%{"accounts" => accounts}) do
+         {:ok, plaintext} <- CodexPooler.JSON.encode(%{"accounts" => accounts}) do
       {ciphertext, tag} =
         :crypto.crypto_one_time_aead(
           :aes_256_gcm,
@@ -314,7 +314,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
           true
         )
 
-      case Jason.encode(Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))) do
+      case CodexPooler.JSON.encode(Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))) do
         {:ok, bundle} -> {:ok, bundle}
         {:error, _reason} -> {:error, lifecycle_error(:bundle_encoding_failed)}
       end
@@ -337,7 +337,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   end
 
   defp decode_header(bundle) do
-    with {:ok, %{} = header} <- Jason.decode(bundle),
+    with {:ok, %{} = header} <- CodexPooler.JSON.decode(bundle),
          true <- Enum.sort(Map.keys(header)) == Enum.sort(@header_keys),
          true <- header["format"] == @format,
          true <- header["cipher"] == @cipher,
@@ -408,7 +408,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   defp decrypt(_encrypted, _key, _nonce, _aad), do: {:error, lifecycle_error(:bundle_malformed)}
 
   defp decode_accounts(plaintext, expected_count) do
-    with {:ok, %{"accounts" => accounts}} <- Jason.decode(plaintext),
+    with {:ok, %{"accounts" => accounts}} <- CodexPooler.JSON.decode(plaintext),
          true <- is_list(accounts),
          true <- length(accounts) == expected_count do
       {:ok, accounts}
@@ -576,13 +576,13 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
       map
       |> Enum.sort_by(fn {key, _value} -> key end)
       |> Enum.map_join(",", fn {key, value} ->
-        [Jason.encode!(key), ":", canonical_json(value)]
+        [CodexPooler.JSON.encode!(key), ":", canonical_json(value)]
       end),
       "}"
     ]
   end
 
-  defp canonical_json(value), do: Jason.encode!(value)
+  defp canonical_json(value), do: CodexPooler.JSON.encode!(value)
 
   defp stringified_kdf(salt) do
     @kdf

@@ -130,7 +130,7 @@ defmodule CodexPooler.NativeCompactionTraceTestExport do
   defp assert_complete!(path) do
     last = path |> File.stream!() |> Enum.reduce(nil, fn line, _last -> line end)
 
-    unless is_binary(last) and Jason.decode!(last)["event"] == "trace_stopped",
+    unless is_binary(last) and CodexPooler.JSON.decode!(last)["event"] == "trace_stopped",
       do: raise(ArgumentError, "trace export source is incomplete")
   end
 end

@@ -243,8 +243,8 @@ defmodule CodexPooler.InstanceSettingsSecurityTest do
     for event <- events do
       refute inspect(event.details) =~ metrics_token
       refute inspect(event.details) =~ smtp_password
-      refute Jason.encode!(event.details) =~ metrics_token
-      refute Jason.encode!(event.details) =~ smtp_password
+      refute CodexPooler.JSON.encode!(event.details) =~ metrics_token
+      refute CodexPooler.JSON.encode!(event.details) =~ smtp_password
     end
 
     listed_events =
@@ -256,8 +256,8 @@ defmodule CodexPooler.InstanceSettingsSecurityTest do
     for listed_event <- listed_events do
       refute inspect(listed_event.details) =~ metrics_token
       refute inspect(listed_event.details) =~ smtp_password
-      refute Jason.encode!(listed_event.details) =~ metrics_token
-      refute Jason.encode!(listed_event.details) =~ smtp_password
+      refute CodexPooler.JSON.encode!(listed_event.details) =~ metrics_token
+      refute CodexPooler.JSON.encode!(listed_event.details) =~ smtp_password
     end
 
     {:ok, remounted_view, remounted_html} = live(conn, ~p"/admin/system?#{%{"tab" => "metrics"}}")

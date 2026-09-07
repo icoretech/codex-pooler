@@ -107,7 +107,7 @@ defmodule CodexPoolerWeb.Runtime.AnchoredOwnerDrainSupport do
     assert %{"item" => %{"type" => "function_call", "call_id" => call_id} = item} = item_event
     assert completed["response"]["output"] == [item]
     assert item["name"] == "synthetic_tool"
-    assert Jason.decode!(item["arguments"]) == %{}
+    assert CodexPooler.JSON.decode!(item["arguments"]) == %{}
     {completed["response"]["id"], call_id, receive_until(state, :complete)}
   end
 
@@ -138,7 +138,7 @@ defmodule CodexPoolerWeb.Runtime.AnchoredOwnerDrainSupport do
           }
         }
       ],
-      "client_metadata" => %{"x-codex-turn-metadata" => Jason.encode!(metadata)},
+      "client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(metadata)},
       "stream" => true,
       "generate" => true
     }
@@ -185,7 +185,7 @@ defmodule CodexPoolerWeb.Runtime.AnchoredOwnerDrainSupport do
         receive_until(state, expected)
 
       {:push, {:text, frame}, state} ->
-        event = Jason.decode!(frame)
+        event = CodexPooler.JSON.decode!(frame)
         code = get_in(event, ["error", "code"])
 
         if event["type"] == expected or expected == {:event, event["type"]} or

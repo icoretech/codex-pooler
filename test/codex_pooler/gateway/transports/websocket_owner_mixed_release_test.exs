@@ -49,7 +49,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     assert {:module, WebsocketOwnerForwarder} = Fixture.load_forwarder(owner_peer.node, self())
 
     %{session: session} = owner_session_fixture(auth, owner_peer.node, "old-old")
-    terminal = Jason.encode!(%{"type" => "response.completed", "response" => %{}})
+    terminal = CodexPooler.JSON.encode!(%{"type" => "response.completed", "response" => %{}})
     owner = start_owner!(owner_peer.node, session, [terminal])
     attached = attach!(owner_peer.node, session.id, "corr-old-old")
     assert {:module, WebsocketOwnerForwarder} = Fixture.load_forwarder(owner_peer.node, self())
@@ -164,7 +164,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
              Fixture.load_synthetic_identity_lookup(owner_peer.node, upstream_identity_id)
 
     %{session: session} = owner_session_fixture(auth, owner_peer.node, "current-current")
-    terminal = Jason.encode!(%{"type" => "response.completed", "response" => %{}})
+    terminal = CodexPooler.JSON.encode!(%{"type" => "response.completed", "response" => %{}})
     owner = start_owner!(owner_peer.node, session, [terminal])
     attached = attach!(owner_peer.node, session.id, "corr-current-current")
     request = owner_request(upstream_identity_id, version: 1, submission_notification?: true)

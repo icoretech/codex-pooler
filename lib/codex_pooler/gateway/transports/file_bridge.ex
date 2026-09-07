@@ -209,7 +209,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
     request_options =
       [
-        json: payload,
+        body: CodexPooler.JSON.encode_to_iodata!(payload),
         retry: false,
         headers: headers(identity, token, forwarded_headers(opts))
       ]

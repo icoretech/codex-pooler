@@ -36,7 +36,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   @spec upstream_payload(map(), Model.t(), String.t(), RequestOptions.t()) ::
           {:ok, binary() | {:multipart, list()}}
-          | {:error, Jason.EncodeError.t() | Error.reason()}
+          | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
   def upstream_payload(payload, %Model{} = model, endpoint, %RequestOptions{} = request_options) do
     case prepare_upstream_payload(payload, model, endpoint, request_options) do
       {:ok, upstream_payload, _request_options} -> {:ok, upstream_payload}
@@ -46,7 +46,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   @spec prepare_upstream_payload(map(), Model.t(), String.t(), RequestOptions.t()) ::
           {:ok, binary() | {:multipart, list()}, RequestOptions.t()}
-          | {:error, Jason.EncodeError.t() | Error.reason()}
+          | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
   def prepare_upstream_payload(
         payload,
         %Model{} = model,
@@ -273,7 +273,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       )
 
     with :ok <- validate(payload, request_options),
-         {:ok, encoded} <- Jason.encode(upstream_payload) do
+         {:ok, encoded} <- CodexPooler.JSON.encode(upstream_payload) do
       {_compaction_projection, request_options} =
         CompactionProjectionContext.finalize(request_options, upstream_payload)
 

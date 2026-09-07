@@ -35,7 +35,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
         ])
 
       {:ok, state} =
-        CodexResponsesSocket.handle_in({Jason.encode!(first), [opcode: :text]}, state)
+        CodexResponsesSocket.handle_in({CodexPooler.JSON.encode!(first), [opcode: :text]}, state)
 
       {_anchor, _call_id, state} = receive_custom_completed(state)
       first_owner = state.websocket_owner_pid
@@ -65,12 +65,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
         Enum.reduce(2..7, {nil, nil, state}, fn _, {anchor, call_id, state} ->
           next =
             first
-            |> Map.put("client_metadata", %{"x-codex-turn-metadata" => Jason.encode!(metadata())})
+            |> Map.put("client_metadata", %{
+              "x-codex-turn-metadata" => CodexPooler.JSON.encode!(metadata())
+            })
 
           next = if anchor, do: continuation(next, anchor, call_id), else: next
 
           {:ok, state} =
-            CodexResponsesSocket.handle_in({Jason.encode!(next), [opcode: :text]}, state)
+            CodexResponsesSocket.handle_in(
+              {CodexPooler.JSON.encode!(next), [opcode: :text]},
+              state
+            )
 
           receive_custom_completed(state)
         end)
@@ -79,7 +84,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
       continuation = continuation(first, anchor, call_id)
 
       {:ok, state} =
-        CodexResponsesSocket.handle_in({Jason.encode!(continuation), [opcode: :text]}, state)
+        CodexResponsesSocket.handle_in(
+          {CodexPooler.JSON.encode!(continuation), [opcode: :text]},
+          state
+        )
 
       assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
                       ^release_ref},

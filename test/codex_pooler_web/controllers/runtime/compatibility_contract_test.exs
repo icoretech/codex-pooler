@@ -3279,7 +3279,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     fixtures_dir
     |> Path.join("*.json")
     |> Path.wildcard()
-    |> Enum.map(&Jason.decode!(File.read!(&1)))
+    |> Enum.map(&CodexPooler.JSON.decode!(File.read!(&1)))
     |> Enum.find(&(&1["scenario_id"] == scenario_id))
     |> case do
       nil -> flunk("missing SDK-shape fixture: #{scenario_id}")
@@ -3293,7 +3293,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     manifest_path
     |> File.read!()
-    |> Jason.decode!()
+    |> CodexPooler.JSON.decode!()
     |> Map.fetch!("fixture_files")
   end
 

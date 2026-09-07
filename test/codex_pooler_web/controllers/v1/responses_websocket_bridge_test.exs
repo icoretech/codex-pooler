@@ -135,7 +135,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     |> String.split("\n\n", trim: true)
     |> Enum.flat_map(fn block ->
       with [_line, data] <- Regex.run(~r/^data: (.+)$/m, block),
-           {:ok, %{"type" => _type} = decoded} <- Jason.decode(data) do
+           {:ok, %{"type" => _type} = decoded} <- CodexPooler.JSON.decode(data) do
         [decoded]
       else
         _no_event -> []
@@ -164,7 +164,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     |> String.split("\n\n", trim: true)
     |> Enum.flat_map(fn block ->
       case Regex.run(~r/^data: (.+)$/m, block) do
-        [_line, data] -> [Jason.decode!(data)]
+        [_line, data] -> [CodexPooler.JSON.decode!(data)]
         _no_data -> []
       end
     end)
@@ -256,7 +256,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     |> Enum.find_value(fn block ->
       with ["error"] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
            [data] <- Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
-        Jason.decode!(data)
+        CodexPooler.JSON.decode!(data)
       else
         _missing -> nil
       end
@@ -453,7 +453,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
       public_frames =
         for {:text, frame} <- frames,
-            decoded = Jason.decode!(frame),
+            decoded = CodexPooler.JSON.decode!(frame),
             decoded["type"] != "codex.response.metadata",
             do: decoded
 
@@ -521,7 +521,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert {:push, {:text, payload}, ^state} =
              CodexResponsesSocket.handle_info(owner_frame, state)
 
-    assert Jason.decode!(payload)["stream_id"] == "lane-owner-error"
+    assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-owner-error"
     refute Map.has_key?(safe_payload, "stream_id")
     refute Map.has_key?(state.websocket_owner_downstream, :stream_id)
     assert tuple_size(owner_frame) == 5
@@ -534,7 +534,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     owner_state = owner_forwarded_public_state(task_pid, stream_id)
 
     delta =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.output_text.delta",
         "delta" => "synthetic visible output"
       })
@@ -551,9 +551,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert {:push, {:text, owner_delta}, owner_delta_state} =
              CodexResponsesSocket.handle_info(owner_delta_frame, owner_state)
 
-    assert Jason.decode!(direct_delta) == Jason.decode!(owner_delta)
-    assert Jason.decode!(owner_delta)["stream_id"] == stream_id
-    refute Map.has_key?(Jason.decode!(delta), "stream_id")
+    assert CodexPooler.JSON.decode!(direct_delta) == CodexPooler.JSON.decode!(owner_delta)
+    assert CodexPooler.JSON.decode!(owner_delta)["stream_id"] == stream_id
+    refute Map.has_key?(CodexPooler.JSON.decode!(delta), "stream_id")
     refute Map.has_key?(owner_delta_state.websocket_owner_downstream, :stream_id)
 
     stale_turn_pid = spawn(fn -> receive do: (:stop -> :ok) end)
@@ -566,7 +566,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              CodexResponsesSocket.handle_info(stale_frame, owner_delta_state)
 
     terminal =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_owner_parity", "status" => "completed"}
       })
@@ -583,8 +583,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert {:push, {:text, owner_terminal}, owner_terminal_state} =
              CodexResponsesSocket.handle_info(owner_terminal_frame, owner_delta_state)
 
-    assert Jason.decode!(direct_terminal) == Jason.decode!(owner_terminal)
-    assert Jason.decode!(owner_terminal)["stream_id"] == stream_id
+    assert CodexPooler.JSON.decode!(direct_terminal) == CodexPooler.JSON.decode!(owner_terminal)
+    assert CodexPooler.JSON.decode!(owner_terminal)["stream_id"] == stream_id
     assert direct_terminal_state.public_responses_websocket_state.terminal_latched?
     assert owner_terminal_state.public_responses_websocket_state.terminal_latched?
   end
@@ -605,7 +605,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         assert {:push, {:text, payload}, ^state} =
                  CodexResponsesSocket.handle_info(owner_frame, state)
 
-        assert Jason.decode!(payload)["stream_id"] == "lane-owner-upstream"
+        assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-owner-upstream"
       end)
 
     refute log =~ "lane-owner-upstream"
@@ -628,7 +628,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         assert {:push, {:text, payload}, aborted_state} =
                  CodexResponsesSocket.handle_info(owner_frame, state)
 
-        assert Jason.decode!(payload)["stream_id"] == "lane-owner-drain"
+        assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-owner-drain"
         assert aborted_state.public_turn_aborted?
         assert aborted_state.public_response_stream_id == nil
         assert aborted_state.public_responses_websocket_state == nil
@@ -643,7 +643,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     upstream = start_upstream(FakeUpstream.sse_stream([completed_event("should_not_dispatch")]))
 
     retarget_payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => "gpt-test",
         "input" => [
@@ -658,7 +658,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       })
 
     next_payload =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.create",
         "model" => "gpt-test",
         "input" => "synthetic queued next turn"
@@ -690,7 +690,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
                    queued_state
                  )
 
-        assert Jason.decode!(retarget_frame)["stream_id"] == "lane-owner-retarget"
+        assert CodexPooler.JSON.decode!(retarget_frame)["stream_id"] == "lane-owner-retarget"
         assert next_state.public_response_stream_id == nil
         assert is_pid(next_state.public_response_task_pid)
         assert next_state.public_response_task_pid != retarget_task_pid
@@ -705,7 +705,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   test "synthetic JSON-frame bridge remains a single successful terminal", %{conn: conn} do
     completed =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{
           "id" => "resp_bridge_stateful_sse_regression",
@@ -979,8 +979,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     setup = gateway_setup(upstream, exposed_model_id: "gpt-4o", upstream_model_id: "gpt-4o")
     enable_request_compression!(setup.pool)
     session = "compression-session-#{System.unique_integer([:positive])}"
-    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
-    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+    schema_bound_output =
+      CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+
+    unbound_output = CodexPooler.JSON.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
 
     assert byte_size(schema_bound_output) > 512
     assert byte_size(unbound_output) > 512
@@ -1053,9 +1056,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       end)
 
     assert schema_bound_item["output"] == schema_bound_output
-    assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+
+    assert CodexPooler.JSON.decode!(schema_bound_item["output"]) ==
+             CodexPooler.JSON.decode!(schema_bound_output)
+
     assert unbound_item["output"] != unbound_output
-    assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
+    assert CodexPooler.JSON.decode!(unbound_item["output"]) ==
+             CodexPooler.JSON.decode!(unbound_output)
 
     assert attempt.transport == "websocket"
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
@@ -2060,9 +2068,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     upstream =
       start_upstream(
         FakeUpstream.websocket_text_frames([
-          Jason.encode!(rate_limits_event),
-          Jason.encode!(elem(created, 1)),
-          Jason.encode!(elem(compact_completed, 1))
+          CodexPooler.JSON.encode!(rate_limits_event),
+          CodexPooler.JSON.encode!(elem(created, 1)),
+          CodexPooler.JSON.encode!(elem(compact_completed, 1))
         ])
       )
 
@@ -2126,16 +2134,16 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     sentinel = "BRIDGE_INVALID_FRAME_SENTINEL"
 
     completed =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "response.completed",
         "response" => %{"id" => "resp_bridge_after_invalid", "status" => "completed"}
       })
 
     invalid_frames = [
       ~s({"private":"#{sentinel}"),
-      Jason.encode!(sentinel),
-      Jason.encode!([sentinel]),
-      Jason.encode!(42),
+      CodexPooler.JSON.encode!(sentinel),
+      CodexPooler.JSON.encode!([sentinel]),
+      CodexPooler.JSON.encode!(42),
       "null"
     ]
 
@@ -2173,7 +2181,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     set_upstream_receive_timeout!(25)
 
     internal_event =
-      Jason.encode!(%{
+      CodexPooler.JSON.encode!(%{
         "type" => "codex.rate_limits",
         "rate_limits" => %{"primary" => %{"used_percent" => 12.5}}
       })
@@ -2823,7 +2831,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp public_websocket_payload(setup, text, extra \\ %{}) do
-    Jason.encode!(
+    CodexPooler.JSON.encode!(
       Map.merge(
         %{
           "type" => "response.create",
@@ -2951,7 +2959,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp public_metadata_frame?(frame) when is_binary(frame) do
-    match?({:ok, %{"type" => "codex.response.metadata"}}, Jason.decode(frame))
+    match?({:ok, %{"type" => "codex.response.metadata"}}, CodexPooler.JSON.decode(frame))
   end
 
   defp assert_stream_finalization_event!(telemetry_events, expected_metadata) do

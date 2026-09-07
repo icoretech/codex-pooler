@@ -79,8 +79,20 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
 
     assert %{event_id: event_id, body: body} = WebhookPayload.encode(incident, channel, attempt)
     assert event_id == "alert.#{incident.id}.#{channel.id}.2"
-    assert Jason.decode!(body) == WebhookPayload.payload(incident, channel, attempt)
+    assert CodexPooler.JSON.decode!(body) == WebhookPayload.payload(incident, channel, attempt)
     assert body == WebhookPayload.encode(incident, channel, attempt).body
+
+    %CodexPooler.JSON.OrderedObject{values: entries} =
+      CodexPooler.JSON.decode!(body, objects: :ordered_objects)
+
+    keys = Enum.map(entries, &elem(&1, 0))
+    assert keys == Enum.sort(keys)
+
+    %CodexPooler.JSON.OrderedObject{values: evidence_entries} =
+      List.keyfind(entries, "safe_evidence_summary", 0) |> elem(1)
+
+    evidence_keys = Enum.map(evidence_entries, &elem(&1, 0))
+    assert evidence_keys == Enum.sort(evidence_keys)
 
     refute_forbidden_values(body)
   end
@@ -107,7 +119,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
              "window_selector" => "weekly"
            }
 
-    refute_forbidden_values(Jason.encode!(summary))
+    refute_forbidden_values(CodexPooler.JSON.encode!(summary))
   end
 
   @tag :saved_reset_banked_first_seen
@@ -127,7 +139,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
              "source" => "persisted_saved_resets"
            }
 
-    encoded = Jason.encode!(summary)
+    encoded = CodexPooler.JSON.encode!(summary)
     refute encoded =~ "provider-credit-hidden"
     refute encoded =~ "provider payload sentinel"
     refute encoded =~ "raw-auth-json-hidden"

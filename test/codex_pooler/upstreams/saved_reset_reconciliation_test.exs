@@ -514,7 +514,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
              }
            ]
 
-    metadata_json = Jason.encode!(updated_identity.metadata)
+    metadata_json = CodexPooler.JSON.encode!(updated_identity.metadata)
     assert metadata_json =~ "available_expires_at"
     assert metadata_json =~ "next_expires_at"
     refute metadata_json =~ "RateLimitResetCredit_"
@@ -559,7 +559,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
              row |> Map.keys() |> Enum.sort() == ["expires_at", "first_seen_at", "granted_at"]
            end)
 
-    refute Jason.encode!(saved_resets) =~ "provider_only"
+    refute CodexPooler.JSON.encode!(saved_resets) =~ "provider_only"
 
     assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
              "/backend-api/wham/usage",
@@ -696,7 +696,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
              row["expires_at"] == "2026-07-21T00:40:11.968726Z"
            end)
 
-    refute Jason.encode!(saved_resets) =~ "not-a-date"
+    refute CodexPooler.JSON.encode!(saved_resets) =~ "not-a-date"
 
     assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
              "/api/codex/usage",
@@ -805,7 +805,8 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     assert {:ok, ^original_first_seen} =
              FirstSeenLedger.lookup(visible_identity.saved_reset_first_seen_ledger, expiration)
 
-    refute Jason.encode!(visible_identity.saved_reset_first_seen_ledger) =~ "granted_at"
+    refute CodexPooler.JSON.encode!(visible_identity.saved_reset_first_seen_ledger) =~
+             "granted_at"
 
     FakeUpstream.set_mode(fake, saved_reset_mode(0))
 
@@ -1133,7 +1134,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
         end)
     }
 
-    assert byte_size(Jason.encode!(detail)) < @saved_reset_detail_max_bytes
+    assert byte_size(CodexPooler.JSON.encode!(detail)) < @saved_reset_detail_max_bytes
 
     {:ok, fake} =
       FakeUpstream.start_link(saved_reset_mode(length(expirations), detail))
@@ -1171,7 +1172,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
     metadata = fresh_saved_reset_metadata(rows)
 
-    assert byte_size(Jason.encode!(metadata["saved_resets"]["available_expirations"])) >
+    assert byte_size(CodexPooler.JSON.encode!(metadata["saved_resets"]["available_expirations"])) >
              @saved_reset_detail_max_bytes
 
     {:ok, fake} = FakeUpstream.start_link(saved_reset_mode(length(rows)))
@@ -1772,7 +1773,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   end
 
   defp oversized_reset_credit_body do
-    Jason.encode!(%{
+    CodexPooler.JSON.encode!(%{
       "available_count" => 4,
       "credits" => [
         %{

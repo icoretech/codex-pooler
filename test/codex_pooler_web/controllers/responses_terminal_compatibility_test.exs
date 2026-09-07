@@ -147,7 +147,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       assert response.status == 200
       assert [payload] = decoded_sse_payloads(response.resp_body)
-      assert payload == Jason.decode!(frame)
+      assert payload == CodexPooler.JSON.decode!(frame)
     end
   end
 
@@ -181,7 +181,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       "/v1/responses"
       |> websocket_terminal(frame, shape)
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> assert_public_completed(shape)
     end
   end
@@ -194,7 +194,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       "/v1/responses"
       |> websocket_terminal(frame, shape)
-      |> Jason.decode!()
+      |> CodexPooler.JSON.decode!()
       |> assert_public_completed(shape)
     end
   end
@@ -332,15 +332,15 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       terminal =
         "/v1/responses"
-        |> websocket_terminal(Jason.encode!(payload), shape)
-        |> Jason.decode!()
+        |> websocket_terminal(CodexPooler.JSON.encode!(payload), shape)
+        |> CodexPooler.JSON.decode!()
 
       assert terminal_error_code(terminal) == expected_code,
              "unexpected websocket terminal for #{shape}: #{inspect(terminal)}"
 
       if shape == :failed_without_nested_code do
         assert terminal == expected_failed_terminal()
-        assert_hostile_failed_sentinels_absent(Jason.encode!(terminal))
+        assert_hostile_failed_sentinels_absent(CodexPooler.JSON.encode!(terminal))
       end
     end
   end
@@ -392,7 +392,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
         setup
         |> stream_payload(shape)
         |> Map.merge(%{"type" => "response.create", "generate" => true})
-        |> Jason.encode!()
+        |> CodexPooler.JSON.encode!()
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
       {_conn, _websocket, terminal_frame} = public_websocket_receive_text!(conn, websocket, ref)
@@ -408,7 +408,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     |> Enum.flat_map(fn block ->
       case Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
         ["[DONE]"] -> []
-        [data] -> [Jason.decode!(data)]
+        [data] -> [CodexPooler.JSON.decode!(data)]
         _missing -> []
       end
     end)
@@ -424,7 +424,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
       }
       |> maybe_put_misalignment(misalignment)
 
-    ~s(event: response.failed\ndata: #{Jason.encode!(%{"type" => "response.failed", "error" => error, "response" => %{"status" => "failed", "error" => error}})}\n\n)
+    ~s(event: response.failed\ndata: #{CodexPooler.JSON.encode!(%{"type" => "response.failed", "error" => error, "response" => %{"status" => "failed", "error" => error}})}\n\n)
   end
 
   defp valid_misalignment do
