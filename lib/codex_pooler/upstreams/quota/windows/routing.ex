@@ -20,7 +20,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     routing_windows =
       windows
       |> Enum.filter(&window_in_model_scope?(&1, opts))
-      |> reject_superseded_primary_windows(timestamp)
+      |> reject_superseded_primary_windows(timestamp, opts)
       |> WindowSelector.logical_windows(timestamp)
       |> select_current_account_primary_variant(timestamp)
 
@@ -173,24 +173,33 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
   """
   @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
           [Quota.AccountQuotaWindow.t()]
-  def reject_superseded_primary_windows(windows, timestamp \\ now()) when is_list(windows) do
+  @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t(), keyword()) ::
+          [Quota.AccountQuotaWindow.t()]
+  def reject_superseded_primary_windows(windows, timestamp \\ now(), opts \\ [])
+      when is_list(windows) do
     Enum.reject(windows, fn window ->
       if superseded_primary_window?(window, windows, timestamp) do
-        :telemetry.execute(
-          [:codex_pooler, :quota, :cycle, :decision],
-          %{count: 1},
-          %{
-            scope: quota_scope(window),
-            decision: :superseded_primary_rejected,
-            source: source_class(window)
-          }
-        )
+        record_superseded_rejection(window, opts)
 
         true
       else
         false
       end
     end)
+  end
+
+  defp record_superseded_rejection(window, opts) do
+    if Keyword.get(opts, :emit_telemetry, true) do
+      :telemetry.execute(
+        [:codex_pooler, :quota, :cycle, :decision],
+        %{count: 1},
+        %{
+          scope: quota_scope(window),
+          decision: :superseded_primary_rejected,
+          source: source_class(window)
+        }
+      )
+    end
   end
 
   defp quota_scope(%Quota.AccountQuotaWindow{quota_scope: scope})

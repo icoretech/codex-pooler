@@ -1,9 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
   @moduledoc false
 
-  alias CodexPooler.Quotas.{AdditionalMeterIdentity, Evidence}
+  alias CodexPooler.Quotas.{Evidence, SourceObservations}
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
-  alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.DateTimeDisplay
 
   @sources %{
@@ -29,12 +28,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
         }
 
   @spec group_key(AccountQuotaWindow.t()) :: String.t()
-  def group_key(%AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window),
-    do: group_key(%{window | window_kind: "secondary"})
-
-  def group_key(window) do
-    fingerprint({WindowSelector.logical_key(window), AdditionalMeterIdentity.token(window)})
-  end
+  defdelegate group_key(window), to: SourceObservations
 
   @spec project(AccountQuotaWindow.t(), DateTimeDisplay.preferences(), DateTime.t()) ::
           observation()

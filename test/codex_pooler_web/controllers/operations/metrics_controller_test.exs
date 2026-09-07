@@ -78,15 +78,18 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
   test "rejects metrics access when configured bearer token is missing", %{conn: conn} do
     configure_metrics_token!("metrics-secret")
+    observe_account_collection()
 
     conn = get(conn, ~p"/metrics")
 
     assert conn.status == 401
     assert json_response(conn, 401)["error"]["code"] == "metrics_unauthorized"
+    refute_received :account_collection
   end
 
   test "rejects metrics access when configured bearer token is wrong", %{conn: conn} do
     configure_metrics_token!("metrics-secret")
+    observe_account_collection()
 
     conn =
       conn
@@ -95,6 +98,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     assert conn.status == 401
     assert json_response(conn, 401)["error"]["code"] == "metrics_unauthorized"
+    refute_received :account_collection
   end
 
   test "allows metrics access with the configured bearer token", %{conn: conn} do
@@ -666,15 +670,45 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   end
 
   test "fails closed when metrics settings are unavailable", %{conn: conn} do
+    observe_account_collection()
     Application.put_env(:codex_pooler, InstanceSettings, repo: FailingRepo)
     InstanceSettings.reset_cache_for_test()
 
     {conn, log} = capture_result_and_log(fn -> get(conn, ~p"/metrics") end)
 
     assert log =~ "instance settings db load failed warm_cache=false"
+    refute_received :account_collection
     assert conn.status == 401
     assert json_response(conn, 401)["error"]["code"] == "metrics_unauthorized"
     assert json_response(conn, 401)["error"]["message"] == "metrics bearer token is unavailable"
+  end
+
+  test "a failed account transaction preserves operational exposition", %{conn: conn} do
+    # ConnCase has already queried its sandbox transaction. PostgreSQL refuses
+    # changing its isolation level, providing a real collector failure fixture.
+    conn = get(conn, ~p"/metrics")
+    assert conn.status == 200
+    assert conn.resp_body =~ "codex_pooler_account_metrics_collection_success 0"
+    assert conn.resp_body =~ "# TYPE codex_pooler_repo_query_count"
+    refute conn.resp_body =~ "SET TRANSACTION"
+    refute conn.resp_body =~ "snapshot_unavailable"
+  end
+
+  defp observe_account_collection do
+    ref = make_ref()
+
+    :telemetry.attach(
+      ref,
+      [:codex_pooler, :repo, :query],
+      fn _, _, metadata, pid ->
+        if (self() == pid or pid in Process.get(:"$callers", [])) and
+             String.contains?(metadata.query, "SET TRANSACTION"),
+           do: send(pid, :account_collection)
+      end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(ref) end)
   end
 
   defp capture_result_and_log(fun) do
