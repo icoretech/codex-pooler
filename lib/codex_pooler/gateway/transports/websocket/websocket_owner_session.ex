@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   require Elixir.Logger
 
   alias CodexPooler.Accounting.RequestReplayEntitlement
-  alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
+  alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus, OwnerRenewalSchedule}
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
@@ -4440,7 +4440,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
        )
        when is_integer(timeout) and timeout > 0 and is_function(renewal_delay, 1) do
     if uuid?(session_id) do
-      delay = bounded_owner_renewal_delay(renewal_delay.(timeout), timeout)
+      delay = OwnerRenewalSchedule.bounded_delay(renewal_delay.(timeout), timeout)
 
       %{state | owner_renewal_ref: Process.send_after(self(), :renew_owner_lease, delay)}
     else
@@ -4512,16 +4512,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp touch_active_replay_liveness(state), do: state
 
-  defp jittered_owner_renewal_delay(timeout) when is_integer(timeout) and timeout > 0 do
-    minimum = max(timeout - div(timeout, 5), 1)
-    minimum + :rand.uniform(timeout - minimum + 1) - 1
-  end
-
-  defp bounded_owner_renewal_delay(delay, timeout)
-       when is_integer(delay) and delay > 0 and delay <= timeout,
-       do: delay
-
-  defp bounded_owner_renewal_delay(_delay, timeout), do: timeout
+  defp jittered_owner_renewal_delay(timeout), do: OwnerRenewalSchedule.staggered_delay(timeout)
 
   defp upstream_boundary(opts) do
     Keyword.get_lazy(opts, :upstream, fn ->
