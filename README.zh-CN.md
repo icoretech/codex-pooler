@@ -632,7 +632,7 @@ agent:
 
 image_gen:
   provider: openai
-  model: gpt-image-2-medium
+  model: gpt-image-2.5-flare-medium
 
 stt:
   enabled: true
@@ -663,6 +663,19 @@ mcp_servers:
 它使用 `OPENAI_API_KEY`，但 `VOICE_TOOLS_OPENAI_KEY` 会覆盖该密钥。请显式设置
 `gpt-4o-transcribe`，因为 Codex Pooler 不支持 Hermes 默认的 `whisper-1`。
 此配置仅启用语音转文字，不支持文字转语音或 Realtime 音频。
+
+请使用支持 GPT Image 2.5 的新版 Hermes OpenAI 图片 provider。
+`gpt-image-2.5-flare-medium` 会选择 Flare 并发送 `quality: medium`；
+如需 Sunburst，请使用 `gpt-image-2.5-sunburst-medium`。两者都提供 `-low`、
+`-medium`、`-high`、`-xhigh` 和 `-max` 预设。这些值表示请求的质量等级；
+Codex 后端可能返回不同的质量或尺寸。请检查 provider 返回的元数据和原始图片，
+不要把 Hermes 请求的值当作实际输出。旧版 Hermes 需要先更新才能使用这些预设。
+详见[图片设置指南](https://docs.codex-pooler.com/clients/hermes/)。
+
+图片 provider 使用 OpenAI SDK 环境，因此 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`
+必须对正在运行的 Hermes 进程可见。`model.base_url` 只配置文本模型路径；图片请求
+仍需要 SDK 环境变量才能通过 Codex Pooler 的 `/v1`，而不是直接访问 OpenAI。
+如果文本请求正常但图片生成返回 `invalid_api_key`，请先检查网关服务的环境变量。
 
 当前 Codex Pooler release 会在 `/v1/models` 上暴露 SDK 可读取的 `context_length`，
 该值由选中的原生 raw context window 及其 effective percentage 展平而来。因为不同

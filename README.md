@@ -681,7 +681,7 @@ agent:
 
 image_gen:
   provider: openai
-  model: gpt-image-2-medium
+  model: gpt-image-2.5-flare-medium
 
 stt:
   enabled: true
@@ -714,10 +714,16 @@ explicit `gpt-4o-transcribe` model because Hermes' default `whisper-1` is not
 supported by Codex Pooler. This enables transcription only; text-to-speech and
 Realtime audio are not supported.
 
-Image generation note: `image_gen.provider: openai` is the recommended image
-provider for this setup. Hermes exposes `gpt-image-2-low`,
-`gpt-image-2-medium`, and `gpt-image-2-high` as quality tiers; for example,
-`gpt-image-2-medium` sends `gpt-image-2` to the API with `quality: medium`.
+Use an updated Hermes OpenAI image provider with GPT Image 2.5 support.
+`gpt-image-2.5-flare-medium` selects Flare with `quality: medium`; use
+`gpt-image-2.5-sunburst-medium` for Sunburst. Both offer `-low`, `-medium`,
+`-high`, `-xhigh`, and `-max` presets. These request a quality level; the Codex
+backend may return different quality or dimensions. Check provider metadata
+and the original image rather than treating Hermes' requested values as
+measured output. Older Hermes versions require an update before using these
+presets. See the [image setup guide](https://docs.codex-pooler.com/clients/hermes/)
+for details.
+
 This provider uses the OpenAI SDK environment, so `OPENAI_API_KEY` and
 `OPENAI_BASE_URL` must be visible to the running Hermes process, not only to
 the shell where you edited the config. `model.base_url` configures Hermes'
