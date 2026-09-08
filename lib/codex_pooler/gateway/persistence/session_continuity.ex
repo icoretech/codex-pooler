@@ -11,19 +11,23 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
     CodexSession,
     CodexTurn,
     SessionContinuity.Aliases,
     SessionContinuity.ExpiredSessions,
     SessionContinuity.OwnerLease,
+    SessionContinuity.OwnerWitness,
     SessionContinuity.TurnLifecycle
   }
 
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Repo
 
   @session_active SessionStatus.active_status()
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
+  @owner_lease_active OwnerLeaseStatus.active_status()
   @continuity_deadlock_retries 1
   @type auth :: CodexPooler.Access.auth_context()
   @type opts :: RequestOptions.t()
@@ -183,17 +187,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     do: {:error, :invalid_session_continuity}
 
   defp register_codex_session_continuity(session, payload, response_body, opts, retries_left) do
-    now = now()
-
     Repo.transaction(fn ->
-      session = codex_session_for_update!(session.id)
+      {session, lease, now} = lock_continuity_owner!(session, opts)
       auth = %{pool: %{id: session.pool_id}, api_key: %{id: session.api_key_id}}
       session = maybe_bind_session_assignment!(session, opts, now)
 
       continuity_opts = Aliases.continuity_opts(opts, payload, response_body)
 
       Aliases.register!(session, auth, continuity_opts, now)
-      OwnerLease.renew_locked!(session, opts)
+      renew_continuity_owner!(session, lease, opts, now)
       :ok
     end)
     |> unwrap_ok_transaction()
@@ -219,6 +221,107 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp deadlock?(%Postgrex.Error{postgres: %{code: :deadlock_detected}}), do: true
   defp deadlock?(%Postgrex.Error{}), do: false
+
+  defp lock_continuity_owner!(
+         %CodexSession{id: session_id},
+         %RequestOptions{
+           runtime: %{
+             session_owner_witness: %OwnerWitness{
+               session_id: session_id,
+               lease_token: lease_token
+             }
+           }
+         }
+       ) do
+    case codex_session_for_update(session_id) do
+      %CodexSession{} = session ->
+        {lease, now} = lock_and_validate_owner!(session, lease_token)
+        {session, lease, now}
+
+      nil ->
+        Repo.rollback(:owner_unavailable)
+    end
+  end
+
+  defp lock_continuity_owner!(%CodexSession{}, %RequestOptions{
+         runtime: %{session_owner_witness: %OwnerWitness{}}
+       }) do
+    Repo.rollback(:stale_owner)
+  end
+
+  defp lock_continuity_owner!(%CodexSession{id: session_id}, %RequestOptions{}) do
+    session = codex_session_for_update!(session_id)
+    {session, nil, now()}
+  end
+
+  defp renew_continuity_owner!(
+         session,
+         %CodexPooler.Gateway.Persistence.BridgeOwnerLease{} = lease,
+         opts,
+         now
+       ),
+       do: renew_validated_owner!(session, lease, opts, now)
+
+  defp renew_continuity_owner!(session, nil, opts, _now),
+    do: OwnerLease.renew_locked!(session, opts)
+
+  defp lock_and_validate_owner!(%CodexSession{} = session, lease_token) do
+    case active_owner_lease_for_update(session.id) do
+      %BridgeOwnerLease{} = lease ->
+        now = db_now()
+
+        cond do
+          session.status not in @session_reconnectable_statuses ->
+            Repo.rollback(:owner_unavailable)
+
+          expired_at?(session.owner_lease_expires_at, now) or expired_at?(lease.expires_at, now) ->
+            Repo.rollback(:owner_unavailable)
+
+          session.owner_lease_token != lease_token or lease.lease_token != lease_token ->
+            Repo.rollback(:stale_owner)
+
+          true ->
+            {lease, now}
+        end
+
+      nil ->
+        Repo.rollback(:owner_unavailable)
+    end
+  end
+
+  defp renew_validated_owner!(session, lease, opts, now) do
+    expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
+
+    renewed_lease =
+      lease
+      |> Ecto.Changeset.change(%{
+        pool_upstream_assignment_id: session.pool_upstream_assignment_id,
+        renewed_at: now,
+        expires_at: expires_at,
+        updated_at: now
+      })
+      |> Repo.update!()
+
+    OwnerLease.persist_session!(session, renewed_lease, now)
+  end
+
+  defp active_owner_lease_for_update(session_id) do
+    Repo.one(
+      from lease in BridgeOwnerLease,
+        where: lease.codex_session_id == ^session_id and lease.status == ^@owner_lease_active,
+        order_by: [desc: lease.renewed_at, desc: lease.created_at],
+        limit: 1,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp expired_at?(%DateTime{} = expires_at, now), do: DateTime.compare(expires_at, now) != :gt
+  defp expired_at?(_expires_at, _now), do: true
+
+  defp db_now do
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+    now
+  end
 
   @spec validate_owner_token(session_ref(), Ecto.UUID.t() | String.t()) :: owner_token_result()
   defdelegate validate_owner_token(session_ref, owner_lease_token), to: OwnerLease, as: :validate
@@ -277,11 +380,17 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   @spec codex_session_for_update!(Ecto.UUID.t()) :: CodexSession.t()
   defp codex_session_for_update!(session_id) do
-    Repo.one!(
-      from session in CodexSession,
-        where: session.id == ^session_id,
-        lock: "FOR UPDATE"
-    )
+    Repo.one!(codex_session_for_update_query(session_id))
+  end
+
+  defp codex_session_for_update(session_id) do
+    Repo.one(codex_session_for_update_query(session_id))
+  end
+
+  defp codex_session_for_update_query(session_id) do
+    from session in CodexSession,
+      where: session.id == ^session_id,
+      lock: "FOR UPDATE"
   end
 
   defp upsert_session_for_start!(auth, opts, session_key, owner, now) do

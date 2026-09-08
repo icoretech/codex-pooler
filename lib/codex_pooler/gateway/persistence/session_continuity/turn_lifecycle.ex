@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     CodexTurn
   }
 
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
@@ -26,6 +27,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   @turn_succeeded TurnStatus.succeeded_status()
   @turn_interrupted TurnStatus.interrupted_status()
   @session_active SessionStatus.active_status()
+  @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
   @owner_lease_active OwnerLeaseStatus.active_status()
 
   @spec start_codex_turn(CodexSession.t(), Request.t(), opts()) :: turn_result()
@@ -34,15 +36,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
         %Request{} = request,
         %RequestOptions{} = opts
       ) do
-    now = now()
-    opts = turn_opts(opts)
+    request_options = opts
+    turn_opts = turn_opts(opts)
 
     Repo.transaction(fn ->
-      locked_session = codex_session_for_update!(session.id)
+      {locked_session, now} = lock_turn_owner!(session, request_options)
 
-      turn = insert_next_codex_turn!(locked_session, request, opts, now)
+      turn = insert_next_codex_turn!(locked_session, request, turn_opts, now)
 
-      case Map.get(opts, :pool_upstream_assignment_id) do
+      case Map.get(turn_opts, :pool_upstream_assignment_id) do
         assignment_id when is_binary(assignment_id) ->
           locked_session
           |> Ecto.Changeset.change(%{
@@ -350,6 +352,93 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
         where: session.id == ^session_id,
         lock: "FOR UPDATE"
     )
+  end
+
+  defp lock_turn_owner!(
+         %CodexSession{id: session_id},
+         %RequestOptions{
+           runtime: %{
+             session_owner_witness: %OwnerWitness{
+               session_id: session_id,
+               lease_token: lease_token
+             }
+           }
+         }
+       ) do
+    case codex_session_for_update(session_id) do
+      %CodexSession{} = session ->
+        now = lock_and_validate_owner!(session, lease_token)
+        {session, now}
+
+      nil ->
+        Repo.rollback(:owner_unavailable)
+    end
+  end
+
+  defp lock_turn_owner!(%CodexSession{}, %RequestOptions{
+         runtime: %{session_owner_witness: %OwnerWitness{}}
+       }) do
+    Repo.rollback(:stale_owner)
+  end
+
+  defp lock_turn_owner!(%CodexSession{id: session_id}, %RequestOptions{}) do
+    {codex_session_for_update!(session_id), now()}
+  end
+
+  defp codex_session_for_update(session_id) do
+    Repo.one(
+      from session in CodexSession,
+        where: session.id == ^session_id,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp lock_and_validate_owner!(%CodexSession{} = session, lease_token) do
+    case active_owner_lease_for_update(session.id) do
+      %BridgeOwnerLease{} = lease ->
+        now = db_now()
+
+        cond do
+          session.status not in @session_reconnectable_statuses ->
+            Repo.rollback(:owner_unavailable)
+
+          expired_at?(session.owner_lease_expires_at, now) ->
+            Repo.rollback(:owner_unavailable)
+
+          expired_at?(lease.expires_at, now) ->
+            Repo.rollback(:owner_unavailable)
+
+          session.owner_lease_token != lease_token ->
+            Repo.rollback(:stale_owner)
+
+          lease.lease_token != lease_token ->
+            Repo.rollback(:stale_owner)
+
+          true ->
+            now
+        end
+
+      nil ->
+        Repo.rollback(:owner_unavailable)
+    end
+  end
+
+  defp active_owner_lease_for_update(session_id) do
+    Repo.one(
+      from lease in BridgeOwnerLease,
+        where: lease.codex_session_id == ^session_id and lease.status == ^@owner_lease_active,
+        order_by: [desc: lease.renewed_at, desc: lease.created_at],
+        limit: 1,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp expired_at?(%DateTime{} = expires_at, now), do: DateTime.compare(expires_at, now) != :gt
+  defp expired_at?(_expires_at, _now), do: true
+
+  defp db_now do
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+    now
   end
 
   defp insert_next_codex_turn!(%CodexSession{} = session, %Request{} = request, opts, now) do

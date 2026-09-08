@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
   @moduledoc false
 
+  require Logger
+
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Routing.RouteLifecycle, as: RoutingRouteLifecycle
@@ -30,12 +32,46 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
     if stale_replay_generation?(context) do
       :ok
     else
-      callbacks.register_continuity.(
-        with_assignment(request_options, context.assignment),
-        payload,
-        body
+      record_continuity_result(
+        fn ->
+          callbacks.register_continuity.(
+            with_assignment(request_options, context.assignment),
+            payload,
+            body
+          )
+        end,
+        context
       )
     end
+  end
+
+  defp record_continuity_result(callback, context) when is_function(callback, 0) do
+    callback.()
+    |> consume_continuity_result(context)
+  rescue
+    _exception in [DBConnection.ConnectionError, Ecto.QueryError, Postgrex.Error] ->
+      log_continuity_failure(context)
+  end
+
+  defp consume_continuity_result(:ok, _context), do: :ok
+  defp consume_continuity_result({:ok, _value}, _context), do: :ok
+
+  defp consume_continuity_result(_result, context), do: log_continuity_failure(context)
+
+  defp log_continuity_failure(%SelectedCandidateContext{} = context) do
+    Logger.warning(
+      "gateway continuity registration failed",
+      continuity_registration_metadata(context)
+    )
+
+    :ok
+  end
+
+  defp continuity_registration_metadata(%SelectedCandidateContext{} = context) do
+    [
+      request_id: context.reserved.request.id,
+      pool_upstream_assignment_id: context.assignment.id
+    ]
   end
 
   @spec before_finalize_success(SelectedCandidateContext.t(), RequestOptions.t() | map()) :: :ok

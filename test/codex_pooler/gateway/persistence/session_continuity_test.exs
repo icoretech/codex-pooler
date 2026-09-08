@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     SessionContinuity
   }
 
-  alias CodexPooler.Gateway.Persistence.SessionContinuity.Aliases
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.{Aliases, OwnerWitness}
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
@@ -59,6 +59,183 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
   end
 
   describe "continuity response aliases" do
+    test "current HTTP owner starts one turn and registers one alias with equal renewed deadlines" do
+      %{auth: auth, session: session} = owner_session_fixture()
+      request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+      response_id = "current-http-response-#{System.unique_integer([:positive])}"
+
+      request_options = http_owner_request_options(session, response_id: response_id)
+
+      assert {:ok, %CodexTurn{}} =
+               SessionContinuity.start_codex_turn(session, request, request_options)
+
+      assert :ok =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{"id" => response_id},
+                 request_options
+               )
+
+      assert [_alias_record] = active_response_aliases(auth, response_id)
+
+      assert Repo.aggregate(
+               from(turn in CodexTurn, where: turn.request_id == ^request.id),
+               :count
+             ) == 1
+
+      renewed_session = Repo.get!(CodexSession, session.id)
+      renewed_lease = active_lease!(session.id)
+      assert renewed_session.owner_lease_expires_at == renewed_lease.expires_at
+    end
+
+    test "stale HTTP owner cannot start a turn or register response continuity after takeover" do
+      %{auth: auth, session: session} = owner_session_fixture()
+      request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+      response_id = "stale-http-response-#{System.unique_integer([:positive])}"
+      request_options = http_owner_request_options(session, response_id: response_id)
+
+      expire_owner_lease!(session.id)
+
+      assert {:ok, %CodexSession{} = replacement} =
+               SessionContinuity.replace_unavailable_owner_lease(
+                 session,
+                 owner_request_options(owner_instance_id: "node-b")
+               )
+
+      before_session = Repo.get!(CodexSession, replacement.id)
+      before_lease = active_lease!(replacement.id)
+
+      assert {:error, :stale_owner} =
+               SessionContinuity.start_codex_turn(session, request, request_options)
+
+      assert {:error, :stale_owner} =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{"id" => response_id},
+                 request_options
+               )
+
+      refute Repo.exists?(from turn in CodexTurn, where: turn.request_id == ^request.id)
+      assert [] = active_response_aliases(auth, response_id)
+
+      after_session = Repo.get!(CodexSession, replacement.id)
+      after_lease = active_lease!(replacement.id)
+
+      assert after_session.pool_upstream_assignment_id ==
+               before_session.pool_upstream_assignment_id
+
+      assert after_session.owner_lease_token == before_session.owner_lease_token
+      assert after_session.owner_lease_expires_at == before_session.owner_lease_expires_at
+      assert after_session.last_heartbeat_at == before_session.last_heartbeat_at
+      assert after_lease.lease_token == before_lease.lease_token
+      assert after_lease.expires_at == before_lease.expires_at
+      assert after_lease.renewed_at == before_lease.renewed_at
+    end
+
+    @tag :session_start_race
+    @tag timeout: 30_000
+    test "HTTP continuity registration revalidates its witness after waiting for the session lock" do
+      fixture =
+        Sandbox.unboxed_run(Repo, fn ->
+          reset_bootstrap_state_fixture!()
+          auth = auth_fixture()
+          session = continuity_session_fixture(auth, "registration-lock-wait")
+          %{auth: auth, session: Repo.get!(CodexSession, session.id)}
+        end)
+
+      on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end) end)
+
+      parent = self()
+      barrier = make_ref()
+      replacement_token = Ecto.UUID.generate()
+      replacement_deadline = DateTime.utc_now() |> DateTime.add(120, :second)
+      response_id = "lock-wait-response-#{System.unique_integer([:positive])}"
+      request_options = http_owner_request_options(fixture.session, response_id: response_id)
+
+      blocker =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(fn ->
+              session =
+                Repo.one!(
+                  from session in CodexSession,
+                    where: session.id == ^fixture.session.id,
+                    lock: "FOR UPDATE"
+                )
+
+              lease = active_lease!(session.id)
+
+              session
+              |> Ecto.Changeset.change(%{
+                owner_instance_id: "node-b",
+                owner_lease_token: replacement_token,
+                owner_lease_expires_at: replacement_deadline,
+                last_heartbeat_at: replacement_deadline,
+                updated_at: replacement_deadline
+              })
+              |> Repo.update!()
+
+              lease
+              |> Ecto.Changeset.change(%{
+                owner_instance_id: "node-b",
+                lease_token: replacement_token,
+                renewed_at: replacement_deadline,
+                expires_at: replacement_deadline,
+                updated_at: replacement_deadline
+              })
+              |> Repo.update!()
+
+              %{rows: [[backend_pid]]} = Repo.query!("SELECT pg_backend_pid()", [])
+              send(parent, {:registration_blocker_ready, barrier, backend_pid})
+
+              receive do
+                {:release_registration_blocker, ^barrier} -> :ok
+              after
+                15_000 -> raise "registration blocker was not released"
+              end
+            end)
+          end)
+        end)
+
+      assert_receive {:registration_blocker_ready, ^barrier, blocker_backend_pid}, 5_000
+
+      waiter =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            %{rows: [[backend_pid]]} = Repo.query!("SELECT pg_backend_pid()", [])
+            send(parent, {:registration_waiter_ready, barrier, backend_pid})
+
+            SessionContinuity.register_codex_session_continuity(
+              fixture.session,
+              %{},
+              %{"id" => response_id},
+              request_options
+            )
+          end)
+        end)
+
+      assert_receive {:registration_waiter_ready, ^barrier, waiter_backend_pid}, 5_000
+      assert blocker_backend_pid in await_blocking_pids!(waiter_backend_pid, 5_000)
+
+      send(blocker.pid, {:release_registration_blocker, barrier})
+      assert {:ok, _value} = Task.await(blocker, 15_000)
+      assert {:error, :stale_owner} = Task.await(waiter, 15_000)
+
+      Sandbox.unboxed_run(Repo, fn ->
+        assert [] = active_response_aliases(fixture.auth, response_id)
+        session = Repo.get!(CodexSession, fixture.session.id)
+        lease = active_lease!(fixture.session.id)
+        assert session.owner_lease_token == replacement_token
+        assert session.owner_lease_expires_at == replacement_deadline
+        assert session.last_heartbeat_at == replacement_deadline
+        assert lease.lease_token == replacement_token
+        assert lease.expires_at == replacement_deadline
+        assert lease.renewed_at == replacement_deadline
+      end)
+    end
+
     test "explicit normalized response identity wins over a conflicting response body" do
       auth = auth_fixture()
       session = continuity_session_fixture(auth, "explicit-precedence")
@@ -649,7 +826,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     %{session: session, token: token} =
       owner_session_fixture(%{bridge_owner_lease_ttl_seconds: 30})
 
-    split_now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    %{rows: [[split_now]]} = Repo.query!("SELECT clock_timestamp()", [])
     initial_session = Repo.get!(CodexSession, session.id)
     initial_lease = active_lease!(session.id)
 
@@ -1103,6 +1280,40 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     opts
     |> Map.new()
     |> RequestOptions.for_websocket()
+  end
+
+  defp http_owner_request_options(session, opts) do
+    {:ok, witness} = OwnerWitness.new(session)
+
+    opts
+    |> Map.new()
+    |> Map.put(:transport, "http_json")
+    |> RequestOptions.build("/backend-api/codex/responses", %{})
+    |> RequestOptions.put_session_owner_witness(witness)
+  end
+
+  defp await_blocking_pids!(backend_pid, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    await_blocking_pids!(backend_pid, deadline, [])
+  end
+
+  defp await_blocking_pids!(backend_pid, deadline, last_seen) do
+    blocking_pids =
+      Sandbox.unboxed_run(Repo, fn ->
+        %{rows: [[blocking_pids]]} = Repo.query!("SELECT pg_blocking_pids($1)", [backend_pid])
+        blocking_pids
+      end)
+
+    cond do
+      blocking_pids != [] ->
+        blocking_pids
+
+      System.monotonic_time(:millisecond) < deadline ->
+        await_blocking_pids!(backend_pid, deadline, blocking_pids)
+
+      true ->
+        flunk("expected PostgreSQL blocking relationship, last seen: #{inspect(last_seen)}")
+    end
   end
 
   defp capture_info_log(fun) when is_function(fun, 0) do
