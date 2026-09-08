@@ -270,6 +270,36 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
   end
 
   describe "pool routing settings workflow" do
+    test "durable affinity settings persist through create, edit and form reload" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "affinity-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, pool} =
+               PoolWorkflow.create_pool_with_related_settings(scope, %{
+                 "name" => "Durable affinity workflow",
+                 "durable_conversation_affinity_enabled" => "true",
+                 "durable_conversation_affinity_idle_seconds" => "3600"
+               })
+
+      assert %{
+               durable_conversation_affinity_enabled: true,
+               durable_conversation_affinity_idle_seconds: 3600
+             } = Pools.get_routing_settings(pool)
+
+      assert {:ok, pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => pool.name,
+                 "status" => "active",
+                 "durable_conversation_affinity_enabled" => "false",
+                 "durable_conversation_affinity_idle_seconds" => "7200"
+               })
+
+      assert %{
+               durable_conversation_affinity_enabled: false,
+               durable_conversation_affinity_idle_seconds: 7200
+             } = Pools.get_routing_settings(pool)
+    end
+
     test "creation persists request compression routing setting when enabled" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])

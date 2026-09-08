@@ -25,10 +25,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing.Status do
       RoutingCircuitState.half_open_status()
     ]
 
+    now = DateTime.utc_now()
+
     active_affinity_count =
       Repo.aggregate(
         from(affinity in BridgeAffinity,
-          where: affinity.pool_id == ^pool_id and affinity.status == ^active_affinity_status
+          where: affinity.pool_id == ^pool_id and affinity.status == ^active_affinity_status,
+          where: is_nil(affinity.expires_at) or affinity.expires_at > ^now
         ),
         :count,
         :id

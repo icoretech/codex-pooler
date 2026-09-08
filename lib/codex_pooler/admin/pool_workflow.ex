@@ -172,6 +172,10 @@ defmodule CodexPooler.Admin.PoolWorkflow do
       "bridge_ring_size" => Map.get(attrs, "bridge_ring_size", 3),
       "sticky_websocket_sessions" => Map.get(attrs, "sticky_websocket_sessions", true),
       "sticky_http_sessions" => Map.get(attrs, "sticky_http_sessions", false),
+      "durable_conversation_affinity_enabled" =>
+        Map.get(attrs, "durable_conversation_affinity_enabled", false),
+      "durable_conversation_affinity_idle_seconds" =>
+        Map.get(attrs, "durable_conversation_affinity_idle_seconds", 86_400),
       "prompt_cache_affinity_enabled" => Map.get(attrs, "prompt_cache_affinity_enabled", true),
       "v1_compatibility_enabled" => Map.get(attrs, "v1_compatibility_enabled", true),
       "request_compression_enabled" => Map.get(attrs, "request_compression_enabled", false),

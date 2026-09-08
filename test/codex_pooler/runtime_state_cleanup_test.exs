@@ -68,6 +68,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
 
     assert summary == %{
              expired_aliases: 1,
+             expired_conversation_affinities: 0,
              expired_idempotency_keys: 1,
              expired_owner_leases: 1,
              expired_owner_sessions_recovered: 0

@@ -160,6 +160,9 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "bridge_ring_size" => settings.bridge_ring_size,
       "sticky_websocket_sessions" => settings.sticky_websocket_sessions,
       "sticky_http_sessions" => settings.sticky_http_sessions,
+      "durable_conversation_affinity_enabled" => settings.durable_conversation_affinity_enabled,
+      "durable_conversation_affinity_idle_seconds" =>
+        settings.durable_conversation_affinity_idle_seconds,
       "prompt_cache_affinity_enabled" => settings.prompt_cache_affinity_enabled,
       "v1_compatibility_enabled" => settings.v1_compatibility_enabled,
       "request_compression_enabled" => settings.request_compression_enabled,
@@ -303,6 +306,8 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "bridge_ring_size" => 3,
       "sticky_websocket_sessions" => true,
       "sticky_http_sessions" => false,
+      "durable_conversation_affinity_enabled" => false,
+      "durable_conversation_affinity_idle_seconds" => 86_400,
       "prompt_cache_affinity_enabled" => true,
       "v1_compatibility_enabled" => true,
       "request_compression_enabled" => false,

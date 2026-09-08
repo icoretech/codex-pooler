@@ -223,6 +223,47 @@ Routing settings are split into selection policy, continuity, and compatibility.
 
 `Prompt cache affinity` keeps related prompt-cache-key requests near the same upstream for routing locality. Codex Pooler uses this as a routing input only. It does not store prompts or responses for this control.
 
+`Durable conversation affinity` is off by default. When enabled, a conversation
+prefers the same eligible account after an idle reconnect, a recreated Pooler
+session, or routing through another Pooler replica. The PostgreSQL mapping is
+scoped to the Pool, API key, exposed model, and typed client identifier.
+
+For HTTP and websocket upgrade requests, send a stable `thread-id` header
+(preferred), or `x-codex-conversation-id`. Keep its value unchanged when resuming
+that conversation. Internal callers may supply an explicit `conversation_key`.
+Codex sends `thread-id`; its `session-id` can be shared by a root and its child
+threads, so session headers alone do not enable this mapping. Window identifiers,
+turn-state tokens, request IDs, prompt-cache keys, and generated Pooler session
+UUIDs are also not durable conversation identifiers. Missing, blank, oversized
+(over 1024 bytes), or duplicate selected headers do not produce a durable key.
+Changing the identifier or its header type starts a separate mapping.
+
+The initial route still respects prompt-cache locality. A successful failover
+changes the remembered account; recovery of the old account does not switch the
+conversation back. Concurrent completions use a database generation fence, so a
+late completion cannot undo that change. An existing soft session preference
+cannot override the durable choice. Quota, health and assignment eligibility,
+previous-response and file constraints, and active upstream websocket pins retain
+their existing priority. Durable affinity neither restores an excluded candidate
+nor adds retries that the request otherwise disallows.
+
+`Conversation affinity idle retention (seconds)` defaults to `86400` (one day),
+with a range of `60` to `2592000` (30 days). Creation starts the retention period;
+only successful completions renew it. Failed attempts and reads do not extend it.
+Expired mappings are ignored immediately and the runtime cleanup job deletes up
+to 1000 expired mappings per run. A new request can replace its own expired row
+before that cleanup runs. Disabling affects new route plans; already admitted
+plans may complete their fenced bookkeeping. Retained rows otherwise expire
+normally. Saving a retention change affects new mappings and subsequent
+successful renewals. It does not retroactively extend existing rows, and a
+shorter retention never shortens an already later expiry.
+
+Only a typed, scoped digest and account routing metadata enter the durable row;
+this feature does not add raw identifiers to request logs or metrics. The outgoing
+payload and `prompt_cache_key` are unchanged. Same-account routing can improve
+locality, but does not guarantee provider cache hits, saved tokens, or portability
+of provider state between accounts.
+
 ### Compatibility
 
 `Allow /v1 compatibility` enables OpenAI-style `/v1` compatibility routes for clients that use that surface.

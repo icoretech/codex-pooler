@@ -293,6 +293,20 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                         help="Same upstream preference for related HTTP requests."
                       />
                       <.routing_toggle_row
+                        field={@form[:durable_conversation_affinity_enabled]}
+                        label="Durable conversation affinity"
+                        help="Remember an eligible account across reconnects; keep successful failover choices."
+                      />
+                      <div class="p-3">
+                        <.input
+                          field={@form[:durable_conversation_affinity_idle_seconds]}
+                          type="number"
+                          label="Conversation affinity idle retention (seconds)"
+                          min="60"
+                          max="2592000"
+                        />
+                      </div>
+                      <.routing_toggle_row
                         field={@form[:prompt_cache_affinity_enabled]}
                         label="Prompt cache affinity"
                         help="Sends requests that share a prompt cache to the same upstream."

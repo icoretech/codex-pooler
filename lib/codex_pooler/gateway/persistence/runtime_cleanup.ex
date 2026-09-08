@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     BridgeSessionAlias,
     CodexSession,
     CodexTurn,
+    ConversationAffinity,
     IdempotencyKey
   }
 
@@ -119,6 +120,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
         |> Repo.update_all(set: [status: expired_idempotency_status, updated_at: now])
 
       %{
+        expired_conversation_affinities: ConversationAffinity.cleanup(now),
         expired_aliases: expired_aliases,
         expired_owner_leases: expired_leases,
         expired_idempotency_keys: expired_idempotency_keys
