@@ -167,10 +167,8 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     result = callback.(heartbeat)
 
     if deferred_result?(result) do
-      case begin_handoff(heartbeat) do
-        :ok -> result
-        {:error, reason} -> {:error, reason}
-      end
+      _ = begin_handoff(heartbeat)
+      result
     else
       :ok = stop(heartbeat)
       result
@@ -190,7 +188,25 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   defp renew_now(heartbeat) do
     GenServer.call(heartbeat, :renew_now, @call_timeout)
   catch
-    :exit, _reason -> {:error, :owner_unavailable}
+    :exit, _reason ->
+      terminate_after_call_failure(heartbeat)
+      {:error, :owner_unavailable}
+  end
+
+  defp terminate_after_call_failure(heartbeat) do
+    monitor = Process.monitor(heartbeat)
+
+    if Process.alive?(heartbeat) do
+      Process.exit(heartbeat, :kill)
+    end
+
+    receive do
+      {:DOWN, ^monitor, :process, ^heartbeat, _reason} -> :ok
+    after
+      @call_timeout ->
+        Process.demonitor(monitor, [:flush])
+        :ok
+    end
   end
 
   defp lifecycle(%RequestOptions{} = request_options, opts) do

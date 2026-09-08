@@ -450,6 +450,106 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
   end
 
+  test "renewal database failure before delayed headers preserves the dispatched response",
+       %{conn: conn} do
+    release_ref = make_ref()
+    response_id = "resp_pre_header_database_failure"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.gated_sse_headers(
+          [{"response.completed", completed_event(response_id)}],
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+    session_key = unique_session_key("pre-header-renewal-db-failure")
+    payload = Map.put(http_payload(setup), "stream", true)
+    task = controller_request(conn, setup, session_key, payload, self())
+
+    assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref},
+                   @detection_budget
+
+    assert_receive {:session_lease_heartbeat, :started, heartbeat}, @detection_budget
+    heartbeat_ref = Process.monitor(heartbeat)
+    session = session_for!(setup, session_key)
+    alias_count = alias_count(session.id)
+    observer = database_observer!()
+    blocker = lock_owner_session!(session.id)
+    waiter_backend = await_blocked_backend!(observer, blocker.backend_pid)
+    assert terminate_backend!(observer, waiter_backend)
+    assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, @detection_budget
+    assert_receive {:DOWN, ^heartbeat_ref, :process, ^heartbeat, :normal}, @detection_budget
+    release_owner_lock!(blocker)
+
+    replacement = replace_owner!(session)
+    send(upstream_pid, {:fake_upstream_release_gate, release_ref})
+    response = Task.await(task, @detection_budget)
+    assert response.status == 200
+    assert response.resp_body =~ response_id
+    assert response.resp_body =~ "response.completed"
+    assert response.resp_body =~ "data: [DONE]"
+    assert_replacement_unchanged!(session.id, replacement, alias_count)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+
+    assert [%{status: "succeeded"}] =
+             Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+  end
+
+  test "synchronous renewal timeout stops the blocked heartbeat before the owner lock releases",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(completed_response("must_not_dispatch")))
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+    session_key = unique_session_key("initial-db-timeout")
+    session = precreate_session!(setup, session_key)
+    observer = database_observer!()
+    barrier_ref = make_ref()
+    parent = self()
+
+    task =
+      controller_request(conn, setup, session_key, http_payload(setup), parent,
+        ttl_seconds: 30,
+        barrier: {barrier_ref, {:heartbeat, :before}}
+      )
+
+    assert_receive {:runtime_authorization_barrier, ^barrier_ref, :heartbeat, :before, task_pid},
+                   @detection_budget
+
+    original_session = Repo.get!(CodexSession, session.id)
+    original_lease = active_lease!(session.id)
+    blocker = lock_owner_session!(session.id)
+    send(task_pid, {:runtime_authorization_release, barrier_ref})
+    waiter_backend = await_blocked_backend!(observer, blocker.backend_pid)
+    assert_receive {:session_lease_heartbeat, :started, heartbeat}, @detection_budget
+    heartbeat_ref = Process.monitor(heartbeat)
+
+    try do
+      response = Task.await(task, @detection_budget)
+
+      assert %{"error" => %{"code" => "owner_unavailable"}} = json_response(response, 503)
+      refute Process.alive?(heartbeat)
+      assert_receive {:DOWN, ^heartbeat_ref, :process, ^heartbeat, _reason}, @detection_budget
+      assert_backend_released!(observer, waiter_backend)
+    after
+      release_owner_lock!(blocker)
+    end
+
+    current_session = Repo.get!(CodexSession, session.id)
+    current_lease = active_lease!(session.id)
+    assert current_session.owner_lease_expires_at == original_session.owner_lease_expires_at
+    assert current_session.last_heartbeat_at == original_session.last_heartbeat_at
+    assert current_lease.expires_at == original_lease.expires_at
+    assert current_lease.renewed_at == original_lease.renewed_at
+    assert_zero_work!(setup)
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   test "database-unavailable synchronous renewal returns exact 503 before reservation", %{
     conn: conn
   } do
@@ -832,6 +932,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       Postgrex.query!(observer, "SELECT pg_terminate_backend($1)", [backend_pid])
 
     terminated?
+  end
+
+  defp assert_backend_released!(observer, backend_pid) do
+    assert_backend_released!(observer, backend_pid, System.monotonic_time(:millisecond) + 5_000)
+  end
+
+  defp assert_backend_released!(observer, backend_pid, deadline) do
+    %{rows: rows} =
+      Postgrex.query!(
+        observer,
+        "SELECT state, cardinality(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE pid = $1",
+        [backend_pid]
+      )
+
+    case rows do
+      [] ->
+        :ok
+
+      [["idle", 0]] ->
+        :ok
+
+      _rows ->
+        if System.monotonic_time(:millisecond) < deadline do
+          marker = make_ref()
+          Process.send_after(self(), {:retry_backend_release, marker}, 10)
+          assert_receive {:retry_backend_release, ^marker}, @detection_budget
+          assert_backend_released!(observer, backend_pid, deadline)
+        else
+          flunk("heartbeat database worker remained active after the heartbeat stopped")
+        end
+    end
   end
 
   defp database_observer! do

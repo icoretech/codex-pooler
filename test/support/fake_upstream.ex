@@ -19,6 +19,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:chunked_body, non_neg_integer(), [binary()], [{String.t(), String.t()}]}
           | {:barrier_json, non_neg_integer(), map(), pid(), reference()}
           | {:gated_json_headers, non_neg_integer(), map(), pid(), reference()}
+          | {:gated_sse_headers, [String.t()], pid(), reference()}
           | {:path_json, map()}
           | {:file_protocol, map()}
           | {:reject_json_field, String.t(), non_neg_integer(), map(), non_neg_integer(), map()}
@@ -198,6 +199,13 @@ defmodule CodexPooler.FakeUpstream do
 
   def gated_json_headers(payload, opts) when is_map(payload) and is_list(opts) do
     {:gated_json_headers, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify),
+     Keyword.fetch!(opts, :release_ref)}
+  end
+
+  def gated_sse_headers(events, opts) when is_list(events) and is_list(opts) do
+    chunks = Enum.map(events, &sse_chunk/1) ++ ["data: [DONE]\n\n"]
+
+    {:gated_sse_headers, chunks, Keyword.fetch!(opts, :notify),
      Keyword.fetch!(opts, :release_ref)}
   end
 
@@ -594,6 +602,16 @@ defmodule CodexPooler.FakeUpstream do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
+  end
+
+  defp respond(_pid, conn, {:gated_sse_headers, chunks, notify, release_ref}, _request) do
+    wait_for_gate_release(:before_headers, notify, release_ref)
+    conn = start_sse_response(conn)
+
+    Enum.reduce(chunks, conn, fn chunk, conn ->
+      {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+      conn
+    end)
   end
 
   defp respond(pid, conn, {:path_json, routes}, request) do

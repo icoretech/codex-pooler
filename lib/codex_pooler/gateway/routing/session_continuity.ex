@@ -630,9 +630,6 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   defp owner_witness_error(:owner_unavailable),
     do: error(503, "owner_unavailable", "session owner lease is unavailable", nil)
 
-  defp owner_witness_error(_reason),
-    do: error(503, "owner_unavailable", "session owner lease is unavailable", nil)
-
   defp attach_http_owner_witness(
          %RequestOptions{transport: %Transport{transport: transport}} = request_options,
          %CodexSession{} = session

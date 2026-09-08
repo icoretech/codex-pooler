@@ -256,6 +256,36 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
     assert :ok = SessionLeaseHeartbeat.stop(heartbeat)
   end
 
+  test "preserves a deferred callback result when the heartbeat stops before handoff" do
+    %{session: session, token: token} = owner_session_fixture()
+    request_options = http_request_options(session, token)
+    parent = self()
+    continue_ref = make_ref()
+
+    task =
+      Task.async(fn ->
+        SessionLeaseHeartbeat.run(request_options, fn heartbeat ->
+          send(parent, {:deferred_callback_ready, heartbeat, self()})
+
+          receive do
+            {:return_deferred_result, ^continue_ref} ->
+              {:ok, %{stream: fn -> :delivered end}}
+          after
+            @detection_timeout -> raise "deferred callback was not released"
+          end
+        end)
+      end)
+
+    assert_receive {:deferred_callback_ready, heartbeat, callback_pid}, @detection_timeout
+    heartbeat_ref = Process.monitor(heartbeat)
+    Process.exit(heartbeat, :kill)
+    assert_receive {:DOWN, ^heartbeat_ref, :process, ^heartbeat, :killed}, @detection_timeout
+    send(callback_pid, {:return_deferred_result, continue_ref})
+
+    assert {:ok, %{stream: stream}} = Task.await(task, @detection_timeout)
+    assert stream.() == :delivered
+  end
+
   test "run maps stale and unavailable synchronous renewal failures without invoking the callback" do
     %{session: session, token: token} = owner_session_fixture()
     request_options = http_request_options(session, token)

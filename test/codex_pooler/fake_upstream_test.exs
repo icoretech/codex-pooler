@@ -143,6 +143,29 @@ defmodule CodexPooler.FakeUpstreamTest do
       assert %{status: 200, body: %{"id" => "resp_gated_headers"}} = Task.await(task, 2_000)
     end
 
+    test "holds SSE response headers behind the dedicated owner-liveness gate" do
+      release_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.gated_sse_headers(
+            [{"response.completed", %{"type" => "response.completed"}}],
+            notify: self(),
+            release_ref: release_ref
+          )
+        )
+
+      task = Task.async(fn -> Req.get!(FakeUpstream.url(upstream) <> "/gated-sse-headers") end)
+
+      assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref}, 1_000
+      refute Task.yield(task, 0)
+      send(upstream_pid, {:fake_upstream_release_gate, release_ref})
+
+      assert %{status: 200, body: body} = Task.await(task, 15_000)
+      assert body =~ "response.completed"
+      assert body =~ "data: [DONE]"
+    end
+
     test "holds only terminal SSE data behind the dedicated owner-liveness gate" do
       release_ref = make_ref()
 
