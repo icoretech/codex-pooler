@@ -2,6 +2,33 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
   use ExUnit.Case, async: true
   alias CodexPooler.Gateway.OpenAICompatibility.{Images, Responses}
 
+  test "GPT Image 2.5 keeps the Codex adapter option boundary" do
+    for model <- ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst) do
+      for quality <- ~w(auto low medium high) do
+        assert {:ok, response} =
+                 Images.coerce_generation(%{
+                   "model" => model,
+                   "prompt" => "synthetic",
+                   "quality" => quality,
+                   "background" => "transparent"
+                 })
+
+        assert response.payload["model"] == model
+        assert response.payload["quality"] == quality
+        assert response.payload["background"] == "transparent"
+      end
+
+      for {key, value} <- [{"quality", "xhigh"}, {"quality", "max"}, {"size", "3840x2160"}] do
+        assert {:error, %{status: 400, param: ^key}} =
+                 Images.coerce_generation(%{
+                   "model" => model,
+                   "prompt" => "synthetic",
+                   key => value
+                 })
+      end
+    end
+  end
+
   test "generation rejects edit-only fields and unsupported response formats" do
     for {key, value} <- [
           {"mask", nil},

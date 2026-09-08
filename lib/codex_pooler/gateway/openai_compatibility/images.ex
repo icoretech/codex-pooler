@@ -5,7 +5,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
-  @supported_models ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini gpt-image-2)
+  @native_models ~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst)
+  @supported_models ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini) ++ @native_models
   @sizes ~w(auto 1024x1024 1024x1536 1536x1024)
   @qualities ~w(auto low medium high)
   @backgrounds ~w(auto transparent opaque)
@@ -31,8 +32,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
           | {:error, Error.reason()}
   def coerce_generation(payload, opts \\ %{})
 
-  def coerce_generation(%{"model" => "gpt-image-2"} = payload, opts)
-      when not is_map_key(payload, "input_fidelity") and not is_map_key(payload, "mask") do
+  def coerce_generation(%{"model" => model} = payload, opts)
+      when model in @native_models and not is_map_key(payload, "input_fidelity") and
+             not is_map_key(payload, "mask") do
     with {:ok, payload} <- normalize_image_payload(payload),
          :ok <- require_prompt(payload),
          :ok <- validate_generation_only(payload) do
@@ -68,8 +70,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
           | {:error, Error.reason()}
   def coerce_edit(payload, opts \\ %{})
 
-  def coerce_edit(%{"model" => "gpt-image-2"} = payload, opts)
-      when not is_map_key(payload, "input_fidelity") and not is_map_key(payload, "mask") do
+  def coerce_edit(%{"model" => model} = payload, opts)
+      when model in @native_models and not is_map_key(payload, "input_fidelity") and
+             not is_map_key(payload, "mask") do
     with {:ok, %{image_payload: image_payload, images: images}} <- prepare_edit(payload),
          {:ok, response} <- native_response(image_payload, "edits", opts) do
       images = Enum.map(images, &Map.take(&1, ["image_url"]))
@@ -175,7 +178,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
   end
 
   defp validate_input_fidelity(%{"model" => model, "input_fidelity" => _})
-       when model in ["gpt-image-2", "gpt-image-1-mini"] do
+       when model in @native_models or model == "gpt-image-1-mini" do
     {:error,
      Error.invalid_request("input_fidelity is not supported for #{model}", "input_fidelity")}
   end

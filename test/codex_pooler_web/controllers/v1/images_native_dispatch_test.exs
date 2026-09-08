@@ -84,10 +84,13 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
     ])
   end
 
-  for mode <- ["full", "lite"], operation <- ["generations", "edits"] do
+  for mode <- ["full", "lite"],
+      operation <- ["generations", "edits"],
+      model <- ~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst) do
+    @image_model model
     @mode mode
     @operation operation
-    test "standard image #{@operation} uses native image service with #{@mode} assignment", %{
+    test "#{@image_model} #{@operation} uses native image service with #{@mode} assignment", %{
       conn: conn
     } do
       upstream =
@@ -107,7 +110,7 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
       })
 
       payload = %{
-        "model" => "gpt-image-2",
+        "model" => @image_model,
         "prompt" => "synthetic image",
         "quality" => "medium",
         "background" => "opaque",
@@ -138,7 +141,7 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
       assert captured.path == "/backend-api/codex/images/#{@operation}"
 
       assert %{
-               "model" => "gpt-image-2",
+               "model" => @image_model,
                "quality" => "medium",
                "size" => "1536x1024",
                "background" => "opaque",
@@ -150,6 +153,8 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
       assert [request] = Repo.all(Request)
       assert request.status == "succeeded"
       assert request.usage_status == "usage_unknown"
+      assert request.request_metadata["requested_model"] == @image_model
+      assert request.request_metadata["effective_model"] == @image_model
 
       if @operation == "edits" do
         assert [%{"image_url" => "data:image/png;base64," <> encoded}] = captured.json["images"]

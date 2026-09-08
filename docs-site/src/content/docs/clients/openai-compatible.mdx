@@ -311,26 +311,28 @@ dispatch. It does not establish ownership, permissions, or routing identity.
 
 ### Image generation and edits
 
-Use `gpt-image-2` for current image examples. It is the [latest GPT Image model](https://developers.openai.com/api/docs/models/gpt-image-2); older supported identifiers remain available for compatibility. Media identifiers do not have to appear in the Pool's model catalog for these translated routes to work.
+Use `gpt-image-2.5-flare` for current image examples, or select `gpt-image-2.5-sunburst` explicitly. Both [Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare) and [Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst) are accepted; `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini` remain available for compatibility. Media identifiers do not have to appear in the Pool's model catalog for these translated routes to work.
 
 ```js
 const image = await client.images.generate({
-  model: "gpt-image-2",
+  model: "gpt-image-2.5-flare",
   prompt: "A simple watercolor landscape",
   size: "1024x1024",
   quality: "medium",
 });
 ```
 
-The translated Images routes accept `size` values `auto`, `1024x1024`, `1024x1536` and `1536x1024`, with one image per request. This is a Codex-backed subset; it does not expose every resolution or option offered by the OpenAI Images API.
+The translated Images routes accept `size` values `auto`, `1024x1024`, `1024x1536` and `1536x1024`, with one image per request. Quality accepts `auto`, `low`, `medium`, and `high`; `xhigh` and `max` are not exposed by this adapter. This is a Codex-backed subset; it does not expose every resolution or option offered by the OpenAI Images API.
 
-Standard `gpt-image-2` generation and edit requests use the native Codex image service. Uploaded edit images are forwarded transiently as image data URLs. Accepted `size` and `quality` values are forwarded unchanged. This backend has returned dimensions and quality metadata that differ from explicit requests; inspect the returned `size` and `quality` fields and decoded image dimensions rather than treating request values as measured output. The native Codex service is distinct from the public OpenAI Images API.
+Standard `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, and `gpt-image-2` generation and edit requests use the native Codex image service. Uploaded edit images are forwarded transiently as image data URLs. Accepted `size` and `quality` values are forwarded unchanged. This backend has returned dimensions and quality metadata that differ from explicit requests; inspect the returned `size` and `quality` fields and decoded image dimensions rather than treating request values as measured output. The native Codex service is distinct from the public OpenAI Images API.
 
 Edits using `mask`, and older image model identifiers, retain the Responses image-tool translation. These options are not silently dropped or sent to the native image service. Their availability depends on the selected provider host actually producing image output; a completed text response alone is an image-generation failure.
 
 `mask` and `input_fidelity` are edit-only options. An uploaded mask becomes the image tool's `input_image_mask`; transparent regions identify the areas to edit. It is not appended as an ordinary reference image or converted into prompt instructions.
 
-`input_fidelity` is accepted only for `gpt-image-1` and `gpt-image-1.5`. Omit it for `gpt-image-2`, which [always processes image inputs at high fidelity](https://developers.openai.com/api/docs/guides/image-generation#image-input-fidelity), and for `gpt-image-1-mini`, which does not support the option. Unsupported model/option combinations are rejected before dispatch.
+`input_fidelity` is accepted only for `gpt-image-1` and `gpt-image-1.5`. Omit it for `gpt-image-2`, which [always processes image inputs at high fidelity](https://developers.openai.com/api/docs/guides/image-generation#image-input-fidelity), and for `gpt-image-1-mini`, which does not support the option. Codex Pooler also rejects configurable `input_fidelity` for both GPT Image 2.5 models; this is an adapter limitation, not a claim about their public OpenAI API capabilities. Unsupported model/option combinations are rejected before dispatch.
+
+The bundled pricing catalog includes both GPT Image 2.5 models. Their separate text/image token prices are not converted into generic token pricing snapshots; catalog presence does not guarantee a calculated image cost.
 
 Image responses contain base64 image data. `response_format` may be omitted or set to `b64_json`; `url` and other values are rejected. The optional `user` hint accepts a string or null and is discarded before dispatch; it does not establish ownership or routing identity. Unsupported options, including image streaming and output compression, are rejected rather than silently ignored.
 
