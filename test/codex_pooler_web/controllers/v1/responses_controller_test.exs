@@ -6641,6 +6641,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
   @tag :v1_post_session_start_race
   test "POST /v1/responses recovers concurrent first starts for the same session key" do
+    assert :ok = Sandbox.mode(Repo, :auto)
+    on_exit(fn -> assert :ok = Sandbox.mode(Repo, :manual) end)
+
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
@@ -6672,7 +6675,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     tasks =
       for label <- [:first, :second] do
         Task.async(fn ->
-          Sandbox.allow(Repo, parent, self())
           Process.put({SessionContinuity, :before_session_insert_barrier}, {parent, barrier})
 
           conn =
