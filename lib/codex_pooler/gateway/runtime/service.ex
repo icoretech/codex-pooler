@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Persistence.SessionContinuity.Aliases, as: SessionAliases
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Routing.BridgeRing
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -30,6 +31,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
+  alias CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.ValidationClaim
@@ -498,7 +500,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         reserve_and_start_turn
       )
       when is_list(candidates) and is_function(reserve_and_start_turn, 8) do
-    do_execute_session_routable_model(context, reserve_and_start_turn)
+    request_options = context.request_options
+
+    SessionLeaseHeartbeat.run(request_options, fn heartbeat ->
+      context
+      |> do_execute_session_routable_model(reserve_and_start_turn)
+      |> wrap_deferred_session_lease_stream(heartbeat)
+    end)
+    |> normalize_session_lease_heartbeat_failure(request_options)
   end
 
   defp do_execute_session_routable_model(
@@ -1750,6 +1759,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          turn_claim,
          authorized_correlation_id
        ) do
+    maybe_test_runtime_authorization_barrier(:reservation_lock, :before)
+
     Repo.transaction(fn ->
       request_options = lock_codex_session_before_reservation(request_options)
 
@@ -1853,6 +1864,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp register_final_window_alias(_auth, _payload, _request_options, _correlation), do: :ok
 
   defp lock_codex_session_before_reservation(
+         %RequestOptions{runtime: %{session_owner_witness: %OwnerWitness{}}} = request_options
+       ) do
+    :ok =
+      PersistenceSessionContinuity.validate_session_owner_witness_for_reservation(request_options)
+
+    request_options
+  end
+
+  defp lock_codex_session_before_reservation(
          %RequestOptions{continuity: %{codex_session: %CodexSession{} = session}} =
            request_options
        ) do
@@ -1862,6 +1882,34 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp lock_codex_session_before_reservation(%RequestOptions{} = request_options),
     do: request_options
+
+  defp normalize_session_lease_heartbeat_failure(
+         {:error, reason},
+         %RequestOptions{} = request_options
+       )
+       when reason in [:stale_owner, :owner_unavailable],
+       do: {:error, AccountingReservation.pre_attempt_failure(reason, request_options)}
+
+  defp normalize_session_lease_heartbeat_failure(result, %RequestOptions{}), do: result
+
+  defp wrap_deferred_session_lease_stream({:ok, %{stream: stream} = result}, heartbeat)
+       when is_function(stream, 1) do
+    {:ok, %{result | stream: wrap_session_lease_stream(stream, heartbeat)}}
+  end
+
+  defp wrap_deferred_session_lease_stream(result, _heartbeat), do: result
+
+  defp wrap_session_lease_stream(stream, heartbeat) do
+    fn conn ->
+      :ok = SessionLeaseHeartbeat.stream_started(heartbeat)
+
+      try do
+        stream.(conn)
+      after
+        :ok = SessionLeaseHeartbeat.stop(heartbeat)
+      end
+    end
+  end
 
   defp duplicate_turn_reservation_constraint?(
          %Ecto.ConstraintError{constraint: "requests_correlation_id_uq"},

@@ -65,6 +65,31 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     end
   end
 
+  @doc false
+  @spec validate_session_owner_witness_for_reservation(RequestOptions.t()) :: :ok
+  def validate_session_owner_witness_for_reservation(%RequestOptions{
+        continuity: %{codex_session: %CodexSession{id: session_id}},
+        runtime: %{
+          session_owner_witness: %OwnerWitness{session_id: session_id, lease_token: lease_token}
+        }
+      }) do
+    case codex_session_for_update(session_id) do
+      %CodexSession{} = session ->
+        _lease_and_now = lock_and_validate_owner!(session, lease_token)
+        :ok
+
+      nil ->
+        Repo.rollback(:owner_unavailable)
+    end
+  end
+
+  def validate_session_owner_witness_for_reservation(%RequestOptions{
+        runtime: %{session_owner_witness: %OwnerWitness{}}
+      }),
+      do: Repo.rollback(:stale_owner)
+
+  def validate_session_owner_witness_for_reservation(%RequestOptions{}), do: :ok
+
   @spec previous_response_session_id(auth(), String.t(), DateTime.t()) :: Ecto.UUID.t() | nil
   defdelegate previous_response_session_id(auth, previous_response_id, now), to: Aliases
 

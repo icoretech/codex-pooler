@@ -23,7 +23,8 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     :renewal_ref,
     :renewal_token,
     :handoff_ref,
-    :handoff_token
+    :handoff_token,
+    :test_observer
   ]
 
   @type result :: {:ok, pid()} | :ignore
@@ -100,8 +101,11 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
       caller_pid: lifecycle.caller_pid,
       caller_monitor: caller_monitor,
       renew: lifecycle.renew,
-      renewal_delay: lifecycle.renewal_delay
+      renewal_delay: lifecycle.renewal_delay,
+      test_observer: lifecycle.test_observer
     }
+
+    notify_test_observer(state, :started)
 
     if lifecycle.schedule? do
       {:ok, schedule_renewal(state)}
@@ -155,6 +159,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   @impl GenServer
   def terminate(_reason, state) do
     _state = state |> cancel_renewal() |> cancel_handoff() |> demonitor_caller()
+    notify_test_observer(state, :stopped)
     :ok
   end
 
@@ -207,7 +212,9 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
          caller_pid: Keyword.get(opts, :caller, self()),
          schedule?: Keyword.get(opts, :schedule?, true) == true,
          renew: Keyword.get(opts, :renew, &SessionContinuity.renew_owner_token/3),
-         renewal_delay: Keyword.get(opts, :renewal_delay, &OwnerRenewalSchedule.staggered_delay/1)
+         renewal_delay:
+           Keyword.get(opts, :renewal_delay, &OwnerRenewalSchedule.staggered_delay/1),
+         test_observer: test_observer(request_options)
        }}
     else
       _ineligible -> :ignore
@@ -309,4 +316,21 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   end
 
   defp demonitor_caller(state), do: state
+
+  if Mix.env() == :test do
+    defp test_observer(%RequestOptions{extra: %{session_lease_heartbeat_test_observer: observer}})
+         when is_pid(observer),
+         do: observer
+
+    defp test_observer(%RequestOptions{}), do: nil
+
+    defp notify_test_observer(%{test_observer: observer}, event)
+         when is_pid(observer) and event in [:started, :stopped],
+         do: send(observer, {:session_lease_heartbeat, event, self()})
+
+    defp notify_test_observer(_state, _event), do: :ok
+  else
+    defp test_observer(%RequestOptions{}), do: nil
+    defp notify_test_observer(_state, _event), do: :ok
+  end
 end

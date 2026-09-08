@@ -25,8 +25,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.PartitionRoutability
+  alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -64,6 +66,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert identity.id == setup.identity.id
     assert prepared.request_options.routing.requested_model == setup.model.exposed_model_id
     assert %CodexSession{} = prepared.request_options.continuity.codex_session
+
+    assert %OwnerWitness{session_id: session_id, lease_token: lease_token} =
+             prepared.request_options.runtime.session_owner_witness
+
+    assert session_id == prepared.request_options.continuity.codex_session.id
+    assert lease_token == prepared.request_options.continuity.codex_session.owner_lease_token
     assert %RouteState{} = route_state = prepared.route_state
     assert route_state.candidates == prepared.candidates
     assert route_state.candidate_snapshots == prepared.candidates
@@ -139,6 +147,35 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert Enum.all?(quota_window_dimension_keys, &(&1.api_key_id == auth.api_key.id))
     assert Repo.all(Request) == []
+  end
+
+  test "a later HTTP attach preserves the admitted session snapshot and owner witness" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("preserve the admitted HTTP owner snapshot")
+    }
+
+    request_options =
+      request_options(auth, payload,
+        accepted_turn_state: "immutable-http-session-#{System.unique_integer([:positive])}",
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
+
+    assert {:ok, reattached} =
+             SessionContinuity.attach_codex_session(
+               auth,
+               %{"previous_response_id" => "resp_later_anchor"},
+               prepared.request_options
+             )
+
+    assert reattached == prepared.request_options
   end
 
   test "ordinary and incomplete authorities cannot forge prepared websocket validation" do

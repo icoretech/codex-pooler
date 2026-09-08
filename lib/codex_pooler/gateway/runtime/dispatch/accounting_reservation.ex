@@ -56,18 +56,47 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     pre_attempt_failure_response(:rollback, request_options, 503, true)
   end
 
+  def pre_attempt_failure(:stale_owner, %RequestOptions{} = request_options) do
+    pre_attempt_failure_response(
+      :stale_owner,
+      request_options,
+      409,
+      false,
+      "stale_owner",
+      "session owner lease is stale"
+    )
+  end
+
+  def pre_attempt_failure(:owner_unavailable, %RequestOptions{} = request_options) do
+    pre_attempt_failure_response(
+      :owner_unavailable,
+      request_options,
+      503,
+      false,
+      "owner_unavailable",
+      "session owner lease is unavailable"
+    )
+  end
+
   def pre_attempt_failure(reason, %RequestOptions{} = request_options) do
     pre_attempt_failure_response(reason, request_options, 500, false)
   end
 
-  defp pre_attempt_failure_response(reason, request_options, status, retryable) do
+  defp pre_attempt_failure_response(
+         reason,
+         request_options,
+         status,
+         retryable,
+         code \\ "gateway_reservation_failed",
+         message \\ "gateway request reservation failed"
+       ) do
     failure_reason = FailureResponse.safe_failure_reason(reason)
 
     Logger.error([
       "gateway pre-attempt reservation failed",
       " phase=pre_attempt",
       " operation=reserve_and_start_turn",
-      " failure_code=gateway_reservation_failed",
+      " failure_code=#{code}",
       " status=#{status}",
       " request_id=#{DiagnosticTaxonomy.safe_correlator(request_options.request_metadata.request_id)}",
       native_lifecycle_log_metadata(request_options),
@@ -77,8 +106,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
 
     %{
       status: status,
-      code: "gateway_reservation_failed",
-      message: "gateway request reservation failed",
+      code: code,
+      message: message,
       retryable: retryable
     }
   end

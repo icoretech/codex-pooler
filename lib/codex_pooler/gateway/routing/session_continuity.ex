@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   alias CodexPooler.Gateway.Payloads.RequestOptions.Transport
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: ContinuityStore
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Routing.BridgeRing
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -25,6 +26,24 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   @spec attach_codex_session(auth(), payload(), RequestOptions.t()) ::
           {:ok, RequestOptions.t()} | {:error, gateway_error()}
   def attach_codex_session(
+        _auth,
+        _payload,
+        %RequestOptions{
+          transport: %Transport{transport: transport},
+          continuity: %{codex_session: %CodexSession{id: session_id}},
+          runtime: %{
+            session_owner_witness: %OwnerWitness{session_id: session_id, lease_token: lease_token}
+          }
+        } = request_options
+      )
+      when transport in ["http_json", "http_sse", "http_compact_json"] do
+    case ContinuityStore.validate_owner_token(session_id, lease_token) do
+      :ok -> {:ok, request_options}
+      {:error, reason} -> {:error, owner_witness_error(reason)}
+    end
+  end
+
+  def attach_codex_session(
         auth,
         payload,
         %RequestOptions{continuity: %{codex_session: %CodexSession{id: session_id}}} =
@@ -37,7 +56,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
 
     case start_previous_response_codex_session(auth, request_options) do
       {:ok, %CodexSession{} = session} ->
-        {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}
+        attach_session(request_options, session)
 
       {:error, :session_not_found} ->
         attach_existing_codex_session(session_id, request_options)
@@ -55,7 +74,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
 
     if continuity_session_requested?(request_options) do
       with {:ok, session} <- ContinuityStore.start_codex_session(auth, request_options) do
-        {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}
+        attach_session(request_options, session)
       end
     else
       {:ok, request_options}
@@ -93,7 +112,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   defp attach_existing_codex_session(session_id, request_options) do
     case Repo.get(CodexSession, session_id) do
       %CodexSession{} = session ->
-        {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}
+        attach_session(request_options, session)
 
       nil ->
         {:ok, request_options}
@@ -587,6 +606,35 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       continuity.session_header
     ]
     |> Enum.any?(&clean_string/1)
+  end
+
+  defp owner_witness_error(:stale_owner),
+    do: error(409, "stale_owner", "session owner lease is stale", nil)
+
+  defp owner_witness_error(:owner_unavailable),
+    do: error(503, "owner_unavailable", "session owner lease is unavailable", nil)
+
+  defp owner_witness_error(_reason),
+    do: error(503, "owner_unavailable", "session owner lease is unavailable", nil)
+
+  defp attach_http_owner_witness(
+         %RequestOptions{transport: %Transport{transport: transport}} = request_options,
+         %CodexSession{} = session
+       )
+       when transport in ["http_json", "http_sse", "http_compact_json"] do
+    case OwnerWitness.new(session) do
+      {:ok, witness} -> {:ok, RequestOptions.put_session_owner_witness(request_options, witness)}
+      {:error, :invalid_owner_witness} -> {:ok, request_options}
+    end
+  end
+
+  defp attach_http_owner_witness(%RequestOptions{} = request_options, %CodexSession{}),
+    do: {:ok, request_options}
+
+  defp attach_session(%RequestOptions{} = request_options, %CodexSession{} = session) do
+    request_options
+    |> RequestOptions.put_continuity(codex_session: session)
+    |> attach_http_owner_witness(session)
   end
 
   defp response_file_ids(payload) do

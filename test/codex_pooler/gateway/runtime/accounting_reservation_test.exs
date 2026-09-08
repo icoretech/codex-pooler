@@ -23,7 +23,14 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    CodexSession,
+    CodexTurn,
+    SessionContinuity
+  }
+
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
@@ -1157,6 +1164,196 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     end)
   end
 
+  test "owner pre-attempt failures retain their exact public maps" do
+    payload = %{"model" => "gpt-test"}
+    request_options = RequestOptions.build(%{request_id: "pre-attempt-owner"}, @endpoint, payload)
+
+    for {reason, expected} <- [
+          {:stale_owner,
+           %{
+             status: 409,
+             code: "stale_owner",
+             message: "session owner lease is stale",
+             retryable: false
+           }},
+          {:owner_unavailable,
+           %{
+             status: 503,
+             code: "owner_unavailable",
+             message: "session owner lease is unavailable",
+             retryable: false
+           }}
+        ] do
+      assert ^expected = AccountingReservation.pre_attempt_failure(reason, request_options)
+    end
+  end
+
+  test "service heartbeat stops before synchronous HTTP success returns" do
+    upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_http_heartbeat_success"}))
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    observer = self()
+    payload = http_payload(setup.model.exposed_model_id, "synchronous HTTP heartbeat success")
+
+    request_options =
+      RequestOptions.build(
+        %{
+          accepted_turn_state: "http-heartbeat-success-#{System.unique_integer([:positive])}",
+          session_lease_heartbeat_test_observer: observer
+        },
+        @endpoint,
+        payload
+      )
+
+    assert {:ok, %{status: 200}} = Service.execute(auth, @endpoint, payload, request_options)
+    assert_receive {:session_lease_heartbeat, :started, heartbeat}, 15_000
+    assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, 15_000
+    refute Process.alive?(heartbeat)
+  end
+
+  test "service heartbeat stops on ordinary error, raise, throw, and exit" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unused_http_heartbeat"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    cases = [
+      {:ordinary_error, fn -> {:error, :synthetic_reservation_failure} end},
+      {:raise, fn -> raise "synthetic reservation raise" end},
+      {:throw, fn -> throw(:synthetic_reservation_throw) end},
+      {:exit, fn -> exit(:synthetic_reservation_exit) end}
+    ]
+
+    for {kind, outcome} <- cases do
+      context = prepared_http_service_context(setup, auth, self(), "#{kind}")
+
+      invoke = fn ->
+        Service.execute_session_routable_model(context, fn _, _, _, _, _, _, _, _ ->
+          outcome.()
+        end)
+      end
+
+      case kind do
+        :ordinary_error ->
+          assert {:error, %{code: "gateway_reservation_failed"}} = invoke.()
+
+        :raise ->
+          assert_raise RuntimeError, "synthetic reservation raise", invoke
+
+        :throw ->
+          assert catch_throw(invoke.()) == :synthetic_reservation_throw
+
+        :exit ->
+          assert catch_exit(invoke.()) == :synthetic_reservation_exit
+      end
+
+      assert_receive {:session_lease_heartbeat, :started, heartbeat}, 15_000
+      assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, 15_000
+      refute Process.alive?(heartbeat)
+    end
+  end
+
+  test "HTTP pre-reservation owner failures preserve the admitted snapshot and roll back work" do
+    for failure <- [:stale_owner, :owner_unavailable, :missing_owner] do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_http_owner_failure"}))
+      setup = gateway_setup(upstream)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      payload = http_payload(setup.model.exposed_model_id, "HTTP owner #{failure}")
+      ref = make_ref()
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+
+          Process.put(
+            {Service, :runtime_authorization_barrier},
+            {parent, ref, {:reservation_lock, :before}}
+          )
+
+          request_options =
+            RequestOptions.build(
+              %{
+                accepted_turn_state:
+                  "http-reservation-owner-#{failure}-#{System.unique_integer([:positive])}",
+                owner_instance_id: "http-owner-a",
+                session_lease_heartbeat_test_observer: parent
+              },
+              @endpoint,
+              payload
+            )
+
+          Service.execute(auth, @endpoint, payload, request_options)
+        end)
+
+      Sandbox.allow(Repo, self(), task.pid)
+
+      assert_receive {:runtime_authorization_barrier, ^ref, :reservation_lock, :before, task_pid},
+                     15_000
+
+      assert task_pid == task.pid
+      assert_receive {:session_lease_heartbeat, :started, heartbeat}, 15_000
+
+      session = Repo.one!(from(session in CodexSession, where: session.pool_id == ^setup.pool.id))
+      original_token = session.owner_lease_token
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      replacement_token = Ecto.UUID.generate()
+
+      case failure do
+        :stale_owner ->
+          replace_http_owner!(session, replacement_token, DateTime.add(now, 90, :second))
+
+        :owner_unavailable ->
+          expire_http_owner!(session, DateTime.add(now, -1, :second))
+
+        :missing_owner ->
+          Repo.delete!(active_lease!(session.id))
+      end
+
+      send(task.pid, {:runtime_authorization_release, ref})
+
+      expected =
+        case failure do
+          :stale_owner ->
+            %{status: 409, code: "stale_owner", message: "session owner lease is stale"}
+
+          _owner_unavailable ->
+            %{
+              status: 503,
+              code: "owner_unavailable",
+              message: "session owner lease is unavailable"
+            }
+        end
+
+      assert {:error, result} = Task.await(task, 15_000)
+
+      assert Map.take(result, [:status, :code, :message, :retryable]) ==
+               Map.put(expected, :retryable, false)
+
+      assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, 15_000
+
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(CodexTurn, :count) == 0
+      assert FakeUpstream.count(upstream) == 0
+
+      current_session = Repo.get!(CodexSession, session.id)
+
+      case failure do
+        :stale_owner ->
+          assert current_session.owner_lease_token == replacement_token
+          refute current_session.owner_lease_token == original_token
+
+        :owner_unavailable ->
+          assert current_session.owner_lease_token == original_token
+
+        :missing_owner ->
+          assert current_session.owner_lease_token == original_token
+      end
+    end
+  end
+
   test "pre-attempt reservation logs sanitize client-controlled request correlators" do
     payload = %{"model" => "gpt-test"}
 
@@ -1208,6 +1405,98 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       ],
       "stream" => false
     }
+  end
+
+  defp http_payload(model, text) do
+    %{
+      "model" => model,
+      "input" => [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => text}]
+        }
+      ]
+    }
+  end
+
+  defp prepared_http_service_context(setup, auth, observer, suffix) do
+    payload = http_payload(setup.model.exposed_model_id, "heartbeat terminal #{suffix}")
+    {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
+
+    request_options =
+      RequestOptions.build(
+        %{
+          accepted_turn_state:
+            "http-heartbeat-terminal-#{suffix}-#{System.unique_integer([:positive])}",
+          session_lease_heartbeat_test_observer: observer
+        },
+        @endpoint,
+        payload
+      )
+      |> RequestOptions.put_routing(
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id,
+        api_key_policy: policy
+      )
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint, payload, request_options, setup.model)
+
+    %{
+      auth: auth,
+      endpoint: @endpoint,
+      payload: payload,
+      request_options: prepared.request_options,
+      model: setup.model,
+      candidates: prepared.candidates,
+      route_state: prepared.route_state,
+      turn_claim: nil
+    }
+  end
+
+  defp active_lease!(session_id) do
+    Repo.one!(
+      from lease in BridgeOwnerLease,
+        where: lease.codex_session_id == ^session_id and lease.status == "active",
+        limit: 1
+    )
+  end
+
+  defp replace_http_owner!(session, token, expires_at) do
+    session
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "http-owner-b",
+      owner_lease_token: token,
+      owner_lease_expires_at: expires_at,
+      last_heartbeat_at: expires_at,
+      updated_at: expires_at
+    })
+    |> Repo.update!()
+
+    active_lease!(session.id)
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "http-owner-b",
+      lease_token: token,
+      renewed_at: expires_at,
+      expires_at: expires_at,
+      updated_at: expires_at
+    })
+    |> Repo.update!()
+  end
+
+  defp expire_http_owner!(session, expires_at) do
+    session
+    |> Ecto.Changeset.change(%{
+      owner_lease_expires_at: expires_at,
+      last_heartbeat_at: expires_at,
+      updated_at: expires_at
+    })
+    |> Repo.update!()
+
+    active_lease!(session.id)
+    |> Ecto.Changeset.change(%{expires_at: expires_at, updated_at: expires_at})
+    |> Repo.update!()
   end
 
   defp start_gateway_task(auth, model, payload, _upstream, ref, phase) do
