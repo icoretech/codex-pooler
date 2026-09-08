@@ -18,6 +18,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:raw_body, non_neg_integer(), binary(), [{String.t(), String.t()}]}
           | {:chunked_body, non_neg_integer(), [binary()], [{String.t(), String.t()}]}
           | {:barrier_json, non_neg_integer(), map(), pid(), reference()}
+          | {:gated_json_headers, non_neg_integer(), map(), pid(), reference()}
           | {:path_json, map()}
           | {:file_protocol, map()}
           | {:reject_json_field, String.t(), non_neg_integer(), map(), non_neg_integer(), map()}
@@ -26,6 +27,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:sse_headers, [String.t()], [{String.t(), String.t()}]}
           | {:delayed_sse, [String.t()], pos_integer(), pid() | nil}
           | {:delayed_terminal_sse, [String.t()], [String.t()], pid(), reference()}
+          | {:gated_terminal_sse, [String.t()], [String.t()], pid(), reference()}
           | {:abrupt_close_mid_stream, [String.t()]}
           | :close_before_headers
           | {:websocket_text, [String.t()]}
@@ -194,6 +196,11 @@ defmodule CodexPooler.FakeUpstream do
      Keyword.fetch!(opts, :release_ref)}
   end
 
+  def gated_json_headers(payload, opts) when is_map(payload) and is_list(opts) do
+    {:gated_json_headers, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify),
+     Keyword.fetch!(opts, :release_ref)}
+  end
+
   def reject_json_field(
         field,
         success_payload,
@@ -295,6 +302,15 @@ defmodule CodexPooler.FakeUpstream do
     terminal = [sse_chunk(terminal_event), "data: [DONE]\n\n"]
 
     {:delayed_terminal_sse, before_terminal, terminal, notify, release_ref}
+  end
+
+  def gated_terminal_sse_stream(events, terminal_event, opts)
+      when is_list(events) and is_list(opts) do
+    before_terminal = Enum.map(events, &sse_chunk/1)
+    terminal = [sse_chunk(terminal_event), "data: [DONE]\n\n"]
+
+    {:gated_terminal_sse, before_terminal, terminal, Keyword.fetch!(opts, :notify),
+     Keyword.fetch!(opts, :release_ref)}
   end
 
   def abrupt_close_mid_stream(events) when is_list(events) do
@@ -567,6 +583,19 @@ defmodule CodexPooler.FakeUpstream do
     |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
+  defp respond(
+         _pid,
+         conn,
+         {:gated_json_headers, status, payload, notify, release_ref},
+         _request
+       ) do
+    wait_for_gate_release(:before_headers, notify, release_ref)
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
+  end
+
   defp respond(pid, conn, {:path_json, routes}, request) do
     case Map.get(routes, conn.request_path) do
       {status, payload} ->
@@ -714,6 +743,28 @@ defmodule CodexPooler.FakeUpstream do
       end)
 
     wait_for_timeout_release(:before_terminal, notify, release_ref)
+
+    Enum.reduce(terminal, conn, fn chunk, conn ->
+      {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+      conn
+    end)
+  end
+
+  defp respond(
+         _pid,
+         conn,
+         {:gated_terminal_sse, before_terminal, terminal, notify, release_ref},
+         _request
+       ) do
+    conn = start_sse_response(conn)
+
+    conn =
+      Enum.reduce(before_terminal, conn, fn chunk, conn ->
+        {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+        conn
+      end)
+
+    wait_for_gate_release(:before_terminal, notify, release_ref)
 
     Enum.reduce(terminal, conn, fn chunk, conn ->
       {:ok, conn} = Plug.Conn.chunk(conn, chunk)
@@ -977,6 +1028,16 @@ defmodule CodexPooler.FakeUpstream do
       {:fake_upstream_release_timeout, ^release_ref} -> :ok
     after
       30_000 -> raise "timed out waiting for fake upstream timeout release"
+    end
+  end
+
+  defp wait_for_gate_release(stage, notify, release_ref) do
+    send(notify, {:fake_upstream_gate, stage, self(), release_ref})
+
+    receive do
+      {:fake_upstream_release_gate, ^release_ref} -> :ok
+    after
+      30_000 -> raise "timed out waiting for fake upstream gate release"
     end
   end
 

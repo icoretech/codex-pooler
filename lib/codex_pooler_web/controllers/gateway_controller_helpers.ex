@@ -145,6 +145,27 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       forwarded_headers: forwarded_headers(conn),
       client_ip: conn.remote_ip |> :inet.ntoa() |> to_string()
     }
+    |> put_test_owner_liveness_options()
+  end
+
+  if Mix.env() == :test do
+    @owner_liveness_test_option_keys [
+      :bridge_owner_lease_ttl_seconds,
+      :session_lease_heartbeat_test_observer,
+      :owner_instance_id
+    ]
+
+    defp put_test_owner_liveness_options(opts) do
+      case Process.get({__MODULE__, :owner_liveness_test_options}) do
+        test_opts when is_map(test_opts) ->
+          Map.merge(opts, Map.take(test_opts, @owner_liveness_test_option_keys))
+
+        _absent ->
+          opts
+      end
+    end
+  else
+    defp put_test_owner_liveness_options(opts), do: opts
   end
 
   @spec websocket_upgrade_opts() :: keyword()

@@ -122,6 +122,53 @@ defmodule CodexPooler.FakeUpstreamTest do
       assert transport_closed?(error)
     end
 
+    test "holds response headers behind the dedicated owner-liveness gate" do
+      release_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.gated_json_headers(%{"id" => "resp_gated_headers"},
+            notify: self(),
+            release_ref: release_ref
+          )
+        )
+
+      task = Task.async(fn -> Req.get!(FakeUpstream.url(upstream) <> "/gated-headers") end)
+
+      assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref}, 1_000
+      refute Task.yield(task, 0)
+
+      send(upstream_pid, {:fake_upstream_release_gate, release_ref})
+
+      assert %{status: 200, body: %{"id" => "resp_gated_headers"}} = Task.await(task, 2_000)
+    end
+
+    test "holds only terminal SSE data behind the dedicated owner-liveness gate" do
+      release_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.gated_terminal_sse_stream(
+            [{"response.created", %{"type" => "response.created"}}],
+            {"response.completed", %{"type" => "response.completed"}},
+            notify: self(),
+            release_ref: release_ref
+          )
+        )
+
+      response = Req.get!(FakeUpstream.url(upstream) <> "/gated-terminal", into: :self)
+
+      assert_receive {:fake_upstream_gate, :before_terminal, upstream_pid, ^release_ref}, 1_000
+      assert {:ok, [data: created]} = receive_stream_message(response)
+      assert created =~ "response.created"
+
+      send(upstream_pid, {:fake_upstream_release_gate, release_ref})
+
+      assert {:ok, [data: completed]} = receive_stream_message(response)
+      assert completed =~ "response.completed"
+      assert {:ok, [data: "data: [DONE]\n\n"]} = receive_stream_message(response)
+    end
+
     test "holds only the terminal SSE event behind an explicit barrier" do
       release_ref = make_ref()
 

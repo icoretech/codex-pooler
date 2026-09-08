@@ -15,6 +15,20 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
 
   @endpoint "/backend-api/codex/responses"
 
+  test "HTTP session start classifies only PostgreSQL shutdown availability failures" do
+    for code <- [:admin_shutdown, :crash_shutdown, :cannot_connect_now] do
+      assert SessionContinuity.http_session_database_unavailable?(%Postgrex.Error{
+               postgres: %{code: code}
+             })
+    end
+
+    refute SessionContinuity.http_session_database_unavailable?(%Postgrex.Error{
+             postgres: %{code: :unique_violation}
+           })
+
+    refute SessionContinuity.http_session_database_unavailable?(%Postgrex.Error{})
+  end
+
   describe "attach_file_affinity/4" do
     test "collects nested mixed-key file ids once while preserving one assignment" do
       setup = active_pinned_assignment_setup()

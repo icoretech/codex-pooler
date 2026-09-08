@@ -73,13 +73,29 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       |> put_previous_response_resolution(auth)
 
     if continuity_session_requested?(request_options) do
-      with {:ok, session} <- ContinuityStore.start_codex_session(auth, request_options) do
-        attach_session(request_options, session)
-      end
+      start_http_codex_session(auth, request_options)
     else
       {:ok, request_options}
     end
   end
+
+  defp start_http_codex_session(auth, %RequestOptions{} = request_options) do
+    with {:ok, session} <- ContinuityStore.start_codex_session(auth, request_options) do
+      attach_session(request_options, session)
+    end
+  rescue
+    error in Postgrex.Error ->
+      if http_session_database_unavailable?(error),
+        do: {:error, owner_witness_error(:owner_unavailable)},
+        else: reraise(error, __STACKTRACE__)
+  end
+
+  @doc false
+  @spec http_session_database_unavailable?(Postgrex.Error.t()) :: boolean()
+  def http_session_database_unavailable?(%Postgrex.Error{postgres: %{code: code}}),
+    do: code in [:admin_shutdown, :crash_shutdown, :cannot_connect_now]
+
+  def http_session_database_unavailable?(%Postgrex.Error{}), do: false
 
   # The immutable resolution proof for the previous-response anchor, captured
   # by a read-only strict lookup BEFORE any attach fallback can register this

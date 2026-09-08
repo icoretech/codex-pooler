@@ -501,6 +501,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       )
       when is_list(candidates) and is_function(reserve_and_start_turn, 8) do
     request_options = context.request_options
+    maybe_test_runtime_authorization_barrier(:heartbeat, :before)
 
     SessionLeaseHeartbeat.run(request_options, fn heartbeat ->
       context
