@@ -25,6 +25,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
@@ -1549,19 +1550,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {model, divergent} = add_divergent_assignment!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    session =
-      %CodexSession{
-        pool_id: setup.pool.id,
-        api_key_id: auth.api_key.id,
-        session_key: "partition-session-#{System.unique_integer([:positive])}",
-        pool_upstream_assignment_id: divergent.assignment.id,
-        status: "active",
-        created_at: now,
-        updated_at: now
-      }
-      |> Repo.insert!()
+    session = admitted_session!(auth, divergent.assignment.id)
 
     payload = %{
       "model" => model.exposed_model_id,
@@ -1636,7 +1626,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   test "a hard-pinned continuation rejects an assignment with malformed canonical source metadata" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     model =
       setup.model
@@ -1648,17 +1637,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       })
       |> Repo.update!()
 
-    session =
-      %CodexSession{
-        pool_id: setup.pool.id,
-        api_key_id: auth.api_key.id,
-        session_key: "invalid-partition-session-#{System.unique_integer([:positive])}",
-        pool_upstream_assignment_id: setup.assignment.id,
-        status: "active",
-        created_at: now,
-        updated_at: now
-      }
-      |> Repo.insert!()
+    session = admitted_session!(auth, setup.assignment.id)
 
     payload = %{
       "model" => model.exposed_model_id,
@@ -2652,6 +2631,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         |> Map.put("source_assignment_models", source_models)
     })
     |> Repo.update!()
+  end
+
+  defp admitted_session!(auth, assignment_id) do
+    {:ok, session} =
+      SessionContinuity.start_codex_session(
+        auth,
+        RequestOptions.build(%{session_header: Ecto.UUID.generate()}, @endpoint_path, %{})
+      )
+
+    session |> Ecto.Changeset.change(pool_upstream_assignment_id: assignment_id) |> Repo.update!()
   end
 
   defp add_divergent_assignment!(setup) do

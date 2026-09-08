@@ -615,7 +615,17 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       setup = active_pinned_assignment_setup()
       api_key = active_api_key_fixture(setup.pool)
       {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
-      session = codex_session_fixture(setup, setup.pinned.assignment, api_key.api_key)
+
+      {:ok, session} =
+        CodexPooler.Gateway.Persistence.SessionContinuity.start_codex_session(
+          auth,
+          RequestOptions.build(%{session_header: Ecto.UUID.generate()}, @endpoint, %{})
+        )
+
+      session =
+        session
+        |> Ecto.Changeset.change(pool_upstream_assignment_id: setup.pinned.assignment.id)
+        |> Repo.update!()
 
       model =
         model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
@@ -671,7 +681,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
 
       opts =
         %{api_key_policy: auth.api_key}
-        |> RequestOptions.build(@endpoint, payload)
+        |> RequestOptions.for_websocket(payload)
         |> RequestOptions.put_continuity(codex_session: attached_session)
 
       assert {:ok, %{request_options: prepared_opts, candidates: candidates}} =

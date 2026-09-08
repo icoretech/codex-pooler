@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Persistence.SessionContinuity.Aliases, as: SessionAliases
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease
   alias CodexPooler.Gateway.Routing.BridgeRing
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -30,6 +31,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
+  alias CodexPooler.Gateway.Runtime.HttpOwnerLease
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.ValidationClaim
@@ -498,7 +500,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         reserve_and_start_turn
       )
       when is_list(candidates) and is_function(reserve_and_start_turn, 8) do
-    do_execute_session_routable_model(context, reserve_and_start_turn)
+    HttpOwnerLease.run(context.request_options, fn ->
+      do_execute_session_routable_model(context, reserve_and_start_turn)
+    end)
   end
 
   defp do_execute_session_routable_model(
@@ -1857,6 +1861,17 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            request_options
        ) do
     locked_session = PersistenceSessionContinuity.lock_codex_session_for_turn(session)
+
+    if request_options.transport.transport != "websocket" do
+      case OwnerLease.validate_for_update(
+             session.id,
+             session.owner_lease_token
+           ) do
+        :ok -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end
+
     RequestOptions.put_continuity(request_options, codex_session: locked_session)
   end
 

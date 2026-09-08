@@ -27,7 +27,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   def attach_codex_session(
         auth,
         payload,
-        %RequestOptions{continuity: %{codex_session: %CodexSession{id: session_id}}} =
+        %RequestOptions{continuity: %{codex_session: %CodexSession{} = admitted_session}} =
           request_options
       ) do
     request_options =
@@ -35,15 +35,12 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       |> ContinuityPayload.put_previous_response_id(payload)
       |> put_previous_response_resolution(auth)
 
-    case start_previous_response_codex_session(auth, request_options) do
-      {:ok, %CodexSession{} = session} ->
-        {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}
-
-      {:error, :session_not_found} ->
-        attach_existing_codex_session(session_id, request_options)
-
-      {:error, reason} ->
-        {:error, reason}
+    with :ok <- validate_admitted_http_owner(admitted_session, request_options) do
+      if request_options.transport.transport == "websocket" do
+        attach_websocket_codex_session(auth, admitted_session, request_options)
+      else
+        attach_existing_codex_session(admitted_session, request_options)
+      end
     end
   end
 
@@ -59,6 +56,19 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       end
     else
       {:ok, request_options}
+    end
+  end
+
+  defp attach_websocket_codex_session(auth, admitted_session, request_options) do
+    case start_previous_response_codex_session(auth, request_options) do
+      {:ok, %CodexSession{} = session} ->
+        {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}
+
+      {:error, :session_not_found} ->
+        attach_existing_codex_session(admitted_session, request_options)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -90,7 +100,32 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     end
   end
 
-  defp attach_existing_codex_session(session_id, request_options) do
+  defp validate_admitted_http_owner(_session, %RequestOptions{
+         transport: %{transport: "websocket"}
+       }),
+       do: :ok
+
+  defp validate_admitted_http_owner(session, _request_options) do
+    case ContinuityStore.validate_owner_token(session.id, session.owner_lease_token) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         error(409, Atom.to_string(reason), "HTTP session owner lease is unavailable", nil)}
+    end
+  end
+
+  # An explicit HTTP session is an admitted snapshot, not a lookup hint. Keep
+  # its token through reservation so a concurrent takeover is still fenced.
+  defp attach_existing_codex_session(
+         session,
+         %RequestOptions{transport: %{transport: transport}} = opts
+       )
+       when transport != "websocket",
+       do: {:ok, RequestOptions.put_continuity(opts, codex_session: session)}
+
+  defp attach_existing_codex_session(%CodexSession{id: session_id}, request_options) do
     case Repo.get(CodexSession, session_id) do
       %CodexSession{} = session ->
         {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}

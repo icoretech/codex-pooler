@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     CodexTurn
   }
 
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
@@ -35,10 +36,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
         %RequestOptions{} = opts
       ) do
     now = now()
+    request_options = opts
     opts = turn_opts(opts)
 
     Repo.transaction(fn ->
       locked_session = codex_session_for_update!(session.id)
+      capture_http_owner!(session, request, request_options)
 
       turn = insert_next_codex_turn!(locked_session, request, opts, now)
 
@@ -276,7 +279,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
     if count == 1 do
       turn = Repo.get_by!(CodexTurn, request_id: request_id)
-      maybe_update_session_assignment(turn.codex_session_id, attempt, now)
+      maybe_update_session_assignment(turn, attempt, now)
     end
 
     :ok
@@ -408,7 +411,63 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   defp codex_turn_transport_kind("http_compact_json"), do: "http_json"
   defp codex_turn_transport_kind(transport), do: transport
 
-  defp maybe_update_session_assignment(session_id, %Attempt{} = attempt, now) do
+  defp capture_http_owner!(_session, _request, %RequestOptions{
+         transport: %{transport: "websocket"}
+       }),
+       do: :ok
+
+  defp capture_http_owner!(session, request, _opts) do
+    case OwnerLease.validate_for_update(session.id, session.owner_lease_token) do
+      :ok ->
+        fingerprint = owner_fingerprint(session.owner_lease_token)
+
+        Request
+        |> where([stored], stored.id == ^request.id)
+        |> update([stored],
+          set: [
+            request_metadata:
+              fragment(
+                "COALESCE(?, '{}'::jsonb) || jsonb_build_object('http_owner_lease_fingerprint', ?::text)",
+                stored.request_metadata,
+                ^fingerprint
+              )
+          ]
+        )
+        |> Repo.update_all([])
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
+
+  defp owner_fingerprint(token) when is_binary(token),
+    do: :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)
+
+  defp owner_fingerprint(_token), do: nil
+
+  defp maybe_update_session_assignment(
+         %CodexTurn{transport_kind: "websocket"} = turn,
+         attempt,
+         now
+       ),
+       do: update_session_assignment(turn.codex_session_id, attempt, now)
+
+  defp maybe_update_session_assignment(%CodexTurn{} = turn, attempt, _now) do
+    Repo.transaction(fn ->
+      session = codex_session_for_update!(turn.codex_session_id)
+      request = Repo.get!(Request, turn.request_id)
+      fingerprint = (request.request_metadata || %{})["http_owner_lease_fingerprint"]
+
+      # Only the admitted owner may bind a completed HTTP turn. A digest is
+      # sufficient for this comparison and never exposes a usable lease token.
+      if is_binary(fingerprint) and fingerprint == owner_fingerprint(session.owner_lease_token) and
+           OwnerLease.validate_for_update(session.id, session.owner_lease_token) == :ok do
+        update_session_assignment(session.id, attempt, now())
+      end
+    end)
+  end
+
+  defp update_session_assignment(session_id, %Attempt{} = attempt, now) do
     CodexSession
     |> where([session], session.id == ^session_id)
     |> Repo.update_all(

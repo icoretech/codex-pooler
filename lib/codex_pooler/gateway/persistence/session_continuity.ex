@@ -186,14 +186,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     now = now()
 
     Repo.transaction(fn ->
-      session = codex_session_for_update!(session.id)
+      # The caller carries the admitted token. Reloading the session first would
+      # let an old response mutate a replacement owner's continuity and account.
+      codex_session_for_update!(session.id)
+
+      session =
+        case OwnerLease.renew_owner_token(session, session.owner_lease_token, opts) do
+          {:ok, renewed_session} -> renewed_session
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
       auth = %{pool: %{id: session.pool_id}, api_key: %{id: session.api_key_id}}
       session = maybe_bind_session_assignment!(session, opts, now)
 
       continuity_opts = Aliases.continuity_opts(opts, payload, response_body)
 
       Aliases.register!(session, auth, continuity_opts, now)
-      OwnerLease.renew!(session, opts, now)
       :ok
     end)
     |> unwrap_ok_transaction()

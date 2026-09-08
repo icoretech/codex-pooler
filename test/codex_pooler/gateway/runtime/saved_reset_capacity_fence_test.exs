@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.SavedResetCapacityFenceTest do
   alias CodexPooler.Access
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.RouteFiltering
   alias CodexPooler.Gateway.Routing.SavedResetAutoRedeem
@@ -225,22 +225,18 @@ defmodule CodexPooler.Gateway.Runtime.SavedResetCapacityFenceTest do
     end
   end
 
-  defp active_session!(setup, auth, assignment_id) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  defp active_session!(_setup, auth, assignment_id) do
+    {:ok, session} =
+      SessionContinuity.start_codex_session(
+        auth,
+        RequestOptions.build(
+          %{session_header: Ecto.UUID.generate(), owner_instance_id: "capacity-fence-test"},
+          @endpoint,
+          %{}
+        )
+      )
 
-    Repo.insert!(%CodexSession{
-      pool_id: setup.pool.id,
-      api_key_id: auth.api_key.id,
-      session_key: "capacity-fence-#{System.unique_integer([:positive])}",
-      pool_upstream_assignment_id: assignment_id,
-      status: "active",
-      owner_instance_id: "capacity-fence-test",
-      owner_lease_token: Ecto.UUID.generate(),
-      owner_lease_expires_at: DateTime.add(now, 1, :hour),
-      last_heartbeat_at: now,
-      created_at: now,
-      updated_at: now
-    })
+    session |> Ecto.Changeset.change(pool_upstream_assignment_id: assignment_id) |> Repo.update!()
   end
 
   defp put_saved_reset_metadata!(identity, upstream) do
