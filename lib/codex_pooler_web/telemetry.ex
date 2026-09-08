@@ -179,8 +179,7 @@ defmodule CodexPoolerWeb.Telemetry do
 
   @spec prometheus_metrics() :: [metric()]
   def prometheus_metrics do
-    # Prometheus Core 1.2.1 enumerates metric.tags and invokes metric.tag_values.
-    # Keep this split until the reporter supports Telemetry.Metrics 1.2 function-valued tags.
+    # Both scalar and histogram handlers consume explicit tags/tag_values.
     [
       counter("phoenix.endpoint.stop.count",
         event_name: [:phoenix, :endpoint, :stop],
@@ -559,7 +558,7 @@ defmodule CodexPoolerWeb.Telemetry do
   @spec prometheus_reporter_child() :: {module(), keyword()} | nil
   defp prometheus_reporter_child do
     if prometheus_reporter_enabled?() do
-      {TelemetryMetricsPrometheus.Core, metrics: prometheus_metrics()}
+      {__MODULE__.PrometheusReporter, metrics: prometheus_metrics()}
     end
   end
 
