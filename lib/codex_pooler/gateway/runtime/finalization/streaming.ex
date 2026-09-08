@@ -73,7 +73,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
                SideEffects.observe_stream_response(context, response, body, stream_state)
                SideEffects.before_finalize_success(context, request_options)
              end
-           )
+           ),
+           request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
@@ -225,7 +226,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
           if compact_assignment_model_miss?(failure, context),
             do: :ok,
             else: record_terminal_health_failure(health_code, response.headers, context)
-        end)
+        end),
+        context.request_options.runtime.session_owner_witness
       )
 
     emit_terminal_outcome(result, code, transports)
@@ -294,7 +296,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         |> maybe_put_before_finalize(context, fn ->
           SideEffects.observe_stream_response(context, response, body, stream_state)
           record_stream_failure_health(reason, code, terminal_failure, response.headers, context)
-        end)
+        end),
+        context.request_options.runtime.session_owner_witness
       )
 
     emit_terminal_outcome(result, code, transports)

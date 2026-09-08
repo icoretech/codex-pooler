@@ -6,11 +6,23 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeDemotion,
+    BridgeOwnerLease,
+    CodexSession,
+    CodexTurn,
+    RoutingCircuitState,
+    SessionContinuity
+  }
+
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
+  alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
 
   import CodexPooler.AccountingTestSupport, only: [accounting_setup: 0]
@@ -116,6 +128,102 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
            }
 
     refute inspect(metadata["payload_compression"]) =~ sensitive_placeholder
+  end
+
+  test "stale owner terminal settlement keeps accounting truthful without moving replacement assignment" do
+    setup = accounting_setup()
+
+    %{assignment: replacement_assignment} =
+      CodexPooler.PoolerFixtures.upstream_assignment_fixture(setup.pool)
+
+    payload = %{"model" => setup.model.exposed_model_id}
+
+    assert {:ok, %CodexSession{} = session} =
+             Gateway.start_codex_session(setup.auth, %{
+               accepted_turn_state: "terminal-settlement-#{System.unique_integer([:positive])}",
+               owner_instance_id: "node-a"
+             })
+
+    session = Repo.reload!(session)
+    {:ok, witness} = OwnerWitness.new(session)
+
+    request_options =
+      %{transport: "http_json"}
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> RequestOptions.put_session_owner_witness(witness)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(setup.auth, setup.model, payload, %{
+               endpoint: "/backend-api/codex/responses",
+               transport: "http_json",
+               correlation_id: "terminal-settlement-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    assert {:ok, %CodexTurn{} = turn} =
+             SessionContinuity.start_codex_turn(session, reserved.request, request_options)
+
+    turn
+    |> Ecto.Changeset.change(%{status: CodexTurn.interrupted_status()})
+    |> Repo.update!()
+
+    replacement_token = Ecto.UUID.generate()
+    takeover_now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    takeover_deadline = DateTime.add(takeover_now, 90, :second)
+
+    session
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "node-b",
+      owner_lease_token: replacement_token,
+      owner_lease_expires_at: takeover_deadline,
+      pool_upstream_assignment_id: replacement_assignment.id,
+      last_heartbeat_at: takeover_now,
+      updated_at: takeover_now
+    })
+    |> Repo.update!()
+
+    lease =
+      Repo.one!(
+        from lease in BridgeOwnerLease,
+          where: lease.codex_session_id == ^session.id and lease.status == "active",
+          limit: 1
+      )
+
+    lease
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "node-b",
+      lease_token: replacement_token,
+      expires_at: takeover_deadline,
+      pool_upstream_assignment_id: replacement_assignment.id,
+      renewed_at: takeover_now,
+      updated_at: takeover_now
+    })
+    |> Repo.update!()
+
+    before_session = Repo.get!(CodexSession, session.id)
+    before_lease = Repo.reload!(lease)
+
+    assert {:ok, %{finalization_disposition: :inserted}} =
+             AttemptSettlement.finalize_success(
+               reserved.request,
+               attempt,
+               %{
+                 status: "usage_known",
+                 input_tokens: 3,
+                 output_tokens: 2,
+                 total_tokens: 5
+               },
+               %{response_status_code: 200},
+               witness
+             )
+
+    assert Repo.reload!(reserved.request).status == "succeeded"
+    assert Repo.reload!(attempt).status == "succeeded"
+    assert Repo.reload!(turn).status == CodexTurn.succeeded_status()
+    assert Repo.get!(CodexSession, session.id) == before_session
+    assert Repo.reload!(lease) == before_lease
   end
 
   test "websocket attempt metadata includes safe payload compression savings" do

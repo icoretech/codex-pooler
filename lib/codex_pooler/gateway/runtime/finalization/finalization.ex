@@ -443,7 +443,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                attempt_metadata,
                latency_ms: latency,
                before_finalize: fn -> record_dispatch_route_failure(code, context) end
-             )
+             ),
+             context.request_options.runtime.session_owner_witness
            ) do
         {:stale_generation, finalized} ->
           {:ok, finalized}
@@ -513,7 +514,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       |> apply_failure_settlement_options(opts)
       |> observe_http_response(context, response, body)
 
-    case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+    case AttemptSettlement.finalize_failure(
+           reserved.request,
+           attempt,
+           attrs,
+           request_options.runtime.session_owner_witness
+         ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
 
@@ -718,7 +724,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
                record_dispatch_route_failure(code, context)
              end
-           )
+           ),
+           request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} -> {:ok, finalized}
       {:ok, _finalized} -> {:error, error(502, code, message)}
@@ -767,7 +774,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                )
              end
            )
-           |> Map.merge(Map.new(attrs))
+           |> Map.merge(Map.new(attrs)),
+           request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
@@ -907,7 +915,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         end
       )
 
-    case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+    case AttemptSettlement.finalize_failure(
+           reserved.request,
+           attempt,
+           attrs,
+           request_options.runtime.session_owner_witness
+         ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
 
@@ -951,7 +964,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                SideEffects.observe_http_response(context, response, body)
                SideEffects.before_finalize_success(context, request_options)
              end
-           )
+           ),
+           request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}

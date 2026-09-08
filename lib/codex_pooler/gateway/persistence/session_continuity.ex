@@ -370,6 +370,17 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
         ) ::
           term()
   defdelegate complete_codex_turn(result, status, error_code, attempt), to: TurnLifecycle
+
+  @spec complete_codex_turn(
+          complete_turn_result(),
+          String.t(),
+          term(),
+          CodexPooler.Accounting.Attempt.t(),
+          OwnerWitness.t() | nil
+        ) :: term()
+  defdelegate complete_codex_turn(result, status, error_code, attempt, owner_witness),
+    to: TurnLifecycle
+
   @spec mark_codex_turn_visible(request_ref()) :: :ok
   defdelegate mark_codex_turn_visible(request_ref), to: TurnLifecycle
 

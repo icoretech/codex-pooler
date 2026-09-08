@@ -943,6 +943,143 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert %DateTime{} = completed_at
   end
 
+  test "current owner completion converges the turn session and active lease assignment" do
+    %{auth: auth, session: session} = owner_session_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+    request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+    attempt = attempt_fixture(request, assignment)
+    request_options = http_owner_request_options(session, [])
+    witness = request_options.runtime.session_owner_witness
+
+    assert {:ok, %CodexTurn{} = turn} =
+             SessionContinuity.start_codex_turn(session, request, request_options)
+
+    result = {:ok, %{request: request, attempt: attempt}}
+
+    assert ^result =
+             SessionContinuity.complete_codex_turn(
+               result,
+               CodexTurn.succeeded_status(),
+               nil,
+               attempt,
+               witness
+             )
+
+    assert %CodexTurn{status: "succeeded", final_attempt_id: final_attempt_id} =
+             Repo.reload!(turn)
+
+    assert final_attempt_id == attempt.id
+
+    assert %CodexSession{
+             pool_upstream_assignment_id: assignment_id,
+             last_heartbeat_at: session_heartbeat
+           } = Repo.get!(CodexSession, session.id)
+
+    assert %BridgeOwnerLease{
+             pool_upstream_assignment_id: lease_assignment_id,
+             renewed_at: lease_heartbeat
+           } = active_lease!(session.id)
+
+    assert assignment_id == assignment.id
+    assert lease_assignment_id == assignment.id
+    assert %DateTime{} = session_heartbeat
+    assert session_heartbeat == lease_heartbeat
+  end
+
+  test "stale owner completion preserves replacement ownership while settling interrupted turn" do
+    %{auth: auth, session: session} = owner_session_fixture()
+    %{assignment: stale_assignment} = upstream_assignment_fixture(auth.pool)
+    %{assignment: replacement_assignment} = upstream_assignment_fixture(auth.pool)
+    request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+
+    attempt =
+      attempt_fixture(request, stale_assignment, %{status: "in_progress", completed_at: nil})
+
+    response_id = "takeover-response-#{System.unique_integer([:positive])}"
+    request_options = http_owner_request_options(session, response_id: response_id)
+    witness = request_options.runtime.session_owner_witness
+
+    assert {:ok, %CodexTurn{} = turn} =
+             SessionContinuity.start_codex_turn(session, request, request_options)
+
+    assert :ok =
+             SessionContinuity.register_codex_session_continuity(
+               session,
+               %{},
+               %{"id" => response_id},
+               request_options
+             )
+
+    turn
+    |> Ecto.Changeset.change(%{status: CodexTurn.interrupted_status()})
+    |> Repo.update!()
+
+    replacement_token = Ecto.UUID.generate()
+    takeover_now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    takeover_deadline = DateTime.add(takeover_now, 90, :second)
+
+    session
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "node-b",
+      owner_lease_token: replacement_token,
+      owner_lease_expires_at: takeover_deadline,
+      pool_upstream_assignment_id: replacement_assignment.id,
+      last_heartbeat_at: takeover_now,
+      updated_at: takeover_now
+    })
+    |> Repo.update!()
+
+    active_lease!(session.id)
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "node-b",
+      lease_token: replacement_token,
+      expires_at: takeover_deadline,
+      pool_upstream_assignment_id: replacement_assignment.id,
+      renewed_at: takeover_now,
+      updated_at: takeover_now
+    })
+    |> Repo.update!()
+
+    before_session = Repo.get!(CodexSession, session.id)
+    before_lease = active_lease!(session.id)
+    before_aliases = response_aliases_for_session(session.id)
+    result = {:ok, %{request: request, attempt: attempt}}
+
+    assert :ok = SessionContinuity.mark_codex_turn_visible(request, attempt)
+    assert %DateTime{} = Repo.reload!(turn).first_visible_output_at
+
+    assert ^result =
+             SessionContinuity.complete_codex_turn(
+               result,
+               CodexTurn.succeeded_status(),
+               nil,
+               attempt,
+               witness
+             )
+
+    assert %CodexTurn{status: "succeeded", final_attempt_id: final_attempt_id} =
+             Repo.reload!(turn)
+
+    assert final_attempt_id == attempt.id
+    refute Repo.reload!(turn).status == CodexTurn.in_progress_status()
+    assert Repo.get!(CodexSession, session.id) == before_session
+    assert active_lease!(session.id) == before_lease
+    assert response_aliases_for_session(session.id) == before_aliases
+
+    assert ^result =
+             SessionContinuity.complete_codex_turn(
+               result,
+               CodexTurn.interrupted_status(),
+               "client_disconnected",
+               attempt,
+               witness
+             )
+
+    assert Repo.reload!(turn).status == CodexTurn.succeeded_status()
+    assert Repo.get!(CodexSession, session.id) == before_session
+    assert active_lease!(session.id) == before_lease
+  end
+
   @tag :replay_schema
   test "fresh native turn insertion stores semantic digest atomically while legacy shape stays nil" do
     %{auth: auth, session: session} = owner_session_fixture()

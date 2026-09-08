@@ -130,7 +130,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                SideEffects.observe_websocket_response(context, finalization)
                SideEffects.before_finalize_success(context, request_options)
              end
-           )
+           ),
+           request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
@@ -225,7 +226,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         end
       )
 
-    case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+    case AttemptSettlement.finalize_failure(
+           reserved.request,
+           attempt,
+           attrs,
+           request_options.runtime.session_owner_witness
+         ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
 
@@ -758,7 +764,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                  context
                )
              end
-           )
+           ),
+           context.request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
@@ -847,7 +854,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              before_finalize: fn ->
                SideEffects.observe_websocket_response(context, finalization)
              end
-           )
+           ),
+           request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
@@ -898,7 +906,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              before_finalize: fn ->
                SideEffects.observe_websocket_response(context, finalization)
              end
-           )
+           ),
+           request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}
@@ -1009,7 +1018,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              SideEffects.observe_websocket_response(context, finalization)
 
              record_failed_health(context, reason, code)
-           end)
+           end),
+           context.request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->
         {:ok, finalized}

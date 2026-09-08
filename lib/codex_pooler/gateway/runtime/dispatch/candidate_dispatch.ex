@@ -22,6 +22,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
 
     alias CodexPooler.Accounting
     alias CodexPooler.Accounting.FailureResponse
+    alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
     alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
     alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
     alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
@@ -35,7 +36,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
                                       {:ok, binary()} | {:error, term()})
     @type upstream_url :: (UpstreamIdentity.t(), PoolUpstreamAssignment.t(), String.t() ->
                              {:ok, String.t()} | {:error, term()})
-    @type finalize_failure :: (Accounting.Request.t(), Accounting.Attempt.t(), map() -> term())
+    @type owner_witness :: OwnerWitness.t() | nil
+    @type finalize_failure :: (Accounting.Request.t(),
+                               Accounting.Attempt.t(),
+                               map(),
+                               owner_witness() ->
+                                 term())
     @type neutral_completion :: (SelectedCandidateContext.t() -> term())
     @type accounting_failure :: (atom(), Accounting.Request.t(), Accounting.Attempt.t(), term() ->
                                    {:error, map()})
@@ -65,7 +71,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
         merge_request_metadata: &Accounting.merge_request_metadata/2,
         decrypt_active_secret: &Secrets.decrypt_active_secret/2,
         upstream_url: &EndpointMetadata.endpoint_url/3,
-        finalize_failure: &AttemptSettlement.finalize_failure/3,
+        finalize_failure: &AttemptSettlement.finalize_failure/4,
         neutral_completion: &DispatchLifecycle.neutral_completion/1,
         accounting_failure: &FailureResponse.accounting_failure/4
       }
@@ -73,7 +79,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
 
     @spec build(t() | map()) :: t()
     def build(%__MODULE__{} = operations), do: operations
-    def build(overrides) when is_map(overrides), do: struct!(defaults(), overrides)
+
+    def build(overrides) when is_map(overrides) do
+      overrides =
+        case Map.fetch(overrides, :finalize_failure) do
+          {:ok, callback} when is_function(callback, 3) ->
+            Map.put(overrides, :finalize_failure, fn request, attempt, attrs, _owner_witness ->
+              callback.(request, attempt, attrs)
+            end)
+
+          _other ->
+            overrides
+        end
+
+      struct!(defaults(), overrides)
+    end
   end
 
   @spec dispatch(Context.t(), dispatch_candidate()) :: dispatch_result()
@@ -221,7 +241,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
               "gateway accounting finalization failed",
               %{},
               latency_ms: elapsed_ms(context.started)
-            )
+            ),
+            context.request_options.runtime.session_owner_witness
           )
         end,
         fn -> operations.neutral_completion.(context) end,
