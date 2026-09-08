@@ -5,7 +5,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
-  @native_models ~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst)
+  @image_25_models ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst gpt-image-2.5-flare-2026-09-08 gpt-image-2.5-sunburst-2026-09-08)
+  @native_models ["gpt-image-2" | @image_25_models]
   @supported_models ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini) ++ @native_models
   @sizes ~w(auto 1024x1024 1024x1536 1536x1024)
   @qualities ~w(auto low medium high)
@@ -167,8 +168,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
          :ok <- Validation.reject_high_impact_fields(payload),
          :ok <- Validation.reject_unsupported_fields(payload, :images),
          :ok <- validate_model(payload),
-         :ok <- validate_one_of(payload, "size", @sizes),
-         :ok <- validate_one_of(payload, "quality", @qualities),
+         :ok <- validate_size(payload),
+         :ok <- validate_quality(payload),
          :ok <- validate_one_of(payload, "background", @backgrounds),
          :ok <- validate_input_fidelity(payload),
          :ok <- validate_n(payload),
@@ -176,6 +177,39 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
       discard_user_identifier(payload)
     end
   end
+
+  defp validate_quality(%{"model" => model} = payload) when model in @image_25_models,
+    do: validate_one_of(payload, "quality", @qualities ++ ~w(xhigh max))
+
+  defp validate_quality(payload), do: validate_one_of(payload, "quality", @qualities)
+
+  defp validate_size(%{"model" => model, "size" => size})
+       when model in @image_25_models and is_binary(size) and size != "auto" do
+    if valid_dimensions?(size),
+      do: :ok,
+      else: {:error, Error.invalid_request("size is not supported", "size")}
+  end
+
+  defp validate_size(payload), do: validate_one_of(payload, "size", @sizes)
+
+  defp valid_dimensions?(size) when byte_size(size) <= 9 do
+    case Regex.run(~r/\A([1-9][0-9]{0,3})x([1-9][0-9]{0,3})\z/, size) do
+      [_, width, height] ->
+        width = String.to_integer(width)
+        height = String.to_integer(height)
+        valid_edges?(width, height) and (width * height) in 655_360..8_294_400
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_dimensions?(_size), do: false
+
+  defp valid_edges?(width, height),
+    do:
+      max(width, height) <= 3840 and rem(width, 16) == 0 and rem(height, 16) == 0 and
+        max(width, height) <= 3 * min(width, height)
 
   defp validate_input_fidelity(%{"model" => model, "input_fidelity" => _})
        when model in @native_models or model == "gpt-image-1-mini" do

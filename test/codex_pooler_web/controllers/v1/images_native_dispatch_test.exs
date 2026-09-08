@@ -86,8 +86,16 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
 
   for mode <- ["full", "lite"],
       operation <- ["generations", "edits"],
-      model <- ~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst) do
+      {model, quality, size} <- [
+        {"gpt-image-2", "medium", "1536x1024"},
+        {"gpt-image-2.5-flare", "xhigh", "1536x864"},
+        {"gpt-image-2.5-sunburst", "max", "1536x864"},
+        {"gpt-image-2.5-flare-2026-09-08", "max", "3840x2160"},
+        {"gpt-image-2.5-sunburst-2026-09-08", "xhigh", "3840x2160"}
+      ] do
     @image_model model
+    @quality quality
+    @size size
     @mode mode
     @operation operation
     test "#{@image_model} #{@operation} uses native image service with #{@mode} assignment", %{
@@ -112,9 +120,9 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
       payload = %{
         "model" => @image_model,
         "prompt" => "synthetic image",
-        "quality" => "medium",
+        "quality" => @quality,
         "background" => "opaque",
-        "size" => "1536x1024",
+        "size" => @size,
         "n" => 1
       }
 
@@ -142,8 +150,8 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
 
       assert %{
                "model" => @image_model,
-               "quality" => "medium",
-               "size" => "1536x1024",
+               "quality" => @quality,
+               "size" => @size,
                "background" => "opaque",
                "n" => 1
              } = captured.json

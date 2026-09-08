@@ -110,9 +110,9 @@ This enables transcription only; text-to-speech and Realtime audio are not suppo
 Use a Hermes version whose OpenAI image provider lists GPT Image 2.5. Its
 `gpt-image-2.5-flare-medium` preset sends `gpt-image-2.5-flare` to the API
 with `quality: medium`; use `gpt-image-2.5-sunburst-medium` for Sunburst.
-The `-low` and `-high` presets also work. Do not use Hermes' `-xhigh` or
-`-max` presets through Codex Pooler: the adapter accepts only `auto`, `low`,
-`medium`, and `high`. Older Hermes versions hardcode `gpt-image-2` in this
+The `-low`, `-high`, `-xhigh`, and `-max` presets are also accepted and forwarded.
+The Codex backend can return a different quality or size than requested; these
+presets do not guarantee measured output quality. Older Hermes versions hardcode `gpt-image-2` in this
 provider; update Hermes before applying the new preset. See the
 [Hermes OpenAI image provider](https://github.com/NousResearch/hermes-agent/blob/b1f003e18633298d549668b8e186af84cca45b76/plugins/image_gen/openai/__init__.py)
 for the model-to-quality mapping.

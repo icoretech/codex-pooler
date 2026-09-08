@@ -2,30 +2,68 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
   use ExUnit.Case, async: true
   alias CodexPooler.Gateway.OpenAICompatibility.{Images, Responses}
 
-  test "GPT Image 2.5 keeps the Codex adapter option boundary" do
-    for model <- ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst) do
-      for quality <- ~w(auto low medium high) do
-        assert {:ok, response} =
-                 Images.coerce_generation(%{
-                   "model" => model,
-                   "prompt" => "synthetic",
-                   "quality" => quality,
-                   "background" => "transparent"
-                 })
+  @image_25_models ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst gpt-image-2.5-flare-2026-09-08 gpt-image-2.5-sunburst-2026-09-08)
 
-        assert response.payload["model"] == model
-        assert response.payload["quality"] == quality
-        assert response.payload["background"] == "transparent"
-      end
+  test "GPT Image 2.5 preserves extended qualities and custom size boundaries" do
+    for model <- @image_25_models,
+        quality <- ~w(auto low medium high xhigh max),
+        size <- ~w(auto 1536x864 864x1536 1024x640 640x1024 3840x2160 2160x3840 1536x512) do
+      assert {:ok, response} =
+               Images.coerce_generation(%{
+                 "model" => model,
+                 "prompt" => "synthetic",
+                 "quality" => quality,
+                 "size" => size,
+                 "background" => "transparent"
+               })
 
-      for {key, value} <- [{"quality", "xhigh"}, {"quality", "max"}, {"size", "3840x2160"}] do
-        assert {:error, %{status: 400, param: ^key}} =
-                 Images.coerce_generation(%{
-                   "model" => model,
-                   "prompt" => "synthetic",
-                   key => value
-                 })
-      end
+      assert response.endpoint == "/backend-api/codex/images/generations"
+      assert response.payload["model"] == model
+      assert response.payload["quality"] == quality
+      assert response.payload["size"] == size
+      assert response.payload["background"] == "transparent"
+    end
+  end
+
+  test "GPT Image 2.5 rejects malformed and out-of-range options" do
+    for model <- @image_25_models,
+        {key, value} <- [
+          {"quality", "ultra"},
+          {"quality", 1},
+          {"quality", %{}},
+          {"size", 1024},
+          {"size", %{}},
+          {"size", "1536X864"},
+          {"size", "1536x864suffix"},
+          {"size", "1537x864"},
+          {"size", "1536x865"},
+          {"size", "0x1024"},
+          {"size", "-1024x1024"},
+          {"size", "3856x2048"},
+          {"size", "2048x3856"},
+          {"size", "1024x624"},
+          {"size", "3840x2176"},
+          {"size", "1552x512"},
+          {"size", "512x1552"}
+        ] do
+      assert {:error, %{status: 400, param: ^key}} =
+               Images.coerce_generation(%{
+                 "model" => model,
+                 "prompt" => "synthetic",
+                 key => value
+               })
+    end
+  end
+
+  test "older image models retain their quality boundary" do
+    for model <- ~w(gpt-image-1 gpt-image-1-mini gpt-image-1.5 gpt-image-2),
+        quality <- ~w(xhigh max) do
+      assert {:error, %{status: 400, param: "quality"}} =
+               Images.coerce_generation(%{
+                 "model" => model,
+                 "prompt" => "synthetic",
+                 "quality" => quality
+               })
     end
   end
 
@@ -114,6 +152,38 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
 
     assert [%{"input_image_mask" => %{"image_url" => url}}] = response.payload["tools"]
     assert String.starts_with?(url, "data:image/png;base64,")
+  end
+
+  test "GPT Image 2.5 masked edits preserve extended options in Responses translation" do
+    path =
+      Path.join(System.tmp_dir!(), "image-mask-options-#{System.unique_integer([:positive])}")
+
+    File.write!(path, <<0, 1, 2>>)
+    on_exit(fn -> File.rm(path) end)
+    upload = %Plug.Upload{path: path, filename: "sample.png", content_type: "image/png"}
+
+    for model <- @image_25_models, quality <- ~w(xhigh max) do
+      assert {:ok, response} =
+               Images.coerce_edit(%{
+                 "model" => model,
+                 "prompt" => "synthetic",
+                 "image" => upload,
+                 "mask" => upload,
+                 "quality" => quality,
+                 "size" => "1536x864"
+               })
+
+      assert response.endpoint == "/backend-api/codex/responses"
+
+      assert [
+               %{
+                 "model" => ^model,
+                 "quality" => ^quality,
+                 "size" => "1536x864",
+                 "input_image_mask" => %{"image_url" => _}
+               }
+             ] = response.payload["tools"]
+    end
   end
 
   test "terminal output supersedes earlier same-id items and ignores created snapshots" do
