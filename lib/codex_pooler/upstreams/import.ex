@@ -67,8 +67,10 @@ defmodule CodexPooler.Upstreams.Import do
   @spec prepare_trusted_account(Scope.t(), Pool.t(), map()) ::
           {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   def prepare_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
-    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
-      PreparedAccount.prepare(scope, pool, attrs, trusted_account_link_options(attrs))
+    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs),
+         {:ok, prepared} <-
+           PreparedAccount.prepare(scope, pool, attrs, trusted_account_link_options(attrs)) do
+      PreparedAccount.capture_import(prepared)
     end
   end
 
@@ -78,8 +80,10 @@ defmodule CodexPooler.Upstreams.Import do
   @spec prepare_bundle_account(Scope.t(), Pool.t(), map()) ::
           {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   def prepare_bundle_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
-    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
-      PreparedAccount.prepare_bundle(scope, pool, attrs, trusted_account_link_options(attrs))
+    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs),
+         {:ok, prepared} <-
+           PreparedAccount.prepare_bundle(scope, pool, attrs, trusted_account_link_options(attrs)) do
+      PreparedAccount.capture_import(prepared)
     end
   end
 
@@ -147,14 +151,19 @@ defmodule CodexPooler.Upstreams.Import do
   end
 
   defp do_import_codex_auth_json_account(%Scope{} = scope, %Pool{} = pool, attrs) do
-    TokenLinking.link_tokens(scope, pool, attrs,
+    opts = [
       onboarding_method: "import",
       credential_provenance: :codex_chatgpt,
       audit_action: "upstream_account.import",
       broadcast_reason: "upstream_account_imported",
       quota_trigger_kind: "account_link",
       token_refresh_trigger_kind: "auth_json_import"
-    )
+    ]
+
+    with {:ok, prepared} <- PreparedAccount.prepare(scope, pool, attrs, opts),
+         {:ok, prepared} <- PreparedAccount.capture_import(prepared) do
+      TokenLinking.link_prepared(scope, pool, prepared, opts)
+    end
   end
 
   defp normalize_import_attrs(attrs) do

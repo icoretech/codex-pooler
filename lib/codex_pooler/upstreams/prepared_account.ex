@@ -5,6 +5,10 @@ defmodule CodexPooler.Upstreams.PreparedAccount do
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Upstreams.Auth.AccessTokenExpiry
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
+  alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @reserved_attr_keys ~w(credential_policy prepared_account __prepared_account__)a
   @reserved_string_keys Enum.map(@reserved_attr_keys, &Atom.to_string/1)
@@ -15,11 +19,62 @@ defmodule CodexPooler.Upstreams.PreparedAccount do
           pool_id: Ecto.UUID.t(),
           attrs: map(),
           expiry: AccessTokenExpiry.resolution(),
-          policy: policy()
+          policy: policy(),
+          import_snapshot: map() | :absent | {:error, term()} | nil
         }
 
   @enforce_keys [:scope_user_id, :pool_id, :attrs, :expiry, :policy]
-  defstruct [:scope_user_id, :pool_id, :attrs, :expiry, :policy]
+  defstruct [:scope_user_id, :pool_id, :attrs, :expiry, :policy, :import_snapshot]
+
+  # Only import entry points opt in. OAuth and invite preparation retain their
+  # existing replacement semantics. Capture before waiting for persistence locks.
+  @spec capture_import(t()) :: {:ok, t()} | {:error, term()}
+  def capture_import(%__MODULE__{} = prepared) do
+    snapshot =
+      with {:ok, identity} <- IdentityLifecycle.select_upsert_identity(prepared.attrs),
+           {:ok, snapshot} <- import_snapshot(identity),
+           do: snapshot
+
+    # Retain selection/epoch errors until persistence, preserving import and
+    # bundle validation error semantics without admitting an invalid snapshot.
+    {:ok, %{prepared | import_snapshot: snapshot}}
+  end
+
+  # The caller holds both the canonical slot and credential replacement locks.
+  @spec validate_import_snapshot(t(), UpstreamIdentity.t() | nil) ::
+          :ok | {:error, %{code: atom(), message: String.t()}}
+  def validate_import_snapshot(%__MODULE__{import_snapshot: nil}, _identity), do: :ok
+
+  def validate_import_snapshot(%__MODULE__{import_snapshot: {:error, reason}}, _identity),
+    do: {:error, reason}
+
+  def validate_import_snapshot(%__MODULE__{import_snapshot: expected}, identity) do
+    with {:ok, current} <- import_snapshot(identity) do
+      if expected == current,
+        do: :ok,
+        else:
+          {:error,
+           %{
+             code: :stale_import,
+             message: "account credentials changed while importing; submit the import again"
+           }}
+    end
+  end
+
+  defp import_snapshot(nil), do: {:ok, :absent}
+
+  defp import_snapshot(%UpstreamIdentity{} = identity) do
+    with {:ok, epoch} <- CredentialFencing.validate_current_credential_epoch(identity) do
+      {:ok,
+       %{
+         identity_id: identity.id,
+         slot: IdentitySlotLock.normalize(identity),
+         credential_epoch: epoch,
+         # First activation of a pending identity keeps its initial epoch.
+         pending?: identity.status == "pending"
+       }}
+    end
+  end
 
   @spec prepare(Scope.t(), Pool.t(), map(), keyword()) ::
           {:ok, t()} | {:error, %{code: atom(), message: String.t()}}

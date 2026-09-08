@@ -119,6 +119,69 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   def link_prepared_in_transaction(_scope, _pool, _prepared, _opts),
     do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
 
+  @spec link_prepared_batch_in_transaction(Scope.t(), Pool.t(), [PreparedAccount.t()]) ::
+          {:ok, [link_success()]} | {:error, lifecycle_error()}
+  def link_prepared_batch_in_transaction(%Scope{} = scope, %Pool{} = pool, prepared_accounts)
+      when is_list(prepared_accounts) do
+    if Repo.in_transaction?() do
+      validate_import_batch!(scope, pool, prepared_accounts)
+
+      # All snapshots were checked before any writes, with every slot/identity
+      # lock retained. Duplicate entries may now replace earlier batch entries.
+      results =
+        Enum.map(prepared_accounts, fn prepared ->
+          persist_prepared!(scope, pool, %{prepared | import_snapshot: nil}, true)
+        end)
+
+      {:ok, results}
+    else
+      {:error,
+       lifecycle_error(:transaction_required, "token linking requires a caller-owned transaction")}
+    end
+  end
+
+  defp validate_import_batch!(scope, pool, prepared_accounts) do
+    Enum.each(prepared_accounts, fn prepared ->
+      case PreparedAccount.validate(prepared, scope, pool) do
+        {:ok, _prepared} -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+
+    IdentitySlotLock.lock_slots!(Enum.map(prepared_accounts, & &1.attrs))
+
+    identities = Enum.map(prepared_accounts, &select_prepared_identity!/1)
+
+    locked =
+      identities
+      |> CredentialFencing.lock_credential_replacements()
+      |> Map.new(&{&1.id, &1})
+
+    Enum.each(prepared_accounts, fn prepared ->
+      identity = select_prepared_identity!(prepared)
+
+      # Slot locks serialize canonical selection with other credential writers.
+      # Never validate a newly selected row that was not part of our lock set.
+      if identity && not Map.has_key?(locked, identity.id) do
+        Repo.rollback(lifecycle_error(:stale_import, "account identity changed while importing"))
+      end
+
+      identity = if identity, do: Map.fetch!(locked, identity.id)
+
+      case PreparedAccount.validate_import_snapshot(prepared, identity) do
+        :ok -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp select_prepared_identity!(prepared) do
+    case select_link_identity(prepared.attrs, incoming_identity_attrs(prepared.attrs)) do
+      {:ok, identity} -> identity
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   @spec publish_link_result(Scope.t(), Pool.t(), link_success(), keyword()) :: link_result()
   def publish_link_result(%Scope{} = scope, %Pool{} = pool, %{} = result, opts)
       when is_list(opts) do
@@ -211,7 +274,8 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       {:ok, %UpstreamIdentity{} = identity} ->
         identity = CredentialFencing.lock_credential_replacement(identity)
 
-        with {:ok, replacement_metadata, epoch} <-
+        with :ok <- PreparedAccount.validate_import_snapshot(prepared, identity),
+             {:ok, replacement_metadata, epoch} <-
                CredentialFencing.prepare_replacement_metadata(identity),
              :ok <- PreparedAccount.evaluate(prepared, now()),
              attrs =
@@ -228,7 +292,8 @@ defmodule CodexPooler.Upstreams.TokenLinking do
         end
 
       {:ok, nil} ->
-        with :ok <- PreparedAccount.evaluate(prepared, now()),
+        with :ok <- PreparedAccount.validate_import_snapshot(prepared, nil),
+             :ok <- PreparedAccount.evaluate(prepared, now()),
              identity_attrs = new_identity_replacement_attrs(identity_attrs, prepared, timestamp),
              {:ok, identity} <-
                create_identity_with_plan(Map.put(identity_attrs, :status, @pending)),

@@ -10,7 +10,6 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
-  alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
   alias CodexPooler.Upstreams.PreparedAccount
   alias CodexPooler.Upstreams.Secrets
   alias CodexPooler.Upstreams.TokenLinking
@@ -314,7 +313,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
           true
         )
 
-      case CodexPooler.JSON.encode(Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))) do
+      case CodexPooler.JSON.encode(
+             Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))
+           ) do
         {:ok, bundle} -> {:ok, bundle}
         {:error, _reason} -> {:error, lifecycle_error(:bundle_encoding_failed)}
       end
@@ -483,16 +484,10 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   end
 
   defp import_accounts_transaction(prepared_accounts, pool, scope) do
-    IdentitySlotLock.lock_slots!(Enum.map(prepared_accounts, & &1.attrs))
-
-    prepared_accounts
-    |> Enum.reduce_while([], fn prepared, results ->
-      case TokenLinking.link_prepared_in_transaction(scope, pool, prepared, slots_locked?: true) do
-        {:ok, result} -> {:cont, [result | results]}
-        {:error, _reason} -> Repo.rollback(:bundle_import_failed)
-      end
-    end)
-    |> Enum.reverse()
+    case TokenLinking.link_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
+      {:ok, results} -> results
+      {:error, _reason} -> Repo.rollback(:bundle_import_failed)
+    end
   end
 
   defp publish_import_results(results, pool, scope) do
