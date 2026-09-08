@@ -2,7 +2,7 @@
 title: Goose on Codex Pooler
 sidebar:
   label: Goose
-description: Configure Goose with Codex Pooler's narrow OpenAI-compatible /v1 chat completions path, config.yaml file locations, and optional operator MCP metadata access.
+description: Configure Goose with Codex Pooler's narrow OpenAI-compatible /v1 Responses path, config.yaml file locations, and optional operator MCP metadata access.
 ---
 
 Configure Goose's OpenAI provider with `OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret storage.
@@ -43,7 +43,7 @@ Add the provider settings to `config.yaml`:
 GOOSE_PROVIDER: openai
 GOOSE_MODEL: gpt-5.6-terra
 OPENAI_HOST: https://codex-pooler.example.com
-OPENAI_BASE_PATH: v1/chat/completions
+OPENAI_BASE_PATH: v1/responses
 GOOSE_CONTEXT_LIMIT: 828400
 GOOSE_MAX_TOKENS: 128000
 GOOSE_AUTO_COMPACT_THRESHOLD: 0.95

@@ -49,14 +49,14 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
         apiKey: "${CODEX_POOLER_API_KEY}",
         api: "openai-responses",
         agentRuntime: { id: "openclaw" },
-        timeoutSeconds: 300,
+        timeoutSeconds: 120,
         models: [
           {
             id: "gpt-5.6-luna",
             name: "GPT-5.6 Luna via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 828400,
+            contextWindow: 872000,
             contextTokens: 828400,
             maxTokens: 128000,
           },
@@ -65,7 +65,7 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
             name: "GPT-5.6 Terra via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 828400,
+            contextWindow: 872000,
             contextTokens: 828400,
             maxTokens: 128000,
           },
@@ -74,7 +74,7 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
             name: "GPT-5.6 Sol via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 828400,
+            contextWindow: 872000,
             contextTokens: 828400,
             maxTokens: 128000,
           },
@@ -83,7 +83,7 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
             name: "GPT-6 Astra via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 828400,
+            contextWindow: 872000,
             contextTokens: 828400,
             maxTokens: 128000,
           },
@@ -98,7 +98,7 @@ Define only model ids your assigned Pool can serve. If you run Codex Pooler loca
 
 ## Choose a model
 
-OpenClaw separates the configured `contextWindow` from the effective runtime `contextTokens` budget. The `828400` values above are long-profile examples for models whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` instead. Use each model's `/v1/models.context_length` for both fields and do not configure the raw ceiling. For the long-profile example, the 128000-token compaction reserve keeps output accounting explicit and starts local compaction at 700400 tokens. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only for heavy reasoning.
+OpenClaw separates the configured `contextWindow` from the effective runtime `contextTokens` budget. The `872000` raw-context / `828400` effective-budget values above are long-profile examples. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` effective tokens. Use each model's `/v1/models.context_length` for `contextWindow`; set `contextTokens` to `floor(0.95 * context_length)` and do not configure the raw ceiling as the effective budget. For the long-profile example, the 128000-token compaction reserve keeps output accounting explicit and starts local compaction at 700400 tokens. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and select `gpt-5.6-sol` only when its Pool assignment permits it.
 
 ## Verify the connection
 
