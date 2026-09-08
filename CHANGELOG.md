@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.7.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.4...codex-pooler-v0.7.5) (2026-09-08)
+
+
+### Features
+
+* **images:** accept GPT Image 2.5 quality and custom dimensions ([2449eda](https://github.com/icoretech/codex-pooler/commit/2449eda00994310bf8dd2ee86cb308fd366174b7))
+* **images:** support GPT Image 2.5 Flare and Sunburst ([55ef04c](https://github.com/icoretech/codex-pooler/commit/55ef04cc7a63cc7eb8aa77aec7939d448e90ce46))
+* **pricing:** import expanded tool rates and character billing metadata ([5272fe1](https://github.com/icoretech/codex-pooler/commit/5272fe18307dd60fb7b657f4c8d3fc1c3dda2348))
+* **runtime:** add HTTP session lease heartbeat ([542feac](https://github.com/icoretech/codex-pooler/commit/542feac6e54cb8c32dcdc36845acd36b3db80359))
+
+
+### Bug Fixes
+
+* **gateway:** fence continuity registration by owner token ([c25196c](https://github.com/icoretech/codex-pooler/commit/c25196cf3b421ec8735feaf2da4d1ad0d333e4b8))
+* **gateway:** fence stale session completion writes ([9a1978a](https://github.com/icoretech/codex-pooler/commit/9a1978aa938bdf97eda91fdc6a1cc429184a1b1a))
+* **gateway:** renew session owner deadlines atomically ([3fcb9ef](https://github.com/icoretech/codex-pooler/commit/3fcb9ef351a2f8d43b52e201cf0355959bf71928))
+* **runtime:** preserve deferred results after heartbeat loss ([0968d02](https://github.com/icoretech/codex-pooler/commit/0968d0231f6060b4c296a92c4df607790a4afa76))
+* **runtime:** retain owner heartbeat through HTTP streams ([7f4dd65](https://github.com/icoretech/codex-pooler/commit/7f4dd65371b0590b6321eabf04161e5632ac4887))
+* **v1:** bound concurrent session startup ([990e6d7](https://github.com/icoretech/codex-pooler/commit/990e6d75182a7ce489a22e3cee8b6eba3ec75c26))
+* **v1:** restore schema-bound input compression ([ae4c90e](https://github.com/icoretech/codex-pooler/commit/ae4c90e78c565036a312c567947cf708ee4e80d7))
+* **websocket:** preserve compact retries without duplicate dispatch ([2679a93](https://github.com/icoretech/codex-pooler/commit/2679a9302d0e929f18e34bc0d0d230bb9dbfe85a))
+
+
+### Tests
+
+* **runtime:** cover HTTP owner lease liveness ([c7bbf97](https://github.com/icoretech/codex-pooler/commit/c7bbf97ef30c0d0e6a6adf4f6031d103f583258f))
+
+
+### Miscellaneous Chores
+
+* **deps:** update helm release codex-pooler to v0.8.3 ([#367](https://github.com/icoretech/codex-pooler/issues/367)) ([6e00d43](https://github.com/icoretech/codex-pooler/commit/6e00d434dd7fd61d010cdf7278476f5ce733c3db))
+* **deps:** update helm release codex-pooler to v0.8.4 ([#369](https://github.com/icoretech/codex-pooler/issues/369)) ([376b4f6](https://github.com/icoretech/codex-pooler/commit/376b4f68390d58b98899f581fa010170a6205a92))
+* update guides ([b9b2bb6](https://github.com/icoretech/codex-pooler/commit/b9b2bb60131c4804a2e017e60a5ddb65ed8ceb3a))
+
 ## [0.7.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.3...codex-pooler-v0.7.4) (2026-09-07)
 
 
