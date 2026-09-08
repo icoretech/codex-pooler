@@ -9,6 +9,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions.Continuity
   alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -33,6 +35,52 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "boundary constructors" do
+    test "admits a redacted owner witness only through the typed programmatic helper" do
+      session_id = Ecto.UUID.generate()
+      lease_token = Ecto.UUID.generate()
+
+      assert {:ok, witness} =
+               OwnerWitness.new(%CodexSession{
+                 id: session_id,
+                 owner_lease_token: lease_token
+               })
+
+      assert inspect(witness) == "#OwnerWitness<redacted>"
+
+      options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", %{})
+        |> RequestOptions.put_session_owner_witness(witness)
+
+      assert options.runtime.session_owner_witness == witness
+      refute inspect(options) =~ lease_token
+    end
+
+    test "rejects incomplete witnesses and ignores external witness injection" do
+      assert {:error, :invalid_owner_witness} = OwnerWitness.new(%CodexSession{})
+
+      assert {:error, :invalid_owner_witness} =
+               OwnerWitness.new(%CodexSession{
+                 id: Ecto.UUID.generate(),
+                 owner_lease_token: nil
+               })
+
+      injected = %{
+        session_id: Ecto.UUID.generate(),
+        owner_lease_token: Ecto.UUID.generate()
+      }
+
+      options =
+        RequestOptions.build(
+          %{"session_owner_witness" => injected, session_owner_witness: injected},
+          "/backend-api/codex/responses",
+          %{}
+        )
+
+      assert options.runtime.session_owner_witness == nil
+      assert options.extra == %{}
+    end
+
     @tag :compaction_state_baseline
     test "characterizes ordinary option transforms and existing result transport state" do
       payload = %{"model" => "example-model", "input" => [%{"type" => "message"}]}

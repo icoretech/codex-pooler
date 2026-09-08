@@ -649,8 +649,29 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     %{session: session, token: token} =
       owner_session_fixture(%{bridge_owner_lease_ttl_seconds: 30})
 
+    split_now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     initial_session = Repo.get!(CodexSession, session.id)
     initial_lease = active_lease!(session.id)
+
+    initial_session =
+      initial_session
+      |> Ecto.Changeset.change(%{
+        owner_lease_expires_at: DateTime.add(split_now, 30, :second),
+        last_heartbeat_at: split_now,
+        updated_at: split_now
+      })
+      |> Repo.update!()
+
+    initial_lease =
+      initial_lease
+      |> Ecto.Changeset.change(%{
+        renewed_at: split_now,
+        expires_at: DateTime.add(split_now, 45, :second),
+        updated_at: split_now
+      })
+      |> Repo.update!()
+
+    refute initial_session.owner_lease_expires_at == initial_lease.expires_at
 
     assert {:ok, %CodexSession{} = renewed_session} =
              SessionContinuity.renew_owner_token(
@@ -668,6 +689,23 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert renewed_lease.owner_instance_id == initial_lease.owner_instance_id
     assert renewed_lease.lease_token == token
     assert renewed_lease.status == "active"
+
+    assert Repo.aggregate(
+             from(lease in BridgeOwnerLease,
+               where: lease.codex_session_id == ^session.id and lease.status == "active"
+             ),
+             :count
+           ) == 1
+
+    assert renewed_session.owner_lease_expires_at == renewed_lease.expires_at
+    assert renewed_session.last_heartbeat_at == renewed_lease.renewed_at
+    assert renewed_lease.renewed_at == renewed_lease.updated_at
+
+    assert DateTime.diff(
+             renewed_session.owner_lease_expires_at,
+             renewed_session.last_heartbeat_at,
+             :second
+           ) == 120
 
     assert DateTime.compare(
              renewed_session.owner_lease_expires_at,
@@ -702,6 +740,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert after_lease.lease_token == before_lease.lease_token
     assert after_lease.expires_at == before_lease.expires_at
     assert after_lease.renewed_at == before_lease.renewed_at
+    assert after_lease.updated_at == before_lease.updated_at
+    assert after_session.updated_at == before_session.updated_at
   end
 
   test "complete_codex_turn finalizes successful lifecycle results without an attempt key" do

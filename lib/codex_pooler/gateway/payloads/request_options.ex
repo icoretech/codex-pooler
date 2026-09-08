@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias CodexPooler.Accounting.ClientRetry.OriginalWitness
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -169,6 +170,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :session_header,
     :session_header_source,
     :session_key,
+    :session_owner_witness,
     :timeout,
     :transport,
     :upload_bytes,
@@ -194,6 +196,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     "prompt_cache_controls_downgraded",
     "prompt_cache_key",
     "request_method",
+    "session_owner_witness",
     "transport",
     "websocket_delivery_mode"
   ]
@@ -775,6 +778,11 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   @spec put_runtime_context(t(), keyword()) :: t()
   def put_runtime_context(%__MODULE__{} = options, updates) when is_list(updates) do
     %{options | runtime: RuntimeContext.update(options.runtime, updates)}
+  end
+
+  @spec put_session_owner_witness(t(), OwnerWitness.t()) :: t()
+  def put_session_owner_witness(%__MODULE__{} = options, %OwnerWitness{} = witness) do
+    %{options | runtime: %{options.runtime | session_owner_witness: witness}}
   end
 
   @spec put_native_client_retry_witness(t(), OriginalWitness.t()) :: t()

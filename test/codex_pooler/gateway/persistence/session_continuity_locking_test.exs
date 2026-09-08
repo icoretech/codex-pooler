@@ -311,6 +311,117 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   describe "session continuity session and owner-lease contention" do
     @tag :session_continuity_contention
+    @tag timeout: 30_000
+    test "renewal cannot revive an owner that expires while waiting for the session lock" do
+      fixture = unboxed_owner_session_fixture("renewal-expiry-wait", 1)
+      fixture = set_unboxed_owner_deadline!(fixture, 1)
+      parent = self()
+      ref = make_ref()
+
+      blocker =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(fn ->
+              session =
+                Repo.one!(
+                  from session in CodexSession,
+                    where: session.id == ^fixture.session.id,
+                    lock: "FOR UPDATE"
+                )
+
+              backend_pid = backend_pid!()
+              send(parent, {:renewal_expiry_blocker_ready, ref, backend_pid, session})
+
+              receive do
+                {:release_renewal_expiry_blocker, ^ref} -> :ok
+              after
+                15_000 -> raise "renewal expiry blocker was not released"
+              end
+            end)
+          end)
+        end)
+
+      try do
+        assert_receive {:renewal_expiry_blocker_ready, ^ref, blocker_backend_pid, locked_session},
+                       5_000
+
+        before_session = unboxed_get_session!(fixture.session.id)
+        before_lease = unboxed_active_lease!(fixture.session.id)
+
+        renewal =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              backend_pid = backend_pid!()
+              send(parent, {:renewal_expiry_waiter_ready, ref, backend_pid})
+
+              SessionContinuity.renew_owner_token(
+                fixture.session.id,
+                fixture.token,
+                request_options(bridge_owner_lease_ttl_seconds: 120)
+              )
+            end)
+          end)
+
+        Process.put({__MODULE__, ref, :renewal}, renewal)
+
+        assert_receive {:renewal_expiry_waiter_ready, ^ref, waiter_backend_pid}, 5_000
+        assert waiter_backend_pid != blocker_backend_pid
+
+        observation =
+          Sandbox.unboxed_run(Repo, fn ->
+            observe_session_block(waiter_backend_pid, blocker_backend_pid, "SELECT")
+          end)
+
+        assert observation.wait_event_type == "Lock"
+        assert blocker_backend_pid in observation.blocking_pids
+
+        milliseconds_to_expiry =
+          DateTime.diff(locked_session.owner_lease_expires_at, DateTime.utc_now(), :millisecond)
+
+        assert milliseconds_to_expiry > 0
+
+        receive do
+        after
+          milliseconds_to_expiry + 50 -> :ok
+        end
+
+        send(blocker.pid, {:release_renewal_expiry_blocker, ref})
+
+        assert {:error, :owner_unavailable} = Task.await(renewal, 15_000)
+        assert {:ok, _} = Task.await(blocker, 15_000)
+
+        after_session = unboxed_get_session!(fixture.session.id)
+        after_lease = unboxed_active_lease!(fixture.session.id)
+
+        assert after_session.owner_lease_expires_at == before_session.owner_lease_expires_at
+        assert after_session.last_heartbeat_at == before_session.last_heartbeat_at
+        assert after_session.updated_at == before_session.updated_at
+        assert after_lease.expires_at == before_lease.expires_at
+        assert after_lease.renewed_at == before_lease.renewed_at
+        assert after_lease.updated_at == before_lease.updated_at
+
+        report_atomic_renewal(%{
+          kind: "owner_renewal_expiry_wait",
+          blocking_observed?: true,
+          blocker_count: length(observation.blocking_pids),
+          result: "owner_unavailable",
+          session_deadline_unchanged?: true,
+          lease_deadline_unchanged?: true
+        })
+      after
+        send(blocker.pid, {:release_renewal_expiry_blocker, ref})
+        shutdown_task(blocker)
+
+        case Process.delete({__MODULE__, ref, :renewal}) do
+          %Task{} = renewal -> shutdown_task(renewal)
+          nil -> :ok
+        end
+
+        cleanup_unboxed_fixture!()
+      end
+    end
+
+    @tag :session_continuity_contention
     @tag :session_continuity_red
     test "session_lease_start_first blocks renewal on session before lease" do
       records =
@@ -1459,6 +1570,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     end
   end
 
+  defp report_atomic_renewal(record) do
+    if path = System.get_env("SESSION_CONTINUITY_MANUAL_QA_PATH") do
+      File.write!(path, CodexPooler.JSON.encode!(record) <> "\n", [:append])
+    end
+  end
+
   defp shutdown_task(task) do
     if Process.alive?(task.pid), do: Task.shutdown(task, :brutal_kill)
   end
@@ -1719,6 +1836,37 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         order_by: [asc: lease.id],
         limit: 1
     )
+  end
+
+  defp unboxed_get_session!(session_id) do
+    Sandbox.unboxed_run(Repo, fn -> Repo.get!(CodexSession, session_id) end)
+  end
+
+  defp unboxed_active_lease!(session_id) do
+    Sandbox.unboxed_run(Repo, fn -> active_lease!(session_id) end)
+  end
+
+  defp set_unboxed_owner_deadline!(fixture, seconds) do
+    Sandbox.unboxed_run(Repo, fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      expires_at = DateTime.add(now, seconds, :second)
+      session = Repo.get!(CodexSession, fixture.session.id)
+      lease = active_lease!(session.id)
+
+      session
+      |> Ecto.Changeset.change(%{
+        owner_lease_expires_at: expires_at,
+        last_heartbeat_at: now,
+        updated_at: now
+      })
+      |> Repo.update!()
+
+      lease
+      |> Ecto.Changeset.change(%{renewed_at: now, expires_at: expires_at, updated_at: now})
+      |> Repo.update!()
+
+      %{fixture | session: Repo.get!(CodexSession, session.id)}
+    end)
   end
 
   defp unboxed_owner_session_fixture(direction_id, iteration) do

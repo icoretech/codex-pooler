@@ -84,18 +84,28 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     |> Repo.update!()
   end
 
-  @spec renew!(CodexSession.t(), RequestOptions.t(), DateTime.t()) :: BridgeOwnerLease.t() | :ok
-  def renew!(%CodexSession{} = session, %RequestOptions{} = opts, now) do
+  @spec renew_locked!(CodexSession.t(), RequestOptions.t()) :: CodexSession.t()
+  def renew_locked!(%CodexSession{} = session, %RequestOptions{} = opts) do
     case active_for_update(session.id) do
       %BridgeOwnerLease{} = lease ->
+        now = db_now()
+
+        case validate_owner_token_snapshot(session, lease, session.owner_lease_token, now) do
+          :ok -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
         expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
-        lease
-        |> Ecto.Changeset.change(%{renewed_at: now, expires_at: expires_at, updated_at: now})
-        |> Repo.update!()
+        renewed_lease =
+          lease
+          |> Ecto.Changeset.change(%{renewed_at: now, expires_at: expires_at, updated_at: now})
+          |> Repo.update!()
+
+        persist_session!(session, renewed_lease, now)
 
       nil ->
-        :ok
+        Repo.rollback(:owner_unavailable)
     end
   end
 
@@ -115,11 +125,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   @spec renew_owner_token(session_ref(), Ecto.UUID.t() | String.t(), RequestOptions.t()) ::
           {:ok, CodexSession.t()} | {:error, :stale_owner | :owner_unavailable}
   def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts) do
-    now = now()
-
     Repo.transaction(fn ->
       with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
              active_snapshot_for_update(session_ref),
+           now <- db_now(),
            :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now) do
         expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
@@ -132,7 +141,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
         |> Ecto.Changeset.change(%{
           owner_instance_id: renewed_lease.owner_instance_id,
           owner_lease_token: renewed_lease.lease_token,
-          owner_lease_expires_at: renewed_lease.expires_at,
+          owner_lease_expires_at: expires_at,
           last_heartbeat_at: now,
           updated_at: now
         })
@@ -414,6 +423,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   defp blank_to_nil(_value), do: nil
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+  defp db_now do
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+    now
+  end
 
   defp unwrap_ok_transaction({:ok, :ok}), do: :ok
   defp unwrap_ok_transaction({:error, reason}), do: {:error, reason}

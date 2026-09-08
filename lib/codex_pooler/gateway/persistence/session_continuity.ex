@@ -193,7 +193,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       continuity_opts = Aliases.continuity_opts(opts, payload, response_body)
 
       Aliases.register!(session, auth, continuity_opts, now)
-      OwnerLease.renew!(session, opts, now)
+      OwnerLease.renew_locked!(session, opts)
       :ok
     end)
     |> unwrap_ok_transaction()
