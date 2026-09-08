@@ -6,7 +6,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   require Logger
 
   alias CodexPooler.Accounting.ClientRetry
-  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
@@ -359,23 +358,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     caller_monitor = Process.monitor(caller_pid)
 
     try do
-      case request_on_connection(state, key, request, {caller_pid, caller_monitor}) do
-        {:ok, result, state} ->
-          {:reply, result, maybe_schedule_keepalive(state)}
+      {:ok, result, state} =
+        request_on_connection(state, key, request, {caller_pid, caller_monitor})
 
-        {:retry, state, previous_connection} ->
-          {:ok, result, state} =
-            state
-            |> close_state()
-            |> request_on_reconnected(
-              key,
-              request,
-              previous_connection,
-              {caller_pid, caller_monitor}
-            )
-
-          {:reply, result, maybe_schedule_keepalive(state)}
-      end
+      {:reply, result, maybe_schedule_keepalive(state)}
     after
       Process.demonitor(caller_monitor, [:flush])
     end
@@ -755,64 +741,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     case request_once_on_connection(state, key, request, connection_usage, request_caller) do
       {:ok, result, state} ->
-        if reconnect_reused_connection?(reused_connection?, request, result) do
-          {:retry, state, result_connection_metadata(result)}
-        else
-          {:ok, result, state}
-        end
-
-      {:error, reason, state} ->
-        if reconnect_reused_connection?(reused_connection?, request, reason) do
-          {:retry, state, nil}
-        else
-          result = request_error(reason, state)
-          state = close_state(state)
-          {:ok, result, state}
-        end
-    end
-  end
-
-  defp reset_probe?(%Request{reset_probe: %ResetProbe{} = probe}), do: ResetProbe.bound?(probe)
-  defp reset_probe?(%Request{}), do: false
-
-  defp collect_compaction?(%Request{websocket_delivery_mode: mode})
-       when mode in [:collect_compaction, :collect_full_history], do: true
-
-  defp collect_compaction?(%Request{}), do: false
-
-  defp reconnect_reused_connection?(false, %Request{}, _result_or_reason), do: false
-
-  defp reconnect_reused_connection?(true, %Request{} = request, result_or_reason) do
-    not reset_probe?(request) and not collect_compaction?(request) and
-      pre_response_reconnectable?(result_or_reason)
-  end
-
-  defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
-  defp reusable_connection?(_state, _key), do: false
-
-  defp request_on_reconnected(
-         state,
-         key,
-         %Request{} = request,
-         previous_connection,
-         request_caller
-       ) do
-    connection_usage = %{reused: false, reconnected: true}
-
-    case request_once_on_connection(state, key, request, connection_usage, request_caller) do
-      {:ok, result, state} ->
         {:ok, result, state}
 
       {:error, reason, state} ->
-        result =
-          reason
-          |> request_error(state)
-          |> maybe_put_result_connection_metadata(previous_connection)
-
+        result = request_error(reason, state)
         state = close_state(state)
         {:ok, result, state}
     end
   end
+
+  defp collect_compaction?(%Request{websocket_delivery_mode: mode})
+       when mode in [:collect_compaction, :collect_full_history],
+       do: true
+
+  defp collect_compaction?(%Request{}), do: false
+
+  defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
+  defp reusable_connection?(_state, _key), do: false
 
   defp request_once_on_connection(
          state,
@@ -1271,16 +1216,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
      )}
   end
 
-  defp maybe_put_result_connection_metadata({status, result}, connection)
-       when status in [:ok, :error] and is_map(connection) do
-    {status, Map.put(result, :upstream_websocket_connection, connection)}
-  end
-
-  defp maybe_put_result_connection_metadata(result, _connection), do: result
-
-  defp result_connection_metadata({_status, result}),
-    do: Map.get(result, :upstream_websocket_connection)
-
   @spec upstream_websocket_connection(map(), connection_usage()) ::
           upstream_websocket_connection()
   defp upstream_websocket_connection(
@@ -1296,19 +1231,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp request_error_transport_failure(reason, state) do
+    phase = Map.get(state, :transport_failure_phase, :request)
+
     attrs =
       %{
-        phase: Map.get(state, :transport_failure_phase, :request),
+        phase: phase,
         termination_source:
           Map.get(state, :transport_failure_source) || request_failure_source(reason),
         pre_visible_output: true,
         terminal_seen: false,
         text_frame_count: 0
       }
+      |> maybe_mark_pre_submission_failure(phase)
       |> Map.merge(Map.get(state, :current_request_diagnostics, %{}))
 
     TransportFailureReason.transport_failure_metadata(reason, attrs)
   end
+
+  defp maybe_mark_pre_submission_failure(attrs, :connect),
+    do: Map.put(attrs, :upstream_committed, false)
+
+  defp maybe_mark_pre_submission_failure(attrs, _phase), do: attrs
 
   defp request_failure_source(:upstream_websocket_session_unavailable), do: :session_unavailable
   defp request_failure_source(_reason), do: nil
@@ -1385,18 +1328,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       _value -> :minutes_30_plus
     end
   end
-
-  defp pre_response_reconnectable?({:error, %{body: "", reason: reason}}),
-    do: pre_response_reconnectable?(reason)
-
-  defp pre_response_reconnectable?(:upstream_websocket_closed_before_terminal), do: true
-  defp pre_response_reconnectable?(:closed), do: true
-  defp pre_response_reconnectable?(:econnreset), do: true
-
-  defp pre_response_reconnectable?(%Mint.TransportError{reason: reason}),
-    do: pre_response_reconnectable?(reason)
-
-  defp pre_response_reconnectable?(_reason), do: false
 
   defp send_text(%{conn: conn, ref: ref, websocket: websocket} = state, text) do
     _trace =
@@ -1830,7 +1761,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     terminal_discriminator = TerminalDiscriminator.classify(mapped_decoded)
 
     collected_text =
-      if receive_state.delivery.mode == :collect_full_history, do: raw_text, else: mapped_text
+      collected_text(
+        receive_state,
+        raw_text,
+        mapped_text,
+        terminal_discriminator
+      )
 
     receive_state =
       raw_decoded
@@ -1867,6 +1803,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         end
     end
   end
+
+  defp collected_text(
+         %ReceiveState{delivery: %Delivery{mode: :collect_full_history}},
+         raw_text,
+         mapped_text,
+         %TerminalDiscriminator{terminal: terminal}
+       )
+       when terminal in ["response.failed", "response.incomplete", "error"] and
+              raw_text != mapped_text,
+       do: mapped_text
+
+  defp collected_text(
+         %ReceiveState{delivery: %Delivery{mode: :collect_full_history}},
+         raw_text,
+         _mapped_text,
+         _terminal_discriminator
+       ),
+       do: raw_text
+
+  defp collected_text(
+         %ReceiveState{},
+         _raw_text,
+         mapped_text,
+         _terminal_discriminator
+       ),
+       do: mapped_text
 
   defp capture_terminal_usage(receive_state, decoded, %TerminalDiscriminator{terminal: terminal})
        when is_binary(terminal) do

@@ -370,6 +370,15 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     |> maybe_put_transport_failure(transport_failure_metadata(reason, attrs))
   end
 
+  @spec retry_safe_before_submission?(term()) :: boolean()
+  def retry_safe_before_submission?(%{
+        transport_failure: %{"reason" => reason, "phase" => "request"}
+      })
+      when reason in ["econnrefused", "ehostunreach", "enetunreach", "nxdomain"],
+      do: true
+
+  def retry_safe_before_submission?(_reason), do: false
+
   defp safe_tuple_reason(value) when is_atom(value), do: safe_reason(value)
   defp safe_tuple_reason(value) when is_tuple(value), do: safe_reason(value)
   defp safe_tuple_reason(value) when is_integer(value), do: Integer.to_string(value)

@@ -167,6 +167,26 @@ defmodule CodexPooler.Accounting do
     to: CodexPooler.Accounting.WebsocketOwnerBinding,
     as: :bind
 
+  @spec bind_websocket_owner_bridge(
+          auth(),
+          Request.t(),
+          Attempt.t(),
+          CodexPooler.Gateway.Payloads.RequestOptions.t()
+        ) :: {:ok, %{request: Request.t(), attempt: Attempt.t()}} | {:error, term()}
+  defdelegate bind_websocket_owner_bridge(auth, request, attempt, options),
+    to: CodexPooler.Accounting.WebsocketOwnerBinding,
+    as: :bind_bridge
+
+  @spec restore_websocket_owner_http_fallback(
+          auth(),
+          Request.t(),
+          Attempt.t(),
+          CodexPooler.Gateway.Payloads.RequestOptions.t()
+        ) :: {:ok, %{request: Request.t(), attempt: Attempt.t()}} | {:error, term()}
+  defdelegate restore_websocket_owner_http_fallback(auth, request, attempt, options),
+    to: CodexPooler.Accounting.WebsocketOwnerBinding,
+    as: :restore_http_fallback
+
   @spec latest_success_by_assignment_ids([Ecto.UUID.t()]) :: %{
           optional(Ecto.UUID.t()) => DateTime.t() | nil
         }

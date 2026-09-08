@@ -287,7 +287,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
          response,
          started
        ) do
-    if pre_visible_transport_websocket_failure?(response) do
+    if pre_visible_transport_websocket_failure?(response) and
+         pre_submission_websocket_failure?(response) do
       handle_pre_visible_transport_websocket_failure(
         prepared_context,
         dispatch_request,
@@ -302,6 +303,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       )
     end
   end
+
+  defp pre_submission_websocket_failure?(%{
+         transport_failure: %{"phase" => "connect", "upstream_committed" => false}
+       }),
+       do: true
+
+  defp pre_submission_websocket_failure?(_response), do: false
 
   defp handle_retryable_first_websocket_event(
          %PreparedContext{context: %{allow_retry?: true} = context} = prepared_context,

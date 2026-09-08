@@ -20,11 +20,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   deadline that commits-and-flushes, since buffered frames prove the
   upstream is alive); any content-bearing or unknown event, and every
   structurally valid terminal, commits fail-closed. Before commitment a
-  peer-initiated channel death (a close without terminal, a TCP cut, an
-  explicit peer Close frame) reports a fallback so the dispatcher retries
-  the same attempt over plain HTTP — the reference Codex client retries the
-  same shape — while locally-declared deaths (receive/pong timeouts) stay
-  committed fatals because the provider may still be generating.
+  fallback only when the owner supplies positive evidence that failure happened
+  before upstream submission. Ambiguous task exits, send failures, peer closes,
+  and local receive/pong timeouts commit a fatal stream error because the
+  provider may already be generating.
   """
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -56,10 +55,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         }
 
   @default_settle_timeout_ms 5_000
+  @default_preflight_timeout_ms 15_000
   @max_precommit_frames 64
   @max_precommit_bytes 1_048_576
-  # Must stay below the dispatcher's preflight timeout so a frames-flowing
-  # turn always commits before the dispatcher cancels it as frameless.
+  # Must stay below the relay-owned preflight timeout so lifecycle frames from
+  # a healthy slow turn commit before total preflight silence fails closed.
   @precontent_commit_deadline_ms 12_000
   @buffered_event_types [
     "response.created",
@@ -90,6 +90,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     ref = make_ref()
     settle_timeout_ms = Keyword.get(opts, :settle_timeout_ms, @default_settle_timeout_ms)
 
+    preflight_timeout_ms =
+      Keyword.get(opts, :preflight_timeout_ms, @default_preflight_timeout_ms)
+
     precontent_deadline_ms =
       Keyword.get(opts, :precontent_deadline_ms, @precontent_commit_deadline_ms)
 
@@ -101,6 +104,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           ref: ref,
           correlation_id: correlation_id,
           settle_timeout_ms: settle_timeout_ms,
+          preflight_timeout_ms: preflight_timeout_ms,
           precontent_deadline_ms: precontent_deadline_ms,
           precontent_deadline_armed?: false,
           epoch: nil,
@@ -207,6 +211,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         task =
           Task.Supervisor.async_nolink(@submit_task_supervisor, fn -> run_submit(submit_fun) end)
 
+        Process.send_after(self(), :preflight_timeout, state.preflight_timeout_ms)
         preflight_loop(%{state | epoch: epoch, task: task})
 
       :cancel ->
@@ -278,11 +283,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       {^task_ref, {:error, reason} = result} ->
         state = put_submit_result_and_clear_task(state, result)
 
-        if precommit_fatal_failure?(state.transport_failure) do
+        if pre_submission_failure?(state.transport_failure) do
+          report_fallback(parent, ref, error_reason(reason))
+        else
           report_stream_error(parent, ref, error_reason(reason))
           metadata_loop(state)
-        else
-          report_fallback(parent, ref, error_reason(reason))
         end
 
       {^task_ref, result} ->
@@ -293,8 +298,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       :precontent_commit_deadline ->
         commit_pending_stream(state)
 
+      :preflight_timeout ->
+        Task.shutdown(task, :brutal_kill)
+        report_stream_error(parent, ref, :bridge_preflight_timeout)
+        metadata_loop(%{state | task: nil})
+
       {:DOWN, ^task_ref, :process, _pid, reason} ->
-        report_fallback(parent, ref, {:task_down, safe_reason(reason)})
+        report_stream_error(parent, ref, {:task_down, safe_reason(reason)})
+        metadata_loop(%{state | task: nil})
 
       {:DOWN, ^parent_monitor, :process, _pid, _reason} ->
         Task.shutdown(task, :brutal_kill)
@@ -305,8 +316,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   end
 
   # The submit task settled successfully before any frame arrived. Give the
-  # owner a brief window to deliver the first visible frame; otherwise fall
-  # back so the dispatcher can still retry over HTTP.
+  # owner a brief window to deliver the first visible frame; otherwise fail
+  # the committed websocket attempt without resubmitting over HTTP.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp preflight_after_result(state) do
     %{
@@ -335,16 +346,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         end
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
-        report_fallback(parent, ref, :bridge_no_first_event)
+        report_stream_error(parent, ref, :upstream_websocket_error)
+        metadata_loop(state)
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:error, error, _payload}} ->
-        report_fallback(parent, ref, owner_error_reason(error))
+        report_stream_error(parent, ref, owner_error_reason(error))
+        metadata_loop(state)
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} ->
         preflight_after_result(state)
 
       :precontent_commit_deadline ->
         commit_pending_stream(state)
+
+      :preflight_timeout ->
+        report_stream_error(parent, ref, :bridge_preflight_timeout)
+        metadata_loop(state)
 
       {:DOWN, ^parent_monitor, :process, _pid, _reason} ->
         :ok
@@ -353,7 +370,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         :ok
     after
       state.settle_timeout_ms ->
-        report_fallback(parent, ref, :bridge_no_first_event)
+        report_stream_error(parent, ref, :upstream_websocket_error)
+        metadata_loop(state)
     end
   end
 
@@ -409,9 +427,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   end
 
   # Buffered frames prove the upstream turn is alive; when no content arrived
-  # by the deadline the relay commits and flushes instead of letting the
-  # dispatcher's zero-frame timeout cancel a healthy slow turn and
-  # double-dispatch it over HTTP.
+  # by the deadline the relay commits and flushes before its total-silence
+  # deadline fails the websocket attempt.
   defp commit_pending_stream(%{task: nil} = state) do
     report_pending(state)
     relay_after_result(%{state | pending: [], upstream_committed: true}, :ok)
@@ -480,70 +497,41 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     send(parent, {ref, {:bridge_error, reason}})
   end
 
-  defp committed_failure?(%{"upstream_committed" => true}), do: true
-  defp committed_failure?(_transport_failure), do: false
+  defp pre_submission_failure?(%{"phase" => "connect", "upstream_committed" => false}),
+    do: true
 
-  # The upstream session marks every post-submit failure committed because
-  # the payload was accepted; while nothing has been forwarded downstream the
-  # relay still distinguishes HOW the turn died. A peer-initiated channel
-  # death (clean close without terminal, a TCP cut mid-receive, an explicit
-  # peer Close frame) is the shape the reference Codex client retries, so it
-  # keeps the pre-content HTTP fallback; locally-declared deaths
-  # (receive/pong timeouts) stay fatal because the provider may still be
-  # generating the original turn.
-  defp precommit_fatal_failure?(transport_failure) do
-    committed_failure?(transport_failure) and not peer_close_failure?(transport_failure)
-  end
+  defp pre_submission_failure?(_transport_failure), do: false
 
-  defp peer_close_failure?(%{"phase" => "upstream_close"}), do: true
-  defp peer_close_failure?(%{"reason" => "closed", "phase" => "receive"}), do: true
-  defp peer_close_failure?(%{"peer_close_code" => code}) when is_integer(code), do: true
-  defp peer_close_failure?(%{"peer_close_reason_present" => true}), do: true
-  defp peer_close_failure?(_transport_failure), do: false
-
-  defp preflight_owner_error(state, :upstream_websocket_terminal_delivery_timeout) do
+  defp preflight_owner_error(state, error) do
     state = settle_task(state)
+    reason = owner_error_reason(error)
 
-    if committed_failure?(state.transport_failure) do
-      report_stream_error(state.parent, state.ref, :upstream_websocket_terminal_delivery_timeout)
-      metadata_loop(state)
+    if pre_submission_failure?(state.transport_failure) do
+      report_fallback(state.parent, state.ref, reason)
     else
-      report_fallback(state.parent, state.ref, :upstream_websocket_terminal_delivery_timeout)
+      report_stream_error(state.parent, state.ref, reason)
+      metadata_loop(state)
     end
   end
-
-  defp preflight_owner_error(state, error),
-    do: fall_back(state, owner_error_reason(error))
 
   defp preflight_complete(state) do
     state = settle_task(state)
 
-    cond do
-      precommit_fatal_failure?(state.transport_failure) ->
-        report_stream_error(
-          state.parent,
-          state.ref,
-          transport_failure_reason(state.transport_failure)
-        )
+    if pre_submission_failure?(state.transport_failure) do
+      report_fallback(
+        state.parent,
+        state.ref,
+        transport_failure_reason(state.transport_failure)
+      )
+    else
+      report_stream_error(
+        state.parent,
+        state.ref,
+        transport_failure_reason(state.transport_failure)
+      )
 
-        metadata_loop(state)
-
-      committed_failure?(state.transport_failure) ->
-        report_fallback(
-          state.parent,
-          state.ref,
-          transport_failure_reason(state.transport_failure)
-        )
-
-      true ->
-        report_fallback(state.parent, state.ref, :bridge_no_first_event)
+      metadata_loop(state)
     end
-  end
-
-  defp fall_back(state, reason) do
-    report_fallback(state.parent, state.ref, reason)
-    _state = settle_task(state)
-    :ok
   end
 
   # Post-commit streaming still watches the submit task so its settlement is

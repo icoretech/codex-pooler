@@ -31,7 +31,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
 
   alias CodexPooler.Gateway.Transports.Streaming.{
@@ -107,6 +107,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     )
 
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
+  end
+
+  defp set_bridge_preflight_timeout!(timeout_ms) do
+    module = CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge
+    previous = Application.get_env(:codex_pooler, module)
+    Application.put_env(:codex_pooler, module, preflight_timeout_ms: timeout_ms)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:codex_pooler, module)
+        value -> Application.put_env(:codex_pooler, module, value)
+      end
+    end)
   end
 
   defp completed_event(id, output \\ []) do
@@ -286,6 +299,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         receive do
         after
           1 -> await_visible_turn(pool_id, attempts_left - 1)
+        end
+    end
+  end
+
+  defp await_owner_bridge_idle(owner, attempts_left \\ 1_000)
+
+  defp await_owner_bridge_idle(owner, 0), do: :sys.get_state(owner)
+
+  defp await_owner_bridge_idle(owner, attempts_left) do
+    case :sys.get_state(owner) do
+      %{active_turn: nil, downstream: nil} = state ->
+        state
+
+      _active ->
+        receive do
+        after
+          1 -> await_owner_bridge_idle(owner, attempts_left - 1)
         end
     end
   end
@@ -1865,11 +1895,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert FakeUpstream.http_request_count(upstream) == 0
   end
 
-  # Deliberately reversed by the bridged-pre-content-retry work: a peer close
-  # before any client-rendered content now keeps the pre-commit HTTP fallback
-  # instead of surfacing a fatal synthetic (locally-declared timeouts still
-  # pin the fatal contract below).
-  test "an internal-only event followed by websocket death falls back to plain HTTP", %{
+  test "an internal-only event followed by websocket death stays on one submission", %{
     conn: conn
   } do
     rate_limits_event =
@@ -1893,14 +1919,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "previsible turn"))
 
-    assert [websocket_request | _rest] = FakeUpstream.requests(upstream)
+    assert [websocket_request] = FakeUpstream.requests(upstream)
     assert websocket_request.method == "WEBSOCKET"
     assert websocket_request.path == "/backend-api/codex/responses"
 
-    assert_precontent_fallback_success(response, upstream, setup, "resp_previsible_t1")
+    assert_precontent_committed_failure(response, upstream, setup)
   end
 
-  test "a failed transparent reconnect persists only a scrubbed HTTP fallback failure", %{
+  test "a reused websocket close persists one scrubbed committed failure", %{
     conn: conn
   } do
     close_reason = "synthetic websocket close reason"
@@ -1963,7 +1989,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "failed reconnect"))
     assert response.status == 200
-    assert event_types(response.resp_body) == ["response.failed"]
+    assert event_types(response.resp_body) == ["error"]
     refute response.resp_body =~ close_reason
     refute response.resp_body =~ upgrade_reason
     refute response.resp_body =~ "synthetic fallback failure"
@@ -1974,39 +2000,34 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              status: "failed",
              transport: "http_sse",
              response_status_code: 200,
-             last_error_code: "internal_error"
+             last_error_code: "upstream_stream_error"
            } = request
 
     assert [attempt] = attempts_for(request)
 
     assert %{
              status: "failed",
-             transport: "http_sse",
+             transport: "websocket",
              upstream_status_code: 200,
-             network_error_code: "internal_error",
-             error_message: "upstream stream returned terminal event internal_error"
+             network_error_code: "upstream_stream_error"
            } = attempt
 
-    assert_no_upstream_websocket_metadata(attempt)
-    assert byte_size(attempt.error_message) <= 256
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
     refute inspect(request) =~ close_reason
     refute inspect(request) =~ upgrade_reason
     refute inspect(attempt) =~ close_reason
     refute inspect(attempt) =~ upgrade_reason
-    refute attempt.response_metadata["upstream_websocket_bridge"]
-    refute attempt.response_metadata["upstream_transport"]
-    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
+    assert attempt.response_metadata["upstream_transport"] == "websocket"
+    assert Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
 
     assert FakeUpstream.websocket_connection_count(upstream) == 1
     assert [^connection_id] = FakeUpstream.websocket_connection_ids(upstream)
-    assert length(FakeUpstream.requests(upstream)) == 3
+    assert length(FakeUpstream.requests(upstream)) == 2
+    assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
   end
 
-  # Deliberately reversed by the bridged-pre-content-retry work: a peer close
-  # with zero delivered frames is a pre-content peer-close death and falls
-  # back to plain HTTP on the same attempt.
-  test "a websocket close before any frame falls back to plain HTTP", %{
+  test "a websocket close before any frame stays on one submission", %{
     conn: conn
   } do
     upstream =
@@ -2023,10 +2044,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "completion fallback"))
 
-    assert [websocket_request | _rest] = FakeUpstream.requests(upstream)
+    assert [websocket_request] = FakeUpstream.requests(upstream)
     assert websocket_request.method == "WEBSOCKET"
 
-    assert_precontent_fallback_success(response, upstream, setup, "resp_complete_fallback")
+    assert_precontent_committed_failure(response, upstream, setup)
   end
 
   @tag :codex_buffering
@@ -2216,6 +2237,55 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert websocket_request.method == "WEBSOCKET"
     assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
+
+    turn = Repo.one!(from t in CodexTurn, where: t.request_id == ^request.id)
+    assert {:ok, owner} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+    assert %{active_turn: nil, downstream: nil} = await_owner_bridge_idle(owner)
+  end
+
+  test "an accepted websocket request that stays silent past bridge preflight is never replayed over HTTP",
+       %{conn: conn} do
+    set_bridge_preflight_timeout!(25)
+    set_upstream_receive_timeout!(1_000)
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_idle_timeout(notify: self(), release_ref: release_ref),
+           FakeUpstream.sse_stream([completed_event("resp_silent_http_replay")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "silent-preflight-session-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "silent preflight"))
+
+    assert_receive {:fake_upstream_timeout_barrier, :websocket_idle, _pid, ^release_ref}, 1_000
+    assert response.status == 200
+    assert event_types(response.resp_body) == ["error"]
+    refute response.resp_body =~ "resp_silent_http_replay"
+
+    request = latest_request(setup.pool)
+    assert request.status == "failed"
+    assert request.transport == "http_sse"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+
+    assert [websocket_request] = FakeUpstream.requests(upstream)
+    assert websocket_request.method == "WEBSOCKET"
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert settlement_count(request) == 1
+
+    turn = Repo.one!(from t in CodexTurn, where: t.request_id == ^request.id)
+    assert {:ok, owner} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+    assert %{active_turn: nil, downstream: nil} = await_owner_bridge_idle(owner)
   end
 
   test "a failure-coded incomplete websocket terminal is preserved without HTTP replay", %{
@@ -2404,9 +2474,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   # ── Pre-content retry family (bridged-pre-content-retry plan) ──
   #
-  # A bridged turn whose upstream channel is killed by the peer before any
-  # client-rendered content falls back to plain HTTP on the same attempt;
-  # content commits the bridge; locally-declared timeouts stay fatal.
+  # A bridged turn never changes transports after its body may have reached
+  # the provider. Connection/setup failures can still fall back before submit;
+  # content and ambiguous post-submit failures commit the websocket attempt.
 
   defp output_item_added_event(response_id, item_type) do
     {"response.output_item.added",
@@ -2433,24 +2503,24 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     {"codex.event_marker", %{"type" => "codex.event_marker", "detail" => %{"count" => 1}}}
   end
 
-  defp assert_precontent_fallback_success(response, upstream, setup, fallback_id) do
+  defp assert_precontent_committed_failure(response, upstream, setup) do
     assert response.status == 200
-    assert completed_id(response.resp_body) == fallback_id
-    refute "response.failed" in event_types(response.resp_body)
+    assert completed_id(response.resp_body) == nil
+    assert event_types(response.resp_body) == ["error"]
 
     request = latest_request(setup.pool)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert request.transport == "http_sse"
     assert [attempt] = attempts_for(request)
-    assert attempt.status == "succeeded"
-    assert attempt.transport == "http_sse"
-    assert_no_upstream_websocket_metadata(attempt)
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
     assert FakeUpstream.websocket_connection_count(upstream) == 1
-    assert FakeUpstream.http_request_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
   end
 
-  test "envelope frames followed by a peer close fall back to plain HTTP", %{conn: conn} do
+  test "envelope frames followed by a peer close stay on one submission", %{conn: conn} do
     events = [
       created_event("resp_precontent_ws"),
       output_item_added_event("resp_precontent_ws", "reasoning"),
@@ -2471,10 +2541,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "precontent close turn"))
 
-    assert_precontent_fallback_success(response, upstream, setup, "resp_precontent_fallback")
+    assert_precontent_committed_failure(response, upstream, setup)
   end
 
-  test "multi-item envelopes without content still fall back on a peer close", %{conn: conn} do
+  test "multi-item envelopes without content stay on one submission", %{conn: conn} do
     events = [
       created_event("resp_multi_item_ws"),
       output_item_added_event("resp_multi_item_ws", "reasoning"),
@@ -2496,7 +2566,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "multi item turn"))
 
-    assert_precontent_fallback_success(response, upstream, setup, "resp_multi_item_fallback")
+    assert_precontent_committed_failure(response, upstream, setup)
   end
 
   test "a reasoning summary delta commits the bridge so a later close stays fatal", %{conn: conn} do
@@ -2600,25 +2670,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   @tag :rollout_drain_precontent_fallback
-  test "a pre-content drain cut falls back to plain HTTP instead of owner_drained", %{conn: conn} do
-    log = capture_log(fn -> assert_precontent_drain_fallback(conn) end)
-
-    warnings =
-      log |> String.split("\n", trim: true) |> Enum.filter(&String.contains?(&1, "[warning]"))
-
-    assert length(warnings) == 2
-
-    Enum.each(warnings, fn warning ->
-      assert warning =~ "websocket owner exit persistence failed"
-      assert warning =~ "operation=interrupt_codex_session"
-      assert warning =~ "reason_class=stale_owner_cleanup"
-      assert warning =~ "owner_exit_reason=owner_drained"
-    end)
-
+  test "a pre-content drain cut fails without resubmitting over HTTP", %{conn: conn} do
+    log = capture_log(fn -> assert_precontent_drain_fails_closed(conn) end)
+    refute log =~ "websocket owner exit persistence failed"
+    refute log =~ "reason_class=stale_owner_cleanup"
     refute log =~ "[error]"
   end
 
-  defp assert_precontent_drain_fallback(conn) do
+  defp assert_precontent_drain_fails_closed(conn) do
     release_ref = make_ref()
 
     upstream =
@@ -2648,6 +2707,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     admitted_request = latest_request(setup.pool)
     admitted_turn = Repo.get_by!(CodexTurn, request_id: admitted_request.id)
+    assert admitted_request.transport == "http_sse"
+    assert [admitted_attempt] = attempts_for(admitted_request)
+    assert admitted_attempt.transport == "websocket"
     assert {:ok, original_owner} = WebsocketOwnerSession.lookup(admitted_turn.codex_session_id)
     original_owner_monitor = Process.monitor(original_owner)
 
@@ -2673,17 +2735,29 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
                    @websocket_frame_timeout
 
     assert response.status == 200
-    assert completed_id(response.resp_body) == "resp_drain_precontent_fallback"
-    refute response.resp_body =~ "owner_drained"
+    assert completed_id(response.resp_body) == nil
 
     request = latest_request(setup.pool)
-    assert request.status == "succeeded"
-    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "owner_drained"
     assert [attempt] = attempts_for(request)
-    assert attempt.status == "succeeded"
-    assert attempt.transport == "http_sse"
-    assert FakeUpstream.http_request_count(upstream) == 1
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.network_error_code == "owner_drained"
+    assert Repo.get_by!(CodexTurn, request_id: request.id).status == "interrupted"
+
+    assert Repo.get_by!(BridgeOwnerLease, codex_session_id: admitted_turn.codex_session_id).status ==
+             "released"
+
+    assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
+
+    assert Repo.aggregate(
+             from(l in LedgerEntry,
+               where: l.request_id == ^request.id and l.entry_kind == "release"
+             ),
+             :count
+           ) == 1
   end
 
   defp oversized_completed_frame(response_id, sentinel, include_usage?) do

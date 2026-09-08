@@ -21,7 +21,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
-  alias CodexPooler.Gateway.Transports.{MisalignmentPolicyViolation, ModelUnavailability}
+
+  alias CodexPooler.Gateway.Transports.{
+    MisalignmentPolicyViolation,
+    ModelUnavailability,
+    TransportFailureReason
+  }
+
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
@@ -419,7 +425,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       endpoint: endpoint
     } = context
 
-    if allow_retry? and not compact_endpoint?(endpoint) do
+    if retry_dispatch_error?(allow_retry?, endpoint, reason) do
       case AttemptSettlement.record_retryable_failure(reserved.request, attempt, %{
              last_error_code: code,
              error_message: Metadata.safe_reason(reason),
@@ -457,6 +463,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           {:error, gateway_error}
       end
     end
+  end
+
+  defp retry_dispatch_error?(allow_retry?, endpoint, reason) do
+    allow_retry? and not compact_endpoint?(endpoint) and
+      TransportFailureReason.retry_safe_before_submission?(reason)
   end
 
   defp record_status_route_failure(%SelectedCandidateContext{} = context, status) do

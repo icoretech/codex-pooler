@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "server_error",
     "overloaded_error",
     "server_is_overloaded",
+    "slow_down",
     "websocket_connection_limit_reached"
   ]
   @websocket_auth_refresh_event_codes ["invalid_api_key", "invalid_authentication"]
@@ -22,10 +23,80 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   @upstream_request_failed_code "upstream_request_failed"
   @websocket_request_failed_code "websocket_request_failed"
 
+  # Keep provider vocabulary in one module while exposing separate predicates:
+  # retry, terminal classification, and route health deliberately have
+  # different effects for some of the same provider codes.
+  @incomplete_failure_reason_codes [
+    "upstream_request_timeout",
+    "stream_incomplete",
+    "server_error",
+    "overloaded_error",
+    "server_is_overloaded",
+    "slow_down",
+    "websocket_connection_limit_reached",
+    "invalid_api_key",
+    "invalid_authentication",
+    "context_length_exceeded",
+    "insufficient_quota",
+    "usage_not_included",
+    "invalid_previous_response_id",
+    "invalid_request",
+    "invalid_request_error",
+    "invalid_prompt",
+    "bio_policy",
+    "cyber_policy",
+    "misalignment_policy_violation",
+    "previous_response_not_found",
+    "rate_limit_exceeded",
+    "unauthorized",
+    "usage_limit_exceeded",
+    "usage_limit_reached",
+    "workspace_member_credits_depleted",
+    "workspace_member_usage_limit_reached",
+    "workspace_owner_credits_depleted",
+    "workspace_owner_usage_limit_reached"
+  ]
+  @health_neutral_error_codes [
+    "context_length_exceeded",
+    "cyber_policy",
+    "invalid_request",
+    "invalid_request_error",
+    "invalid_previous_response_id",
+    "invalid_prompt",
+    "bio_policy",
+    "max_output_tokens",
+    "misalignment_policy_violation",
+    "missing_required_parameter",
+    "overloaded_error",
+    "previous_response_not_found",
+    "server_is_overloaded",
+    "slow_down",
+    "server_error",
+    "unsupported_input_image_format",
+    "unsupported_parameter",
+    "unsupported_value",
+    "usage_limit_exceeded",
+    "usage_limit_reached"
+  ]
+  @codex_response_failed_non_retryable_codes [
+    "context_length_exceeded",
+    "insufficient_quota",
+    "usage_not_included",
+    "cyber_policy",
+    "misalignment_policy_violation",
+    "invalid_prompt",
+    "bio_policy",
+    "server_is_overloaded",
+    "slow_down"
+  ]
+
   @known_error_codes Enum.uniq(
                        @retryable_first_event_codes ++
                          @websocket_auth_refresh_event_codes ++
                          @previous_response_miss_codes ++
+                         @incomplete_failure_reason_codes ++
+                         @health_neutral_error_codes ++
+                         @codex_response_failed_non_retryable_codes ++
                          [
                            @stream_incomplete_code,
                            @previous_response_not_found_code,
@@ -120,6 +191,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   @spec retryable_first_event_code?(String.t() | nil) :: boolean()
   def retryable_first_event_code?(code) when code in @retryable_first_event_codes, do: true
   def retryable_first_event_code?(_code), do: false
+
+  @spec incomplete_failure_reason?(String.t() | nil) :: boolean()
+  def incomplete_failure_reason?(code) when code in @incomplete_failure_reason_codes, do: true
+  def incomplete_failure_reason?(_code), do: false
+
+  @spec health_neutral_error_code?(String.t() | nil) :: boolean()
+  def health_neutral_error_code?(code) when code in @health_neutral_error_codes, do: true
+  def health_neutral_error_code?(_code), do: false
+
+  @spec codex_compaction_terminal_retryable?(String.t() | nil, String.t() | nil) :: boolean()
+  def codex_compaction_terminal_retryable?("response.incomplete", _code), do: true
+
+  def codex_compaction_terminal_retryable?("response.failed", code),
+    do: code not in @codex_response_failed_non_retryable_codes
+
+  def codex_compaction_terminal_retryable?(_event_type, _code), do: false
 
   @spec websocket_auth_refresh_event_code?(String.t() | nil) :: boolean()
   def websocket_auth_refresh_event_code?(code) when code in @websocket_auth_refresh_event_codes,

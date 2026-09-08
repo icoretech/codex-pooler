@@ -840,12 +840,34 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         # An unattempted compaction successor cannot be reattached or replayed.
         # Only its native full-history retry may reach the owner-idle check and
         # the transactional successor claim, which validates exact reclamation.
-        if native_full_history_compaction?(context.endpoint, context.request_options),
-          do: replay_intent_result(:fresh, authorization_binding, nil),
-          else: Repo.rollback(duplicate_turn_error())
+        if native_full_history_compaction?(context.endpoint, context.request_options) do
+          classify_native_compaction_lifecycle_conflict(
+            locked_session,
+            authorization.api_key,
+            model,
+            context,
+            authorization_binding
+          )
+        else
+          Repo.rollback(duplicate_turn_error())
+        end
 
       {:error, _reason} ->
         Repo.rollback(duplicate_turn_error())
+    end
+  end
+
+  defp classify_native_compaction_lifecycle_conflict(
+         session,
+         api_key,
+         model,
+         context,
+         authorization_binding
+       ) do
+    case native_compaction_retry_preflight(session, api_key, model, context) do
+      {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
+      {:error, :successor_claimed} -> replay_intent_result(:fresh, authorization_binding, nil)
+      _none_or_invalid -> Repo.rollback(duplicate_turn_error())
     end
   end
 
@@ -865,11 +887,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp classify_client_retry_intent(
-         _session,
-         _api_key,
-         _model,
+         session,
+         api_key,
+         model,
          %{
            endpoint: "/backend-api/codex/responses/compact",
+           requested_model: requested_model,
+           semantic_turn_digest: semantic_turn_digest,
+           replay_claim_digest: replay_claim_digest,
            request_options:
              %RequestOptions{
                payload_context: %{
@@ -881,9 +906,25 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          },
          authorization_binding
        ) do
-    if native_compaction_preflight?(options),
-      do: replay_intent_result(:fresh, authorization_binding, nil),
-      else: Repo.rollback(duplicate_turn_error())
+    cond do
+      valid_incremental_compaction_admission?(options) ->
+        replay_intent_result(:fresh, authorization_binding, nil)
+
+      native_full_history_compaction_preflight?(options) ->
+        case native_compaction_retry_preflight(session, api_key, model, %{
+               requested_model: requested_model,
+               semantic_turn_digest: semantic_turn_digest,
+               replay_claim_digest: replay_claim_digest,
+               request_options: options
+             }) do
+          :none -> replay_intent_result(:fresh, authorization_binding, nil)
+          {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
+          {:error, _reason} -> Repo.rollback(duplicate_turn_error())
+        end
+
+      true ->
+        Repo.rollback(duplicate_turn_error())
+    end
   end
 
   defp classify_client_retry_intent(session, api_key, model, context, authorization_binding) do
@@ -904,13 +945,45 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  defp native_compaction_preflight?(%RequestOptions{
+  defp native_compaction_retry_preflight(
+         session,
+         api_key,
+         model,
+         %{
+           requested_model: requested_model,
+           semantic_turn_digest: semantic_turn_digest,
+           replay_claim_digest: replay_claim_digest,
+           request_options:
+             %RequestOptions{
+               runtime: %{api_key_runtime_epoch: api_key_runtime_epoch},
+               continuity: %{previous_response_id: previous_response_id},
+               payload_context: payload_context
+             } = options
+         }
+       ) do
+    Accounting.client_retry_preflight_snapshot(session, api_key, model, %{
+      endpoint: "/backend-api/codex/responses/compact",
+      requested_model: requested_model,
+      runtime_revocation_epoch: api_key_runtime_epoch,
+      semantic_turn_digest: semantic_turn_digest,
+      original_request_claim: options.continuity.request_claim_key,
+      replay_claim_digest: replay_claim_digest,
+      anchor_present?: not is_nil(previous_response_id),
+      retry_policy: :native_compaction,
+      full_history?: payload_context.compaction_input_mode == :full_history,
+      compaction_trigger_bridge?: true
+    })
+  end
+
+  defp native_full_history_compaction_preflight?(%RequestOptions{
          payload_context: %{compaction_input_mode: :full_history},
          transport: %{websocket_delivery_mode: :collect_full_history}
        }),
        do: true
 
-  defp native_compaction_preflight?(
+  defp native_full_history_compaction_preflight?(%RequestOptions{}), do: false
+
+  defp valid_incremental_compaction_admission?(
          %RequestOptions{
            payload_context: %{compaction_input_mode: :incremental},
            transport: %{websocket_delivery_mode: :collect_compaction}
@@ -922,7 +995,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     )
   end
 
-  defp native_compaction_preflight?(%RequestOptions{}), do: false
+  defp valid_incremental_compaction_admission?(%RequestOptions{}), do: false
 
   defp validate_replay_session_binding(
          %CodexSession{pool_id: pool_id, api_key_id: api_key_id} = session,
@@ -1170,9 +1243,18 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp adapt_websocket_result(result, %{result_adapter: result_adapter})
        when is_function(result_adapter, 1),
-       do: result_adapter.(result)
+       do: maybe_adapt_websocket_result(result, result_adapter)
 
   defp adapt_websocket_result(result, _coerced), do: result
+
+  defp maybe_adapt_websocket_result(
+         {:ok, %{websocket_messages: [%{"type" => type}]}} = result,
+         _result_adapter
+       )
+       when type in ["response.failed", "response.incomplete", "error"],
+       do: result
+
+  defp maybe_adapt_websocket_result(result, result_adapter), do: result_adapter.(result)
 
   defp execute_prepared_response_create(
          %PreparedWebsocketFrame{
@@ -1603,36 +1685,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     case request_options.runtime.replay_lifecycle_binding do
       %{client_retry_predecessor_request_id: predecessor_request_id}
       when is_binary(predecessor_request_id) ->
-        retry_attrs =
-          attrs
-          |> Map.put(:codex_session, request_options.continuity.codex_session)
-          |> Map.put(:semantic_turn_digest, request_options.continuity.semantic_turn_key)
-          |> Map.put(:original_request_claim, request_options.continuity.request_claim_key)
-          |> Map.put(:replay_claim_digest, request_options.continuity.replay_claim_digest)
-          |> Map.put(
-            :anchor_present?,
-            not is_nil(request_options.continuity.previous_response_id)
-          )
-          |> Map.put(
-            :owner_idle_validated?,
-            Map.get(
-              request_options.runtime.replay_lifecycle_binding,
-              :owner_idle_validated?
-            ) == true
-          )
-          |> Map.put(
-            :owner_lease_token,
-            Map.get(request_options.runtime.replay_lifecycle_binding, :owner_lease_token)
-          )
-          |> Map.put(
-            :owner_instance_id,
-            Map.get(request_options.runtime.replay_lifecycle_binding, :owner_instance_id)
-          )
-
-        case Accounting.claim_client_retry_successor(auth, model, payload, retry_attrs) do
-          {:ok, claim} -> {:ok, Map.from_struct(claim)}
-          {:error, _reason} -> {:error, duplicate_turn_error()}
-        end
+        reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
 
       _ordinary ->
         if is_nil(turn_claim) and native_full_history_compaction?(endpoint, request_options) do
@@ -1640,6 +1693,38 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         else
           Accounting.reserve(auth, model, payload, attrs)
         end
+    end
+  end
+
+  defp reserve_client_retry(auth, model, payload, endpoint, request_options, attrs) do
+    if native_full_history_compaction?(endpoint, request_options) do
+      reserve_compaction_retry(auth, model, payload, request_options, attrs)
+    else
+      retry_attrs =
+        attrs
+        |> Map.put(:codex_session, request_options.continuity.codex_session)
+        |> Map.put(:semantic_turn_digest, request_options.continuity.semantic_turn_key)
+        |> Map.put(:original_request_claim, request_options.continuity.request_claim_key)
+        |> Map.put(:replay_claim_digest, request_options.continuity.replay_claim_digest)
+        |> Map.put(:anchor_present?, not is_nil(request_options.continuity.previous_response_id))
+        |> Map.put(
+          :owner_idle_validated?,
+          Map.get(request_options.runtime.replay_lifecycle_binding, :owner_idle_validated?) ==
+            true
+        )
+        |> Map.put(
+          :owner_lease_token,
+          Map.get(request_options.runtime.replay_lifecycle_binding, :owner_lease_token)
+        )
+        |> Map.put(
+          :owner_instance_id,
+          Map.get(request_options.runtime.replay_lifecycle_binding, :owner_instance_id)
+        )
+
+      case Accounting.claim_client_retry_successor(auth, model, payload, retry_attrs) do
+        {:ok, claim} -> {:ok, Map.from_struct(claim)}
+        {:error, _reason} -> {:error, duplicate_turn_error()}
+      end
     end
   end
 

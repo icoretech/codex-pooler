@@ -99,27 +99,72 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert StreamProtocol.terminal_failure(frame) == :error
     end
 
-    test "classifies failure-coded response.incomplete as failed" do
-      frame =
-        sse_event("response.incomplete", %{
-          "type" => "response.incomplete",
-          "response" => %{
-            "id" => "resp_failed_incomplete",
-            "status" => "incomplete",
-            "incomplete_details" => %{"reason" => "context_length_exceeded"}
-          }
-        })
+    test "classifies release-known failure reasons in response.incomplete as failed" do
+      for code <- [
+            "context_length_exceeded",
+            "invalid_prompt",
+            "bio_policy",
+            "cyber_policy",
+            "misalignment_policy_violation",
+            "usage_not_included",
+            "slow_down"
+          ] do
+        frame =
+          sse_event("response.incomplete", %{
+            "type" => "response.incomplete",
+            "response" => %{
+              "id" => "resp_failed_incomplete",
+              "status" => "incomplete",
+              "incomplete_details" => %{"reason" => code}
+            }
+          })
 
-      assert {:ok, %{kind: :failed, failure: failure}} = StreamProtocol.terminal_outcome(frame)
-      assert failure.code == "context_length_exceeded"
-      assert failure.event_type == "response.incomplete"
+        assert {:ok, %{kind: :failed, failure: failure}} = StreamProtocol.terminal_outcome(frame)
+        assert failure.code == code
+        assert failure.event_type == "response.incomplete"
 
-      normalized = StreamProtocol.normalize_codex_responses_sse_data(frame)
-      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(normalized)
-      assert data["type"] == "response.failed"
-      assert data["response"]["status"] == "failed"
-      assert data["error"]["code"] == "context_length_exceeded"
-      assert data["response"]["error"]["code"] == "context_length_exceeded"
+        normalized = StreamProtocol.normalize_codex_responses_sse_data(frame)
+        assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(normalized)
+        assert data["type"] == "response.failed"
+        assert data["response"]["status"] == "failed"
+        assert data["error"]["code"] == code
+        assert data["response"]["error"]["code"] == code
+      end
+    end
+
+    test "keeps the released client terminal retry policy explicit" do
+      retryable = ["server_error", "upstream_terminal_failure", "rate_limit_exceeded"]
+
+      terminal = [
+        "context_length_exceeded",
+        "insufficient_quota",
+        "usage_not_included",
+        "cyber_policy",
+        "misalignment_policy_violation",
+        "invalid_prompt",
+        "bio_policy",
+        "server_is_overloaded",
+        "slow_down"
+      ]
+
+      for code <- retryable do
+        assert StreamProtocol.ErrorCodes.codex_compaction_terminal_retryable?(
+                 "response.failed",
+                 code
+               )
+      end
+
+      for code <- terminal do
+        refute StreamProtocol.ErrorCodes.codex_compaction_terminal_retryable?(
+                 "response.failed",
+                 code
+               )
+      end
+
+      assert StreamProtocol.ErrorCodes.codex_compaction_terminal_retryable?(
+               "response.incomplete",
+               "max_output_tokens"
+             )
     end
 
     test "classifies workspace credit depletion response.incomplete as failed" do

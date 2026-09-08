@@ -2097,10 +2097,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                      malformed_trigger: "pre_dispatch_invalid_request",
                      compact_saturation: "server_is_overloaded",
                      invalid_result: "invalid_compaction_response",
-                     provider_terminal: "invalid_compaction_response"
+                     provider_terminal: "canonical_provider_terminal"
                    },
                    socket_reuse: "ordinary_follow_up_same_downstream_socket",
-                   collector_retry: false,
+                   collector_retry: "one_client_full_history_successor_when_codex_retryable",
                    diagnostic: %{
                      request_metadata: "compaction_bridge",
                      applied: true,
@@ -2640,7 +2640,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "only when a committed websocket-bridge turn is aborted"
 
       assert feature.contract =~
-               "keep precommit drain admission on its existing fallback or refusal path"
+               "fail precommit drains without hidden HTTP resubmission"
 
       assert feature.contract =~
                "keep client disconnect and non-drain interruption mappings unchanged"
@@ -2691,7 +2691,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    "proxy_turns_failed"
                  ]
                },
-               precommit_drain: "existing_fallback_or_refusal",
+               precommit_drain: "fail_closed_without_resubmission",
                client_disconnect: "unchanged",
                non_drain_interruptions: "byte_identical",
                backend_raw_streams: "unchanged",

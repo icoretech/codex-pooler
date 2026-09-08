@@ -5,6 +5,7 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBindingTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.WebsocketOwnerBinding
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexTurn}
   alias CodexPooler.Gateway.Websocket
@@ -20,6 +21,83 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBindingTest do
     changed = RequestOptions.put_transport(fixture.options, websocket_owner_downstream_epoch: 2)
     assert {:error, :stale_websocket_owner_binding} = bind(%{fixture | options: changed})
     assert Repo.reload!(fixture.request).request_metadata == bound.request_metadata
+  end
+
+  test "bridge binding marks the upstream carrier in the same transaction" do
+    fixture = fixture()
+
+    assert {:ok, %{request: request, attempt: attempt}} =
+             WebsocketOwnerBinding.bind_bridge(
+               fixture.auth,
+               fixture.request,
+               fixture.attempt,
+               fixture.options
+             )
+
+    assert request.request_metadata["websocket_owner_forwarding"] == expected_binding(fixture)
+    assert request.transport == "http_sse"
+    assert attempt.transport == "websocket"
+    assert Repo.reload!(fixture.attempt).transport == "websocket"
+  end
+
+  test "proven pre-submission fallback atomically restores the HTTP attempt" do
+    fixture = fixture()
+
+    assert {:ok, %{request: request, attempt: attempt}} =
+             WebsocketOwnerBinding.bind_bridge(
+               fixture.auth,
+               fixture.request,
+               fixture.attempt,
+               fixture.options
+             )
+
+    assert {:ok, %{request: restored, attempt: restored_attempt}} =
+             WebsocketOwnerBinding.restore_http_fallback(
+               fixture.auth,
+               request,
+               attempt,
+               fixture.options
+             )
+
+    assert restored.request_metadata["websocket_owner_forwarding"] == nil
+    assert restored.transport == "http_sse"
+    assert restored_attempt.transport == "http_sse"
+    assert Repo.reload!(fixture.attempt).transport == "http_sse"
+  end
+
+  test "fallback restore refuses stale authority or terminal work without changing it" do
+    for invalid <- [
+          :released_lease,
+          :expired_lease,
+          :wrong_lease,
+          :key_epoch,
+          :changed_binding,
+          :terminal_request,
+          :terminal_attempt,
+          :replacement_attempt
+        ] do
+      fixture = fixture()
+
+      assert {:ok, %{request: request, attempt: attempt}} =
+               WebsocketOwnerBinding.bind_bridge(
+                 fixture.auth,
+                 fixture.request,
+                 fixture.attempt,
+                 fixture.options
+               )
+
+      invalidate(%{fixture | request: request, attempt: attempt}, invalid)
+
+      assert {:error, :stale_websocket_owner_binding} =
+               WebsocketOwnerBinding.restore_http_fallback(
+                 fixture.auth,
+                 request,
+                 attempt,
+                 fixture.options
+               )
+
+      assert Repo.reload!(attempt).transport == "websocket"
+    end
   end
 
   for invalid <- [
@@ -72,7 +150,11 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBindingTest do
   end
 
   defp fixture do
-    setup = accounting_setup()
+    setup =
+      accounting_setup(%{
+        price_version: "websocket-owner-binding-#{System.unique_integer([:positive])}"
+      })
+
     assert {:ok, session} = Websocket.start_codex_session(setup.auth, %{})
 
     request =
@@ -148,6 +230,14 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBindingTest do
       status: "in_progress",
       completed_at: nil
     })
+  end
+
+  defp invalidate(fixture, :changed_binding) do
+    update_row(fixture.request,
+      request_metadata: %{
+        "websocket_owner_forwarding" => Map.put(expected_binding(fixture), "downstream_epoch", 2)
+      }
+    )
   end
 
   defp change_lease(fixture, attrs),

@@ -1113,7 +1113,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                callback_construction: "owner_node_only",
                incompatible_remote_owner: "reject_before_owner_lookup_or_upstream_submission",
                native_result: "existing_owner_unavailable_error",
-               previsible_bridge_result: "existing_http_fallback"
+               previsible_bridge_result: "fail_closed_without_resubmission"
              }
 
       assert feature.observability == %{
@@ -1161,13 +1161,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                native_attach_arity: 2,
                bridge_attach_arity: 3,
                old_owner_native_attach: "compatible_without_connection_metadata",
-               old_owner_bridge_attach: "fail_closed_http_fallback",
+               old_owner_bridge_attach: "fail_closed_without_resubmission",
                owner_submission: %{
                  protocol: "versioned_data_only",
                  callback_construction: "owner_node_only",
                  incompatible_remote_owner: "reject_before_owner_lookup_or_upstream_submission",
                  native_result: "existing_owner_unavailable_error",
-                 previsible_bridge_result: "existing_http_fallback"
+                 previsible_bridge_result: "fail_closed_without_resubmission"
                },
                operator_action: "none"
              }
@@ -1449,10 +1449,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         malformed_trigger: "pre_dispatch_invalid_request",
         compact_saturation: "server_is_overloaded",
         invalid_result: "invalid_compaction_response",
-        provider_terminal: "invalid_compaction_response"
+        provider_terminal: "canonical_provider_terminal"
       },
       socket_reuse: "ordinary_follow_up_same_downstream_socket",
-      collector_retry: false,
+      collector_retry: "one_client_full_history_successor_when_codex_retryable",
       diagnostic: %{
         request_metadata: "compaction_bridge",
         applied: true,

@@ -1503,14 +1503,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert FakeUpstream.websocket_connection_count(upstream) == 2
   end
 
-  test "characterization reconnects the same session lifecycle after a preterminal peer close" do
+  test "a preterminal peer close does not replay the accepted request" do
     upstream =
       start_upstream(
         {:sequence,
          [
            websocket_success("resp_ws_characterized_initial"),
-           FakeUpstream.websocket_sse_then_close([]),
-           websocket_success("resp_ws_characterized_reconnect")
+           FakeUpstream.websocket_sse_then_close([])
          ]}
       )
 
@@ -1524,11 +1523,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     generation_one = %{initial_lifecycle | generation: 1}
     assert_connection_metadata(first_result, generation_one, false, false)
 
-    assert {:ok, second_result} = UpstreamWebsocketSession.request(session, request)
-    generation_two = %{initial_lifecycle | generation: 2}
-    assert_connection_metadata(second_result, generation_two, false, true)
-    assert lifecycle_state(session) == generation_two
-    assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert {:error, second_result} = UpstreamWebsocketSession.request(session, request)
+    assert second_result.reason == :upstream_websocket_closed_before_terminal
+    assert second_result.transport_failure["upstream_committed"] == true
+    assert_connection_metadata(second_result, generation_one, true, false)
+    assert lifecycle_state(session).generation == generation_one.generation
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert length(FakeUpstream.requests(upstream)) == 2
   end
 
   test "controlled terminal-plus-close releases the terminal before the peer close" do
@@ -2124,15 +2125,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     upstream.close.(upstream_pid)
   end
 
-  test "advances generations 1,1,2 through reuse and transparent reconnect" do
+  test "does not transparently replay an accepted request after a reused connection closes" do
     upstream =
       start_upstream(
         {:sequence,
          [
            websocket_success("resp_ws_generation_1"),
            websocket_success("resp_ws_generation_1_reused"),
-           FakeUpstream.websocket_sse_then_close([]),
-           websocket_success("resp_ws_generation_2")
+           FakeUpstream.websocket_sse_then_close([])
          ]}
       )
 
@@ -2159,24 +2159,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert lifecycle_state(session) == generation_one
     assert_connection_metadata(reused_result, generation_one, true, false)
 
-    assert {:ok, reconnected_result} = UpstreamWebsocketSession.request(session, request)
+    assert {:error, interrupted_result} = UpstreamWebsocketSession.request(session, request)
+    assert interrupted_result.reason == :upstream_websocket_closed_before_terminal
+    assert interrupted_result.transport_failure["upstream_committed"] == true
+    assert lifecycle_state(session).generation == 1
 
-    generation_two = %{initial_lifecycle | generation: 2}
-    assert lifecycle_state(session) == generation_two
-    assert_connection_metadata(reconnected_result, generation_two, false, true)
-
-    assert [first_request, second_request, interrupted_request, reconnected_request] =
+    assert [first_request, second_request, interrupted_request] =
              FakeUpstream.requests(upstream)
 
     assert first_request.websocket_connection_id == second_request.websocket_connection_id
     assert interrupted_request.websocket_connection_id == first_request.websocket_connection_id
-    assert reconnected_request.websocket_connection_id != first_request.websocket_connection_id
 
-    assert Enum.map([first_request, second_request, interrupted_request, reconnected_request], fn
+    assert Enum.map([first_request, second_request, interrupted_request], fn
              captured -> captured.json["input"]
-           end) == List.duplicate([handoff], 4)
+           end) == List.duplicate([handoff], 3)
 
-    assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
   end
 
   test "request_once uses an invocation-scoped lifecycle and reaches generation one" do
@@ -2556,18 +2554,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert cleanup.client_socket_count == 0
   end
 
-  test "failed reconnect preserves the last successful generation" do
+  test "ambiguous close preserves the last successful generation without reconnect" do
     upstream =
       start_upstream(
         {:sequence,
          [
            websocket_success("resp_ws_before_failed_reconnect"),
            FakeUpstream.websocket_sse_then_close([]),
-           FakeUpstream.websocket_upgrade_error(
-             %{"error" => %{"code" => "reconnect_rejected"}},
-             status: 503
-           ),
-           websocket_success("resp_ws_after_failed_reconnect")
+           websocket_success("resp_ws_after_explicit_request")
          ]}
       )
 
@@ -2585,7 +2579,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert {:error, failed_reconnect} = UpstreamWebsocketSession.request(session, request)
 
-    assert %{body: "", reason: {:websocket_upgrade_failed, 503, _headers}} = failed_reconnect
+    assert %{body: "", reason: :upstream_websocket_closed_before_terminal} = failed_reconnect
     assert_connection_metadata(failed_reconnect, established_lifecycle, true, false)
 
     assert_disconnected_lifecycle(session, established_lifecycle)
@@ -3962,7 +3956,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   @tag :continuation_generation_boundary
-  test "transparent reconnect never replays a marked continuation on the next generation" do
+  test "ambiguous marked continuation close requires a later explicit request" do
     upstream =
       start_upstream(
         {:sequence,
@@ -3979,18 +3973,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     request = websocket_request(FakeUpstream.url(upstream))
     assert {:ok, _warmup} = UpstreamWebsocketSession.request(session, request)
 
-    assert_guard_terminal(
-      session,
-      %{request | connection_bound_continuation?: true},
-      :transparent_reconnect_guard,
-      :reconnected
-    )
+    assert {:error, failure} =
+             UpstreamWebsocketSession.request(
+               session,
+               %{request | connection_bound_continuation?: true}
+             )
+
+    assert failure.reason == :upstream_websocket_closed_before_terminal
+    assert failure.transport_failure["upstream_committed"] == true
 
     assert [warmup, continuation] = FakeUpstream.requests(upstream)
     assert warmup.websocket_connection_id == continuation.websocket_connection_id
 
     assert {:ok, later_result} = UpstreamWebsocketSession.request(session, request)
-    assert later_result.upstream_websocket_connection.reused
+    refute later_result.upstream_websocket_connection.reconnected
 
     assert [_warmup, continuation, later_full_request] = FakeUpstream.requests(upstream)
     assert later_full_request.websocket_connection_id != continuation.websocket_connection_id

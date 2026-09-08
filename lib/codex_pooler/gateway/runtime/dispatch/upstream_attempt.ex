@@ -36,9 +36,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
     end
   end
 
-  # A bridged turn that fails before the first upstream event falls back to
-  # plain HTTP dispatch on the same candidate and attempt; after the first
-  # event it finalizes through the standard HTTP streaming path.
+  # A bridged turn falls back to plain HTTP only with positive proof that the
+  # failure preceded upstream submission. Silence and ambiguous failures stay
+  # on the websocket attempt and finalize through the standard streaming path.
   defp dispatch_websocket_bridge(%PreparedContext{} = prepared_context, callbacks) do
     case WebsocketBridge.open(prepared_context) do
       {:ok, %PreparedContext{context: context}, response} ->

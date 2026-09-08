@@ -362,10 +362,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     end
   end
 
-  # Deliberately reversed by the bridged-pre-content-retry work: a peer close
-  # without a terminal and without content is retried over plain HTTP on the
-  # same attempt with a single settlement.
-  test "websocket close without a terminal falls back to plain HTTP exactly once",
+  test "websocket close without a terminal fails without HTTP resubmission",
        %{conn: conn} do
     release_ref = make_ref()
 
@@ -412,16 +409,15 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     response = Task.await(request_task, 1_000)
 
     assert response.status == 200
-    assert stream_event_types(response.resp_body) == ["response.created", "response.completed"]
-    assert response.resp_body =~ "resp_close_fallback"
-    refute response.resp_body =~ "upstream_stream_error"
+    assert stream_event_types(response.resp_body) == ["error"]
+    refute response.resp_body =~ "resp_close_fallback"
 
     assert [upstream_request | _rest] = FakeUpstream.requests(upstream)
     assert upstream_request.method == "WEBSOCKET"
-    assert FakeUpstream.http_request_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
 
     request = latest_request(setup.pool.id)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
 
     assert Repo.aggregate(
              from(attempt in Attempt, where: attempt.request_id == ^request.id),

@@ -22,6 +22,7 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
 
@@ -361,6 +362,62 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
              Repo.get!(Request, reserved.request.id).request_metadata,
              "prompt_cache_controls_downgraded"
            )
+  end
+
+  test "ambiguous post-submit HTTP failure does not rotate candidates" do
+    setup = accounting_setup()
+
+    %{assignment: second_assignment, identity: second_identity} =
+      CodexPooler.PoolerFixtures.upstream_assignment_fixture(setup.pool)
+
+    payload = %{"model" => setup.model.exposed_model_id}
+
+    assert {:ok, reserved} =
+             Accounting.reserve(setup.auth, setup.model, payload, %{
+               endpoint: "/backend-api/codex/responses",
+               transport: "http_json",
+               correlation_id: "ambiguous-dispatch-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    request_options = request_options()
+
+    context = %SelectedCandidateContext{
+      auth: setup.auth,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      model: setup.model,
+      reserved: reserved,
+      request_options: request_options,
+      route_plan:
+        BridgeRing.plan_route(%{
+          auth: setup.auth,
+          model: setup.model,
+          candidates: [
+            {setup.assignment, setup.identity},
+            {second_assignment, second_identity}
+          ],
+          route_plan_input: RoutePlanInput.from_reserved(reserved),
+          request_options: request_options
+        }),
+      assignment: setup.assignment,
+      identity: setup.identity,
+      index: 0,
+      retry_count: 0,
+      allow_retry?: true,
+      routing_attempt_metadata: %{},
+      route_class: "proxy_http",
+      attempt: attempt,
+      started: System.monotonic_time(:millisecond)
+    }
+
+    error = TransportFailureReason.upstream_transport_error(:timeout, %{phase: :request})
+
+    assert {:error, %{status: 502}} = Finalization.handle_dispatch_error(error, context, 7)
+    assert Repo.reload!(reserved.request).status == "failed"
+    refute Repo.reload!(attempt).retryable
+    assert Repo.aggregate(Attempt, :count) == 1
   end
 
   test "terminal websocket failure settles once with the sanitized local guard diagnostic" do

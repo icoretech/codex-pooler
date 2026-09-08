@@ -593,6 +593,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert request.status == "succeeded"
     assert attempt.status == "succeeded"
+
     assert Repo.all(from(d in BridgeDemotion)) == []
     assert Repo.all(from(c in RoutingCircuitState)) == []
 
@@ -9791,7 +9792,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :feature_websocket_connection_limit_retry
-  test "websocket pre-visible upstream close retries same assignment with accounted first attempt" do
+  test "websocket pre-visible upstream close does not replay an accepted request" do
     upstream =
       start_upstream(
         {:sequence,
@@ -9808,7 +9809,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert :ok =
+    assert {:error, %{code: "upstream_request_failed"}} =
              execute_websocket_response(
                auth,
                CodexPooler.JSON.encode!(%{
@@ -9822,20 +9823,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    assert_received {:websocket_frame, frame}
-    assert %{"id" => "resp_ws_pre_visible_close_retry"} = CodexPooler.JSON.decode!(frame)
     refute_received {:websocket_frame, _unexpected}
 
-    assert FakeUpstream.websocket_connection_count(upstream) == 2
-    assert [first_request, second_request] = FakeUpstream.requests(upstream)
-    assert first_request.websocket_connection_id != second_request.websocket_connection_id
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [first_request] = FakeUpstream.requests(upstream)
+    assert first_request.method == "WEBSOCKET"
 
-    assert [first_attempt, second_attempt] =
+    assert [first_attempt] =
              Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
 
     assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
-    assert first_attempt.status == "retryable_failed"
-    assert first_attempt.retryable == true
+    assert first_attempt.status == "failed"
+    refute first_attempt.retryable
     assert first_attempt.network_error_code == "upstream_stream_error"
 
     assert first_attempt.response_metadata["transport_failure"] == %{
@@ -9862,16 +9861,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "websocket_fragment_open" => false
            }
 
-    assert second_attempt.pool_upstream_assignment_id == setup.assignment.id
-    assert second_attempt.status == "succeeded"
-
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.status == "succeeded"
-    assert request.retry_count == 1
-    assert request.last_error_code == nil
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_stream_error"
 
-    assert Repo.all(from(d in BridgeDemotion)) == []
-    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert [%BridgeDemotion{reason_code: "upstream_stream_error"}] =
+             Repo.all(from(d in BridgeDemotion))
+
+    assert [%RoutingCircuitState{reason_code: "upstream_stream_error"}] =
+             Repo.all(from(c in RoutingCircuitState))
 
     metadata_text = inspect({request.request_metadata, first_attempt.response_metadata})
     refute metadata_text =~ setup.authorization

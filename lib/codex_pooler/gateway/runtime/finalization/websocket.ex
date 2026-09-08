@@ -23,6 +23,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   alias CodexPooler.Gateway.Transports.Websocket.OrdinarySuccessResult
 
   alias CodexPooler.Gateway.Transports.Websocket.{
+    DiagnosticTaxonomy,
     NativeCompactionAdmission,
     UpstreamWebsocketSession,
     WebsocketOwnerAdmissionControlV1,
@@ -171,11 +172,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       |> Map.put(:upstream_error_param, failure.upstream_error_param)
       |> Map.put(:collected_provider_failure, failure)
 
-    if native_full_history_compaction?(context.request_options) do
-      finalize_invalid_compaction(context, finalization, compact_ack_error())
-    else
-      finalize_terminal_failure(context, finalization)
-    end
+    finalization =
+      if native_full_history_compaction?(context.request_options) do
+        Map.put(
+          finalization,
+          :collected_provider_failure_event,
+          CompactionResultCollector.provider_failure_websocket_event(failure)
+        )
+      else
+        finalization
+      end
+
+    finalize_terminal_failure(context, finalization)
   end
 
   defp validate_public_compaction_response(
@@ -247,8 +255,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   defp collected_compaction_diagnostics(metadata, %{collected_provider_failure: failure}) do
     metadata
-    |> Map.put("upstream_error_code", failure.upstream_code)
-    |> Map.put("stream_terminal_type", failure.event_type)
+    |> maybe_put_terminal_error_code(failure.upstream_code)
+    |> maybe_put_stream_terminal_type(failure.event_type)
     |> Metadata.maybe_put_upstream_error_param(failure)
   end
 
@@ -670,6 +678,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         Map.get(finalization, :upstream_error_param),
         Map.get(finalization, :transport_failure)
       )
+      |> collected_compaction_diagnostics(finalization)
 
     settle_terminal_failure(
       context,
@@ -717,6 +726,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       do: Map.delete(metadata, "upstream_error_param"),
       else: metadata
   end
+
+  defp maybe_put_terminal_error_code(metadata, upstream_code) when is_binary(upstream_code),
+    do:
+      Map.put(
+        metadata,
+        "upstream_error_code",
+        DiagnosticTaxonomy.identifier(upstream_code)
+      )
+
+  defp maybe_put_terminal_error_code(metadata, _upstream_code), do: metadata
+
+  defp maybe_put_stream_terminal_type(metadata, terminal) when is_binary(terminal),
+    do: Map.put(metadata, "stream_terminal_type", DiagnosticTaxonomy.identifier(terminal))
+
+  defp maybe_put_stream_terminal_type(metadata, _terminal), do: metadata
 
   defp maybe_put_terminal_transport_failure(metadata, transport_failure)
        when map_size(transport_failure) > 0,
@@ -787,6 +811,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     if code == MisalignmentPolicyViolation.code(),
       do: MisalignmentPolicyViolation.fallback_message(),
       else: code
+  end
+
+  defp terminal_failure_result(
+         %{collected_provider_failure_event: event},
+         _code
+       ) do
+    {:ok, %{status: 200, headers: [], websocket_messages: [event]}}
   end
 
   defp terminal_failure_result(

@@ -1517,7 +1517,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
            websocket_success("direct-initial"),
            websocket_success("direct-reused"),
            FakeUpstream.websocket_sse_then_close([]),
-           websocket_success("direct-reconnected")
+           websocket_success("direct-later-request")
          ]}
       )
 
@@ -1547,13 +1547,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              reconnected: false
            }
 
-    assert {:ok, reconnected} = UpstreamDispatch.websocket_request(request)
+    assert {:error, interrupted} = UpstreamDispatch.websocket_request(request)
 
-    assert Map.fetch!(reconnected, :upstream_websocket_connection) == %{
+    assert Map.fetch!(interrupted, :upstream_websocket_connection) == %{
+             lifecycle_id: initial_connection.lifecycle_id,
+             generation: 1,
+             reused: true,
+             reconnected: false
+           }
+
+    assert interrupted.transport_failure["upstream_committed"] == true
+
+    assert {:ok, later_request} = UpstreamDispatch.websocket_request(request)
+
+    assert Map.fetch!(later_request, :upstream_websocket_connection) == %{
              lifecycle_id: initial_connection.lifecycle_id,
              generation: 2,
              reused: false,
-             reconnected: true
+             reconnected: false
            }
 
     FakeUpstream.set_mode(
@@ -1568,7 +1579,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     )
 
     assert {:error, failed_reconnect} = UpstreamDispatch.websocket_request(request)
-    assert %{body: "", reason: {:websocket_upgrade_failed, 503, _headers}} = failed_reconnect
+    assert %{body: "", reason: :upstream_websocket_closed_before_terminal} = failed_reconnect
 
     assert Map.fetch!(failed_reconnect, :upstream_websocket_connection) == %{
              lifecycle_id: initial_connection.lifecycle_id,

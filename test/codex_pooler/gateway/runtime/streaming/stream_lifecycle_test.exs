@@ -2406,9 +2406,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
   for {case_name, health_neutral_code, health_headers} <- [
         {"misalignment_policy_violation", "misalignment_policy_violation", %{}},
+        {"invalid_prompt", "invalid_prompt", %{}},
+        {"bio_policy", "bio_policy", %{}},
         {"server_error", "server_error", %{}},
         {"overloaded_error", "overloaded_error", %{}},
         {"server_is_overloaded", "server_is_overloaded", %{}},
+        {"slow_down", "slow_down", %{}},
         {"workspace_owner_credits_depleted", "workspace_owner_credits_depleted", %{}},
         {"workspace_member_credits_depleted", "workspace_member_credits_depleted", %{}},
         {"workspace_owner_credits_depleted header", "upstream_stream_error",

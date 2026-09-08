@@ -9,15 +9,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   then submitted through the owner-session machinery; the resulting event
   stream feeds the unchanged HTTP SSE relay via `WebsocketBridgeStream`. The
   relay decides commitment (first client-rendered content, bounded buffer
-  caps, or its pre-content deadline) and which pre-commit deaths fall back to
-  plain HTTP dispatch on the same candidate and attempt; this module's
-  preflight timeout only guards turns that never produced any frame at all.
+  caps, or its pre-content deadline). After submission, ambiguous owner or
+  transport failures stay on the websocket attempt without hidden HTTP
+  resubmission. This module's preflight timeout also fails closed on the
+  websocket attempt: silence cannot prove that the provider rejected the
+  submission.
   """
 
   require Logger
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.Attempt
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -30,7 +31,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.RouteClass
 
-  @preflight_timeout_ms 15_000
+  @default_preflight_timeout_ms 15_000
 
   @spec eligible?(PreparedContext.t()) :: boolean()
   def eligible?(%PreparedContext{context: context}) do
@@ -58,8 +59,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   @doc """
   Runs the bridged turn. Returns `{:ok, prepared_context, response}` once the
   first upstream event arrived and the fabricated SSE response is ready for
-  the standard HTTP finalization path, or `{:fallback, reason}` when anything
-  failed before the first upstream event.
+  the standard HTTP finalization path, or `{:fallback, reason}` only when the
+  relay has positive proof that failure happened before upstream submission.
   """
   @spec open(PreparedContext.t()) ::
           {:ok, PreparedContext.t(), Req.Response.t()}
@@ -67,7 +68,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
           | {:error, :owner_unavailable}
   def open(%PreparedContext{context: context} = prepared_context) do
     correlation_id = Ecto.UUID.generate()
-    stream = WebsocketBridgeStream.start(correlation_id)
+
+    stream =
+      WebsocketBridgeStream.start(correlation_id,
+        preflight_timeout_ms: preflight_timeout_ms()
+      )
 
     with {:ok, runtime} <-
            Websocket.prepare_owner_bridge_session(
@@ -76,9 +81,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
              %{pid: stream.relay, correlation_id: correlation_id}
            ),
          {:ok, ws_payload, bridged_options} <- bridge_payload(prepared_context, runtime),
-         {:bound, {:ok, request}} <-
+         {:bound, {:ok, binding}} <-
            {:bound,
-            Accounting.bind_websocket_owner(
+            Accounting.bind_websocket_owner_bridge(
               context.auth,
               context.reserved.request,
               context.attempt,
@@ -86,7 +91,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
             )} do
       prepared_context = %{
         prepared_context
-        | context: %{context | reserved: %{context.reserved | request: request}}
+        | context: %{
+            context
+            | reserved: %{context.reserved | request: binding.request},
+              attempt: binding.attempt
+          }
       }
 
       dispatch_request = bridge_dispatch_request(prepared_context, ws_payload, bridged_options)
@@ -110,40 +119,52 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   end
 
   # The relay reports its decision out of band as {:preflight, decision}. Only a
-  # data frame commits to websocket streaming; a completion, error, or timeout
-  # before the first data frame falls back to HTTP. The real stream parts are
-  # left untouched in the mailbox so StreamRelay consumes them in order.
+  # data frame commits to websocket streaming. Fallback requires a positive
+  # pre-submission receipt; ambiguous completion, error, or timeout commits a
+  # failed websocket attempt. Real stream parts stay in the mailbox so
+  # StreamRelay consumes them in order.
   defp await_first_event(prepared_context, %WebsocketBridgeStream{ref: ref} = stream, options) do
+    monitor_ref = Process.monitor(stream.relay)
+
     receive do
       {^ref, {:preflight, :stream}} ->
-        prepared_context = mark_bridged_attempt(prepared_context)
+        Process.demonitor(monitor_ref, [:flush])
         {:ok, put_bridged_options(prepared_context, options), bridge_response(stream)}
 
       {^ref, {:preflight, {:fallback, reason}}} ->
+        Process.demonitor(monitor_ref, [:flush])
         WebsocketBridgeStream.cancel(stream)
-        {:fallback, reason}
-    after
-      @preflight_timeout_ms ->
-        WebsocketBridgeStream.cancel(stream)
-        {:fallback, :bridge_preflight_timeout}
+
+        case restore_http_fallback(prepared_context, options) do
+          :ok -> {:fallback, reason}
+          {:error, _restore_reason} -> {:error, :owner_unavailable}
+        end
+
+      {:DOWN, ^monitor_ref, :process, _pid, _reason} ->
+        {:error, :owner_unavailable}
     end
   end
 
-  # The canonical attempt row records the upstream transport that actually
-  # carried the turn; the request keeps the downstream protocol.
-  defp mark_bridged_attempt(
-         %PreparedContext{context: %{attempt: %Attempt{} = attempt} = context} = prepared_context
+  defp preflight_timeout_ms do
+    :codex_pooler
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:preflight_timeout_ms, @default_preflight_timeout_ms)
+  end
+
+  defp restore_http_fallback(
+         %PreparedContext{context: %{auth: auth, reserved: reserved, attempt: attempt}},
+         options
        ) do
-    case Accounting.mark_attempt_upstream_transport(attempt, "websocket") do
-      {:ok, updated_attempt} ->
-        %{prepared_context | context: %{context | attempt: updated_attempt}}
-
-      {:error, _changeset} ->
-        prepared_context
+    case Accounting.restore_websocket_owner_http_fallback(
+           auth,
+           reserved.request,
+           attempt,
+           options
+         ) do
+      {:ok, _binding} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
-
-  defp mark_bridged_attempt(%PreparedContext{} = prepared_context), do: prepared_context
 
   defp bridge_response(%WebsocketBridgeStream{} = stream) do
     %Req.Response{

@@ -46,6 +46,49 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
     state |> finalize_sse_state() |> websocket_compact_result()
   end
 
+  @spec provider_failure_websocket_event(StreamProtocol.terminal_failure()) :: map()
+  def provider_failure_websocket_event(%{
+        event_type: "response.incomplete",
+        code: code,
+        upstream_code: upstream_code
+      }) do
+    reason = DiagnosticTaxonomy.identifier(upstream_code || code) || "upstream_terminal_failure"
+
+    %{
+      "type" => "response.incomplete",
+      "response" => %{
+        "status" => "incomplete",
+        "incomplete_details" => %{"reason" => reason}
+      }
+    }
+  end
+
+  def provider_failure_websocket_event(%{} = failure) do
+    code =
+      DiagnosticTaxonomy.identifier(failure.upstream_code || failure.code) ||
+        "upstream_terminal_failure"
+
+    error =
+      %{
+        "code" => code,
+        "message" => "upstream rejected the compact request"
+      }
+      |> maybe_put_provider_failure_param(failure.upstream_error_param)
+
+    %{
+      "type" => "response.failed",
+      "error" => error,
+      "response" => %{"status" => "failed", "error" => error}
+    }
+  end
+
+  defp maybe_put_provider_failure_param(error, param) do
+    case UpstreamErrorParam.sanitize(param) do
+      value when is_binary(value) -> Map.put(error, "param", value)
+      nil -> error
+    end
+  end
+
   defp new_state(item_mode \\ :native) do
     %{
       collection: %{

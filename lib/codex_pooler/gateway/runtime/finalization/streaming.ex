@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -445,7 +446,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   def record_health_failure(_reason, code, %SelectedCandidateContext{} = context)
       when is_binary(code) do
-    if health_neutral_error_code?(code) do
+    if ErrorCodes.health_neutral_error_code?(code) do
       DispatchLifecycle.neutral_completion(context)
     else
       route_failure(context, code)
@@ -529,29 +530,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     end
   end
 
-  defp health_neutral_error_code?(code) do
-    code in [
-      "context_length_exceeded",
-      "cyber_policy",
-      "invalid_request",
-      "invalid_request_error",
-      "invalid_previous_response_id",
-      "misalignment_policy_violation",
-      "missing_required_parameter",
-      "overloaded_error",
-      "previous_response_not_found",
-      "server_is_overloaded",
-      "server_error",
-      "unsupported_input_image_format",
-      "unsupported_parameter",
-      "unsupported_value",
-      "usage_limit_exceeded",
-      "usage_limit_reached"
-    ]
-  end
-
   defp do_health_neutral_terminal_failure?(code, headers) do
-    health_neutral_error_code?(code) or
+    ErrorCodes.health_neutral_error_code?(code) or
       workspace_quota_depleted?(code) or
       workspace_quota_depleted?(RateLimitReachedType.parse_header(headers))
   end

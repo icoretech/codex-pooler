@@ -92,6 +92,20 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
            }
   end
 
+  test "permits candidate retry only for failures proven before submission" do
+    for reason <- [:econnrefused, :ehostunreach, :enetunreach, :nxdomain] do
+      error = TransportFailureReason.upstream_transport_error(reason, %{phase: :request})
+      assert TransportFailureReason.retry_safe_before_submission?(error)
+    end
+
+    for reason <- [:closed, :timeout, :econnreset] do
+      error = TransportFailureReason.upstream_transport_error(reason, %{phase: :request})
+      refute TransportFailureReason.retry_safe_before_submission?(error)
+    end
+
+    refute TransportFailureReason.retry_safe_before_submission?(%{})
+  end
+
   test "preserves websocket receive timeout phase metadata" do
     metadata =
       TransportFailureReason.transport_failure_metadata(

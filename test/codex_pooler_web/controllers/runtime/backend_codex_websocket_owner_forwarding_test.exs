@@ -2988,11 +2988,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   @tag :public_protocol_fallback
-  test "public responses bridge protocol incompatibility falls back before commit once", %{
+  test "public responses bridge protocol incompatibility fails without upstream submission", %{
     conn: conn
   } do
     ensure_test_distribution_started!()
-    response_id = "resp_owner_public_fallback_#{System.unique_integer([:positive])}"
     marker = "synthetic-public-protocol-marker-#{System.unique_integer([:positive])}"
 
     upstream =
@@ -3002,10 +3001,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
            %{
              "type" => "response.completed",
              "response" => %{
-               "id" => response_id,
+               "id" => "unused_protocol_incompatible_response",
                "status" => "completed",
-               "output" => [],
-               "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
+               "output" => []
              }
            }}
         ])
@@ -3027,19 +3025,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         assert response.status == 200
 
-        assert [
-                 %{
-                   "event" => "response.created",
-                   "data" => %{
-                     "type" => "response.created",
-                     "response" => %{"id" => ^response_id, "status" => "in_progress"}
-                   }
-                 },
-                 %{"event" => "response.completed", "data" => terminal}
-               ] = public_stream_events(response.resp_body)
+        assert [%{"event" => "error", "data" => %{"code" => "server_error"}}] =
+                 public_stream_events(response.resp_body)
 
-        assert terminal["type"] == "response.completed"
-        assert get_in(terminal, ["response", "id"]) == response_id
         refute response.resp_body =~ marker
       end)
 
@@ -3053,19 +3041,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     refute logs =~ marker
     refute logs =~ setup.authorization
 
-    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.count(upstream) == 0
     assert FakeUpstream.websocket_connection_count(upstream) == 0
-    assert FakeUpstream.http_request_count(upstream) == 1
-    assert [upstream_request] = FakeUpstream.requests(upstream)
-    assert inspect(%{body: upstream_request.body, json: upstream_request.json}) =~ marker
+    assert FakeUpstream.http_request_count(upstream) == 0
     assert [request] = request_logs(setup.pool.id)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert request.transport == "http_sse"
-    rows = assert_forwarding_cardinality!(request, nil, "succeeded")
+    rows = assert_forwarding_cardinality!(request, nil, "failed")
     assert_no_markers_persisted!(rows, setup.pool.id, [marker])
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.transport == "http_sse"
-    refute attempt.response_metadata["upstream_websocket_bridge"]
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
     refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
     assert node(owner_pid) == remote_node
     assert :erpc.call(remote_node, Process, :alive?, [owner_pid])

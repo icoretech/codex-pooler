@@ -171,6 +171,57 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
     end
   end
 
+  for {event_type, error} <- [
+        {"response.failed", "server_error"},
+        {"response.failed", "rate_limit_exceeded"},
+        {"response.incomplete", "max_output_tokens"}
+      ] do
+    test "claims one successor for Codex-retryable #{event_type} #{error}" do
+      {setup, predecessor, opts} = predecessor!(unquote(error), 0)
+      attempt = Repo.get_by!(Attempt, request_id: predecessor.id)
+
+      update!(attempt, response_metadata: %{"stream_terminal_type" => unquote(event_type)})
+
+      assert {:ok, claim} =
+               Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+
+      assert claim.predecessor_request_id == predecessor.id
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 1
+
+      assert {:error, :successor_claimed} =
+               Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+    end
+  end
+
+  for error <- [
+        "context_length_exceeded",
+        "insufficient_quota",
+        "usage_not_included",
+        "cyber_policy",
+        "misalignment_policy_violation",
+        "invalid_prompt",
+        "bio_policy",
+        "server_is_overloaded",
+        "slow_down"
+      ] do
+    test "rejects Codex-terminal response.failed #{error} without side effects" do
+      {setup, predecessor, opts} = predecessor!(unquote(error), 0)
+      attempt = Repo.get_by!(Attempt, request_id: predecessor.id)
+      update!(attempt, response_metadata: %{"stream_terminal_type" => "response.failed"})
+      counts = row_counts()
+
+      assert {:error, :terminal_predecessor} =
+               Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+
+      assert row_counts() == counts
+
+      refute Repo.exists?(
+               from link in RequestClientRetryLink,
+                 where: link.predecessor_request_id == ^predecessor.id
+             )
+    end
+  end
+
   for endpoint <- ["/backend-api/codex/responses", "/backend-api/codex/responses/compact"] do
     test "does not revive an older failed compact after a newer successful #{endpoint} turn" do
       {setup, predecessor, opts} = predecessor!("upstream_stream_error", 0)

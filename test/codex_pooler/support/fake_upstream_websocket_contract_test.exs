@@ -56,7 +56,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
     assert [^connection_id] = FakeUpstream.websocket_connection_ids(upstream)
   end
 
-  test "observes a new ID after a forced pre-visible close and transparent reconnect" do
+  test "reconnects on the next explicit request after a forced pre-visible close" do
     {upstream, session} =
       start_resources(FakeUpstream.websocket_text_frames([completed_event("first")]))
 
@@ -76,6 +76,12 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
        ]}
     )
 
+    assert {:error, %{reason: :upstream_websocket_closed_before_terminal}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [^first_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
 
@@ -88,7 +94,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
     refute first_connection_id == second_connection_id
   end
 
-  test "does not invent an ID when a transparent reconnect fails its upgrade" do
+  test "does not invent an ID when the next explicit reconnect fails its upgrade" do
     {upstream, session} =
       start_resources(FakeUpstream.websocket_text_frames([completed_event("first")]))
 
@@ -109,6 +115,9 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
          )
        ]}
     )
+
+    assert {:error, %{reason: :upstream_websocket_closed_before_terminal}} =
+             UpstreamWebsocketSession.request(session, request)
 
     assert {:error, %{body: "", reason: {:websocket_upgrade_failed, 503, _}}} =
              UpstreamWebsocketSession.request(session, request)

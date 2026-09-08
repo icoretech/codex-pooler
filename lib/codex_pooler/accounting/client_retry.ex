@@ -14,6 +14,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   }
 
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.InstanceSettings.AppSecretCrypto
   alias CodexPooler.Repo
 
@@ -372,12 +373,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
     input = Map.put(input, :defer_owner_idle_validation?, true)
     digest = Map.get(input, :semantic_turn_digest)
 
-    existing_turn? =
-      is_binary(digest) and byte_size(digest) == @digest_bytes and
-        Repo.exists?(
-          from turn in CodexTurn,
-            where: turn.codex_session_id == ^session.id and turn.semantic_turn_digest == ^digest
-        )
+    existing_turn? = existing_turn_for_policy?(session, digest, input)
 
     if existing_turn? or not is_nil(claimed_original(session, api_key, input)) do
       case lock_eligible_predecessor!(session, api_key, model, input) do
@@ -391,6 +387,29 @@ defmodule CodexPooler.Accounting.ClientRetry do
       :none
     end
   end
+
+  defp existing_turn_for_policy?(session, digest, input)
+       when is_binary(digest) and byte_size(digest) == @digest_bytes do
+    query =
+      from turn in CodexTurn,
+        where: turn.codex_session_id == ^session.id and turn.semantic_turn_digest == ^digest
+
+    query =
+      case input do
+        %{retry_policy: :native_compaction} ->
+          from turn in query,
+            join: request in Request,
+            on: request.id == turn.request_id,
+            where: request.endpoint == "/backend-api/codex/responses/compact"
+
+        _other_policy ->
+          query
+      end
+
+    Repo.exists?(query)
+  end
+
+  defp existing_turn_for_policy?(_session, _digest, _input), do: false
 
   @spec lock_eligible_predecessor!(
           CodexSession.t(),
@@ -837,8 +856,36 @@ defmodule CodexPooler.Accounting.ClientRetry do
          }
        )
        when turn_status in ["failed", "interrupted"] and
-              error in ["upstream_stream_error", "client_disconnected", "owner_drained"],
-       do: :ok
+              error in ["upstream_stream_error", "client_disconnected", "owner_drained"] do
+    :ok
+  end
+
+  defp validate_compaction_lifecycle(
+         %CodexTurn{
+           status: "failed",
+           error_code: error,
+           transport_kind: "websocket",
+           completed_at: %DateTime{}
+         },
+         %Request{
+           status: "failed",
+           last_error_code: error,
+           endpoint: "/backend-api/codex/responses/compact",
+           completed_at: %DateTime{}
+         },
+         %Attempt{
+           status: "failed",
+           network_error_code: error,
+           transport: "websocket",
+           replay_generation: 0,
+           completed_at: %DateTime{},
+           response_metadata: %{"stream_terminal_type" => terminal_type}
+         }
+       ) do
+    if ErrorCodes.codex_compaction_terminal_retryable?(terminal_type, error),
+      do: :ok,
+      else: {:error, :terminal_predecessor}
+  end
 
   defp validate_compaction_lifecycle(_turn, _request, _attempt),
     do: {:error, :terminal_predecessor}

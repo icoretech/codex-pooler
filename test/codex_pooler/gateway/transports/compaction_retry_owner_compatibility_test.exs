@@ -335,11 +335,7 @@ defmodule CodexPooler.Gateway.Transports.CompactionRetryOwnerCompatibilityTest d
              )
 
     assert {:error, %{code: "duplicate_turn"}} =
-             Service.execute_prepared_websocket_response(
-               auth,
-               admit_retry!(auth, session, duplicate),
-               true
-             )
+             Service.prepare_replay_intent(auth, duplicate)
 
     assert counts() == after_acceptance
     refute_received {:compatible_owner_submission, _args}

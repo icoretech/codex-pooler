@@ -98,16 +98,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
   test "V2 native collector terminal families fail once without retry or replay" do
     cases = [
-      {"response.failed", response_failed(),
-       {"context_length_exceeded", "response.failed", "input"}},
-      {"response.incomplete", failure_coded_incomplete(),
-       {"server_error", "response.incomplete", "input"}},
-      {"error", top_level_error(), {"invalid_request", "error", "input"}},
-      {"response.incomplete", ordinary_incomplete(),
-       {"max_output_tokens", "response.incomplete", nil}}
+      {"response.failed", response_failed(), {"context_length_exceeded", "input"},
+       {"context_length_exceeded", "response.failed", "input"}, :neutral},
+      {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"},
+       {"server_error", "response.failed", "input"}, :neutral},
+      {"error", top_level_error(), {"invalid_request", "input"},
+       {"invalid_request", "response.failed", "input"}, :neutral},
+      {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil},
+       {"max_output_tokens", "response.incomplete", nil}, :neutral}
     ]
 
-    for {event_type, terminal, diagnostics} <- cases do
+    for {event_type, terminal, {code, param}, diagnostics, health} <- cases do
       mode =
         FakeUpstream.sse_stream(
           [native_compaction_item_event(), {event_type, terminal}],
@@ -116,17 +117,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
       result = execute_failure(mode)
 
-      assert result.error == %{
-               status: 502,
-               code: "invalid_compaction_response",
-               message: "upstream compact stream was invalid"
-             }
+      assert result.error == nil
+      assert_provider_failure_frame(result, diagnostics |> elem(1), code, param)
 
-      assert_failure_contract(result, "invalid_compaction_response",
+      assert_failure_contract(result, code,
         diagnostics: diagnostics,
-        health: :failed
+        health: health
       )
     end
+  end
+
+  test "V2 full-history collector preserves a canonicalized typeless terminal failure" do
+    result =
+      execute_failure(FakeUpstream.sse_stream([%{"detail" => @raw_sentinel}], done: false))
+
+    assert result.error == nil
+    assert_provider_failure_frame(result, "response.failed", "upstream_terminal_failure", nil)
+
+    assert_failure_contract(result, "upstream_terminal_failure",
+      diagnostics: {"upstream_terminal_failure", "response.failed", nil},
+      health: :failed
+    )
+  end
+
+  test "V2 full-history collector bounds malformed provider terminal diagnostics" do
+    source_code = "bad " <> String.duplicate("private-terminal-", 20)
+
+    terminal =
+      response_failed()
+      |> put_in(["response", "error", "code"], source_code)
+      |> put_in(["response", "error", "param"], @raw_sentinel)
+
+    result =
+      execute_failure(
+        FakeUpstream.sse_stream(
+          [native_compaction_item_event(), {"response.failed", terminal}],
+          done: false
+        )
+      )
+
+    attempt =
+      Repo.get_by!(Attempt, pool_upstream_assignment_id: result.selected_assignment.id)
+
+    assert "sha256_" <> digest = attempt.response_metadata["upstream_error_code"]
+    assert byte_size(digest) == 12
+    assert attempt.response_metadata["stream_terminal_type"] == "response.failed"
+    refute inspect({result, attempt}) =~ source_code
+    refute inspect({result, attempt}) =~ @raw_sentinel
   end
 
   test "V2 malformed native result fails once without retry or replay" do
@@ -538,8 +575,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
         )
       )
 
+    # This lower-level service fixture enters through the semantic claim path.
+    # Production public websocket frames redeem a one-shot capability and store
+    # an owner-authorized UUID instead; the released-client smoke proves that
+    # full path. Keep this focused regression on the persisted predecessor shape.
+    request =
+      request
+      |> Ecto.Changeset.change(correlation_id: Ecto.UUID.generate())
+      |> Repo.update!()
+
     assert request.status == "failed"
     assert request.last_error_code == "upstream_stream_error"
+    assert {:ok, request.correlation_id} == Ecto.UUID.cast(request.correlation_id)
+    refute String.starts_with?(request.correlation_id, "codex-turn:")
 
     assert [%{status: "failed"}] =
              Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
@@ -557,11 +605,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
                fn frame -> send(self(), {:retry_frame, frame}) end
              )
 
-    assert {:ok, %{intent: :fresh} = intent} = Service.prepare_replay_intent(auth, prepared_retry)
+    assert {:ok,
+            %{
+              intent: :fresh,
+              lifecycle: %{client_retry_predecessor_request_id: predecessor_request_id}
+            } = intent} = Service.prepare_replay_intent(auth, prepared_retry)
+
+    assert predecessor_request_id == request.id
     refreshed_session = Repo.reload!(session)
 
     lifecycle =
-      Map.merge(intent.lifecycle || %{replay_generation: 0}, %{
+      Map.merge(intent.lifecycle, %{
         owner_idle_validated?: true,
         owner_lease_token: refreshed_session.owner_lease_token,
         owner_instance_id: refreshed_session.owner_instance_id
@@ -606,13 +660,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert FakeUpstream.http_request_count(upstream) == 0
     assert_compaction_retry_successor!(request, session.id)
 
-    assert {:error, %{code: "duplicate_turn"}} =
-             Service.execute_websocket_response(
-               auth,
+    assert {:ok, repeated_retry} =
+             Service.prepare_websocket_response(
                full_history_retry_payload,
-               options,
+               RequestOptions.capture_api_key_runtime_epoch(options, auth),
                fn _frame -> flunk("a completed retry must not emit more compaction output") end
              )
+
+    assert {:error, %{code: "duplicate_turn"}} =
+             Service.prepare_replay_intent(auth, repeated_retry)
 
     assert FakeUpstream.count(upstream) == 3
     assert_compaction_retry_successor!(request, session.id)
@@ -692,13 +748,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
         receive_timeout: Keyword.get(opts, :receive_timeout, 5_000)
       })
 
-    assert {:error, error} =
-             Service.execute_websocket_response(
-               auth,
-               compact_payload(setup),
-               request_options,
-               fn frame -> send(self(), {:unexpected_native_frame, frame}) end
-             )
+    result =
+      Service.execute_websocket_response(
+        auth,
+        compact_payload(setup),
+        request_options,
+        fn frame -> send(self(), {:native_frame, frame}) end
+      )
+
+    error =
+      case result do
+        :ok -> nil
+        {:error, error} -> error
+      end
 
     {selected_upstream, selected_assignment, unselected_upstream} =
       case {FakeUpstream.count(first_upstream), FakeUpstream.count(second_upstream)} do
@@ -716,11 +778,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     }
   end
 
+  defp assert_provider_failure_frame(result, source_event_type, code, param) do
+    assert_receive {:native_frame, frame}, @detection_timeout_ms
+    decoded = CodexPooler.JSON.decode!(frame)
+
+    case source_event_type do
+      "response.incomplete" ->
+        assert decoded == %{
+                 "type" => "response.incomplete",
+                 "response" => %{
+                   "status" => "incomplete",
+                   "incomplete_details" => %{"reason" => code}
+                 }
+               }
+
+      _failure ->
+        expected_error =
+          %{"code" => code, "message" => "upstream rejected the compact request"}
+          |> maybe_put_expected_param(param)
+
+        assert decoded == %{
+                 "type" => "response.failed",
+                 "error" => expected_error,
+                 "response" => %{"status" => "failed", "error" => expected_error}
+               }
+    end
+
+    refute_receive {:native_frame, _extra_frame}
+    refute frame =~ @raw_sentinel
+    refute inspect(result) =~ @raw_sentinel
+  end
+
+  defp maybe_put_expected_param(error, nil), do: error
+  defp maybe_put_expected_param(error, param), do: Map.put(error, "param", param)
+
   defp assert_failure_contract(result, expected_code, opts) do
     diagnostics = Keyword.fetch!(opts, :diagnostics)
     health = Keyword.fetch!(opts, :health)
 
-    refute_received {:unexpected_native_frame, _frame}
     assert FakeUpstream.count(result.selected_upstream) == 1
     assert FakeUpstream.count(result.unselected_upstream) == 0
     assert FakeUpstream.http_request_count(result.selected_upstream) == 0
