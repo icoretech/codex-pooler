@@ -11,8 +11,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "cd74a2827b92610b89288fa511c78ec63ed76017a912d95470085abc03b0fe56"
-  @target_generated_at "2026-09-03T19:40:10.049982Z"
+  @target_sha256 "5e41f16a55087b8a5aa063dd466f463d0cf9c1ee47063cfcbbbf2cdd9df36109"
+  @target_generated_at "2026-09-08T22:55:14.662729Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -214,7 +214,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "imports the reviewed September 3 target as canonical revision 2 rows" do
+  test "imports the reviewed September 8 target as canonical revision 2 rows" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
@@ -239,7 +239,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
     assert first.inserted == 181
-    assert first.skipped == 82
+    assert first.skipped == 86
 
     rows =
       Repo.all(
@@ -269,7 +269,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
              end)
     end)
 
-    assert {:ok, %{inserted: 0, skipped: 82}} = OpenAIPricingImporter.import_file(@target)
+    assert {:ok, %{inserted: 0, skipped: 86}} = OpenAIPricingImporter.import_file(@target)
   end
 
   test "target checksum, exact rates, removals, and schema descriptors detect drift" do
