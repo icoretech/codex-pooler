@@ -33,14 +33,24 @@ defmodule CodexPooler.Gateway.RequestCompression.TokenCounter.Ranks do
 
   defp rank_file_path(encoding) do
     with {:ok, priv_dir} <- priv_dir() do
-      path = Path.join([priv_dir, "tokenizers", "ranks", "#{encoding}.tiktoken"])
-
-      if File.regular?(path) do
-        {:ok, path}
-      else
-        {:error, :rank_file_unavailable}
+      priv_dir
+      |> rank_file_candidates(encoding)
+      |> Enum.find(&File.regular?/1)
+      |> case do
+        nil -> {:error, :rank_file_unavailable}
+        path -> {:ok, path}
       end
     end
+  end
+
+  defp rank_file_candidates(priv_dir, encoding) do
+    rank_suffix = Path.join(["tokenizers", "ranks", "#{encoding}.tiktoken"])
+
+    [Path.join(priv_dir, rank_suffix)] ++
+      case File.read_link(priv_dir) do
+        {:ok, target} -> [Path.join(Path.expand(target, Path.dirname(priv_dir)), rank_suffix)]
+        {:error, _reason} -> []
+      end
   end
 
   defp priv_dir do
