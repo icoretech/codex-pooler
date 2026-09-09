@@ -776,14 +776,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert Repo.aggregate(Request, :count) == models_accounting_count
   end
 
+  @tag :strict_fake_upstream
   test "owner-forwarded websocket turns reuse one upstream websocket connection" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{"id" => "resp_owner_first", "object" => "response"}),
-           FakeUpstream.json_response(%{"id" => "resp_owner_second", "object" => "response"})
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_owner_response("resp_owner_first", 1),
+          strict_owner_response("resp_owner_second", 1)
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -913,9 +913,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert session.owner_instance_id == Atom.to_string(node())
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(session.id)
       assert_owner_websocket_values_not_persisted!(setup, [residency, access_token], "")
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
+  end
+
+  defp strict_owner_response(response_id, connection_ordinal) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: connection_ordinal,
+      json: [valid: true, equals: %{"type" => "response.create"}],
+      respond:
+        FakeUpstream.websocket_text_frames([
+          CodexPooler.JSON.encode!(%{"id" => response_id, "object" => "response"})
+        ])
+    )
   end
 
   test "owner-forwarded native failure after accepted data logs visible output" do

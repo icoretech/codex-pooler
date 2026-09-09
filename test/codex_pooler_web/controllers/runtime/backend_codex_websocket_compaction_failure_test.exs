@@ -228,29 +228,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert_transport_failure(result, "pooler_receive_timeout", "receive_timeout")
   end
 
+  @tag :strict_fake_upstream
   test "connection-bound compact suppresses retryable first-event replay" do
     anchor = "resp_connection_bound_retry_anchor"
 
     first_upstream =
       start_upstream(
-        {:sequence,
-         [
-           completed_websocket_response(anchor),
-           FakeUpstream.sse_stream(
-             [
-               {"error",
-                %{
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "type" => "response.completed",
+                  "response" => %{"id" => anchor, "status" => "completed", "output" => []}
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"previous_response_id" => anchor}
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
                   "type" => "error",
                   "status" => 400,
                   "code" => "websocket_connection_limit_reached",
                   "param" => "reasoning.effort",
                   "message" => @raw_sentinel
-                }}
-             ],
-             done: false
-           ),
-           successful_compaction_response("retry_must_not_run")
-         ]}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(first_upstream, compact?: true)
@@ -316,8 +331,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
              :count
            ) == 1
 
-    assert {:error, %{code: _code}} = result
+    assert {:error, %{code: "invalid_compaction_response"}} = result
     refute_received {:unexpected_native_frame, _frame}
+    assert :ok = FakeUpstream.verify!(first_upstream)
   end
 
   test "connection-bound compact suppresses websocket auth refresh and reconnect" do

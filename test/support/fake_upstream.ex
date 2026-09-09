@@ -40,6 +40,9 @@ defmodule CodexPooler.FakeUpstream do
              reference()}
           | {:websocket_init_barrier, mode(), pid(), reference()}
           | {:sequence, [mode()]}
+          | {:strict_sequence, [mode()]}
+          | {:repeat_last, [mode()]}
+          | {:expect_request, keyword(), mode()}
           | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference()}
           | {:malformed_json, non_neg_integer(), String.t()}
           | {:json_error, non_neg_integer(), map()}
@@ -54,6 +57,7 @@ defmodule CodexPooler.FakeUpstream do
 
   @doc "Starts a local fake upstream server for the given response mode."
   def start_link(mode, opts \\ []) do
+    validate_mode!(mode)
     {:ok, supervisor} = CodexPooler.FakeUpstream.Supervisor.start_link()
 
     {:ok, pid} =
@@ -103,6 +107,79 @@ defmodule CodexPooler.FakeUpstream do
 
   @doc "Returns the captured request count."
   def count(fake), do: fake |> requests() |> length()
+
+  @doc "Builds a finite response sequence whose entries are consumed exactly once."
+  @spec strict_sequence([mode()]) :: mode()
+  def strict_sequence([_mode | _rest] = modes), do: {:strict_sequence, modes}
+
+  @doc "Builds a response sequence whose final entry is intentionally repeated."
+  @spec repeat_last([mode()]) :: mode()
+  def repeat_last([_mode | _rest] = modes), do: {:repeat_last, modes}
+
+  @doc "Validates selected request facts before emitting the configured response."
+  @spec expect_request(keyword()) :: mode()
+  def expect_request(opts) when is_list(opts) do
+    respond = Keyword.fetch!(opts, :respond)
+    {:expect_request, Keyword.delete(opts, :respond), respond}
+  end
+
+  @doc "Fails when a strict scenario was not consumed exactly as configured."
+  @spec verify!(t()) :: :ok
+  def verify!(%__MODULE__{pid: pid}) do
+    state = Agent.get(pid, & &1)
+    failures = Enum.reverse(state.scenario_failures)
+
+    failures =
+      if state.strict_total > state.strict_consumed do
+        [
+          "unused_strict_entries remaining=#{state.strict_total - state.strict_consumed} consumed=#{state.strict_consumed} total=#{state.strict_total}"
+          | failures
+        ]
+      else
+        failures
+      end
+
+    missing_acknowledgements =
+      MapSet.difference(state.required_acknowledgements, state.acknowledged)
+
+    failures =
+      Enum.reduce(missing_acknowledgements, failures, fn acknowledgement, acc ->
+        ["missing_required_acknowledgement acknowledgement=#{inspect(acknowledgement)}" | acc]
+      end)
+
+    case Enum.reverse(failures) do
+      [] -> :ok
+      failures -> raise ExUnit.AssertionError, message: Enum.join(failures, "\n")
+    end
+  end
+
+  @doc "Registers a causal acknowledgement that strict scenario verification requires."
+  @spec require_acknowledgement(t(), term()) :: :ok
+  def require_acknowledgement(%__MODULE__{pid: pid}, acknowledgement) do
+    Agent.update(pid, fn state ->
+      %{
+        state
+        | required_acknowledgements: MapSet.put(state.required_acknowledgements, acknowledgement)
+      }
+    end)
+  end
+
+  @doc "Records a causal acknowledgement for strict scenario verification."
+  @spec acknowledge(t(), term()) :: :ok
+  def acknowledge(%__MODULE__{pid: pid}, acknowledgement) do
+    Agent.update(pid, fn state ->
+      %{state | acknowledged: MapSet.put(state.acknowledged, acknowledgement)}
+    end)
+  end
+
+  @doc false
+  @spec take_response_mode(pid(), map()) :: mode()
+  def take_response_mode(pid, request) when is_pid(pid) and is_map(request) do
+    Agent.get_and_update(pid, fn state ->
+      {mode, state} = take_response_mode_from_state(state, request)
+      {mode, %{state | requests: [request | state.requests]}}
+    end)
+  end
 
   @doc "Returns the captured non-websocket request count."
   @spec http_request_count(t()) :: non_neg_integer()
@@ -177,7 +254,17 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   def set_mode(%__MODULE__{pid: pid}, mode) do
-    Agent.update(pid, &%{&1 | mode: mode})
+    validate_mode!(mode)
+
+    Agent.update(pid, fn state ->
+      %{
+        state
+        | mode: mode,
+          strict_total: strict_entry_count(mode),
+          strict_consumed: 0,
+          scenario_failures: []
+      }
+    end)
   end
 
   def json_response(payload, status \\ 200), do: {:json, status, payload}
@@ -393,6 +480,8 @@ defmodule CodexPooler.FakeUpstream do
   @spec close_websocket_connection(t(), pos_integer(), keyword()) :: :ok | {:error, :not_found}
   def close_websocket_connection(%__MODULE__{pid: pid}, connection_id, opts \\ [])
       when is_integer(connection_id) and connection_id > 0 and is_list(opts) do
+    close_ref = Keyword.fetch!(opts, :close_ref)
+
     websocket_pid =
       Agent.get(pid, fn state ->
         state
@@ -401,11 +490,19 @@ defmodule CodexPooler.FakeUpstream do
       end)
 
     if is_pid(websocket_pid) and Process.alive?(websocket_pid) do
+      Agent.update(pid, fn state ->
+        %{
+          state
+          | required_acknowledgements:
+              MapSet.put(state.required_acknowledgements, {:peer_close, close_ref})
+        }
+      end)
+
       send(
         websocket_pid,
         {:fake_upstream_close_websocket, Keyword.get(opts, :code, 1000),
          Keyword.get(opts, :reason, "synthetic peer close"), Keyword.fetch!(opts, :notify),
-         Keyword.fetch!(opts, :close_ref)}
+         close_ref}
       )
 
       :ok
@@ -485,7 +582,12 @@ defmodule CodexPooler.FakeUpstream do
       websocket_pids: MapSet.new(),
       websocket_pids_by_connection: %{},
       websocket_control_notify: nil,
-      websocket_control_frames: []
+      websocket_control_frames: [],
+      strict_total: strict_entry_count(mode),
+      strict_consumed: 0,
+      scenario_failures: [],
+      required_acknowledgements: MapSet.new(),
+      acknowledged: MapSet.new()
     }
   end
 
@@ -564,11 +666,7 @@ defmodule CodexPooler.FakeUpstream do
       json: decode_json(body)
     }
 
-    mode =
-      Agent.get_and_update(pid, fn state ->
-        {mode, next_mode} = next_response_mode(state.mode)
-        {mode, %{state | mode: next_mode, requests: [request | state.requests]}}
-      end)
+    mode = take_response_mode(pid, request)
 
     respond(pid, conn, mode, request)
   end
@@ -592,7 +690,213 @@ defmodule CodexPooler.FakeUpstream do
 
   defp next_response_mode({:sequence, [mode | remaining]}), do: {mode, {:sequence, remaining}}
 
+  defp next_response_mode({:strict_sequence, [mode | remaining]}),
+    do: {mode, {:strict_sequence, remaining}}
+
+  defp next_response_mode({:repeat_last, [mode]}), do: {mode, {:repeat_last, [mode]}}
+
+  defp next_response_mode({:repeat_last, [mode | remaining]}),
+    do: {mode, {:repeat_last, remaining}}
+
   defp next_response_mode(mode), do: {mode, mode}
+
+  defp take_response_mode_from_state(%{mode: {:strict_sequence, []}} = state, request) do
+    failure =
+      "unexpected_extra_request transport=#{request_transport(request)} method=#{request.method} path=#{request.path} websocket_connection_ordinal=#{inspect(Map.get(request, :websocket_connection_id))} remaining=0 consumed=#{state.strict_consumed}"
+
+    {{:scenario_failure, failure},
+     %{state | scenario_failures: [failure | state.scenario_failures]}}
+  end
+
+  defp take_response_mode_from_state(state, request) do
+    {mode, next_mode} = next_response_mode(state.mode)
+
+    strict_consumed =
+      state.strict_consumed + if(match?({:strict_sequence, _}, state.mode), do: 1, else: 0)
+
+    state = %{state | mode: next_mode, strict_consumed: strict_consumed}
+
+    case mode do
+      {:expect_request, expectations, respond} ->
+        case expectation_failures(expectations, request) do
+          [] ->
+            {respond, state}
+
+          failures ->
+            diagnostic = "expectation_mismatch " <> Enum.join(failures, " ")
+
+            {{:scenario_failure, diagnostic},
+             %{state | scenario_failures: [diagnostic | state.scenario_failures]}}
+        end
+
+      mode ->
+        {mode, state}
+    end
+  end
+
+  defp request_transport(%{method: "WEBSOCKET"}), do: "websocket"
+  defp request_transport(_request), do: "http"
+
+  defp expectation_failures(expectations, request) do
+    []
+    |> compare_scalar("method", Keyword.get(expectations, :method), request.method)
+    |> compare_scalar("path", Keyword.get(expectations, :path), request.path)
+    |> compare_scalar(
+      "websocket_connection_ordinal",
+      Keyword.get(expectations, :websocket_connection_ordinal),
+      Map.get(request, :websocket_connection_id)
+    )
+    |> validate_headers(Keyword.get(expectations, :headers, []), request.headers)
+    |> validate_json(Keyword.get(expectations, :json, []), request.json)
+  end
+
+  defp compare_scalar(failures, _field, nil, _actual), do: failures
+
+  defp compare_scalar(failures, _field, expected, actual) when expected == actual, do: failures
+
+  defp compare_scalar(failures, field, expected, actual),
+    do: failures ++ [diagnostic(field, expected, actual)]
+
+  defp validate_headers(failures, expectations, headers) do
+    headers =
+      Map.new(headers, fn {name, value} -> {String.downcase(to_string(name)), value} end)
+
+    failures =
+      expectations
+      |> Keyword.get(:required, %{})
+      |> Enum.sort_by(fn {name, _value} -> name end)
+      |> Enum.reduce(failures, fn {name, expected}, acc ->
+        compare_scalar(
+          acc,
+          "headers.#{String.downcase(name)}",
+          expected,
+          Map.get(headers, String.downcase(name), :missing)
+        )
+      end)
+
+    expectations
+    |> Keyword.get(:forbidden, [])
+    |> Enum.sort()
+    |> Enum.reduce(failures, fn name, acc ->
+      name = String.downcase(name)
+
+      case Map.fetch(headers, name) do
+        :error -> acc
+        {:ok, actual} -> acc ++ [diagnostic("headers.#{name}", :forbidden, actual)]
+      end
+    end)
+  end
+
+  defp validate_json(failures, expectations, json) do
+    failures =
+      if Keyword.get(expectations, :valid, false) and not (is_map(json) or is_list(json)) do
+        failures ++ [diagnostic("json", :valid_json, :invalid_json)]
+      else
+        failures
+      end
+
+    failures
+    |> validate_required_json_paths(Keyword.get(expectations, :required, []), json)
+    |> validate_forbidden_json_paths(Keyword.get(expectations, :forbidden, []), json)
+    |> validate_equal_json_paths(Keyword.get(expectations, :equals, %{}), json)
+  end
+
+  defp validate_required_json_paths(failures, paths, json) do
+    Enum.reduce(paths, failures, fn path, acc ->
+      case fetch_json_path(json, path) do
+        {:ok, _value} -> acc
+        :error -> acc ++ [diagnostic("json.#{path_string(path)}", :required, :missing)]
+      end
+    end)
+  end
+
+  defp validate_forbidden_json_paths(failures, paths, json) do
+    Enum.reduce(paths, failures, fn path, acc ->
+      case fetch_json_path(json, path) do
+        :error -> acc
+        {:ok, actual} -> acc ++ [diagnostic("json.#{path_string(path)}", :forbidden, actual)]
+      end
+    end)
+  end
+
+  defp validate_equal_json_paths(failures, paths, json) do
+    paths
+    |> Enum.sort_by(fn {path, _value} -> path_string(path) end)
+    |> Enum.reduce(failures, fn {path, expected}, acc ->
+      actual =
+        case fetch_json_path(json, path) do
+          {:ok, value} -> value
+          :error -> :missing
+        end
+
+      compare_scalar(acc, "json.#{path_string(path)}", expected, actual)
+    end)
+  end
+
+  defp fetch_json_path(json, path) do
+    path
+    |> path_segments()
+    |> Enum.reduce_while({:ok, json}, fn segment, {:ok, value} ->
+      case fetch_segment(value, segment) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp fetch_segment(map, segment) when is_map(map), do: Map.fetch(map, segment)
+
+  defp fetch_segment(list, segment) when is_list(list) do
+    with {index, ""} <- Integer.parse(segment),
+         true <- index >= 0,
+         {:ok, value} <- Enum.fetch(list, index) do
+      {:ok, value}
+    else
+      _other -> :error
+    end
+  end
+
+  defp fetch_segment(_value, _segment), do: :error
+
+  defp path_segments(path) when is_binary(path), do: String.split(path, ".", trim: true)
+  defp path_segments(path) when is_list(path), do: Enum.map(path, &to_string/1)
+  defp path_string(path), do: path |> path_segments() |> Enum.join(".")
+
+  defp diagnostic(field, expected, actual),
+    do: "field=#{field} expected=#{inspect(expected)} actual=#{inspect(actual)}"
+
+  defp strict_entry_count({:strict_sequence, modes}), do: length(modes)
+  defp strict_entry_count(_mode), do: 0
+
+  defp validate_mode!({:strict_sequence, modes}), do: Enum.each(modes, &validate_mode!/1)
+  defp validate_mode!({:repeat_last, modes}), do: Enum.each(modes, &validate_mode!/1)
+
+  defp validate_mode!({:expect_request, expectations, respond}) do
+    if Keyword.get(expectations, :method) == "WEBSOCKET" and not native_websocket_mode?(respond) do
+      raise ArgumentError, "native websocket expectation requires websocket_text_frames"
+    end
+
+    validate_mode!(respond)
+  end
+
+  defp validate_mode!(_mode), do: :ok
+
+  defp native_websocket_mode?({:websocket_text, _messages}), do: true
+  defp native_websocket_mode?({:websocket_sse_then_close, _chunks, _code, _reason}), do: true
+  defp native_websocket_mode?({:websocket_terminal_then_close_barrier, _, _, _, _, _}), do: true
+  defp native_websocket_mode?({:websocket_connection_limit_terminal_barrier, _, _, _}), do: true
+  defp native_websocket_mode?({:websocket_close_without_terminal_barrier, _, _, _, _}), do: true
+  defp native_websocket_mode?({:websocket_upgrade_error, _, _, _, _, _}), do: true
+  defp native_websocket_mode?(_mode), do: false
+
+  defp respond(_pid, conn, {:scenario_failure, _diagnostic}, _request) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(
+      500,
+      CodexPooler.JSON.encode!(%{"error" => %{"code" => "fake_upstream_scenario_failure"}})
+    )
+  end
 
   defp respond(_pid, conn, {:json, status, payload}, _request) do
     conn
@@ -1238,6 +1542,13 @@ defmodule CodexPooler.FakeUpstream do
 
       case Map.get(state, :peer_close_ack) do
         {notify, close_ref} when is_pid(notify) ->
+          Agent.update(pid, fn agent_state ->
+            %{
+              agent_state
+              | acknowledged: MapSet.put(agent_state.acknowledged, {:peer_close, close_ref})
+            }
+          end)
+
           send(notify, {:fake_upstream_websocket_peer_closed, state.connection_id, close_ref})
 
         _other ->
@@ -1286,11 +1597,7 @@ defmodule CodexPooler.FakeUpstream do
         json: decode_json(payload)
       }
 
-      mode =
-        Agent.get_and_update(pid, fn agent_state ->
-          {mode, next_mode} = next_response_mode(agent_state.mode)
-          {mode, %{agent_state | mode: next_mode, requests: [request | agent_state.requests]}}
-        end)
+      mode = CodexPooler.FakeUpstream.take_response_mode(pid, request)
 
       handle_websocket_message(websocket_messages(mode, request), state)
     end
@@ -1353,6 +1660,9 @@ defmodule CodexPooler.FakeUpstream do
 
     defp websocket_messages({:json, _status, payload}, _request),
       do: [CodexPooler.JSON.encode!(payload)]
+
+    defp websocket_messages({:scenario_failure, _diagnostic}, _request),
+      do: {:close, 1011, "fake upstream scenario failure"}
 
     defp websocket_messages({:json_headers, _status, payload, _headers}, _request),
       do: [CodexPooler.JSON.encode!(payload)]
@@ -1507,12 +1817,6 @@ defmodule CodexPooler.FakeUpstream do
         }
       })
     end
-
-    defp next_response_mode({:sequence, [mode]}), do: {mode, mode}
-
-    defp next_response_mode({:sequence, [mode | remaining]}), do: {mode, {:sequence, remaining}}
-
-    defp next_response_mode(mode), do: {mode, mode}
 
     defp messages_from_sse_chunk(chunk) do
       chunk

@@ -7,6 +7,110 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
+  @tag :fake_upstream_strict_contract
+  test "strict websocket expectations validate discriminator and connection ordinal" do
+    event = completed_event("strict")
+
+    {upstream, session} =
+      start_resources(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: FakeUpstream.websocket_text_frames([event])
+          )
+        ])
+      )
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(upstream, [], %{"type" => "response.create"})
+             )
+
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  @tag :fake_upstream_strict_contract
+  test "native websocket success cannot be satisfied by an SSE-derived shortcut" do
+    mode =
+      FakeUpstream.strict_sequence([
+        FakeUpstream.expect_request(
+          method: "WEBSOCKET",
+          json: [valid: true, equals: %{"type" => "response.create"}],
+          respond:
+            FakeUpstream.sse_stream([
+              {"response.completed", %{"type" => "response.completed", "response" => %{}}}
+            ])
+        )
+      ])
+
+    assert_raise ArgumentError,
+                 ~r/native websocket expectation requires websocket_text_frames/,
+                 fn ->
+                   start_resources(mode)
+                 end
+  end
+
+  @tag :fake_upstream_strict_contract
+  test "websocket ordinal mismatch withholds success and reports exact ordinals" do
+    {upstream, session} =
+      start_resources(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: FakeUpstream.websocket_text_frames([completed_event("wrong-ordinal")])
+          )
+        ])
+      )
+
+    assert {:error, %{reason: :upstream_websocket_closed_before_terminal}} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(upstream, [], %{"type" => "response.create"})
+             )
+
+    assert_raise ExUnit.AssertionError,
+                 ~r/expectation_mismatch.*field=websocket_connection_ordinal expected=2 actual=1/s,
+                 fn -> FakeUpstream.verify!(upstream) end
+  end
+
+  @tag :fake_upstream_strict_contract
+  test "peer-close acknowledgement is required and recorded by the real websocket lifecycle" do
+    {upstream, session} =
+      start_resources(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: FakeUpstream.websocket_text_frames([completed_event("peer-close")])
+          )
+        ])
+      )
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(upstream, [], %{"type" => "response.create"})
+             )
+
+    close_ref = make_ref()
+
+    assert :ok =
+             FakeUpstream.close_websocket_connection(upstream, 1,
+               notify: self(),
+               close_ref: close_ref
+             )
+
+    assert_receive {:fake_upstream_websocket_peer_closed, 1, ^close_ref}, 2_000
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "real upstream websocket session upgrades and counts one fake connection" do
     event =
       CodexPooler.JSON.encode!(%{
@@ -212,11 +316,11 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
     {upstream, session}
   end
 
-  defp websocket_request(upstream, headers \\ []) do
+  defp websocket_request(upstream, headers \\ [], payload \\ %{}) do
     %Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: headers,
-      payload: "{}",
+      payload: CodexPooler.JSON.encode!(payload),
       timeouts: @timeouts,
       writer: fn _text -> :ok end,
       message_mapper: nil

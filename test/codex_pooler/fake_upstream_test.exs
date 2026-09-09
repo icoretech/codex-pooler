@@ -5,6 +5,201 @@ defmodule CodexPooler.FakeUpstreamTest do
   alias CodexPooler.PoolerFixtures
 
   describe "local fake upstream" do
+    @tag :fake_upstream_pin
+    test "legacy sequences remain permissive and repeat their final response" do
+      upstream =
+        start_upstream(
+          {:sequence,
+           [
+             FakeUpstream.json_response(%{"id" => "resp_first"}),
+             FakeUpstream.json_response(%{"id" => "resp_final"})
+           ]}
+        )
+
+      assert %{status: 200, body: %{"id" => "resp_first"}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/first")
+
+      assert %{status: 200, body: %{"id" => "resp_final"}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/final")
+
+      assert %{status: 200, body: %{"id" => "resp_final"}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/legacy-repeat")
+
+      assert FakeUpstream.count(upstream) == 3
+    end
+
+    @tag :fake_upstream_pin
+    test "an explicit persistent response mode remains reusable" do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_persistent"}))
+
+      for path <- ["/one", "/two"] do
+        assert %{status: 200, body: %{"id" => "resp_persistent"}} =
+                 Req.get!(FakeUpstream.url(upstream) <> path)
+      end
+
+      assert FakeUpstream.count(upstream) == 2
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "strict finite sequences consume once and reject an extra request" do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.json_response(%{"id" => "resp_once"})
+          ])
+        )
+
+      assert %{status: 200, body: %{"id" => "resp_once"}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/once")
+
+      assert %{status: 500, body: %{"error" => %{"code" => "fake_upstream_scenario_failure"}}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/extra", retry: false)
+
+      assert_raise ExUnit.AssertionError, ~r/unexpected_extra_request.*transport=http/s, fn ->
+        FakeUpstream.verify!(upstream)
+      end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "repeat-last behavior is explicit" do
+      upstream =
+        start_upstream(
+          FakeUpstream.repeat_last([
+            FakeUpstream.json_response(%{"id" => "resp_first"}),
+            FakeUpstream.json_response(%{"id" => "resp_repeat"})
+          ])
+        )
+
+      assert %{body: %{"id" => "resp_first"}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/first")
+
+      for path <- ["/second", "/third"] do
+        assert %{body: %{"id" => "resp_repeat"}} =
+                 Req.get!(FakeUpstream.url(upstream) <> path)
+      end
+
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "final verification rejects an unused strict entry" do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.json_response(%{"id" => "resp_expected"})
+          ])
+        )
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/unused_strict_entries.*remaining=1.*consumed=0/s,
+                   fn -> FakeUpstream.verify!(upstream) end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "request expectations withhold success and expose exact structural mismatch" do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/backend-api/codex/responses",
+              headers: [required: %{"x-synthetic-contract" => "expected"}, forbidden: ["x-bad"]],
+              json: [
+                valid: true,
+                required: ["type", "input.0.role"],
+                forbidden: ["unsupported_field"],
+                equals: %{
+                  "type" => "response.create",
+                  "input.0.role" => "user"
+                }
+              ],
+              respond: FakeUpstream.json_response(%{"id" => "resp_should_not_escape"})
+            )
+          ])
+        )
+
+      response =
+        Req.post!(FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+          json: %{"type" => "wrong.create", "input" => [%{"role" => "assistant"}]},
+          headers: [{"x-synthetic-contract", "actual"}, {"x-bad", "present"}],
+          retry: false
+        )
+
+      assert response.status == 500
+      refute response.body["id"] == "resp_should_not_escape"
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/expectation_mismatch.*headers.x-synthetic-contract.*expected="expected".*actual="actual".*headers.x-bad.*expected=:forbidden.*actual="present".*json.input.0.role.*expected="user".*actual="assistant".*json.type.*expected="response.create".*actual="wrong.create"/s,
+                   fn -> FakeUpstream.verify!(upstream) end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "request expectations reject invalid JSON and missing required paths" do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/strict-json",
+              json: [valid: true, required: ["type"]],
+              respond: FakeUpstream.json_response(%{"id" => "resp_invalid_json"})
+            )
+          ])
+        )
+
+      response =
+        Req.post!(FakeUpstream.url(upstream) <> "/strict-json",
+          body: "{not-json",
+          headers: [{"content-type", "application/json"}],
+          retry: false
+        )
+
+      assert response.status == 500
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/expectation_mismatch.*json.*expected=:valid_json.*actual=:invalid_json.*json.type.*expected=:required.*actual=:missing/s,
+                   fn -> FakeUpstream.verify!(upstream) end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "request expectations report method path and forbidden JSON mismatches" do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/expected-path",
+              json: [valid: true, forbidden: ["forbidden.nested"]],
+              respond: FakeUpstream.json_response(%{"id" => "resp_mismatch"})
+            )
+          ])
+        )
+
+      assert %{status: 500} =
+               Req.put!(FakeUpstream.url(upstream) <> "/actual-path",
+                 json: %{"forbidden" => %{"nested" => "synthetic-value"}},
+                 retry: false
+               )
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/expectation_mismatch.*field=method expected="POST" actual="PUT".*field=path expected="\/expected-path" actual="\/actual-path".*field=json.forbidden.nested expected=:forbidden actual="synthetic-value"/s,
+                   fn -> FakeUpstream.verify!(upstream) end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "final verification requires registered barrier acknowledgements" do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused-permissive"}))
+      barrier_ref = make_ref()
+      :ok = FakeUpstream.require_acknowledgement(upstream, {:barrier, barrier_ref})
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/missing_required_acknowledgement.*barrier/s,
+                   fn -> FakeUpstream.verify!(upstream) end
+
+      :ok = FakeUpstream.acknowledge(upstream, {:barrier, barrier_ref})
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+
     test "keeps the existing low-level failure modes deterministic" do
       release_ref = make_ref()
 

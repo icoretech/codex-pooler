@@ -1593,22 +1593,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   for terminal_shape <- [:top_level, :nested] do
     @tag :findings116
+    @tag :strict_fake_upstream
     test "connection-limit terminal from #{terminal_shape} retires peer-open connection before next send" do
       terminal_ref = make_ref()
 
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             websocket_success("resp_ws_limit_warmup_#{unquote(terminal_shape)}"),
-             FakeUpstream.websocket_connection_limit_terminal_barrier(
-               shape: unquote(terminal_shape),
-               notify: self(),
-               release_ref: terminal_ref
-             ),
-             websocket_success("resp_ws_limit_next_#{unquote(terminal_shape)}"),
-             websocket_success("resp_ws_limit_after_late_close_#{unquote(terminal_shape)}")
-           ]}
+          FakeUpstream.strict_sequence([
+            strict_websocket_response(
+              "resp_ws_limit_warmup_#{unquote(terminal_shape)}",
+              1
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_connection_limit_terminal_barrier(
+                  shape: unquote(terminal_shape),
+                  notify: self(),
+                  release_ref: terminal_ref
+                )
+            ),
+            strict_websocket_response("resp_ws_limit_next_#{unquote(terminal_shape)}", 2),
+            strict_websocket_response(
+              "resp_ws_limit_after_late_close_#{unquote(terminal_shape)}",
+              2
+            )
+          ])
         )
 
       {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -1661,6 +1674,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       assert_connection_metadata(reused_result, generation_two, true, false)
       assert lifecycle_state(session) == generation_two
       assert %{1 => 2, 2 => 2} = generation_request_counts(upstream)
+      assert :ok = FakeUpstream.verify!(upstream)
     end
   end
 
@@ -4483,6 +4497,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp websocket_success(response_id) do
     FakeUpstream.json_response(%{"id" => response_id, "object" => "response"})
+  end
+
+  defp strict_websocket_response(response_id, connection_ordinal) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: connection_ordinal,
+      json: [valid: true, equals: %{"type" => "response.create"}],
+      respond:
+        FakeUpstream.websocket_text_frames([
+          CodexPooler.JSON.encode!(%{"id" => response_id, "object" => "response"})
+        ])
+    )
   end
 
   defp request_websocket_frames(frames, request_opts \\ []) do

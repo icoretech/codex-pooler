@@ -7674,6 +7674,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   @tag :duplicate_turn
   @tag :replay_matrix
+  @tag :strict_fake_upstream
   test "released 0.151.0 same-socket native tool continuation without previous response gets a request claim" do
     previous_response_id = "resp_native_tool_continuation_anchor"
     logical_turn_id = "native-tool-continuation-turn"
@@ -7695,19 +7696,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => previous_response_id,
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_native_tool_continuation_complete",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7}
-           })
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_native_response(previous_response_id, 1, 4, 3),
+          strict_native_response("resp_native_tool_continuation_complete", 1, 5, 2)
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -7864,6 +7856,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       refute Enum.any?(FakeUpstream.requests(upstream), fn request ->
                request.path == "/api/codex/rate-limit-reset-credits/consume"
              end)
+
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -8028,6 +8022,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              from(entry in LedgerEntry, where: entry.entry_kind == "settlement"),
              :count
            ) == 1
+  end
+
+  defp strict_native_response(response_id, connection_ordinal, input_tokens, output_tokens) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: connection_ordinal,
+      json: [valid: true, equals: %{"type" => "response.create"}],
+      respond:
+        FakeUpstream.websocket_text_frames([
+          CodexPooler.JSON.encode!(%{
+            "id" => response_id,
+            "object" => "response",
+            "usage" => %{
+              "input_tokens" => input_tokens,
+              "output_tokens" => output_tokens,
+              "total_tokens" => input_tokens + output_tokens
+            }
+          })
+        ])
+    )
   end
 
   @tag :replay_matrix
