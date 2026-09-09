@@ -139,6 +139,11 @@ defmodule CodexPooler.Upstreams do
   defdelegate validate_trusted_account(scope, pool, attrs), to: Import
 
   @spec import_trusted_account_in_transaction(Scope.t(), Pool.t(), map()) :: import_result()
+  @doc """
+  Imports one trusted account inside the caller's transaction.
+
+  Multi-account callers must prepare the full set and use the batch transaction boundary once.
+  """
   defdelegate import_trusted_account_in_transaction(scope, pool, attrs), to: Import
 
   @spec start_browser_oauth(Scope.t(), Pool.t(), keyword()) :: oauth_flow_start_result()

@@ -77,7 +77,9 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     assert diagnostics.candidate_loads == %{account: 3, email: 3}
     assert diagnostics.locked_identity_count == 0
 
-    assert {:error, %{code: :stale_import}} =
+    before = counts()
+
+    assert {:error, %{code: :batch_composition_required}} =
              Repo.transaction(fn ->
                IdentitySlotLock.lock_slots!([first.attrs, second.attrs])
 
@@ -93,6 +95,8 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
                  end
                end)
              end)
+
+    assert counts() == before
 
     assert {:ok, {:ok, [first_result, second_result]}} =
              Repo.transaction(fn ->

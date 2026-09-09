@@ -107,6 +107,13 @@ defmodule CodexPooler.Upstreams.Import do
     do: {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
 
   @spec import_trusted_account_in_transaction(Scope.t(), Pool.t(), map()) :: import_result()
+  @doc """
+  Imports one trusted account inside the caller's transaction.
+
+  Callers composing multiple prepared imports must prepare the complete set first and submit it
+  once through `TokenLinking.link_prepared_batch_in_transaction/3` so the union lock and preflight
+  boundary is acquired exactly once.
+  """
   def import_trusted_account_in_transaction(%Scope{} = scope, %Pool{} = pool, attrs)
       when is_map(attrs) do
     with {:ok, prepared} <- prepare_trusted_account(scope, pool, attrs) do

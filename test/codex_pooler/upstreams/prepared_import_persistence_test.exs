@@ -69,12 +69,22 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
 
         before = credential_snapshot(identity.id)
 
-        assert {:error,
-                %{
-                  code: :stale_import,
-                  message:
-                    "credentials changed after import preparation; submit the current auth data again"
-                }} = invoke_boundary(unquote(boundary), fixture, stale_prepared)
+        expected_error =
+          if unquote(boundary) in [:persist_prepared_locked, :link_prepared_locked] do
+            %{
+              code: :batch_composition_required,
+              message: "prepared imports must be submitted as one complete batch"
+            }
+          else
+            %{
+              code: :stale_import,
+              message:
+                "credentials changed after import preparation; submit the current auth data again"
+            }
+          end
+
+        assert {:error, ^expected_error} =
+                 invoke_boundary(unquote(boundary), fixture, stale_prepared)
 
         assert credential_snapshot(identity.id) == before
         assert before.credential_epoch == newer_identity.metadata["credential_epoch"]
@@ -130,12 +140,11 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
               send(parent, {barrier, :newer_locked, backend_pid})
               await_message!({barrier, :commit_newer})
 
-              assert {:ok, result} =
-                       TokenLinking.persist_prepared(
+              assert {:ok, [result]} =
+                       TokenLinking.link_prepared_batch_in_transaction(
                          fixture.scope,
                          fixture.pool,
-                         newer_prepared,
-                         true
+                         [newer_prepared]
                        )
 
               assert result.identity.id == locked.id

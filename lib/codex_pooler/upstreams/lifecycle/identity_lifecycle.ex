@@ -205,39 +205,74 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
     do: not is_nil(present_string(identity.workspace_id))
 
   defp select_account_slot_identity(account_id, workspace_id, nil, attrs) do
-    identities = identities_for_account(account_id)
-
-    case subjectless_identity_for_workspace(identities, workspace_id) do
+    case account_identity(account_id, workspace_id, :subjectless) do
       %UpstreamIdentity{} = identity ->
         {:ok, identity}
 
       nil ->
-        select_subjectless_account_fallback(identities, workspace_id, attrs)
+        select_subjectless_account_fallback(account_id, workspace_id, attrs)
     end
   end
 
   defp select_account_slot_identity(account_id, workspace_id, subject, _attrs) do
-    identities = identities_for_account(account_id)
-
-    with nil <- identity_for_workspace_and_subject(identities, workspace_id, subject),
-         nil <- subjectless_identity_for_workspace(identities, workspace_id) do
-      {:ok, claimable_subjectless_legacy_identity(identities, workspace_id)}
+    with nil <- account_identity(account_id, workspace_id, {:subject, subject}),
+         nil <- account_identity(account_id, workspace_id, :subjectless) do
+      {:ok, claimable_subjectless_legacy_identity_for_account(account_id, workspace_id)}
     else
       %UpstreamIdentity{} = identity -> {:ok, identity}
     end
   end
 
-  defp select_subjectless_account_fallback(identities, workspace_id, attrs) do
-    case claimable_subjectless_legacy_identity(identities, workspace_id) do
+  defp select_subjectless_account_fallback(account_id, workspace_id, attrs) do
+    case claimable_subjectless_legacy_identity_for_account(account_id, workspace_id) do
       %UpstreamIdentity{} = identity ->
         {:ok, identity}
 
       nil ->
-        case subject_bound_identity_for_workspace(identities, workspace_id) do
+        case account_identity(account_id, workspace_id, :subject_bound) do
           %UpstreamIdentity{} = conflict -> {:error, identity_conflict(attrs, conflict)}
           nil -> {:ok, nil}
         end
     end
+  end
+
+  defp account_identity(account_id, workspace_id, subject_selector) do
+    UpstreamIdentity
+    |> where([identity], identity.chatgpt_account_id == ^account_id)
+    |> where_workspace(workspace_id)
+    |> where_subject(subject_selector)
+    |> order_by([identity], asc: identity.created_at, asc: identity.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp where_subject(query, :subjectless),
+    do: where(query, [identity], is_nil(identity.chatgpt_user_id))
+
+  defp where_subject(query, :subject_bound),
+    do: where(query, [identity], not is_nil(identity.chatgpt_user_id))
+
+  defp where_subject(query, {:subject, subject}),
+    do: where(query, [identity], identity.chatgpt_user_id == ^subject)
+
+  defp claimable_subjectless_legacy_identity_for_account(account_id, workspace_id)
+       when is_binary(workspace_id) do
+    legacy_identity = account_identity(account_id, nil, :subjectless)
+
+    if legacy_identity && not subjectless_concrete_identity_exists?(account_id) do
+      legacy_identity
+    end
+  end
+
+  defp claimable_subjectless_legacy_identity_for_account(_account_id, _workspace_id), do: nil
+
+  defp subjectless_concrete_identity_exists?(account_id) do
+    Repo.exists?(
+      from identity in UpstreamIdentity,
+        where: identity.chatgpt_account_id == ^account_id,
+        where: not is_nil(identity.workspace_id),
+        where: is_nil(identity.chatgpt_user_id)
+    )
   end
 
   defp claimable_subjectless_legacy_identity(identities, workspace_id)
@@ -288,7 +323,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
   defp select_account_candidates(identities, workspace_id, nil, attrs) do
     case subjectless_identity_for_workspace(identities, workspace_id) do
       %UpstreamIdentity{} = identity -> {:ok, identity}
-      nil -> select_subjectless_account_fallback(identities, workspace_id, attrs)
+      nil -> select_subjectless_account_fallback_from_candidates(identities, workspace_id, attrs)
     end
   end
 
@@ -298,6 +333,19 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
       {:ok, claimable_subjectless_legacy_identity(identities, workspace_id)}
     else
       %UpstreamIdentity{} = identity -> {:ok, identity}
+    end
+  end
+
+  defp select_subjectless_account_fallback_from_candidates(identities, workspace_id, attrs) do
+    case claimable_subjectless_legacy_identity(identities, workspace_id) do
+      %UpstreamIdentity{} = identity ->
+        {:ok, identity}
+
+      nil ->
+        case subject_bound_identity_for_workspace(identities, workspace_id) do
+          %UpstreamIdentity{} = conflict -> {:error, identity_conflict(attrs, conflict)}
+          nil -> {:ok, nil}
+        end
     end
   end
 
@@ -460,6 +508,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
     |> where([identity], identity.account_email == ^account_email)
     |> where_workspace(workspace_id)
     |> order_by([identity], asc: identity.created_at, asc: identity.id)
+    |> limit(2)
     |> Repo.all()
   end
 

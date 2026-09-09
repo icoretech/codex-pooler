@@ -7,8 +7,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
   alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
-  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
-  alias CodexPooler.Upstreams.Secrets
+  alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
   alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
@@ -22,6 +21,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   @assignment_disabled AssignmentStatus.disabled_health_status()
   @assignment_eligible AssignmentStatus.eligible_status()
   @assignment_ineligible AssignmentStatus.ineligible_status()
+  @secret_active "active"
   @active IdentityStatus.active_status()
   @pending IdentityStatus.pending_status()
   @refresh_failed IdentityStatus.refresh_failed_status()
@@ -191,7 +191,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   @spec lock_credential_replacement_after_identity(UpstreamIdentity.t()) :: UpstreamIdentity.t()
   def lock_credential_replacement_after_identity(%UpstreamIdentity{} = identity) do
     lock_assignments(identity.id)
-    Secrets.lock_encrypted_secrets(identity.id)
+    lock_active_secrets(identity.id)
     identity
   end
 
@@ -709,6 +709,16 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
           assignment.upstream_identity_id == ^identity_id and
             assignment.status != ^@assignment_deleted,
         order_by: [asc: assignment.id],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_active_secrets(identity_id) do
+    Repo.all(
+      from(secret in EncryptedSecret,
+        where: secret.upstream_identity_id == ^identity_id and secret.status == ^@secret_active,
+        order_by: [asc: secret.id],
         lock: "FOR UPDATE"
       )
     )

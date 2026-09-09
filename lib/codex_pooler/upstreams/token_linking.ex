@@ -29,6 +29,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   @identity_mismatch_message "OAuth account does not match the selected upstream account"
   @stale_import_message "credentials changed after import preparation; submit the current auth data again"
   @transaction_not_allowed_message "auto-publishing token linking is not allowed inside a caller-owned transaction"
+  @batch_composition_required_message "prepared imports must be submitted as one complete batch"
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type link_success :: %{
@@ -108,7 +109,9 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       )
       when is_list(opts) do
     if Repo.in_transaction?() do
-      {:ok, persist_prepared!(scope, pool, prepared, Keyword.get(opts, :slots_locked?, false))}
+      with :ok <- require_supported_import_composition(prepared, opts) do
+        {:ok, persist_prepared!(scope, pool, prepared, Keyword.get(opts, :slots_locked?, false))}
+      end
     else
       {:error,
        lifecycle_error(:transaction_required, "token linking requires a caller-owned transaction")}
@@ -171,7 +174,10 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       )
       when is_boolean(slots_locked?) do
     if Repo.in_transaction?() do
-      with {:ok, prepared} <- PreparedAccount.validate(prepared, scope, pool),
+      composition_opts = if slots_locked?, do: [slots_locked?: true], else: []
+
+      with :ok <- require_supported_import_composition(prepared, composition_opts),
+           {:ok, prepared} <- PreparedAccount.validate(prepared, scope, pool),
            :ok <- lock_and_validate_prepared_import(prepared, slots_locked?) do
         persist_validated_prepared(scope, pool, prepared, :select)
       end
@@ -368,6 +374,20 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   defp selected_identity_id(nil), do: nil
 
   defp stale_import_error, do: lifecycle_error(:stale_import, @stale_import_message)
+
+  defp require_supported_import_composition(
+         %PreparedAccount{import_witness: witness},
+         opts
+       )
+       when not is_nil(witness) do
+    if Keyword.get(opts, :slots_locked?, false) do
+      {:error, lifecycle_error(:batch_composition_required, @batch_composition_required_message)}
+    else
+      :ok
+    end
+  end
+
+  defp require_supported_import_composition(_prepared, _opts), do: :ok
 
   defp transaction_not_allowed_error,
     do: lifecycle_error(:transaction_not_allowed, @transaction_not_allowed_message)
