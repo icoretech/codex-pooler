@@ -35,6 +35,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
           | {:websocket_terminal_then_close_barrier, String.t(), non_neg_integer(), String.t(),
              pid(), reference()}
+          | {:websocket_connection_limit_terminal_barrier, atom(), pid(), reference()}
           | {:websocket_close_without_terminal_barrier, non_neg_integer(), String.t(), pid(),
              reference()}
           | {:websocket_init_barrier, mode(), pid(), reference()}
@@ -357,11 +358,60 @@ defmodule CodexPooler.FakeUpstream do
      Keyword.fetch!(opts, :release_ref)}
   end
 
+  @spec websocket_connection_limit_terminal_barrier(keyword()) :: mode()
+  def websocket_connection_limit_terminal_barrier(opts) when is_list(opts) do
+    shape = Keyword.fetch!(opts, :shape)
+
+    unless shape in [:top_level, :nested] do
+      raise ArgumentError, "connection-limit terminal shape must be :top_level or :nested"
+    end
+
+    {:websocket_connection_limit_terminal_barrier, shape, Keyword.fetch!(opts, :notify),
+     Keyword.fetch!(opts, :release_ref)}
+  end
+
   @spec websocket_close_without_terminal_barrier(keyword()) :: mode()
   def websocket_close_without_terminal_barrier(opts) when is_list(opts) do
     {:websocket_close_without_terminal_barrier, Keyword.get(opts, :code, 1000),
      Keyword.get(opts, :reason, "synthetic close without terminal"),
      Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
+  end
+
+  @spec websocket_connection_alive?(t(), pos_integer()) :: boolean()
+  def websocket_connection_alive?(%__MODULE__{pid: pid}, connection_id)
+      when is_integer(connection_id) and connection_id > 0 do
+    case Agent.get(pid, fn state ->
+           state
+           |> Map.get(:websocket_pids_by_connection, %{})
+           |> Map.get(connection_id)
+         end) do
+      websocket_pid when is_pid(websocket_pid) -> Process.alive?(websocket_pid)
+      _other -> false
+    end
+  end
+
+  @spec close_websocket_connection(t(), pos_integer(), keyword()) :: :ok | {:error, :not_found}
+  def close_websocket_connection(%__MODULE__{pid: pid}, connection_id, opts \\ [])
+      when is_integer(connection_id) and connection_id > 0 and is_list(opts) do
+    websocket_pid =
+      Agent.get(pid, fn state ->
+        state
+        |> Map.get(:websocket_pids_by_connection, %{})
+        |> Map.get(connection_id)
+      end)
+
+    if is_pid(websocket_pid) and Process.alive?(websocket_pid) do
+      send(
+        websocket_pid,
+        {:fake_upstream_close_websocket, Keyword.get(opts, :code, 1000),
+         Keyword.get(opts, :reason, "synthetic peer close"), Keyword.fetch!(opts, :notify),
+         Keyword.fetch!(opts, :close_ref)}
+      )
+
+      :ok
+    else
+      {:error, :not_found}
+    end
   end
 
   def websocket_terminal_failure(code \\ "server_error") when is_binary(code) do
@@ -433,6 +483,7 @@ defmodule CodexPooler.FakeUpstream do
       websocket_connection_count: 0,
       websocket_connection_ids: [],
       websocket_pids: MapSet.new(),
+      websocket_pids_by_connection: %{},
       websocket_control_notify: nil,
       websocket_control_frames: []
     }
@@ -1110,7 +1161,13 @@ defmodule CodexPooler.FakeUpstream do
                 opaque_connection_id | Map.get(agent_state, :websocket_connection_ids, [])
               ],
               websocket_pids:
-                MapSet.put(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid)
+                MapSet.put(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
+              websocket_pids_by_connection:
+                Map.put(
+                  Map.get(agent_state, :websocket_pids_by_connection, %{}),
+                  connection_count,
+                  websocket_pid
+                )
           }
 
           {{connection_count, opaque_connection_id}, agent_state}
@@ -1129,6 +1186,13 @@ defmodule CodexPooler.FakeUpstream do
 
     def handle_info({:fake_upstream_close_websocket, code, reason}, state),
       do: {:stop, :normal, {code, reason}, state}
+
+    def handle_info(
+          {:fake_upstream_close_websocket, code, reason, notify, close_ref},
+          state
+        ) do
+      {:stop, :normal, {code, reason}, Map.put(state, :peer_close_ack, {notify, close_ref})}
+    end
 
     def handle_info(
           {:fake_upstream_delayed_websocket_message, message, remaining, interval_ms},
@@ -1156,16 +1220,29 @@ defmodule CodexPooler.FakeUpstream do
     def handle_info(_message, state), do: {:ok, state}
 
     @impl WebSock
-    def terminate(_reason, %{pid: pid}) do
+    def terminate(_reason, %{pid: pid} = state) do
       websocket_pid = self()
 
       Agent.update(pid, fn agent_state ->
         %{
           agent_state
           | websocket_pids:
-              MapSet.delete(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid)
+              MapSet.delete(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
+            websocket_pids_by_connection:
+              Map.delete(
+                Map.get(agent_state, :websocket_pids_by_connection, %{}),
+                state.connection_id
+              )
         }
       end)
+
+      case Map.get(state, :peer_close_ack) do
+        {notify, close_ref} when is_pid(notify) ->
+          send(notify, {:fake_upstream_websocket_peer_closed, state.connection_id, close_ref})
+
+        _other ->
+          :ok
+      end
 
       :ok
     catch
@@ -1215,48 +1292,64 @@ defmodule CodexPooler.FakeUpstream do
           {mode, %{agent_state | mode: next_mode, requests: [request | agent_state.requests]}}
         end)
 
-      case websocket_messages(mode, request) do
-        {:close, code, reason} ->
-          {:stop, reason, {code, reason}, state}
-
-        {:push_then_close, messages, code, reason} ->
-          send(self(), {:fake_upstream_close_websocket, code, reason})
-          {:push, Enum.map(messages, &{:text, &1}), state}
-
-        {:barrier_push_then_close, terminal, code, reason, notify, release_ref} ->
-          await_websocket_barrier(:before_terminal, notify, release_ref)
-
-          send(
-            self(),
-            {:fake_upstream_terminal_close_barrier, code, reason, notify, release_ref}
-          )
-
-          {:push, {:text, terminal}, state}
-
-        {:barrier_close, code, reason, notify, release_ref} ->
-          await_websocket_barrier(:before_close, notify, release_ref)
-          {:stop, :normal, {code, reason}, state}
-
-        {:delayed_push, messages, interval_ms} ->
-          schedule_delayed_websocket_message(messages, interval_ms)
-          {:ok, state}
-
-        {:delayed_terminal, messages, terminal, notify, release_ref} ->
-          if is_pid(notify) do
-            send(notify, {:fake_upstream_timeout_barrier, :before_terminal, self(), release_ref})
-          end
-
-          next_state =
-            Map.put(state, :delayed_terminal, %{release_ref: release_ref, messages: terminal})
-
-          {:push, Enum.map(messages, &{:text, &1}), next_state}
-
-        messages ->
-          {:push, Enum.map(messages, &{:text, &1}), state}
-      end
+      handle_websocket_message(websocket_messages(mode, request), state)
     end
 
     def handle_in({_payload, [opcode: :binary]}, state), do: {:stop, :unsupported_binary, state}
+
+    defp handle_websocket_message({:close, code, reason}, state),
+      do: {:stop, reason, {code, reason}, state}
+
+    defp handle_websocket_message({:push_then_close, messages, code, reason}, state) do
+      send(self(), {:fake_upstream_close_websocket, code, reason})
+      {:push, Enum.map(messages, &{:text, &1}), state}
+    end
+
+    defp handle_websocket_message(
+           {:barrier_push_then_close, terminal, code, reason, notify, release_ref},
+           state
+         ) do
+      await_websocket_barrier(:before_terminal, notify, release_ref)
+
+      send(
+        self(),
+        {:fake_upstream_terminal_close_barrier, code, reason, notify, release_ref}
+      )
+
+      {:push, {:text, terminal}, state}
+    end
+
+    defp handle_websocket_message({:barrier_push, terminal, notify, release_ref}, state) do
+      await_websocket_barrier(:before_terminal, notify, release_ref)
+      {:push, {:text, terminal}, state}
+    end
+
+    defp handle_websocket_message({:barrier_close, code, reason, notify, release_ref}, state) do
+      await_websocket_barrier(:before_close, notify, release_ref)
+      {:stop, :normal, {code, reason}, state}
+    end
+
+    defp handle_websocket_message({:delayed_push, messages, interval_ms}, state) do
+      schedule_delayed_websocket_message(messages, interval_ms)
+      {:ok, state}
+    end
+
+    defp handle_websocket_message(
+           {:delayed_terminal, messages, terminal, notify, release_ref},
+           state
+         ) do
+      if is_pid(notify) do
+        send(notify, {:fake_upstream_timeout_barrier, :before_terminal, self(), release_ref})
+      end
+
+      next_state =
+        Map.put(state, :delayed_terminal, %{release_ref: release_ref, messages: terminal})
+
+      {:push, Enum.map(messages, &{:text, &1}), next_state}
+    end
+
+    defp handle_websocket_message(messages, state),
+      do: {:push, Enum.map(messages, &{:text, &1}), state}
 
     defp websocket_messages({:json, _status, payload}, _request),
       do: [CodexPooler.JSON.encode!(payload)]
@@ -1344,6 +1437,13 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp websocket_messages(
+           {:websocket_connection_limit_terminal_barrier, shape, notify, release_ref},
+           _request
+         ) do
+      {:barrier_push, websocket_connection_limit_terminal(shape), notify, release_ref}
+    end
+
+    defp websocket_messages(
            {:websocket_close_without_terminal_barrier, code, reason, notify, release_ref},
            _request
          ) do
@@ -1383,6 +1483,30 @@ defmodule CodexPooler.FakeUpstream do
 
     defp websocket_messages(_mode, _request),
       do: {:close, 1011, "unsupported fake websocket mode"}
+
+    defp websocket_connection_limit_terminal(:top_level) do
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.failed",
+        "error" => %{
+          "code" => "websocket_connection_limit_reached",
+          "message" => "synthetic websocket connection limit"
+        },
+        "response" => %{"status" => "failed"}
+      })
+    end
+
+    defp websocket_connection_limit_terminal(:nested) do
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.failed",
+        "response" => %{
+          "status" => "failed",
+          "error" => %{
+            "code" => "websocket_connection_limit_reached",
+            "message" => "synthetic websocket connection limit"
+          }
+        }
+      })
+    end
 
     defp next_response_mode({:sequence, [mode]}), do: {mode, mode}
 

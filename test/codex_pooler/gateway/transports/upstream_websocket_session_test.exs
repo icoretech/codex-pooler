@@ -1503,6 +1503,296 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert FakeUpstream.websocket_connection_count(upstream) == 2
   end
 
+  test "ordinary successful and request-terminal work keep one connection reusable" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success("resp_ws_ordinary_success_before_terminal"),
+           FakeUpstream.websocket_terminal_failure("invalid_request_error"),
+           websocket_success("resp_ws_ordinary_success_after_terminal")
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    request = generation_request(FakeUpstream.url(upstream))
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert {:ok, %{terminal: "response.failed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert %{1 => 3} = generation_request_counts(upstream)
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+  end
+
+  @tag :findings116
+  test "connection-limit fixture withholds its terminal and records one queued next send" do
+    terminal_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success("resp_ws_limit_fixture_warmup"),
+           FakeUpstream.websocket_connection_limit_terminal_barrier(
+             shape: :nested,
+             notify: self(),
+             release_ref: terminal_ref
+           ),
+           websocket_success("resp_ws_limit_fixture_next")
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    request = generation_request(FakeUpstream.url(upstream))
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid,
+                    ^terminal_ref},
+                   @detection_timeout_ms
+
+    assert FakeUpstream.websocket_connection_alive?(upstream, 1)
+
+    parent = self()
+
+    next_task =
+      Task.async(fn ->
+        send(parent, :findings116_next_request_task_started)
+        UpstreamWebsocketSession.request(session, request)
+      end)
+
+    assert_receive :findings116_next_request_task_started, @detection_timeout_ms
+    send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
+
+    assert {:error,
+            %{reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}}} =
+             Task.await(terminal_task, @detection_timeout_ms)
+
+    assert {:ok, %{terminal: "response.completed"}} = Task.await(next_task, @detection_timeout_ms)
+
+    assert %{1 => 2, 2 => 1} = generation_request_counts(upstream)
+    refute FakeUpstream.websocket_connection_alive?(upstream, 1)
+
+    assert {:error, :not_found} =
+             FakeUpstream.close_websocket_connection(upstream, 1,
+               notify: self(),
+               close_ref: make_ref()
+             )
+  end
+
+  for terminal_shape <- [:top_level, :nested] do
+    @tag :findings116
+    test "connection-limit terminal from #{terminal_shape} retires peer-open connection before next send" do
+      terminal_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          {:sequence,
+           [
+             websocket_success("resp_ws_limit_warmup_#{unquote(terminal_shape)}"),
+             FakeUpstream.websocket_connection_limit_terminal_barrier(
+               shape: unquote(terminal_shape),
+               notify: self(),
+               release_ref: terminal_ref
+             ),
+             websocket_success("resp_ws_limit_next_#{unquote(terminal_shape)}"),
+             websocket_success("resp_ws_limit_after_late_close_#{unquote(terminal_shape)}")
+           ]}
+        )
+
+      {:ok, session} = UpstreamWebsocketSession.start_link([])
+      on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+      request = generation_request(FakeUpstream.url(upstream))
+
+      assert {:ok, %{terminal: "response.completed"}} =
+               UpstreamWebsocketSession.request(session, request)
+
+      generation_one = lifecycle_state(session)
+      old_socket = session_socket(session)
+      terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid,
+                      ^terminal_ref},
+                     @detection_timeout_ms
+
+      assert FakeUpstream.websocket_connection_alive?(upstream, 1)
+      peer_monitor = Process.monitor(websocket_pid)
+      send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
+
+      assert {:error,
+              %{
+                reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}
+              } = failure} =
+               Task.await(terminal_task, @detection_timeout_ms)
+
+      assert_connection_metadata(failure, generation_one, true, false)
+      assert_disconnected_lifecycle(session, generation_one)
+
+      assert_receive {:DOWN, ^peer_monitor, :process, ^websocket_pid, _reason},
+                     @detection_timeout_ms
+
+      refute FakeUpstream.websocket_connection_alive?(upstream, 1)
+
+      assert {:ok, %{terminal: "response.completed"} = next_result} =
+               UpstreamWebsocketSession.request(session, request)
+
+      generation_two = %{generation_one | generation: generation_one.generation + 1}
+      assert_connection_metadata(next_result, generation_two, false, false)
+      assert lifecycle_state(session) == generation_two
+      assert %{1 => 2, 2 => 1} = generation_request_counts(upstream)
+
+      send(session, {:tcp_closed, old_socket})
+      _late_close_processed = :sys.get_state(session)
+
+      assert {:ok, %{terminal: "response.completed"} = reused_result} =
+               UpstreamWebsocketSession.request(session, request)
+
+      assert_connection_metadata(reused_result, generation_two, true, false)
+      assert lifecycle_state(session) == generation_two
+      assert %{1 => 2, 2 => 2} = generation_request_counts(upstream)
+    end
+  end
+
+  @tag :findings116
+  test "connection-limit after rate-limit control retires connection and clears connection state" do
+    rate_limits =
+      CodexPooler.JSON.encode!(%{
+        "type" => "codex.rate_limits",
+        "rate_limits" => %{"primary" => %{"used_percent" => 42}}
+      })
+
+    limit = connection_limit_terminal(:top_level)
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success("resp_ws_limit_after_control_warmup"),
+           FakeUpstream.websocket_text_frames([rate_limits, limit]),
+           websocket_success("resp_ws_limit_after_control_next")
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    request = ordinary_request(generation_request(FakeUpstream.url(upstream)))
+
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: receipt}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    generation_one = lifecycle_state(session)
+    binding = direct_admission_binding(generation_one, receipt)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               System.system_time(:millisecond) + 30_000,
+               receipt
+             )
+
+    assert :pending_compact = UpstreamWebsocketSession.compaction_admission_phase(session)
+    peer_pid = websocket_connection_pid(upstream, 1)
+    peer_monitor = Process.monitor(peer_pid)
+
+    assert {:error,
+            %{
+              reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}
+            } = failure} = UpstreamWebsocketSession.request(session, request)
+
+    assert_connection_metadata(failure, generation_one, true, false)
+
+    assert status_state(:sys.get_status(session)) == %{
+             lifecycle_id: generation_one.lifecycle_id,
+             generation: generation_one.generation,
+             connected?: false,
+             reconnect_pending?: false,
+             request_active?: false,
+             keepalive_pending?: false,
+             pong_pending?: false,
+             admission_phase: :cleared
+           }
+
+    assert_receive {:DOWN, ^peer_monitor, :process, ^peer_pid, _reason}, @detection_timeout_ms
+
+    assert {:ok, %{terminal: "response.completed"} = next_result} =
+             UpstreamWebsocketSession.request(session, request)
+
+    generation_two = %{generation_one | generation: generation_one.generation + 1}
+    assert_connection_metadata(next_result, generation_two, false, false)
+    assert %{1 => 2, 2 => 1} = generation_request_counts(upstream)
+  end
+
+  @tag :findings116
+  test "connection-limit after response.created retires connection without replaying visible work" do
+    created =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.created",
+        "response" => %{"id" => "resp_ws_limit_visible"}
+      })
+
+    limit = connection_limit_terminal(:nested)
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success("resp_ws_limit_visible_warmup"),
+           FakeUpstream.websocket_text_frames([created, limit]),
+           websocket_success("resp_ws_limit_visible_next")
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    request = generation_request(FakeUpstream.url(upstream))
+    parent = self()
+
+    visible_request = %{
+      request
+      | writer: fn frame -> send(parent, {:visible_limit_frame, frame}) end
+    }
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    generation_one = lifecycle_state(session)
+    peer_pid = websocket_connection_pid(upstream, 1)
+    peer_monitor = Process.monitor(peer_pid)
+
+    assert {:ok,
+            %{
+              terminal: "error",
+              upstream_error_code: "websocket_connection_limit_reached"
+            } = terminal_result} = UpstreamWebsocketSession.request(session, visible_request)
+
+    assert_receive {:visible_limit_frame, ^created}, @detection_timeout_ms
+    assert_receive {:visible_limit_frame, ^limit}, @detection_timeout_ms
+    assert_connection_metadata(terminal_result, generation_one, true, false)
+    assert_disconnected_lifecycle(session, generation_one)
+    assert_receive {:DOWN, ^peer_monitor, :process, ^peer_pid, _reason}, @detection_timeout_ms
+
+    assert %{1 => 2} = generation_request_counts(upstream)
+
+    assert {:ok, %{terminal: "response.completed"} = next_result} =
+             UpstreamWebsocketSession.request(session, request)
+
+    generation_two = %{generation_one | generation: generation_one.generation + 1}
+    assert_connection_metadata(next_result, generation_two, false, false)
+    assert %{1 => 2, 2 => 1} = generation_request_counts(upstream)
+  end
+
   test "a preterminal peer close does not replay the accepted request" do
     upstream =
       start_upstream(
@@ -4238,6 +4528,43 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       writer: fn _text -> :ok end,
       message_mapper: nil
     }
+  end
+
+  defp generation_request(base_url) do
+    %{
+      websocket_request(base_url)
+      | payload: CodexPooler.JSON.encode!(%{"type" => "response.create"})
+    }
+  end
+
+  defp generation_request_counts(upstream) do
+    upstream
+    |> FakeUpstream.requests()
+    |> Enum.filter(&match?(%{"type" => "response.create"}, &1.json))
+    |> Enum.frequencies_by(& &1.websocket_connection_id)
+  end
+
+  defp connection_limit_terminal(:top_level) do
+    CodexPooler.JSON.encode!(%{
+      "type" => "error",
+      "status" => 400,
+      "code" => "websocket_connection_limit_reached"
+    })
+  end
+
+  defp connection_limit_terminal(:nested) do
+    CodexPooler.JSON.encode!(%{
+      "type" => "error",
+      "status" => 400,
+      "error" => %{"code" => "websocket_connection_limit_reached"}
+    })
+  end
+
+  defp websocket_connection_pid(upstream, connection_id) do
+    upstream.pid
+    |> :sys.get_state()
+    |> Map.fetch!(:websocket_pids_by_connection)
+    |> Map.fetch!(connection_id)
   end
 
   defp metadata_event(frame) do

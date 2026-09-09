@@ -1596,13 +1596,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           }
           |> maybe_put_success_response_id(terminal, receive_state.response_id)
 
-        {{:ok, result}, state}
+        {{:ok, result}, maybe_retire_exhausted_connection(state, receive_state)}
 
       {:failure, state, receive_state, reason} ->
         next_state =
-          if receive_state.termination_source == :upstream_terminal_event,
-            do: state,
-            else: close_state(state)
+          if receive_state.termination_source == :upstream_terminal_event and
+               not exhausted_connection?(receive_state),
+             do: state,
+             else: close_state(state)
 
         {{:error,
           %{
@@ -1619,6 +1620,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           }}, next_state}
     end
   end
+
+  defp maybe_retire_exhausted_connection(state, receive_state) do
+    if exhausted_connection?(receive_state), do: close_state(state), else: state
+  end
+
+  defp exhausted_connection?(%ReceiveState{
+         terminal_upstream_error_code: "websocket_connection_limit_reached"
+       }),
+       do: true
+
+  defp exhausted_connection?(%ReceiveState{}), do: false
 
   defp reduce_receive_result({:continue, _state, _receive_state} = result), do: {:cont, result}
 
