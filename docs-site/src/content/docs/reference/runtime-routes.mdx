@@ -377,17 +377,17 @@ Supported work is translated into Codex-compatible requests and then routed thro
     </tr>
     <tr>
       <td><code>POST /v1/images/generations</code></td>
-      <td><code>/backend-api/codex/responses</code></td>
+      <td><code>/backend-api/codex/images/generations</code> or <code>/backend-api/codex/responses</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>OpenAI image generation request is converted to Codex Responses-compatible image work. Pool image permission applies before body parsing.</td>
+      <td>GPT Image 2/2.5 uses native Images generation; legacy image models use Responses translation. Pool image permission applies before body parsing.</td>
     </tr>
     <tr>
       <td><code>POST /v1/images/edits</code></td>
-      <td><code>/backend-api/codex/responses</code></td>
+      <td><code>/backend-api/codex/images/edits</code> or <code>/backend-api/codex/responses</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>OpenAI image edit request is converted to Codex Responses-compatible image work. Pool image permission applies before body parsing.</td>
+      <td>Unmasked GPT Image 2/2.5 edits use native Images. Masked edits require an eligible Full Responses image-input host and explicit image tool selection; without one, mask is rejected before dispatch or reservation. Legacy models use Responses translation. Pool image permission applies before body parsing.</td>
     </tr>
   </tbody>
 </table>

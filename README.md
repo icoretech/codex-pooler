@@ -98,6 +98,9 @@ assigned Pools.
 - 🔌 **OpenAI-compatible SDK surface:** let `/v1`-only apps and agent tools use
   Codex capacity through the same Pool boundary, with supported requests
   translated and routed to help contain API spend
+- 🚀 **Unlock the full potential of Responses:** give your agents parallel tool
+  calls and fewer API restrictions with Full, while Pooler handles Lite
+  compatibility behind the scenes. [Learn more](https://docs.codex-pooler.com/reference/responses-lite-vs-full/)
 - 🔁 **Session-aware websockets:** keep resumable Codex sessions and websocket
   reconnects attached to the right upstream account without translating backend
   websocket traffic through an HTTP compatibility layer

@@ -93,6 +93,9 @@ Bearer 令牌或原始 Codex 密钥。实例所有者保留全局管理界面，
 - 🔌 **OpenAI 兼容 SDK 接口：** 让只支持 `/v1` 的应用和 Agent 工具
   通过同一个 Pool 边界使用 Codex 容量，翻译、路由受支持的请求以帮助控制
   API 支出
+- 🚀 **释放 Responses 的全部潜力：** 通过 Full 为 Agent 提供并行工具调用，
+  减少 API 限制，同时由 Pooler 在后台处理 Lite 兼容性。
+  [了解更多](https://docs.codex-pooler.com/reference/responses-lite-vs-full/)
 - 🔁 **感知会话的 websockets：** 保持可恢复 Codex 会话和 websocket 重连绑定到
   正确的上游账号，而不是通过 HTTP 兼容层翻译后端 websocket 流量
 - ⚡ **Prompt-cache locality：** 使用临时 `prompt_cache_key` 优先为重复的无

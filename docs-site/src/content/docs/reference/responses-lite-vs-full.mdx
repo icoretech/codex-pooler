@@ -213,7 +213,7 @@ Serving-mode choices are stored independently of the model catalog. They persist
 
 ## What Serving Mode Does Not Affect
 
-This section exists because the mode is easy to over-attribute. Lite and Full change the outgoing request shape and nothing else.
+This section exists because the mode is easy to over-attribute. Lite and Full primarily control the outgoing Responses request shape. Features requiring typed tool selection can also constrain the compatible host, as with masked image edits.
 
 <table>
   <thead>
@@ -237,7 +237,7 @@ This section exists because the mode is easy to over-attribute. Lite and Full ch
     </tr>
     <tr>
       <td>Routing and eligibility</td>
-      <td>None. Serving mode never removes an upstream assignment from the candidate set and never reorders it</td>
+      <td>Ordinary model routing keeps its existing assignment eligibility and ordering. Masked Images edits additionally require an eligible Full image-input host; their adapter selects a compatible host while respecting persisted model overrides</td>
     </tr>
     <tr>
       <td>Catalog partition selection</td>
@@ -275,6 +275,14 @@ Clients that implement Lite themselves stay compatible, because the translation 
 
 The conversion runs in one direction only. Codex Pooler translates an ordinary request into the Lite dialect when the mode is Lite; it never translates a Lite-shaped request back into the ordinary dialect. A client that forces Lite on its own side while the Pool serves Full will have its Lite-shaped body forwarded as sent, without the Lite marker. Leave client-side Lite settings at their default and let the Pool decide, which is what a client does when it reads `use_responses_lite` from the Pool's own catalog.
 
+## Image generation and masked edits
+
+Unmasked GPT Image 2/2.5 generation and edits use the native Codex Images service. Its catalog host is an account-capacity carrier; a Full or Lite label on that request does not change the native image payload or establish a quality level.
+
+Masked `POST /v1/images/edits` requests instead require a Full Responses host with image-input support. Codex Pooler preserves the original mask in `input_image_mask` and explicitly selects the image generation tool. An eligible Full host is selected under the Pool's configured model and serving policy; an explicit Lite override on an exact requested model is not bypassed. The resolved mode is checked again before reservation.
+
+If no eligible Full host exists under that policy, the request returns `400 unsupported_parameter` with `param: "mask"`, without an upstream request or accounting reservation. Pooler does not discard the mask, silently override Lite, or fall back to an unmasked edit. Describe the intended edit clearly and inspect the generated result: mask forwarding does not guarantee exact pixel preservation. See [image generation and edits](/clients/openai-compatible/#image-generation-and-edits).
+
 ## Stability Within A Request
 
 One HTTP request, or one websocket `response.create` turn, keeps the serving mode it started with. The resolved mode is captured once, before dispatch, and is then immutable for that request. It survives:
@@ -304,5 +312,5 @@ Serving modes are database-backed Pool configuration. There is no environment va
 
 - [Pools](/operators/pools/) for the operator workflow that selects Auto, Lite, or Full
 - [Runtime Routes](/reference/runtime-routes/) for the routes these requests are admitted on and the custom tool contract that interacts with `tool_choice`
-- [Routing Strategies](/reference/routing-strategies/) for how an upstream account is chosen, which serving mode never influences
+- [Routing Strategies](/reference/routing-strategies/) for ordinary upstream account selection and eligibility
 - [Request logs](/operators/request-logs/) for per-request metadata and error classification
