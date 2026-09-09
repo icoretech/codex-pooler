@@ -1603,7 +1603,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           if receive_state.termination_source == :upstream_terminal_event and
                not exhausted_connection?(receive_state),
              do: state,
-             else: close_state(state)
+             else: retire_exhausted_connection(state, receive_state)
 
         {{:error,
           %{
@@ -1622,7 +1622,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp maybe_retire_exhausted_connection(state, receive_state) do
-    if exhausted_connection?(receive_state), do: close_state(state), else: state
+    if exhausted_connection?(receive_state),
+      do: retire_exhausted_connection(state, receive_state),
+      else: state
+  end
+
+  defp retire_exhausted_connection(state, receive_state) do
+    if exhausted_connection?(receive_state) do
+      lifecycle = connection_lifecycle_state(state)
+
+      Logger.info(
+        "websocket connection retirement decision " <>
+          "reason_code=websocket_connection_limit_reached " <>
+          "lifecycle_id=#{lifecycle.lifecycle_id} old_generation=#{lifecycle.generation}"
+      )
+    end
+
+    close_state(state)
   end
 
   defp exhausted_connection?(%ReceiveState{

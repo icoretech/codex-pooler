@@ -42,6 +42,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
@@ -53,6 +54,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
+
+  require Logger
 
   @backend_transcription_model "gpt-4o-transcribe"
   @native_image_endpoints [
@@ -856,11 +859,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
             authorization_binding
           )
         else
-          Repo.rollback(duplicate_turn_error())
+          reject_replay_intent(context, locked_session, :lifecycle_conflict)
         end
 
-      {:error, _reason} ->
-        Repo.rollback(duplicate_turn_error())
+      {:error, reason} ->
+        reject_replay_intent(context, locked_session, reason)
     end
   end
 
@@ -874,7 +877,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     case native_compaction_retry_preflight(session, api_key, model, context) do
       {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
       {:error, :successor_claimed} -> replay_intent_result(:fresh, authorization_binding, nil)
-      _none_or_invalid -> Repo.rollback(duplicate_turn_error())
+      :none -> reject_replay_intent(context, session, :missing_witness)
+      {:error, reason} -> reject_replay_intent(context, session, reason)
+      _invalid -> reject_replay_intent(context, session, :missing_witness)
     end
   end
 
@@ -910,7 +915,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
                  native_codex_turn_metadata: %NativeCodexTurnMetadata{request_kind: :compaction}
                }
              } = options
-         },
+         } = context,
          authorization_binding
        ) do
     cond do
@@ -926,11 +931,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
              }) do
           :none -> replay_intent_result(:fresh, authorization_binding, nil)
           {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
-          {:error, _reason} -> Repo.rollback(duplicate_turn_error())
+          {:error, reason} -> reject_replay_intent(context, session, reason)
         end
 
       true ->
-        Repo.rollback(duplicate_turn_error())
+        reject_replay_intent(context, session, :missing_witness)
     end
   end
 
@@ -948,7 +953,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     case Accounting.client_retry_preflight_snapshot(session, api_key, model, input) do
       :none -> replay_intent_result(:fresh, authorization_binding, nil)
       {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
-      {:error, _reason} -> Repo.rollback(duplicate_turn_error())
+      {:error, reason} -> reject_replay_intent(context, session, reason)
     end
   end
 
@@ -1904,10 +1909,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     error in Ecto.ConstraintError ->
       cancel_compaction_retry_hold(request_options)
 
-      if duplicate_turn_reservation_constraint?(error, request_options) do
-        {:error, duplicate_turn_error()}
-      else
-        reraise(error, __STACKTRACE__)
+      case reservation_constraint_error(error, request_options) do
+        {:error, _gateway_error} = result -> result
+        :reraise -> reraise(error, __STACKTRACE__)
       end
 
     error ->
@@ -2016,6 +2020,18 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp duplicate_turn_reservation_constraint?(_error, _opts), do: false
 
+  @doc false
+  @spec reservation_constraint_error(Ecto.ConstraintError.t(), RequestOptions.t()) ::
+          {:error, gateway_error()} | :reraise
+  def reservation_constraint_error(%Ecto.ConstraintError{} = error, %RequestOptions{} = opts) do
+    if duplicate_turn_reservation_constraint?(error, opts) do
+      log_replay_rejection(opts, :reservation_duplicate)
+      {:error, duplicate_turn_error()}
+    else
+      :reraise
+    end
+  end
+
   defp duplicate_turn_error do
     error(
       409,
@@ -2024,6 +2040,51 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       "request_id"
     )
   end
+
+  defp reject_replay_intent(context, session, reason) do
+    log_replay_rejection(context, session, reason)
+    Repo.rollback(duplicate_turn_error())
+  end
+
+  defp log_replay_rejection(context, session, reason) when is_map(context) do
+    request_options = Map.fetch!(context, :request_options)
+
+    log_replay_rejection(
+      request_options,
+      session,
+      reason,
+      Map.get(context, :endpoint, "unknown")
+    )
+  end
+
+  defp log_replay_rejection(%RequestOptions{} = request_options, reason) do
+    log_replay_rejection(
+      request_options,
+      Map.get(request_options.continuity, :codex_session),
+      reason,
+      Map.get(request_options.transport, :upstream_endpoint, "unknown")
+    )
+  end
+
+  defp log_replay_rejection(%RequestOptions{} = request_options, session, reason, endpoint) do
+    reason_code = replay_rejection_reason_code(reason)
+    request_id = request_options.request_metadata.request_id
+    session_id = if is_struct(session, CodexSession), do: session.id
+
+    Logger.info(fn ->
+      "websocket replay rejection " <>
+        "stage=runtime_replay_preflight " <>
+        "reason_code=#{reason_code} " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
+        "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>
+        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=websocket"
+    end)
+  end
+
+  defp replay_rejection_reason_code(:replay_claim_mismatch), do: "payload_mismatch"
+
+  defp replay_rejection_reason_code(reason),
+    do: DiagnosticTaxonomy.reason_code(reason) || "unknown"
 
   if Mix.env() == :test do
     defp maybe_test_runtime_authorization_barrier(operation, phase) do

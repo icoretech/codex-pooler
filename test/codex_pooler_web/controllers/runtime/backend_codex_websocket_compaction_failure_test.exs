@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -576,8 +577,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
     options = RequestOptions.put_payload_context(options, native_codex_turn_metadata: metadata)
 
-    assert {:error, %{code: "upstream_request_failed"}} =
-             Service.execute_websocket_response(auth, payload, options, fn _frame -> :ok end)
+    {result, log} =
+      with_log([level: :warning], fn ->
+        Service.execute_websocket_response(auth, payload, options, fn _frame -> :ok end)
+      end)
+
+    assert {:error, %{code: "upstream_request_failed"}} = result
+    assert event_count(log, "compact terminal decision") == 1
+    assert log =~ "source_stage=transport_failure"
+    assert log =~ "code=upstream_request_failed"
+    assert log =~ "status=502"
+    assert log =~ "terminal_type=transport_failure"
+    assert log =~ "param_state=absent"
+    assert log =~ "elapsed_ms="
 
     assert FakeUpstream.count(upstream) == 2
     assert FakeUpstream.http_request_count(upstream) == 0
@@ -689,6 +701,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert FakeUpstream.count(upstream) == 3
     assert_compaction_retry_successor!(request, session.id)
   end
+
+  defp event_count(log, message), do: length(String.split(log, message)) - 1
 
   defp assert_compaction_retry_successor!(predecessor, session_id) do
     assert [link] =

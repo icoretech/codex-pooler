@@ -321,13 +321,25 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
         DateTime.utc_now() |> DateTime.truncate(:microsecond)
       )
 
-    assert {:error, %{code: "upstream_request_failed"}} =
-             CandidateDispatch.dispatch(
-               context,
-               fn _prepared ->
-                 flunk("transport must not run after decrypt failure")
-               end
-             )
+    {result, log} =
+      with_log([level: :warning], fn ->
+        CandidateDispatch.dispatch(
+          context,
+          fn _prepared ->
+            flunk("transport must not run after decrypt failure")
+          end
+        )
+      end)
+
+    assert {:error, %{code: "upstream_request_failed"}} = result
+    assert event_count(log, "compact terminal decision") == 1
+    assert log =~ "source_stage=local_preflight"
+    assert log =~ "code=upstream_request_failed"
+    assert log =~ "status=502"
+    assert log =~ "terminal_type=dispatch_error"
+    assert log =~ "param_state=absent"
+    assert log =~ "request_id=#{reserved.request.id}"
+    assert log =~ "elapsed_ms="
 
     projection =
       Repo.get!(Request, reserved.request.id).request_metadata["compaction_projection"]
@@ -338,6 +350,8 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
     refute inspect(projection) =~ "raw-dispatch-output"
     assert FakeUpstream.count(upstream) == 0
   end
+
+  defp event_count(log, message), do: length(String.split(log, message)) - 1
 
   test "compact provenance persists before upstream URL resolution failure" do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))

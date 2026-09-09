@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
     owner_instance_id
     phase
     proxy_instance_id
+    rejection_stage
     reconnect_disposition
     reason_class
     reason_code
@@ -423,6 +424,29 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
   end
 
   describe "reconnect lifecycle events" do
+    test "emits a bounded replay rejection with the owning stage and reason" do
+      log =
+        capture_lifecycle_log(fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_replay_rejection(
+                     reconnect_metadata("TASK8_PRIVATE_REJECTION_SENTINEL"),
+                     :owner_preflight,
+                     "malformed provider reason"
+                   )
+        end)
+
+      line =
+        assert_lifecycle_line!(
+          log,
+          WebsocketConnectionLogger.replay_rejection_message(),
+          ~w(codex_session_id reason_class reason_code rejection_stage request_id)
+        )
+
+      assert line =~ "rejection_stage=owner_preflight"
+      assert line =~ "reason_code=sha256_"
+      refute log =~ "malformed provider reason"
+    end
+
     test "emits every fixed reconnect disposition with safe correlators only" do
       sentinel = "TASK2_PRIVATE_RECONNECT_SENTINEL"
 

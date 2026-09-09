@@ -1934,11 +1934,25 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     )
   end
 
-  defp apply_replay_preflight_result({:error, reason}, _prepared, state, _intent, _ref),
-    do: reject_prepared_response(public_replay_error(reason), state)
+  defp apply_replay_preflight_result(
+         {:error, %{code: "duplicate_turn"} = reason},
+         _prepared,
+         state,
+         _intent,
+         _ref
+       ) do
+    reject_prepared_response(public_replay_error(reason), state)
+  end
 
-  defp apply_replay_preflight_result(_result, _prepared, state, _intent, _ref),
-    do: reject_prepared_response(public_replay_error(:owner_busy), state)
+  defp apply_replay_preflight_result({:error, reason}, _prepared, state, _intent, _ref) do
+    log_replay_rejection(state, reason, :replay_preflight)
+    reject_prepared_response(public_replay_error(reason), state)
+  end
+
+  defp apply_replay_preflight_result(_result, _prepared, state, _intent, _ref) do
+    log_replay_rejection(state, :owner_busy, :replay_preflight)
+    reject_prepared_response(public_replay_error(:owner_busy), state)
+  end
 
   defp fresh_owner_binding?(binding, state) when is_map(binding) do
     binding == Map.take(state.websocket_owner_downstream, [:pid, :epoch, :correlation_id]) and
@@ -2125,6 +2139,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp reject_owner_preflight(reason, state) do
+    log_replay_rejection(state, reason, :owner_preflight)
     log_reconnect_disposition(state, :owner_busy)
     reject_prepared_response(owner_error(reason), state)
   end
@@ -2294,6 +2309,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> reconnect_log_metadata()
     |> WebsocketConnectionLogger.log_handoff_outcome(outcome)
+  end
+
+  defp log_replay_rejection(state, reason, stage) do
+    state
+    |> reconnect_log_metadata()
+    |> WebsocketConnectionLogger.log_replay_rejection(stage, reason)
   end
 
   defp reconnect_log_metadata(state) do

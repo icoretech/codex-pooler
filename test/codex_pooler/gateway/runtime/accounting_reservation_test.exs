@@ -190,6 +190,20 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
                prepared.request_options
              )
 
+    previous_logger_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_logger_level) end)
+
+    {lifecycle_result, lifecycle_log} =
+      with_log([level: :info], fn -> Service.prepare_replay_intent(auth, prepared) end)
+
+    assert {:error, lifecycle_public = %{status: 409, code: "duplicate_turn"}} = lifecycle_result
+    assert event_count(lifecycle_log, "websocket replay rejection") == 1
+    assert lifecycle_log =~ "reason_code=lifecycle_conflict"
+    assert lifecycle_log =~ "codex_session_id=#{session.id}"
+    assert lifecycle_log =~ "request_id=intent-existing"
+    assert FakeUpstream.count(upstream) == 0
+
     attempt =
       CodexPooler.PoolerFixtures.attempt_fixture(request, setup.assignment, %{
         status: "in_progress",
@@ -252,8 +266,16 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
                fn _frame -> :ok end
              )
 
-    assert {:error, %{status: 409, code: "duplicate_turn"}} =
-             Service.prepare_replay_intent(auth, changed)
+    {replay_result, replay_log} =
+      with_log([level: :info], fn -> Service.prepare_replay_intent(auth, changed) end)
+
+    assert {:error, ^lifecycle_public} = replay_result
+    assert replay_log =~ "websocket replay rejection"
+    assert replay_log =~ "stage=runtime_replay_preflight"
+    assert replay_log =~ "reason_code=payload_mismatch"
+    assert replay_log =~ "codex_session_id=#{session.id}"
+    assert replay_log =~ "request_id=intent-existing"
+    assert event_count(replay_log, "websocket replay rejection") == 1
 
     assert Repo.aggregate(Request, :count) == 1
     assert Repo.aggregate(Attempt, :count) == 1
@@ -364,6 +386,53 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
     Repo.update!(Ecto.Changeset.change(turn, final_attempt_id: attempt.id))
     counts = runtime_counts()
+
+    witness_fields =
+      Map.take(request, [
+        :native_client_retry_version,
+        :native_client_retry_digest,
+        :native_client_retry_auth_epoch
+      ])
+
+    previous_logger_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_logger_level) end)
+
+    expired_at = DateTime.add(now, -31, :second)
+
+    for row <- [request, attempt, turn] do
+      Repo.update!(Ecto.Changeset.change(row, completed_at: expired_at))
+    end
+
+    {expired_result, expired_log} =
+      with_log([level: :info], fn -> Service.prepare_replay_intent(auth, prepared) end)
+
+    assert {:error, public_409 = %{status: 409, code: "duplicate_turn"}} = expired_result
+    assert event_count(expired_log, "websocket replay rejection") == 1
+    assert expired_log =~ "reason_code=retry_expired"
+
+    for row <- [request, attempt, turn] do
+      Repo.update!(Ecto.Changeset.change(row, completed_at: now))
+    end
+
+    request =
+      Repo.update!(
+        Ecto.Changeset.change(request,
+          native_client_retry_version: nil,
+          native_client_retry_digest: nil,
+          native_client_retry_auth_epoch: nil
+        )
+      )
+
+    {missing_result, missing_log} =
+      with_log([level: :info], fn -> Service.prepare_replay_intent(auth, prepared) end)
+
+    assert {:error, ^public_409} = missing_result
+    assert event_count(missing_log, "websocket replay rejection") == 1
+    assert missing_log =~ "reason_code=missing_witness"
+
+    request =
+      Repo.update!(Ecto.Changeset.change(request, witness_fields))
 
     assert {:ok,
             intent = %{
@@ -1188,6 +1257,82 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     end
   end
 
+  test "reservation duplicate constraint keeps its internal cause before the public 409 mapping" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => "gpt-test"}
+
+    claim =
+      "codex-turn:" <>
+        Base.url_encode64(:crypto.hash(:sha256, "reservation-duplicate"), padding: false)
+
+    CodexPooler.PoolerFixtures.request_fixture(auth, %{
+      correlation_id: claim,
+      model_id: setup.model.id,
+      requested_model: setup.model.exposed_model_id,
+      transport: "websocket"
+    })
+
+    counts = runtime_counts()
+
+    constraint_error =
+      try do
+        CodexPooler.PoolerFixtures.request_fixture(auth, %{
+          correlation_id: claim,
+          model_id: setup.model.id,
+          requested_model: setup.model.exposed_model_id,
+          transport: "websocket"
+        })
+
+        flunk("duplicate correlation must raise the installed Ecto constraint error")
+      rescue
+        error in Ecto.ConstraintError -> error
+      end
+
+    assert constraint_error.constraint == "requests_correlation_id_uq"
+
+    request_options =
+      RequestOptions.build(
+        %{
+          request_id: "reservation-duplicate",
+          turn_claim_key: claim,
+          request_claim_key: claim
+        },
+        @endpoint,
+        payload
+      )
+      |> RequestOptions.put_transport(transport: "websocket")
+
+    assert request_options.transport.transport == "websocket"
+    assert request_options.continuity.request_claim_key == claim
+
+    previous_logger_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_logger_level) end)
+
+    {result, log} =
+      with_log([level: :info], fn ->
+        Service.reservation_constraint_error(constraint_error, request_options)
+      end)
+
+    assert {:error,
+            %{
+              status: 409,
+              code: "duplicate_turn",
+              message: "duplicate Codex turn was already recorded for this session",
+              param: "request_id"
+            }} = result
+
+    assert event_count(log, "websocket replay rejection") == 1
+    assert log =~ "reason_code=reservation_duplicate"
+    assert log =~ "request_id=reservation-duplicate"
+    assert log =~ "transport=websocket"
+
+    assert runtime_counts() == counts
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   test "service heartbeat stops before synchronous HTTP success returns" do
     upstream =
       start_upstream(FakeUpstream.json_response(%{"id" => "resp_http_heartbeat_success"}))
@@ -1595,6 +1740,8 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       entitlements: Repo.aggregate(RequestReplayEntitlement, :count)
     }
   end
+
+  defp event_count(log, message), do: length(String.split(log, message)) - 1
 
   defp expected_binding(auth, session, model) do
     %{

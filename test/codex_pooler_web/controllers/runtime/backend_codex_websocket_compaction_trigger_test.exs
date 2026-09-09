@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -705,10 +706,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       try do
         payload = compact_payload(setup, frame_turn_state, transport)
-        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
-        {conn, websocket, done_frame} = public_websocket_receive_text!(conn, websocket, ref)
+        previous_logger_level = Logger.level()
+        Logger.configure(level: :info)
+        on_exit(fn -> Logger.configure(level: previous_logger_level) end)
 
-        {conn, websocket, completed_frame} = public_websocket_receive_text!(conn, websocket, ref)
+        {{conn, websocket, done_frame, completed_frame}, egress_log} =
+          with_log([level: :info], fn ->
+            {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+            {conn, websocket, done_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+            {conn, websocket, completed_frame} =
+              public_websocket_receive_text!(conn, websocket, ref)
+
+            {conn, websocket, done_frame, completed_frame}
+          end)
+
+        assert egress_log =~ "compact final egress decision"
+
+        assert egress_log =~ "discriminator_class=#{compact_discriminator_class(transport)}"
+
+        assert egress_log =~ "serving_mode=#{mode}"
+
+        assert egress_log =~
+                 "lite_marker_present=#{compact_lite_marker_present?(transport, mode)}"
+
+        assert egress_log =~ "lite_marker_matches=true"
+        assert egress_log =~ "input_mode=full_history"
+        assert egress_log =~ "transport=#{compact_expected(transport, :transport)}"
+        assert Enum.count(String.split(egress_log, "compact final egress decision")) == 2
 
         item = fixture.expected_item
 
@@ -763,6 +788,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
         assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
         assert request.endpoint == "/backend-api/codex/responses/compact"
+        assert egress_log =~ "request_id=#{request.id}"
 
         assert request.transport ==
                  compact_expected(transport, :transport)
@@ -2107,6 +2133,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
   defp compact_input_types("full"), do: ["message", "compaction_trigger"]
   defp compact_input_types("lite"), do: ["additional_tools", "message", "compaction_trigger"]
+
+  defp compact_discriminator_class(:sse), do: "response_create"
+  defp compact_discriminator_class(:buffered), do: "missing"
+
+  defp compact_lite_marker_present?(:sse, "lite"), do: true
+  defp compact_lite_marker_present?(_transport, _mode), do: false
 
   defp assert_compact_transport_envelope(payload, :sse, mode) do
     assert payload["type"] == "response.create"

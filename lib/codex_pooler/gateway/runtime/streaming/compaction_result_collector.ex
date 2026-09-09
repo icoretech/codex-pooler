@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   @moduledoc false
 
+  require Logger
+
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
@@ -92,10 +94,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp new_state(item_mode \\ :native) do
     %{
       collection: %{
+        started_ms: System.monotonic_time(:millisecond),
         invalid_reason: nil,
         item_mode: item_mode,
         item: nil,
         provider_failure: nil,
+        provider_terminal_param_state: "absent",
+        provider_terminal_witness: nil,
         response: nil,
         terminal_failure: nil,
         terminal?: false
@@ -117,15 +122,21 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
            compaction_item: collection.item
          }}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        log_collector_invalid(collection, reason)
         invalid_compaction_error()
     end
   end
 
-  defp compact_result(_state), do: invalid_compaction_error()
+  defp compact_result(%{collection: collection}) do
+    log_collector_invalid(collection, collection.invalid_reason)
+    invalid_compaction_error()
+  end
 
-  defp websocket_compact_result(%{collection: %{provider_failure: %{} = failure}}),
-    do: {:provider_failure, failure}
+  defp websocket_compact_result(%{collection: %{provider_failure: %{} = failure} = collection}) do
+    log_provider_terminal(collection, failure, elapsed_ms(collection))
+    {:provider_failure, failure}
+  end
 
   defp websocket_compact_result(state), do: compact_result(state)
 
@@ -214,7 +225,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
     if buffer != "" and is_map(collection.provider_failure) do
       %{
         state
-        | collection: %{collection | invalid_reason: :invalid_compaction, provider_failure: nil}
+        | collection: %{
+            collection
+            | invalid_reason: :invalid_compaction,
+              provider_terminal_witness: collection.provider_failure,
+              provider_failure: nil
+          }
       }
     else
       case collect_terminal_buffer(buffer, collection) do
@@ -229,11 +245,21 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp put_collection_error(%{collection: %{invalid_reason: nil} = collection} = state, reason) do
     collection =
       case reason do
-        {:provider_failure, terminal_failure, provider_failure} ->
+        {:provider_failure, terminal_failure, provider_failure, param_state} ->
           %{
             collection
             | terminal_failure: terminal_failure,
-              provider_failure: provider_failure
+              provider_failure: provider_failure,
+              provider_terminal_param_state: param_state
+          }
+
+        {:invalid_after_provider_failure, terminal_failure, provider_failure, param_state} ->
+          %{
+            collection
+            | invalid_reason: :invalid_compaction,
+              terminal_failure: terminal_failure,
+              provider_terminal_param_state: param_state,
+              provider_terminal_witness: provider_failure
           }
 
         _reason ->
@@ -282,8 +308,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
       {:ok, state} ->
         collect_events(blocks, state)
 
-      {:error, {:provider_failure, _terminal_failure, _provider_failure}} when blocks != [] ->
-        {:error, :invalid_compaction}
+      {:error, {:provider_failure, terminal_failure, provider_failure, param_state}}
+      when blocks != [] ->
+        {:error,
+         {:invalid_after_provider_failure, terminal_failure, provider_failure, param_state}}
 
       {:error, _reason} = error ->
         error
@@ -365,19 +393,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
        when type in ["response.completed", "response.done"],
        do: {:error, :missing_terminal}
 
-  defp collect_summarized_event(%{event_type: type} = event_summary, _event, _state)
+  defp collect_summarized_event(%{event_type: type} = event_summary, event, _state)
        when type in ["error", "response.failed", "response.incomplete"] do
+    param_state = provider_param_state(event, event_summary.upstream_error_param)
+
     case StreamProtocol.terminal_outcome_event(event_summary) do
       {:ok, %{kind: :failed} = outcome} ->
         {:error,
-         {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome)}}
+         {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome),
+          param_state}}
 
       {:ok, %{kind: :incomplete, incomplete_reason: reason} = outcome} when is_binary(reason) ->
         if String.trim(reason) == "" do
           {:error, :invalid_compaction}
         else
           {:error,
-           {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome)}}
+           {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome),
+            param_state}}
         end
 
       _outcome ->
@@ -516,6 +548,90 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
        message: "upstream compact stream was invalid"
      }}
   end
+
+  defp log_collector_invalid(collection, reason) do
+    witness = collection.provider_terminal_witness
+    reason_code = provider_reason_code(witness, reason)
+    {param_state, param} = provider_param(witness)
+
+    Logger.warning(fn ->
+      "compact collector terminal decision " <>
+        "source_stage=collector_invalid " <>
+        "code=invalid_compaction_response status=502 " <>
+        "terminal_type=#{collector_terminal_type(witness)} " <>
+        "reason_code=#{reason_code} " <>
+        "param_state=#{param_state}" <>
+        if(is_nil(param), do: "", else: " param=#{param}") <>
+        " elapsed_ms=#{elapsed_ms(collection)}"
+    end)
+  end
+
+  defp log_provider_terminal(collection, failure, elapsed_ms) do
+    {param_state, param} = provider_param(failure, collection.provider_terminal_param_state)
+
+    Logger.warning(fn ->
+      "compact terminal decision " <>
+        "source_stage=provider_terminal " <>
+        "code=#{DiagnosticTaxonomy.identifier(failure.code) || "upstream_terminal_failure"} " <>
+        "status=#{provider_failure_status(failure)} " <>
+        "terminal_type=#{failure.event_type || "provider_terminal"} " <>
+        "reason_code=#{provider_reason_code(failure, :provider_terminal)} " <>
+        "param_state=#{param_state}" <>
+        if(is_nil(param), do: "", else: " param=#{param}") <>
+        " elapsed_ms=#{elapsed_ms}"
+    end)
+  end
+
+  defp collector_terminal_type(%{}), do: "provider_terminal"
+  defp collector_terminal_type(_witness), do: "collector_invalid"
+
+  defp provider_reason_code(%{upstream_code: code}, _reason) when is_binary(code), do: code
+  defp provider_reason_code(%{code: code}, _reason) when is_binary(code), do: code
+
+  defp provider_reason_code(_witness, reason),
+    do: DiagnosticTaxonomy.identifier(reason) || "invalid_compaction"
+
+  defp provider_param(%{upstream_error_param: param}) when is_binary(param),
+    do: {"accepted", param}
+
+  defp provider_param(%{}), do: {"rejected", nil}
+  defp provider_param(_witness), do: {"absent", nil}
+
+  defp provider_param(%{upstream_error_param: param}, _param_state)
+       when is_binary(param),
+       do: {"accepted", param}
+
+  defp provider_param(_failure, param_state) when param_state in ["absent", "rejected"],
+    do: {param_state, nil}
+
+  defp provider_failure_status(%{code: code, upstream_code: upstream_code})
+       when code in ["invalid_request", "invalid_request_error"] or
+              upstream_code in [
+                "misalignment_policy_violation",
+                "previous_response_not_found",
+                "invalid_previous_response_id"
+              ],
+       do: 400
+
+  defp provider_failure_status(_failure), do: 502
+
+  defp provider_param_state(event, sanitized_param) do
+    raw_param =
+      get_in(event, ["response", "error", "param"]) ||
+        get_in(event, ["error", "param"]) ||
+        Map.get(event, "param")
+
+    cond do
+      is_binary(sanitized_param) -> "accepted"
+      is_nil(raw_param) -> "absent"
+      true -> "rejected"
+    end
+  end
+
+  defp elapsed_ms(%{started_ms: started}),
+    do: max(System.monotonic_time(:millisecond) - started, 0)
+
+  defp elapsed_ms(_collection), do: 0
 
   defp rate_limit_state(%{rate_limit: %{buffer: buffer} = state}) when is_binary(buffer),
     do: state

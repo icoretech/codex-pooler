@@ -1641,13 +1641,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
       assert FakeUpstream.websocket_connection_alive?(upstream, 1)
       peer_monitor = Process.monitor(websocket_pid)
-      send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
+
+      previous_logger_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_logger_level) end)
+
+      {failure_result, retirement_log} =
+        with_log([level: :info], fn ->
+          send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
+          Task.await(terminal_task, @detection_timeout_ms)
+        end)
 
       assert {:error,
               %{
                 reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}
-              } = failure} =
-               Task.await(terminal_task, @detection_timeout_ms)
+              } = failure} = failure_result
+
+      assert retirement_log =~ "websocket connection retirement decision"
+      assert retirement_log =~ "reason_code=websocket_connection_limit_reached"
+      assert retirement_log =~ "lifecycle_id=#{generation_one.lifecycle_id}"
+      assert retirement_log =~ "old_generation=#{generation_one.generation}"
 
       assert_connection_metadata(failure, generation_one, true, false)
       assert_disconnected_lifecycle(session, generation_one)

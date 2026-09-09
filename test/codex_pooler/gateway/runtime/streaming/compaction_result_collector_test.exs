@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   @moduletag :collect_compaction
 
   alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
@@ -75,6 +77,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
         provider_failure_event("response.failed", raw_code, raw_param, raw_message)
       ])
 
+    {result, log} =
+      with_log([level: :warning], fn -> CompactionResultCollector.collect_websocket_body(body) end)
+
     assert {:provider_failure,
             %{
               code: code,
@@ -82,7 +87,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
               upstream_error_param: nil,
               event_type: "response.failed",
               data_type: "response.failed"
-            } = failure} = CompactionResultCollector.collect_websocket_body(body)
+            } = failure} = result
+
+    assert event_count(log, "compact terminal decision") == 1
+    assert log =~ "source_stage=provider_terminal"
+    assert log =~ "param_state=rejected"
+    refute log =~ raw_param
 
     assert is_binary(code) and byte_size(code) <= 80
     assert is_binary(upstream_code) and byte_size(upstream_code) <= 80
@@ -109,6 +119,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
       body =
         websocket_body([provider_failure_event(event_type, upstream_code, param, raw_sentinel)])
 
+      {result, log} =
+        with_log([level: :warning], fn ->
+          CompactionResultCollector.collect_websocket_body(body)
+        end)
+
       assert {:provider_failure,
               %{
                 code: ^expected_code,
@@ -116,7 +131,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
                 upstream_error_param: ^param,
                 event_type: ^event_type,
                 data_type: ^event_type
-              } = failure} = CompactionResultCollector.collect_websocket_body(body)
+              } = failure} = result
+
+      assert event_count(log, "compact terminal decision") == 1
+      assert log =~ "source_stage=provider_terminal"
+      assert log =~ "code=#{expected_code}"
+      assert log =~ "status=#{provider_failure_status(expected_code, upstream_code)}"
+      assert log =~ "terminal_type=#{event_type}"
+      assert log =~ "param_state=accepted"
+      assert log =~ "param=#{param}"
+      assert log =~ "elapsed_ms="
 
       assert Map.keys(failure) |> Enum.sort() ==
                [:code, :data_type, :event_type, :upstream_code, :upstream_error_param]
@@ -163,6 +187,46 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
     assert {:error, %{status: 502, code: "invalid_compaction_response"}} =
              CompactionResultCollector.collect_websocket_body("data: not-json\n\n")
   end
+
+  test "trailing malformed material keeps a bounded provider terminal witness while rejecting the collector" do
+    raw_message = "PRIVATE_TRAILING_PROVIDER_MESSAGE"
+
+    body =
+      websocket_body([
+        provider_failure_event("response.failed", "server_error", "input", raw_message)
+      ]) <> "data: malformed trailing material"
+
+    log =
+      capture_log([level: :warning], fn ->
+        assert {:error, %{status: 502, code: "invalid_compaction_response"}} =
+                 CompactionResultCollector.collect_websocket_body(body)
+      end)
+
+    assert log =~ "compact collector terminal decision"
+    assert event_count(log, "compact collector terminal decision") == 1
+    assert log =~ "source_stage=collector_invalid"
+    assert log =~ "code=invalid_compaction_response"
+    assert log =~ "status=502"
+    assert log =~ "terminal_type=provider_terminal"
+    assert log =~ "reason_code=server_error"
+    assert log =~ "param_state=accepted"
+    assert log =~ "param=input"
+    assert log =~ "elapsed_ms="
+    refute log =~ raw_message
+  end
+
+  defp event_count(log, message), do: length(String.split(log, message)) - 1
+
+  defp provider_failure_status(code, upstream_code)
+       when code in ["invalid_request", "invalid_request_error"] or
+              upstream_code in [
+                "misalignment_policy_violation",
+                "previous_response_not_found",
+                "invalid_previous_response_id"
+              ],
+       do: 400
+
+  defp provider_failure_status(_code, _upstream_code), do: 502
 
   defp websocket_body(events), do: Enum.map_join(events, "", &"data: #{&1}\n\n")
 

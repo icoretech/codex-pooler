@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   @failed_native_websocket_turn_message "websocket native turn failed"
   @reconnect_disposition_message "websocket reconnect disposition"
   @handoff_outcome_message "websocket handoff outcome"
+  @replay_rejection_message "websocket replay rejection"
   @bandit_oversize_fragmented_message_reason "Received oversize fragmented message"
 
   @metadata_keys [
@@ -26,10 +27,12 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     :visible_output,
     :owner_instance_id,
     :proxy_instance_id,
+    :rejection_stage,
     :downstream_epoch
   ]
   @reconnect_event_keys [:reconnect_disposition, :handoff_outcome]
   @reconnect_metadata_keys @metadata_keys ++ @reconnect_event_keys
+  @replay_rejection_stages ~w(owner_preflight replay_preflight)
 
   @type event_metadata :: keyword() | map()
 
@@ -47,6 +50,9 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   @spec handoff_outcome_message() :: String.t()
   def handoff_outcome_message, do: @handoff_outcome_message
+
+  @spec replay_rejection_message() :: String.t()
+  def replay_rejection_message, do: @replay_rejection_message
 
   @spec log_init_failed_before_request_reservation(event_metadata(), term()) :: :ok
   def log_init_failed_before_request_reservation(metadata, reason) do
@@ -91,6 +97,23 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
       :handoff_outcome,
       DiagnosticTaxonomy.handoff_outcome(outcome)
     )
+  end
+
+  @spec log_replay_rejection(event_metadata(), term(), term()) :: :ok
+  def log_replay_rejection(metadata, stage, reason) do
+    case fixed_vocabulary(stage, @replay_rejection_stages) do
+      nil ->
+        :ok
+
+      rejection_stage ->
+        metadata =
+          metadata
+          |> normalize_metadata()
+          |> Map.put(:rejection_stage, rejection_stage)
+          |> put_native_reason_code(reason)
+
+        log_event(:info, @replay_rejection_message, metadata, reason)
+    end
   end
 
   @spec failed_native_websocket_turn_level(term()) :: :info | :warning
@@ -193,6 +216,9 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   defp allowed_metadata_value(:handoff_outcome, value),
     do: DiagnosticTaxonomy.handoff_outcome(value)
 
+  defp allowed_metadata_value(:rejection_stage, value),
+    do: fixed_vocabulary(value, @replay_rejection_stages)
+
   defp allowed_metadata_value(_key, value), do: value
 
   defp metadata_value(metadata, key) do
@@ -232,6 +258,18 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
       reason_code -> Map.put(metadata, :reason_code, reason_code)
     end
   end
+
+  defp fixed_vocabulary(value, vocabulary) when is_atom(value) do
+    value
+    |> Atom.to_string()
+    |> fixed_vocabulary(vocabulary)
+  end
+
+  defp fixed_vocabulary(value, vocabulary) when is_binary(value) do
+    if value in vocabulary, do: value
+  end
+
+  defp fixed_vocabulary(_value, _vocabulary), do: nil
 
   defp safe_log_value(key, value) when key in [:error_code, :reason_code, :reason_class],
     do: DiagnosticTaxonomy.identifier(value) || "unknown"

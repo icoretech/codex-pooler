@@ -10947,7 +10947,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert event_count(missing_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
              1
 
+    assert event_count(missing_log, WebsocketConnectionLogger.replay_rejection_message()) == 1
+
     assert missing_log =~ "reconnect_disposition=owner_busy"
+    assert missing_log =~ "rejection_stage=owner_preflight"
+    assert missing_log =~ "reason_code=owner_busy"
     refute missing_log =~ private_sentinel
 
     different =
