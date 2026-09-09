@@ -130,6 +130,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              visible_models,
              request_options
            ),
+         :ok <- ensure_mask_serving_mode(request_options),
          :ok <- validate_payload_once(payload, request_options, validation_authority),
          {:ok, candidate_snapshots} <-
            CandidateEligibility.routable_candidates(visible_model_context, model),
@@ -582,6 +583,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   end
 
   defp policy_visible_models(models, nil) when is_list(models), do: visible_models(models)
+
+  defp ensure_mask_serving_mode(%RequestOptions{
+         payload_context: %{masked_image_request?: true},
+         routing: %{model_serving_mode: mode}
+       })
+       when mode != "full" do
+    {:error,
+     error(
+       400,
+       "unsupported_parameter",
+       "mask requires an eligible Full Responses backend",
+       "mask"
+     )}
+  end
+
+  defp ensure_mask_serving_mode(%RequestOptions{}), do: :ok
 
   defp resolve_model_serving_modes(
          auth,

@@ -48,7 +48,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Websocket.DirectCleanup
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Pools
+  alias CodexPooler.Pools.{ModelServingMode, ModelServingOverride, Pool}
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
@@ -300,6 +301,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           validation
         )
 
+      {:error, %{code: "unsupported_parameter", param: "mask"} = reason} ->
+        {:error, reason}
+
       nil ->
         reason = error(400, "invalid_model", "model is not available for this pool", "model")
 
@@ -426,6 +430,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         end
 
       {:error, %{code: "duplicate_turn"} = reason} ->
+        {:error, reason}
+
+      {:error, %{code: "unsupported_parameter", param: "mask"} = reason} ->
         {:error, reason}
 
       {:error, %{code: _code} = reason} ->
@@ -2042,6 +2049,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          endpoint,
          %RequestOptions{} = request_options
        ) do
+    if request_options.payload_context.masked_image_request? do
+      masked_image_host_context(pool, requested_model)
+    else
+      default_visible_model_context(pool, requested_model, endpoint, request_options)
+    end
+  end
+
+  defp default_visible_model_context(pool, requested_model, endpoint, request_options) do
     case CandidateEligibility.visible_model_context(pool, requested_model) do
       %{visible_model: %Model{}} = context ->
         context
@@ -2049,6 +2064,49 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       nil ->
         media_host_model_context(pool, requested_model, endpoint, request_options)
     end
+  end
+
+  defp masked_image_host_context(pool, requested_model) do
+    hydration = CandidateEligibility.hydrate_model_visibility(pool)
+    overrides = Pools.model_serving_modes_by_pool_ids([pool.id]) |> Map.get(pool.id, %{})
+    requested = ModelServingOverride.canonical_exposed_model_id(requested_model)
+
+    exact =
+      Enum.find(hydration.visible_models, fn model ->
+        ModelServingOverride.canonical_exposed_model_id(model.exposed_model_id) == requested
+      end)
+
+    models = if exact, do: [exact], else: sort_media_hosts(hydration.visible_models)
+    host = Enum.find(models, &full_media_host?(&1, hydration, overrides))
+
+    case host do
+      %Model{} ->
+        media_host_context(host, hydration, requested_model)
+
+      nil ->
+        {:error,
+         error(
+           400,
+           "unsupported_parameter",
+           "mask requires an eligible Full Responses backend",
+           "mask"
+         )}
+    end
+  end
+
+  defp full_media_host?(model, hydration, overrides) do
+    source_ids =
+      hydration.candidates_by_model_id
+      |> Map.get(model.id, [])
+      |> Enum.map(fn {assignment, _identity} -> assignment.id end)
+
+    override =
+      Map.get(overrides, ModelServingOverride.canonical_exposed_model_id(model.exposed_model_id))
+
+    resolution = ModelServingMode.resolve(override, ModelMetadata.metadata(model), source_ids)
+
+    media_host_model?(model) and ModelMetadata.supports_image_input?(model) and
+      match?({:ok, %{effective_mode: "full"}}, resolution)
   end
 
   defp media_host_model_context(

@@ -152,6 +152,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
 
     assert [%{"input_image_mask" => %{"image_url" => url}}] = response.payload["tools"]
     assert String.starts_with?(url, "data:image/png;base64,")
+    assert response.payload["tool_choice"] == %{"type" => "image_generation"}
   end
 
   test "GPT Image 2.5 masked edits preserve extended options in Responses translation" do
@@ -174,6 +175,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
                })
 
       assert response.endpoint == "/backend-api/codex/responses"
+      assert response.payload["tool_choice"] == %{"type" => "image_generation"}
 
       assert [
                %{

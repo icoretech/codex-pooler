@@ -327,6 +327,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
         supports_streaming: true,
         metadata:
           setup.model.metadata
+          |> Map.put("input_modalities", ["text", "image"])
           |> Map.put("source_assignment_ids", [setup.assignment.id])
           |> put_in(
             ["source_assignment_models", setup.assignment.id, "slug"],

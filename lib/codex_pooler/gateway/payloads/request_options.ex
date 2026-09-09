@@ -129,6 +129,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :model_serving_mode_configured,
     :model_serving_mode_source,
     :native_image_request?,
+    :masked_image_request?,
     :now,
     :openai_source_endpoint,
     :openai_translated_endpoint,

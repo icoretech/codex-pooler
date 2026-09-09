@@ -82,8 +82,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
   end
 
   def coerce_edit(payload, opts) do
-    with {:ok, %{image_payload: image_payload, response_payload: response_payload}} <-
+    with {:ok, %{image_payload: image_payload, response_payload: response_payload, mask: mask}} <-
            prepare_edit(payload),
+         opts = Map.put(Map.new(opts), :masked_image_request?, not is_nil(mask)),
          {:ok, response} <- Responses.coerce(response_payload, opts) do
       {:ok, Map.put(response, :image_payload, image_payload)}
     end
@@ -365,6 +366,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
     |> Map.update!("tools", fn [tool] ->
       [Map.put(tool, "input_image_mask", Map.take(mask, ["image_url"]))]
     end)
+    |> Map.put("tool_choice", %{"type" => "image_generation"})
   end
 
   defp message_input(prompt, images) do

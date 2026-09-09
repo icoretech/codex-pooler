@@ -195,7 +195,10 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
 
   for mode <- ["full", "lite"],
       {model, options, fidelity} <-
-        Enum.map(~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst), &{&1, :mask, nil}) ++
+        Enum.map(
+          ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst),
+          &{&1, :mask, nil}
+        ) ++
           for(
             model <- ~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst gpt-image-1-mini),
             options <- [:fidelity, :both],
@@ -243,6 +246,16 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
               "\r\n"
             ]
 
+      if @options == :mask do
+        unauthenticated =
+          conn
+          |> recycle()
+          |> put_req_header("content-type", "multipart/form-data; boundary=edit-options")
+          |> post("/v1/images/edits", IO.iodata_to_binary([parts, files, "--edit-options--\r\n"]))
+
+        assert response(unauthenticated, 401)
+      end
+
       response =
         conn
         |> auth(setup)
@@ -259,35 +272,49 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
         assert Repo.aggregate(Attempt, :count) == 0
         assert Repo.aggregate(LedgerEntry, :count) == 0
       else
-        assert %{"data" => [_]} = json_response(response, 200)
-        assert [captured] = FakeUpstream.requests(upstream)
-        assert captured.path == "/backend-api/codex/responses"
-        assert [tool] = image_tools(captured.json, @mode)
-        assert tool["model"] == @image_model
-        assert tool["quality"] == "high"
-        assert Map.has_key?(tool, "input_fidelity") == @options in [:fidelity, :both]
-        if @options in [:fidelity, :both], do: assert(tool["input_fidelity"] == @fidelity)
-        assert Map.has_key?(tool, "input_image_mask") == @options in [:mask, :both]
+        if @mode == "lite" and @options in [:mask, :both] do
+          assert %{"error" => %{"code" => "unsupported_parameter", "param" => "mask"}} =
+                   json_response(response, 400)
 
-        if @options in [:mask, :both] do
-          assert %{"image_url" => "data:image/png;base64," <> encoded} = tool["input_image_mask"]
-          assert Base.decode64!(encoded) == mask
+          assert FakeUpstream.count(upstream) == 0
+          assert Repo.aggregate(Request, :count) == 0
+          assert Repo.aggregate(Attempt, :count) == 0
+          assert Repo.aggregate(LedgerEntry, :count) == 0
+        else
+          assert %{"data" => [_]} = json_response(response, 200)
+          assert [captured] = FakeUpstream.requests(upstream)
+          assert captured.path == "/backend-api/codex/responses"
+          assert [tool] = image_tools(captured.json, @mode)
+          assert tool["model"] == @image_model
+          assert tool["quality"] == "high"
+          assert Map.has_key?(tool, "input_fidelity") == @options in [:fidelity, :both]
+          if @options in [:fidelity, :both], do: assert(tool["input_fidelity"] == @fidelity)
+          assert Map.has_key?(tool, "input_image_mask") == @options in [:mask, :both]
+
+          if @options in [:mask, :both] do
+            assert captured.json["tool_choice"] == %{"type" => "image_generation"}
+
+            assert %{"image_url" => "data:image/png;base64," <> encoded} =
+                     tool["input_image_mask"]
+
+            assert Base.decode64!(encoded) == mask
+          end
+
+          content = captured.json["input"] |> Enum.flat_map(&Map.get(&1, "content", []))
+
+          assert [
+                   %{"type" => "input_text", "text" => "synthetic image"},
+                   %{"type" => "input_image", "image_url" => "data:image/png;base64," <> encoded}
+                 ] = content
+
+          assert Base.decode64!(encoded) == source
+          assert [request] = Repo.all(Request)
+          assert request.status == "succeeded"
+          assert request.request_metadata["effective_model"] == @image_model
+          assert [attempt] = Repo.all(Attempt)
+          assert attempt.response_metadata["routing"]["model_serving_mode"] == @mode
+          assert_usage_settled_once(request, attempt)
         end
-
-        content = captured.json["input"] |> Enum.flat_map(&Map.get(&1, "content", []))
-
-        assert [
-                 %{"type" => "input_text", "text" => "synthetic image"},
-                 %{"type" => "input_image", "image_url" => "data:image/png;base64," <> encoded}
-               ] = content
-
-        assert Base.decode64!(encoded) == source
-        assert [request] = Repo.all(Request)
-        assert request.status == "succeeded"
-        assert request.request_metadata["effective_model"] == @image_model
-        assert [attempt] = Repo.all(Attempt)
-        assert attempt.response_metadata["routing"]["model_serving_mode"] == @mode
-        assert_usage_settled_once(request, attempt)
       end
     end
   end
