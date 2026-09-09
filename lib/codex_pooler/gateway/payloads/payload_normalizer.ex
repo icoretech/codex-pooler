@@ -252,6 +252,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     upstream_payload =
       maybe_project_compact_payload(upstream_payload, endpoint, request_options)
 
+    upstream_payload =
+      finalize_compact_transport_envelope(upstream_payload, endpoint, request_options)
+
     debug_payload =
       maybe_record_gateway_debug_payload(endpoint, payload, upstream_payload, request_options)
 
@@ -598,6 +601,23 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp maybe_project_compact_payload(payload, _endpoint, %RequestOptions{}), do: payload
+
+  defp finalize_compact_transport_envelope(
+         payload,
+         endpoint,
+         %RequestOptions{transport: %{transport: "websocket"}} = request_options
+       ) do
+    if endpoint == "/backend-api/codex/responses/compact" or
+         request_options.transport.upstream_endpoint == "/backend-api/codex/responses/compact" do
+      payload
+      |> Map.put("type", "response.create")
+      |> maybe_put_websocket_responses_lite_client_metadata(request_options)
+    else
+      payload
+    end
+  end
+
+  defp finalize_compact_transport_envelope(payload, _endpoint, %RequestOptions{}), do: payload
 
   defp normalize_noncompact_backend_responses_envelope(payload, %RequestOptions{} = opts) do
     reasoning = payload |> Map.get("reasoning") |> reasoning_map()

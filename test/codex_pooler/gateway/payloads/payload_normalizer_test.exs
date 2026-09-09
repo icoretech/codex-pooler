@@ -2449,6 +2449,75 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert CodexPooler.JSON.decode!(alias_encoded) == first
     end
 
+    test "finalizes compact transport fields after direct and retargeted projection" do
+      marker = "ws_request_header_x_openai_internal_codex_responses_lite"
+      model = %Model{upstream_model_id: "provider-model"}
+
+      for {input_mode, previous_response_id} <- [
+            {:full_history, nil},
+            {:incremental, "resp_compact_transport_anchor"}
+          ],
+          mode <- ["full", "lite"],
+          {route, upstream_endpoint} <- [
+            {"/backend-api/codex/responses/compact", nil},
+            {"/backend-api/codex/responses", "/backend-api/codex/responses/compact"}
+          ],
+          transport <- ["websocket", "http_compact_json"] do
+        source = %{
+          "model" => "gpt-5.6-terra",
+          "input" => [
+            %{"type" => "message", "role" => "user", "content" => "synthetic"},
+            %{"type" => "compaction_trigger"}
+          ],
+          "stream" => true,
+          "client_metadata" => %{
+            marker => "client-spoofed",
+            "untrusted" => "must-not-survive-compact-projection"
+          }
+        }
+
+        source =
+          if previous_response_id,
+            do: Map.put(source, "previous_response_id", previous_response_id),
+            else: source
+
+        projected = CompactionTrigger.project_responses_payload(source, :sse)
+
+        opts =
+          mode
+          |> serving_mode_opts()
+          |> Map.merge(%{
+            transport: transport,
+            compaction_trigger_bridge?: true,
+            compaction_result_transport: :sse
+          })
+          |> RequestOptions.build(route, projected)
+
+        opts =
+          if upstream_endpoint,
+            do: RequestOptions.put_transport(opts, upstream_endpoint: upstream_endpoint),
+            else: opts
+
+        assert {:ok, encoded, normalized_options} =
+                 PayloadNormalizer.prepare_upstream_payload(projected, model, route, opts)
+
+        upstream = CodexPooler.JSON.decode!(encoded)
+        label = inspect({input_mode, mode, route, upstream_endpoint, transport})
+
+        assert normalized_options.payload_context.compaction_input_mode == input_mode, label
+
+        if transport == "websocket" do
+          assert upstream["type"] == "response.create", label
+
+          assert get_in(upstream, ["client_metadata", marker]) == if(mode == "lite", do: "true"),
+                 label
+        else
+          refute Map.has_key?(upstream, "type"), label
+          refute Map.has_key?(upstream, "client_metadata"), label
+        end
+      end
+    end
+
     test "preserves incremental compact input exactly when projecting Responses Lite" do
       function_output = %{
         "type" => "function_call_output",

@@ -653,16 +653,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {"/backend-api/codex/v1/responses", :buffered, :malformed},
         {"/backend-api/codex/responses", :sse, :valid},
         {"/backend-api/codex/v1/responses", :sse, :malformed}
-      ] do
+      ],
+      mode <- ["full", "lite"] do
     if transport == :sse do
       @tag :codex_remote_compaction_v2
     end
 
     @tag :strict_fake_upstream
-    test "#{path} completes #{transport} native compaction and reuses the downstream socket" do
+    test "#{path} completes #{mode} #{transport} native compaction and reuses the downstream socket" do
       path = unquote(path)
       transport = unquote(transport)
       optional_metadata = unquote(optional_metadata)
+      mode = unquote(mode)
       admission_events = attach_admission_telemetry()
 
       fixture = native_compaction_fixture(transport, optional_metadata)
@@ -670,7 +672,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       upstream =
         start_upstream(
           FakeUpstream.strict_sequence([
-            strict_compaction_response(fixture.upstream_mode, transport),
+            strict_compaction_response(fixture.upstream_mode, transport, mode),
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
               path: "/backend-api/codex/responses",
@@ -693,6 +695,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         )
 
       setup = gateway_setup(upstream, compact?: true)
+      put_model_serving_mode!(setup, mode)
       port = start_public_endpoint!()
       upgrade_turn_state = "upgrade-#{fixture.case_id}"
       frame_turn_state = "frame-#{fixture.case_id}"
@@ -747,16 +750,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert compact_request.json["model"] == setup.model.upstream_model_id
         assert List.last(compact_request.json["input"]) == %{"type" => "compaction_trigger"}
 
-        assert Enum.map(compact_request.json["input"], & &1["type"]) == [
-                 "message",
-                 "compaction_trigger"
-               ]
+        assert Enum.map(compact_request.json["input"], & &1["type"]) ==
+                 compact_input_types(mode)
 
         assert_compact_transport_payload(compact_request.json, transport)
 
-        refute Map.has_key?(compact_request.json, "type")
         refute Map.has_key?(compact_request.json, "generate")
-        refute Map.has_key?(compact_request.json, "client_metadata")
+
+        assert_compact_transport_envelope(compact_request.json, transport, mode)
 
         assert_compact_turn_state_header(compact_request.headers, transport, frame_turn_state)
 
@@ -2090,6 +2091,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     })
   end
 
+  defp put_model_serving_mode!(setup, mode) when mode in ["full", "lite"] do
+    %{user: user} = CodexPooler.AccountsFixtures.bootstrap_owner_fixture()
+    scope = Scope.for_user(user, ["instance_owner"])
+    {:ok, snapshot} = CodexPooler.Pools.model_serving_modes_snapshot(scope, setup.pool)
+
+    assert {:ok, _changed} =
+             CodexPooler.Pools.update_model_serving_modes(
+               scope,
+               setup.pool,
+               [%{exposed_model_id: setup.model.exposed_model_id, mode: mode}],
+               snapshot.revision
+             )
+  end
+
+  defp compact_input_types("full"), do: ["message", "compaction_trigger"]
+  defp compact_input_types("lite"), do: ["additional_tools", "message", "compaction_trigger"]
+
+  defp assert_compact_transport_envelope(payload, :sse, mode) do
+    assert payload["type"] == "response.create"
+
+    assert get_in(payload, [
+             "client_metadata",
+             "ws_request_header_x_openai_internal_codex_responses_lite"
+           ]) == if(mode == "lite", do: "true")
+  end
+
+  defp assert_compact_transport_envelope(payload, :buffered, _mode) do
+    refute Map.has_key?(payload, "type")
+    refute Map.has_key?(payload, "client_metadata")
+  end
+
   defp compact_expected(:sse, key),
     do:
       Map.fetch!(
@@ -2478,7 +2510,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     }
   end
 
-  defp strict_compaction_response(mode, :buffered) do
+  defp strict_compaction_response(mode, :buffered, _serving_mode) do
     FakeUpstream.expect_request(
       method: "POST",
       path: "/backend-api/codex/responses",
@@ -2487,13 +2519,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     )
   end
 
-  defp strict_compaction_response(mode, :sse) do
+  defp strict_compaction_response(mode, :sse, serving_mode) do
     FakeUpstream.expect_request(
       method: "WEBSOCKET",
       path: "/backend-api/codex/responses",
       websocket_connection_ordinal: 1,
-      json: [valid: true, required: ["model", "input"], forbidden: ["type"]],
+      json: [
+        valid: true,
+        required: ["model", "input", "type"],
+        equals:
+          %{"type" => "response.create"}
+          |> maybe_expect_lite_marker(serving_mode)
+      ],
       respond: mode
+    )
+  end
+
+  defp maybe_expect_lite_marker(expected, "full"), do: expected
+
+  defp maybe_expect_lite_marker(expected, "lite") do
+    put_in(
+      expected,
+      ["client_metadata"],
+      %{"ws_request_header_x_openai_internal_codex_responses_lite" => "true"}
     )
   end
 
