@@ -2,6 +2,8 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
   use ExUnit.Case, async: false
   import Ecto.Query
   import CodexPooler.RequestReplayFixtures
+  alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.RequestReplay
   alias CodexPooler.Accounting.RequestReplayEntitlement
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -149,9 +151,90 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
     end
   end
 
+  test "PostgreSQL replay states preserve one request and one reservation through N2" do
+    fixture = Sandbox.unboxed_run(Repo, fn -> replay_fixture(reservation?: true) end)
+    expired_fixture = Sandbox.unboxed_run(Repo, fn -> replay_fixture(reservation?: true) end)
+
+    try do
+      assert {:active_generation_zero, active} =
+               Sandbox.unboxed_run(Repo, fn ->
+                 RequestReplay.preflight_snapshot(fixture.preflight)
+               end)
+
+      assert active.request_id == fixture.request.id
+      assert active.replay_generation == 0
+
+      {:ok, armed} =
+        Sandbox.unboxed_run(Repo, fn -> RequestReplay.arm(arm_input(fixture)) end)
+
+      assert {:armed_generation_one, armed_snapshot} =
+               Sandbox.unboxed_run(Repo, fn ->
+                 RequestReplay.preflight_snapshot(fixture.preflight)
+               end)
+
+      assert armed_snapshot.entitlement_id == armed.entitlement_id
+      assert armed_snapshot.replay_generation == 1
+
+      input = consume_input(fixture, armed, :crypto.strong_rand_bytes(32))
+      allow_committed_owner(fixture)
+
+      assert {:ok, consumed} =
+               Sandbox.unboxed_run(Repo, fn -> RequestReplay.consume(input) end)
+
+      assert consumed.attempt.replay_generation == 1
+
+      assert {:error, :lifecycle_conflict} =
+               Sandbox.unboxed_run(Repo, fn ->
+                 RequestReplay.preflight_snapshot(fixture.preflight)
+               end)
+
+      Sandbox.unboxed_run(Repo, fn ->
+        assert Repo.aggregate(
+                 from(request in Request, where: request.id == ^fixture.request.id),
+                 :count
+               ) == 1
+
+        assert Repo.all(
+                 from(attempt in Attempt,
+                   where: attempt.request_id == ^fixture.request.id,
+                   order_by: [asc: attempt.replay_generation],
+                   select: attempt.replay_generation
+                 )
+               ) == [0, 1]
+
+        assert Repo.aggregate(
+                 from(entry in LedgerEntry,
+                   where:
+                     entry.request_id == ^fixture.request.id and
+                       entry.entry_kind == "reservation"
+                 ),
+                 :count
+               ) == 1
+      end)
+
+      Sandbox.unboxed_run(Repo, fn ->
+        now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+        insert_entitlement!(expired_fixture, %{
+          armed_at: DateTime.add(now, -60, :second),
+          expires_at: DateTime.add(now, -30, :second)
+        })
+
+        assert {:error, :lifecycle_conflict} =
+                 RequestReplay.preflight_snapshot(expired_fixture.preflight)
+
+        assert request_attempt_count(expired_fixture.request.id) == 1
+      end)
+    after
+      cleanup_fixture(fixture)
+      cleanup_fixture(expired_fixture)
+    end
+  end
+
   test "consume checks expiry after a real PostgreSQL session lock wait" do
     fixture = Sandbox.unboxed_run(Repo, fn -> replay_fixture(reservation?: true) end)
     parent = self()
+    deadlocks_before = Sandbox.unboxed_run(Repo, &deadlock_count/0)
 
     try do
       armed =
@@ -212,15 +295,27 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
       assert_receive {:replay_consume_backend, consumer_backend}, 15_000
       refute holder_backend == consumer_backend
 
-      Sandbox.unboxed_run(Repo, fn ->
-        deadline = System.monotonic_time(:millisecond) + 15_000
-        await_replay_blocked!(consumer_backend, holder_backend, armed.expires_at, deadline)
-      end)
+      lock_snapshot =
+        Sandbox.unboxed_run(Repo, fn ->
+          deadline = System.monotonic_time(:millisecond) + 15_000
+          await_replay_blocked!(consumer_backend, holder_backend, armed.expires_at, deadline)
+        end)
 
       send(holder_pid, :release_replay_session)
       assert {:ok, :ok} = Task.await(holder, 15_000)
-      assert {:error, :ineligible} = Task.await(consumer, 15_000)
-      assert Sandbox.unboxed_run(Repo, fn -> request_attempt_count(fixture.request.id) end) == 1
+      consume_result = Task.await(consumer, 15_000)
+
+      assert lock_snapshot.state == "active"
+      assert lock_snapshot.wait_event_type == "Lock"
+      assert holder_backend in lock_snapshot.blockers
+      assert lock_snapshot.ungranted_lock_count > 0
+      assert {:error, :ineligible} = consume_result
+
+      Sandbox.unboxed_run(Repo, fn ->
+        assert Repo.query!("SELECT pg_blocking_pids($1)", [consumer_backend]).rows == [[[]]]
+        assert deadlock_count() == deadlocks_before
+        assert request_attempt_count(fixture.request.id) == 1
+      end)
     after
       if holder_pid = Process.delete(:replay_lock_holder),
         do: send(holder_pid, :release_replay_session)
@@ -260,16 +355,119 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
     end
   end
 
+  test "consume revalidates the API key epoch after a real session lock wait" do
+    fixture = Sandbox.unboxed_run(Repo, fn -> replay_fixture(reservation?: true) end)
+    parent = self()
+    deadlocks_before = Sandbox.unboxed_run(Repo, &deadlock_count/0)
+
+    try do
+      {:ok, armed} = Sandbox.unboxed_run(Repo, fn -> RequestReplay.arm(arm_input(fixture)) end)
+      input = consume_input(fixture, armed, :crypto.strong_rand_bytes(32))
+      allow_committed_owner(fixture)
+
+      holder =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(fn ->
+              Repo.one!(
+                from session in CodexSession,
+                  where: session.id == ^fixture.session.id,
+                  lock: "FOR UPDATE"
+              )
+
+              %{rows: [[pid]]} = Repo.query!("SELECT pg_backend_pid()", [])
+              send(parent, {:epoch_session_locked, self(), pid})
+
+              receive do
+                :release_epoch_session -> :ok
+              end
+            end)
+          end)
+        end)
+
+      assert_receive {:epoch_session_locked, holder_pid, holder_backend}, 15_000
+      Process.put(:epoch_lock_holder, holder_pid)
+
+      consumer =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            %{rows: [[pid]]} = Repo.query!("SELECT pg_backend_pid()", [])
+            send(parent, {:epoch_consumer_backend, pid})
+            RequestReplay.consume(input)
+          end)
+        end)
+
+      assert_receive {:epoch_consumer_backend, consumer_backend}, 15_000
+
+      snapshot =
+        Sandbox.unboxed_run(Repo, fn ->
+          snapshot =
+            await_replay_blocked!(
+              consumer_backend,
+              holder_backend,
+              DateTime.add(DateTime.utc_now(), -1, :second),
+              System.monotonic_time(:millisecond) + 15_000
+            )
+
+          api_key = Repo.get!(APIKey, fixture.api_key.id)
+
+          api_key
+          |> Ecto.Changeset.change(runtime_revocation_epoch: api_key.runtime_revocation_epoch + 1)
+          |> Repo.update!()
+
+          snapshot
+        end)
+
+      send(holder_pid, :release_epoch_session)
+      assert {:ok, :ok} = Task.await(holder, 15_000)
+      Process.delete(:epoch_lock_holder)
+      consume_result = Task.await(consumer, 15_000)
+
+      assert snapshot.wait_event_type == "Lock"
+      assert holder_backend in snapshot.blockers
+      assert {:error, :ineligible} = consume_result
+
+      Sandbox.unboxed_run(Repo, fn ->
+        assert Repo.query!("SELECT pg_blocking_pids($1)", [consumer_backend]).rows == [[[]]]
+        assert deadlock_count() == deadlocks_before
+        assert request_attempt_count(fixture.request.id) == 1
+        assert Repo.get!(RequestReplayEntitlement, armed.entitlement_id).status == "armed"
+      end)
+    after
+      if holder_pid = Process.delete(:epoch_lock_holder),
+        do: send(holder_pid, :release_epoch_session)
+
+      cleanup_fixture(fixture)
+    end
+  end
+
   defp await_replay_blocked!(waiter, holder, expires_at, deadline) do
-    %{rows: [[blockers, expired]]} =
+    %{rows: [[state, wait_event_type, wait_event, blockers, ungranted_lock_count, expired]]} =
       Repo.query!(
-        "SELECT pg_blocking_pids($1), clock_timestamp() > $2::timestamptz",
+        """
+        SELECT activity.state,
+               activity.wait_event_type,
+               activity.wait_event,
+               pg_blocking_pids($1),
+               count(locks.*) FILTER (WHERE locks.granted = false),
+               clock_timestamp() > $2::timestamptz
+        FROM pg_stat_activity AS activity
+        LEFT JOIN pg_locks AS locks ON locks.pid = activity.pid
+        WHERE activity.pid = $1
+        GROUP BY activity.state, activity.wait_event_type, activity.wait_event
+        """,
         [waiter, expires_at]
       )
 
     cond do
-      holder in blockers and expired ->
-        :ok
+      holder in blockers and wait_event_type == "Lock" and expired ->
+        %{
+          state: state,
+          wait_event_type: wait_event_type,
+          wait_event: wait_event,
+          blockers: blockers,
+          ungranted_lock_count: ungranted_lock_count
+        }
 
       System.monotonic_time(:millisecond) < deadline ->
         await_replay_blocked!(waiter, holder, expires_at, deadline)
@@ -348,5 +546,12 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
         {:run, ^ref} -> operation.()
       end
     end)
+  end
+
+  defp deadlock_count do
+    %{rows: [[deadlocks]]} =
+      Repo.query!("SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()")
+
+    deadlocks
   end
 end

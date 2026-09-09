@@ -4,6 +4,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
   import Ecto.Query
   import CodexPooler.AccountingTestSupport
 
+  alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestClientRetryLink}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
@@ -173,6 +174,142 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
     end)
   end
 
+  for mutation <- [:auth_epoch, :deadline] do
+    @mutation mutation
+    test "successor claim revalidates #{@mutation} after a real session lock wait" do
+      assert_lock_wait_revalidation(@mutation)
+    end
+  end
+
+  defp assert_lock_wait_revalidation(mutation) do
+    fixture = Sandbox.unboxed_run(Repo, fn -> committed_fixture(:attempted) end)
+    on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(fixture) end) end)
+    parent = self()
+    release = make_ref()
+    deadlocks_before = Sandbox.unboxed_run(Repo, &deadlock_count/0)
+
+    holder = Task.async(fn -> hold_session_lock(fixture, parent, release) end)
+
+    assert_receive {:session_holder_ready, ^release, holder_backend}, @detection_budget
+
+    claimant =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+          send(parent, {:blocked_claimant_ready, release, backend})
+
+          Accounting.claim_client_retry_successor(
+            fixture.auth,
+            fixture.model,
+            fixture.payload,
+            fixture.opts
+          )
+        end)
+      end)
+
+    assert_receive {:blocked_claimant_ready, ^release, claimant_backend}, @detection_budget
+
+    snapshot =
+      Sandbox.unboxed_run(Repo, fn ->
+        snapshot =
+          await_blocked_snapshot(
+            claimant_backend,
+            holder_backend,
+            System.monotonic_time(:millisecond) + @detection_budget
+          )
+
+        mutate_after_lock_wait!(fixture, mutation)
+        snapshot
+      end)
+
+    send(holder.pid, {:release_session_holder, release})
+    assert {:ok, :ok} = Task.await(holder, @detection_budget)
+    claim_result = Task.await(claimant, @detection_budget)
+
+    assert snapshot.state == "active"
+    assert snapshot.wait_event_type == "Lock"
+    assert holder_backend in snapshot.blockers
+    assert snapshot.ungranted_lock_count > 0
+
+    expected_error = if mutation == :auth_epoch, do: :authorization_changed, else: :retry_expired
+    assert {:error, ^expected_error} = claim_result
+
+    Sandbox.unboxed_run(Repo, fn ->
+      assert Repo.query!("SELECT pg_blocking_pids($1)", [claimant_backend]).rows == [[[]]]
+      assert deadlock_count() == deadlocks_before
+
+      refute Repo.exists?(
+               from link in RequestClientRetryLink,
+                 where: link.predecessor_request_id == ^fixture.predecessor_id
+             )
+
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^fixture.pool_id), :count) == 1
+    end)
+  end
+
+  defp hold_session_lock(fixture, parent, release) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.transaction(fn -> hold_session_lock_transaction(fixture, parent, release) end)
+    end)
+  end
+
+  defp hold_session_lock_transaction(fixture, parent, release) do
+    Repo.one!(
+      from session in CodexSession,
+        where: session.id == ^fixture.session_id,
+        lock: "FOR UPDATE"
+    )
+
+    [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+    send(parent, {:session_holder_ready, release, backend})
+
+    receive do
+      {:release_session_holder, ^release} -> :ok
+    after
+      @detection_budget -> flunk("session holder was not released")
+    end
+  end
+
+  test "fixed client retry workload keeps the same query schedule at concurrency 1 4 and 16" do
+    logical_operations = 16
+
+    schedules =
+      for concurrency <- [1, 4, 16] do
+        fixtures =
+          for _index <- 1..logical_operations do
+            Sandbox.unboxed_run(Repo, fn -> committed_fixture(:attempted) end)
+          end
+
+        try do
+          {results, events} =
+            capture_repo_schedule(fn ->
+              run_claim_workload(fixtures, concurrency)
+            end)
+
+          assert Enum.all?(results, &match?({:ok, %ClientRetry.SuccessorClaim{}}, &1))
+
+          %{
+            concurrency: concurrency,
+            total: length(events),
+            per_operation: div(length(events), logical_operations),
+            operation_sources: Enum.frequencies_by(events, &{&1.operation, &1.source}),
+            query_time_us: Enum.sum(Enum.map(events, & &1.query_time_us)),
+            max_query_time_us: Enum.max(Enum.map(events, & &1.query_time_us)),
+            queue_time_us: Enum.sum(Enum.map(events, & &1.queue_time_us)),
+            max_queue_time_us: Enum.max(Enum.map(events, & &1.queue_time_us))
+          }
+        after
+          Enum.each(fixtures, fn fixture ->
+            Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(fixture) end)
+          end)
+        end
+      end
+
+    assert Enum.map(schedules, & &1.total) == [336, 336, 336]
+    assert Enum.map(schedules, & &1.per_operation) == [21, 21, 21]
+    assert Enum.map(schedules, & &1.operation_sources) |> Enum.uniq() |> length() == 1
+  end
+
   defp await_blocked(waiter, holder, deadline) do
     [[blocked?]] = Repo.query!("SELECT $1 = ANY(pg_blocking_pids($2))", [holder, waiter]).rows
 
@@ -181,6 +318,156 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       System.monotonic_time(:millisecond) < deadline -> await_blocked(waiter, holder, deadline)
       true -> flunk("old attempt did not block on the successor request lock")
     end
+  end
+
+  defp await_blocked_snapshot(waiter, holder, deadline) do
+    [[state, wait_event_type, wait_event, blockers, ungranted_lock_count]] =
+      Repo.query!(
+        """
+        SELECT activity.state,
+               activity.wait_event_type,
+               activity.wait_event,
+               pg_blocking_pids($1),
+               count(locks.*) FILTER (WHERE locks.granted = false)
+        FROM pg_stat_activity AS activity
+        LEFT JOIN pg_locks AS locks ON locks.pid = activity.pid
+        WHERE activity.pid = $1
+        GROUP BY activity.state, activity.wait_event_type, activity.wait_event
+        """,
+        [waiter]
+      ).rows
+
+    if holder in blockers and wait_event_type == "Lock" do
+      %{
+        state: state,
+        wait_event_type: wait_event_type,
+        wait_event: wait_event,
+        blockers: blockers,
+        ungranted_lock_count: ungranted_lock_count
+      }
+    else
+      if System.monotonic_time(:millisecond) < deadline do
+        await_blocked_snapshot(waiter, holder, deadline)
+      else
+        flunk("claimant did not block on the session lock")
+      end
+    end
+  end
+
+  defp mutate_after_lock_wait!(fixture, :auth_epoch) do
+    api_key = Repo.get!(APIKey, fixture.auth.api_key.id)
+
+    api_key
+    |> Ecto.Changeset.change(runtime_revocation_epoch: api_key.runtime_revocation_epoch + 1)
+    |> Repo.update!()
+  end
+
+  defp mutate_after_lock_wait!(fixture, :deadline) do
+    [[now]] = Repo.query!("SELECT clock_timestamp()").rows
+    expired_at = DateTime.add(now, -31, :second)
+
+    fixture.predecessor
+    |> Repo.reload!()
+    |> Ecto.Changeset.change(completed_at: expired_at)
+    |> Repo.update!()
+  end
+
+  defp run_claim_workload(fixtures, concurrency) do
+    fixtures
+    |> Enum.chunk_every(concurrency)
+    |> Enum.flat_map(&run_claim_batch/1)
+  end
+
+  defp run_claim_batch(fixtures) do
+    parent = self()
+    release = make_ref()
+
+    tasks =
+      Enum.map(fixtures, fn fixture ->
+        Task.async(fn ->
+          send(parent, {:claim_actor_ready, release, self()})
+
+          receive do
+            {:run_claim, ^release} ->
+              Sandbox.unboxed_run(Repo, fn ->
+                Accounting.claim_client_retry_successor(
+                  fixture.auth,
+                  fixture.model,
+                  fixture.payload,
+                  fixture.opts
+                )
+              end)
+          after
+            @detection_budget -> flunk("query schedule actor was not released")
+          end
+        end)
+      end)
+
+    actors =
+      Enum.map(tasks, fn _task ->
+        assert_receive {:claim_actor_ready, ^release, actor}, @detection_budget
+        actor
+      end)
+
+    Enum.each(actors, &send(&1, {:run_claim, release}))
+    Enum.map(tasks, &Task.await(&1, @detection_budget))
+  end
+
+  defp capture_repo_schedule(fun) do
+    table = :ets.new(:client_retry_query_schedule, [:ordered_set, :public])
+    handler_id = {__MODULE__, :query_schedule, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, measurements, metadata, query_table ->
+          if metadata[:repo] == Repo do
+            query = Map.get(metadata, :query, "")
+
+            :ets.insert(query_table, {
+              System.unique_integer([:positive, :monotonic]),
+              %{
+                source: metadata[:source],
+                operation: query_operation(query),
+                query_time_us: native_microseconds(measurements[:query_time]),
+                queue_time_us: native_microseconds(measurements[:queue_time])
+              }
+            })
+          end
+        end,
+        table
+      )
+
+    try do
+      result = fun.()
+      events = table |> :ets.tab2list() |> Enum.map(&elem(&1, 1))
+      {result, events}
+    after
+      :telemetry.detach(handler_id)
+      :ets.delete(table)
+    end
+  end
+
+  defp query_operation(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+    |> to_string()
+    |> String.upcase()
+  end
+
+  defp native_microseconds(nil), do: 0
+
+  defp native_microseconds(value),
+    do: System.convert_time_unit(value, :native, :microsecond)
+
+  defp deadlock_count do
+    [[deadlocks]] =
+      Repo.query!("SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()").rows
+
+    deadlocks
   end
 
   defp cleanup_fixture(fixture) do
