@@ -13484,6 +13484,139 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :hard_pinned_quota_recovery
+  test "POST /backend-api/codex/responses retries the same hard pin after quota recovery",
+       %{conn: conn} do
+    reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+    pinned_upstream =
+      start_upstream(
+        {:path_json,
+         %{
+           "/backend-api/wham/usage" =>
+             {200,
+              %{
+                "rate_limit" => %{
+                  "primary_window" => %{
+                    "used_percent" => 20,
+                    "limit_window_seconds" => 18_000,
+                    "reset_after_seconds" => 900,
+                    "reset_at" => DateTime.to_unix(reset_at)
+                  }
+                }
+              }},
+           "/backend-api/codex/responses" =>
+             {200,
+              %{
+                "id" => "resp_hard_pin_recovery",
+                "object" => "response",
+                "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+              }}
+         }}
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_hard_pin_recovery_fallback_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(pinned_upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-hard-pin-recovery-fallback",
+        compact?: false
+      )
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    prime_routing_quota!(setup.identity)
+
+    session_header = "hard-pin-recovery-session-#{System.unique_integer([:positive])}"
+
+    first_conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("session-id", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("hard pin recovery first request"),
+        "stream" => true
+      })
+
+    assert %{"id" => previous_response_id} = json_response(first_conn, 200)
+    assert FakeUpstream.count(pinned_upstream) == 1
+
+    prime_exhausted_routing_quota!(setup.identity)
+
+    denied_conn =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("session-id", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("hard pin recovery denied request"),
+        "previous_response_id" => previous_response_id,
+        "stream" => true
+      })
+
+    assert_pinned_unavailable_recovery_response!(denied_conn)
+    assert FakeUpstream.count(pinned_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert {:ok, _refreshed_identity} =
+             PoolReconciliation.refresh_quota_from_usage(setup.identity, setup.assignment)
+
+    assert [%{used_percent: recovered_percent}] = QuotaWindows.list_quota_windows(setup.identity)
+    assert Decimal.equal?(recovered_percent, Decimal.new("20"))
+
+    recovered_conn =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("session-id", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("hard pin recovery retry"),
+        "previous_response_id" => previous_response_id,
+        "stream" => true
+      })
+
+    assert %{"id" => ^previous_response_id} = json_response(recovered_conn, 200)
+    assert FakeUpstream.count(pinned_upstream) == 2
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    requests =
+      Repo.all(
+        from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at])
+      )
+
+    assert Enum.map(requests, &{&1.status, &1.last_error_code}) ==
+             [
+               {"succeeded", nil},
+               {"rejected", "pinned_continuation_unavailable"},
+               {"succeeded", nil}
+             ]
+
+    assert Repo.aggregate(from(a in Attempt, where: a.pool_id == ^setup.pool.id), :count) == 2
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.pool_id == ^setup.pool.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 2
+  end
+
+  @tag :hard_pinned_quota_recovery
   test "POST /backend-api/codex/responses keeps file affinity hard pinned when quota is exhausted",
        %{conn: conn} do
     fallback_upstream =
