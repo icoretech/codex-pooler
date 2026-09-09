@@ -137,11 +137,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
            {:ok, accounts} <- open_accounts(bundle, password),
            :ok <- validate_import_accounts(accounts),
            {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope) do
-        if dry_run? do
-          validate_import_accounts_transaction(prepared_accounts, pool, scope)
-        else
-          import_accounts(prepared_accounts, pool, scope)
-        end
+        import_prepared_accounts(prepared_accounts, pool, scope, dry_run?)
       end
     end
   end
@@ -460,8 +456,30 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
 
   defp optional_datetime?(_value), do: false
 
-  defp import_accounts(accounts, pool, scope) do
-    case Repo.transaction(fn -> import_accounts_transaction(accounts, pool, scope) end) do
+  defp import_prepared_accounts([], _pool, _scope, dry_run?) do
+    {:ok, empty_import_receipt(dry_run?)}
+  end
+
+  defp import_prepared_accounts(prepared_accounts, pool, scope, true) do
+    validate_import_accounts_transaction(prepared_accounts, pool, scope)
+  end
+
+  defp import_prepared_accounts(prepared_accounts, pool, scope, false) do
+    import_accounts(prepared_accounts, pool, scope)
+  end
+
+  defp empty_import_receipt(dry_run?) do
+    %{
+      version: @version,
+      account_count: 0,
+      valid: 0,
+      imported: 0,
+      dry_run: dry_run?
+    }
+  end
+
+  defp import_accounts(prepared_accounts, pool, scope) do
+    case persist_import_accounts(prepared_accounts, pool, scope) do
       {:ok, results} ->
         publish_import_results(results, pool, scope)
         imported = length(results)
@@ -480,6 +498,17 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end
   end
 
+  # This deliberately wraps only the transaction invocation. Publication stays
+  # outside this boundary so unexpected publication failures remain visible and
+  # a database failure can never publish a partially persisted bundle.
+  defp persist_import_accounts(prepared_accounts, pool, scope) do
+    try do
+      Repo.transaction(fn -> import_accounts_transaction(prepared_accounts, pool, scope) end)
+    rescue
+      _exception in [Postgrex.Error, Ecto.ConstraintError] -> {:error, :persistence_failed}
+    end
+  end
+
   defp import_accounts_transaction(prepared_accounts, pool, scope) do
     case TokenLinking.link_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
       {:ok, results} -> results
@@ -488,16 +517,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   end
 
   defp validate_import_accounts_transaction(prepared_accounts, pool, scope) do
-    case Repo.transaction(fn ->
-           case TokenLinking.validate_prepared_batch_in_transaction(
-                  scope,
-                  pool,
-                  prepared_accounts
-                ) do
-             {:ok, count} -> count
-             {:error, _reason} -> Repo.rollback(:bundle_import_failed)
-           end
-         end) do
+    case validate_import_accounts_transaction_result(prepared_accounts, pool, scope) do
       {:ok, count} ->
         {:ok,
          %{
@@ -510,6 +530,19 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
 
       {:error, _reason} ->
         {:error, lifecycle_error(:bundle_import_failed)}
+    end
+  end
+
+  defp validate_import_accounts_transaction_result(prepared_accounts, pool, scope) do
+    try do
+      Repo.transaction(fn ->
+        case TokenLinking.validate_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
+          {:ok, count} -> count
+          {:error, _reason} -> Repo.rollback(:bundle_import_failed)
+        end
+      end)
+    rescue
+      _exception in [Postgrex.Error, Ecto.ConstraintError] -> {:error, :persistence_failed}
     end
   end
 
@@ -528,7 +561,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     |> Enum.reduce_while({:ok, []}, fn account, {:ok, prepared} ->
       case Upstreams.prepare_bundle_account(scope, pool, import_attrs(account)) do
         {:ok, %PreparedAccount{} = entry} -> {:cont, {:ok, [entry | prepared]}}
-        {:error, _reason} -> {:halt, {:error, lifecycle_error(:bundle_import_denied)}}
+        {:error, reason} -> {:halt, {:error, preparation_error(reason)}}
       end
     end)
     |> case do
@@ -536,6 +569,15 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
       {:error, _reason} = error -> error
     end
   end
+
+  # Bundle parsing and account-shape validation own their existing public
+  # errors. Once preparation reaches identity selection, only authorization is
+  # a denial; conflicts, malformed persisted epochs, and any other preparation
+  # failure are deliberately opaque lifecycle failures.
+  defp preparation_error(%{code: code}) when code in [:capability_denied, :pool_not_found],
+    do: lifecycle_error(:bundle_import_denied)
+
+  defp preparation_error(_reason), do: lifecycle_error(:bundle_import_failed)
 
   defp import_attrs(account) do
     %{
