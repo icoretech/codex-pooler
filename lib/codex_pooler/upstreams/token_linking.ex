@@ -9,6 +9,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
+  alias CodexPooler.Upstreams.ImportBatchPlanner
   alias CodexPooler.Upstreams.Lifecycle.AccountAudit
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
@@ -117,6 +118,31 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   def link_prepared_in_transaction(_scope, _pool, _prepared, _opts),
     do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
 
+  @spec link_prepared_batch_in_transaction(Scope.t(), Pool.t(), [PreparedAccount.t()]) ::
+          {:ok, [link_success()]} | {:error, term()}
+  def link_prepared_batch_in_transaction(%Scope{} = _scope, %Pool{} = _pool, []), do: {:ok, []}
+
+  def link_prepared_batch_in_transaction(
+        %Scope{} = scope,
+        %Pool{} = pool,
+        prepared_accounts
+      )
+      when is_list(prepared_accounts) do
+    with {:ok, plan, locked_rows, _diagnostics} <-
+           ImportBatchPlanner.plan_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
+      persist_prepared_batch_plan(scope, pool, plan, locked_rows)
+    end
+  end
+
+  def link_prepared_batch_in_transaction(_scope, _pool, _prepared_accounts),
+    do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
+
+  @spec validate_prepared_batch_in_transaction(Scope.t(), Pool.t(), [PreparedAccount.t()]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def validate_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
+    ImportBatchPlanner.validate_prepared_batch_in_transaction(scope, pool, prepared_accounts)
+  end
+
   @spec publish_link_result(Scope.t(), Pool.t(), link_success(), keyword()) :: link_result()
   def publish_link_result(%Scope{} = scope, %Pool{} = pool, %{} = result, opts)
       when is_list(opts) do
@@ -147,7 +173,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
     if Repo.in_transaction?() do
       with {:ok, prepared} <- PreparedAccount.validate(prepared, scope, pool),
            :ok <- lock_and_validate_prepared_import(prepared, slots_locked?) do
-        persist_validated_prepared(scope, pool, prepared)
+        persist_validated_prepared(scope, pool, prepared, :select)
       end
     else
       {:error,
@@ -158,12 +184,12 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   def persist_prepared(_scope, _pool, _prepared, _slots_locked?),
     do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
 
-  defp persist_validated_prepared(scope, pool, prepared) do
+  defp persist_validated_prepared(scope, pool, prepared, selection) do
     attrs = prepared.attrs
 
     with :ok <- validate_link_target(pool, attrs),
          {:ok, identity_status, identity, recovery_relink?} <-
-           upsert_link_identity(scope, prepared),
+           upsert_link_identity(scope, prepared, selection),
          {:ok, _secret} <-
            Secrets.store_encrypted_secret(identity, %{
              secret_kind: "access_token",
@@ -176,7 +202,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
              pool,
              identity,
              attrs,
-             nil,
+             selected_assignment(selection),
              recovery_relink?
            ) do
       {:ok,
@@ -189,6 +215,63 @@ defmodule CodexPooler.Upstreams.TokenLinking do
     else
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp persist_prepared_batch_plan(scope, pool, plan, locked_rows) do
+    assignments = Map.new(locked_rows.assignments, &{{&1.pool_id, &1.upstream_identity_id}, &1})
+
+    plan
+    |> Enum.reduce_while({:ok, [], %{}, assignments}, fn
+      {prepared, target}, {:ok, results, created, assignments} ->
+        selected = resolve_planned_target(target, locked_rows.identities, created)
+        assignment = selected && Map.get(assignments, {pool.id, selected.id})
+
+        case persist_validated_prepared(
+               scope,
+               pool,
+               prepared,
+               {:selected, selected, assignment}
+             ) do
+          {:ok, result} ->
+            created = remember_planned_identity(created, target, result.identity)
+
+            assignments =
+              Map.put(
+                assignments,
+                {result.assignment.pool_id, result.assignment.upstream_identity_id},
+                result.assignment
+              )
+
+            {:cont, {:ok, [result | results], created, assignments}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
+    end)
+    |> case do
+      {:ok, results, _created, _assignments} -> {:ok, Enum.reverse(results)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp resolve_planned_target({:existing, id}, identities, created),
+    do: Map.get(created, id) || Enum.find(identities, &(&1.id == id))
+
+  defp resolve_planned_target({:new, index}, _identities, created),
+    do: Map.get(created, {:new, index})
+
+  defp remember_planned_identity(created, {:new, index}, identity) do
+    created
+    |> Map.put({:new, index}, identity)
+    |> Map.put(projected_identity_id(index), identity)
+    |> Map.put(identity.id, identity)
+  end
+
+  defp remember_planned_identity(created, _target, identity),
+    do: Map.put(created, identity.id, identity)
+
+  defp projected_identity_id(index) do
+    "00000000-0000-0000-0000-#{index |> Integer.to_string() |> String.pad_leading(12, "0")}"
   end
 
   defp persist_prepared!(scope, pool, prepared, slots_locked?) do
@@ -289,7 +372,11 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   defp transaction_not_allowed_error,
     do: lifecycle_error(:transaction_not_allowed, @transaction_not_allowed_message)
 
-  defp upsert_link_identity(%Scope{} = scope, %PreparedAccount{attrs: attrs} = prepared) do
+  defp upsert_link_identity(
+         %Scope{} = scope,
+         %PreparedAccount{attrs: attrs} = prepared,
+         selection
+       ) do
     timestamp = now()
 
     metadata =
@@ -312,12 +399,12 @@ defmodule CodexPooler.Upstreams.TokenLinking do
         metadata: link_identity_metadata(metadata, attrs)
       })
 
-    case select_link_identity(attrs, identity_attrs) do
+    case selected_link_identity(selection, attrs, identity_attrs) do
       {:error, reason} ->
         {:error, reason}
 
       {:ok, %UpstreamIdentity{} = identity} ->
-        identity = CredentialFencing.lock_credential_replacement(identity)
+        identity = maybe_lock_selected_identity(identity, selection)
 
         with {:ok, replacement_metadata, epoch} <-
                CredentialFencing.prepare_replacement_metadata(identity),
@@ -345,6 +432,20 @@ defmodule CodexPooler.Upstreams.TokenLinking do
         end
     end
   end
+
+  defp selected_link_identity(:select, attrs, identity_attrs),
+    do: select_link_identity(attrs, identity_attrs)
+
+  defp selected_link_identity({:selected, selected, _assignment}, _attrs, _identity_attrs),
+    do: {:ok, selected}
+
+  defp maybe_lock_selected_identity(identity, :select),
+    do: CredentialFencing.lock_credential_replacement(identity)
+
+  defp maybe_lock_selected_identity(identity, {:selected, _selected, _assignment}), do: identity
+
+  defp selected_assignment({:selected, _selected, assignment}), do: assignment
+  defp selected_assignment(:select), do: nil
 
   defp new_identity_replacement_attrs(identity_attrs, prepared, timestamp) do
     Map.update!(identity_attrs, :metadata, fn link_metadata ->

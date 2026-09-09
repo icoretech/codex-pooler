@@ -10,7 +10,6 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
-  alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
   alias CodexPooler.Upstreams.PreparedAccount
   alias CodexPooler.Upstreams.Secrets
   alias CodexPooler.Upstreams.TokenLinking
@@ -139,14 +138,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
            :ok <- validate_import_accounts(accounts),
            {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope) do
         if dry_run? do
-          {:ok,
-           %{
-             version: @version,
-             account_count: length(prepared_accounts),
-             valid: length(prepared_accounts),
-             imported: 0,
-             dry_run: true
-           }}
+          validate_import_accounts_transaction(prepared_accounts, pool, scope)
         else
           import_accounts(prepared_accounts, pool, scope)
         end
@@ -489,16 +481,36 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   end
 
   defp import_accounts_transaction(prepared_accounts, pool, scope) do
-    IdentitySlotLock.lock_slots!(Enum.map(prepared_accounts, & &1.attrs))
+    case TokenLinking.link_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
+      {:ok, results} -> results
+      {:error, _reason} -> Repo.rollback(:bundle_import_failed)
+    end
+  end
 
-    prepared_accounts
-    |> Enum.reduce_while([], fn prepared, results ->
-      case TokenLinking.link_prepared_in_transaction(scope, pool, prepared, slots_locked?: true) do
-        {:ok, result} -> {:cont, [result | results]}
-        {:error, _reason} -> Repo.rollback(:bundle_import_failed)
-      end
-    end)
-    |> Enum.reverse()
+  defp validate_import_accounts_transaction(prepared_accounts, pool, scope) do
+    case Repo.transaction(fn ->
+           case TokenLinking.validate_prepared_batch_in_transaction(
+                  scope,
+                  pool,
+                  prepared_accounts
+                ) do
+             {:ok, count} -> count
+             {:error, _reason} -> Repo.rollback(:bundle_import_failed)
+           end
+         end) do
+      {:ok, count} ->
+        {:ok,
+         %{
+           version: @version,
+           account_count: count,
+           valid: count,
+           imported: 0,
+           dry_run: true
+         }}
+
+      {:error, _reason} ->
+        {:error, lifecycle_error(:bundle_import_failed)}
+    end
   end
 
   defp publish_import_results(results, pool, scope) do
