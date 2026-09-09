@@ -59,6 +59,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:freshness_title) => String.t(),
           required(:observed_label) => String.t(),
           required(:observed_title) => String.t() | nil,
+          required(:measurement_pending?) => boolean(),
+          required(:measurement_pending_label) => String.t() | nil,
+          required(:measurement_pending_detail) => String.t() | nil,
+          required(:permission_facts) => %{
+            allowed: boolean() | nil,
+            limit_reached: boolean() | nil
+          },
           required(:reset_semantics) => :anchored | :floating | :unknown,
           required(:reset_display_state) => reset_display_state(),
           required(:reset_at) => DateTime.t() | nil,
@@ -119,12 +126,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   def put_current_quota_priming(assignment, quota_readiness) do
     case assignment_priming_status(assignment) do
       status when status in ["failed", "blocked"] ->
-        put_quota_priming(assignment, status)
+        if current_assignment_quota_usable?(assignment, quota_readiness) do
+          put_derived_quota_priming(assignment, quota_readiness)
+        else
+          put_quota_priming(assignment, status)
+        end
 
       _status ->
         put_derived_quota_priming(assignment, quota_readiness)
     end
   end
+
+  defp current_assignment_quota_usable?(assignment, %{routing_ready_now?: true}) do
+    Map.get(assignment, :status) == "active" and
+      Map.get(assignment, :health_status) == "active" and
+      Map.get(assignment, :eligibility_status) == "eligible"
+  end
+
+  defp current_assignment_quota_usable?(_assignment, _quota_readiness), do: false
 
   defp put_derived_quota_priming(assignment, %{state: "ready"}) do
     put_quota_priming(assignment, "known")
@@ -521,12 +540,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     {observed_label, observed_title} =
       observed_presentation(window.observed_at, evidence_state, datetime_preferences, snapshot_at)
 
+    observation = QuotaObservations.project(window, datetime_preferences, snapshot_at)
+
+    {measurement_pending?, measurement_pending_label, measurement_pending_detail} =
+      measurement_pending_presentation(observation)
+
     %{
       key: key,
       label: label,
       percent: remaining_percent,
       observation_group: QuotaObservations.group_key(window),
-      observations: [QuotaObservations.project(window, datetime_preferences, snapshot_at)],
+      observations: [observation],
       percent_value: quota_percent_value(remaining_percent),
       percent_label: quota_percent_label(remaining_percent),
       count_label: count_label,
@@ -538,6 +562,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       freshness_title: freshness_title,
       observed_label: observed_label,
       observed_title: observed_title,
+      measurement_pending?: measurement_pending?,
+      measurement_pending_label: measurement_pending_label,
+      measurement_pending_detail: measurement_pending_detail,
+      permission_facts: observation.permission_facts,
       reset_semantics: reset_semantics,
       reset_display_state: reset_display_state,
       reset_at: reset_at,
@@ -562,6 +590,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       freshness_title: "quota evidence was not reported",
       observed_label: "observed time not reported",
       observed_title: nil,
+      measurement_pending?: false,
+      measurement_pending_label: nil,
+      measurement_pending_detail: nil,
+      permission_facts: %{allowed: nil, limit_reached: nil},
       reset_semantics: :unknown,
       reset_display_state: :absent,
       reset_at: nil,
@@ -569,6 +601,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       reset_title: nil
     }
   end
+
+  defp measurement_pending_presentation(%{measurement_pending?: true}) do
+    {true, "Retained measurement awaits confirmation",
+     "Retained measurement; newer provider measurement awaits confirmation"}
+  end
+
+  defp measurement_pending_presentation(_observation), do: {false, nil, nil}
 
   defp quota_remaining_percent(
          %Quota.AccountQuotaWindow{

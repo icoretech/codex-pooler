@@ -11,14 +11,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
     ~H"""
     <dialog
       id={@id}
-      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      class="quota-observations-dialog modal modal-bottom overflow-x-hidden sm:modal-middle"
       aria-labelledby={"#{@id}-title"}
       aria-describedby={"#{@id}-description"}
       aria-modal="true"
     >
       <.focus_wrap
         id={"#{@id}-panel"}
-        class="modal-box flex max-h-[85dvh] w-full flex-col overflow-hidden sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl"
+        class="quota-observations-dialog-panel modal-box flex max-h-[85dvh] w-full flex-col overflow-hidden sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl"
       >
         <header class="shrink-0 border-b border-base-300 px-5 py-4">
           <p class="text-xs font-semibold uppercase tracking-wide text-primary">{@limit.label}</p>
@@ -45,10 +45,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                 :for={{observation, index} <- Enum.with_index(@limit.observations)}
                 data-role="quota-observation"
                 data-selected={to_string(observation.selected?)}
+                data-measurement-pending={
+                  if observation_measurement_pending?(observation), do: "true", else: nil
+                }
                 class={["py-3 first:pt-0 last:pb-0 text-xs", index >= 5 && "hidden"]}
                 data-extra-evidence={to_string(index >= 5)}
               >
-                <details id={"#{@id}-observation-#{observation.key}"} data-preserve-open class="group">
+                <details
+                  id={"#{@id}-observation-#{observation.key}"}
+                  open={observation_measurement_pending?(observation)}
+                  data-preserve-open
+                  class="group"
+                >
                   <summary class="grid gap-1.5 cursor-pointer list-none rounded transition-colors hover:bg-base-200/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary [&::-webkit-details-marker]:hidden">
                     <div class="flex items-baseline justify-between gap-3">
                       <p class="min-w-0 truncate text-sm font-semibold leading-5 text-base-content">
@@ -80,7 +88,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                       >
                         evidence as of {observation.observed_at}
                       </span>
-                      <span>{observation.freshness}</span>
+                      <span>
+                        {observation.freshness}<span :if={
+                          observation_measurement_pending?(observation)
+                        }> · retained measurement</span>
+                      </span>
                     </div>
                   </summary>
                   <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 rounded bg-base-200/50 p-3 text-[11px] leading-4">
@@ -139,6 +151,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
   defp observation_tone(%{remaining_value: nil}),
     do: "progress-neutral admin-static-unknown-progress"
 
+  defp observation_tone(%{measurement_pending?: true}), do: "progress-warning"
+
   defp observation_tone(%{selected?: false}),
     do:
       "text-base-content/50 bg-base-content/10 [&::-webkit-progress-value]:bg-current [&::-moz-progress-bar]:bg-current"
@@ -155,4 +169,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
       _neutral -> "text-base-content/50"
     end
   end
+
+  defp observation_measurement_pending?(%{measurement_pending?: true}), do: true
+  defp observation_measurement_pending?(_observation), do: false
 end

@@ -1408,6 +1408,155 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     refute Enum.any?(rows, &(&1.key == "model-codex_spark-primary-300"))
   end
 
+  @tag :quota_projection
+  test "marks a retained exhausted measurement with newer safe provider evidence as pending confirmation" do
+    selected_observed_at = DateTime.add(@snapshot_at, -2, :minute)
+    candidate_observed_at = DateTime.add(@snapshot_at, -1, :minute)
+    reset_at = DateTime.add(@snapshot_at, 6, :day)
+
+    selected =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: reset_at,
+        observed_at: selected_observed_at,
+        metadata: %{
+          "__quota_confirmed_candidate_v1" => %{
+            "version" => 1,
+            "used_percent" => "32",
+            "reset_at" => DateTime.to_iso8601(reset_at),
+            "observed_at" => DateTime.to_iso8601(candidate_observed_at),
+            "count" => 1
+          },
+          "__quota_candidate_provider_status_v1" => %{
+            "version" => 1,
+            "allowed" => true,
+            "limit_reached" => false,
+            "observed_at" => DateTime.to_iso8601(candidate_observed_at)
+          }
+        }
+      )
+
+    stale_runtime =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_rate_limit_event",
+        used_percent: Decimal.new("32"),
+        reset_at: reset_at,
+        observed_at: DateTime.add(@snapshot_at, -1, :hour)
+      )
+
+    stale_headers =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_response_headers",
+        used_percent: Decimal.new("31"),
+        reset_at: reset_at,
+        observed_at: DateTime.add(@snapshot_at, -2, :hour)
+      )
+
+    rows =
+      QuotaProjection.quota_limit_rows(
+        [selected],
+        DateTimeDisplay.preferences_for_user(nil),
+        @snapshot_at,
+        nil,
+        [selected, stale_runtime, stale_headers]
+      )
+
+    weekly = Enum.find(rows, &(&1.key == :weekly))
+
+    assert weekly.percent_label == "0%"
+    assert weekly.measurement_pending? == true
+
+    assert weekly.measurement_pending_label == "Retained measurement awaits confirmation"
+
+    assert weekly.measurement_pending_detail ==
+             "Retained measurement; newer provider measurement awaits confirmation"
+
+    assert weekly.permission_facts == %{allowed: true, limit_reached: false}
+
+    assert Enum.map(weekly.observations, &{&1.source, &1.remaining, &1.selected?}) == [
+             {"Usage API", "0%", true},
+             {"Rate-limit event", "68%", false},
+             {"Response headers", "69%", false}
+           ]
+  end
+
+  @tag :quota_projection
+  test "keeps consistent and incomplete permission evidence free of a false measurement-pending state" do
+    observed_at = @snapshot_at
+
+    for {metadata, used_percent} <- [
+          {%{"rate_limit_allowed" => false, "rate_limit_reached" => true}, "100"},
+          {%{"rate_limit_allowed" => true, "rate_limit_reached" => false}, "45"},
+          {%{"rate_limit_allowed" => true}, "100"},
+          {%{"rate_limit_reached" => false}, "100"},
+          {%{}, "100"}
+        ] do
+      [weekly] =
+        QuotaProjection.quota_limit_rows(
+          [
+            account_window(
+              window_kind: "secondary",
+              window_minutes: 10_080,
+              used_percent: Decimal.new(used_percent),
+              reset_at: DateTime.add(observed_at, 6, :day),
+              observed_at: observed_at,
+              metadata: metadata
+            )
+          ],
+          DateTimeDisplay.preferences_for_user(nil),
+          observed_at
+        )
+        |> Enum.filter(&(&1.key == :weekly))
+
+      refute weekly.measurement_pending?
+    end
+  end
+
+  @tag :quota_projection
+  test "current usable identity quota overrides a historical failed priming status only for a routable assignment" do
+    historical_failure = %{
+      status: "active",
+      health_status: "active",
+      eligibility_status: "eligible",
+      metadata: %{
+        "quota_priming" => %{"status" => "failed", "reason" => %{"code" => "upstream_status_503"}}
+      }
+    }
+
+    assert %{quota_priming_status: "weekly_only_probe", quota_priming_label: "Weekly-only probe"} =
+             QuotaProjection.put_current_quota_priming(historical_failure, %{
+               state: "weekly_only_probe",
+               routing_ready_now?: true
+             })
+
+    for assignment <- [
+          %{historical_failure | status: "disabled"},
+          %{historical_failure | health_status: "degraded"},
+          %{historical_failure | eligibility_status: "ineligible"}
+        ] do
+      assert %{quota_priming_status: "failed", quota_priming_label: "Quota failed"} =
+               QuotaProjection.put_current_quota_priming(assignment, %{
+                 state: "weekly_only_probe",
+                 routing_ready_now?: true
+               })
+    end
+
+    for readiness <- [
+          %{state: "exhausted", routing_ready_now?: false},
+          %{state: "stale", routing_ready_now?: false},
+          %{state: "missing_evidence", routing_ready_now?: false}
+        ] do
+      assert %{quota_priming_status: "failed", quota_priming_label: "Quota failed"} =
+               QuotaProjection.put_current_quota_priming(historical_failure, readiness)
+    end
+  end
+
   defp account_window(attrs) do
     observed_at = Keyword.fetch!(attrs, :observed_at)
 

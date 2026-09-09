@@ -271,6 +271,19 @@ body {
   container: upstream-account-card / inline-size;
 }
 
+/* Browser zoom can reduce the effective layout height while preserving a
+   desktop-width breakpoint. Keep the existing dialog readable by preferring
+   the bottom-aligned, scrollable sheet layout in a short viewport. */
+@media (height < 48rem) {
+  .quota-observations-dialog {
+    place-items: end center;
+  }
+
+  .quota-observations-dialog-panel {
+    max-height: calc(100dvh - 1rem);
+  }
+}
+
 .upstream-account-token-model-grid {
   grid-template-columns:
     minmax(0, 1fr) clamp(1.5rem, 9cqi, 2.25rem) max-content max-content;

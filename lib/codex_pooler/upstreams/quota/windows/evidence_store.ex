@@ -1389,7 +1389,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         relative_reset_timing_present?(evidence.metadata) and
         not weak_zero_percent_evidence?(evidence) and
           not stale_same_cycle_exhausted_snapshot?(evidence, existing, timestamp) ->
-        :same_cycle
+        if safe_lower_same_cycle_observation?(evidence, existing) do
+          lower_snapshot_decision(evidence, existing, timestamp)
+        else
+          :same_cycle
+        end
 
       Evidence.expired?(existing, timestamp) ->
         :incoming
@@ -1449,6 +1453,17 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   defp confirmed_snapshot_decision(_evidence, _existing, _timestamp), do: :continue
+
+  defp safe_lower_same_cycle_observation?(
+         %Evidence{used_percent: %Decimal{} = incoming_percent, metadata: metadata},
+         %Quota.AccountQuotaWindow{used_percent: %Decimal{} = existing_percent}
+       ) do
+    positive_percent?(incoming_percent) and
+      Decimal.compare(incoming_percent, existing_percent) == :lt and
+      provider_status_safe?(metadata)
+  end
+
+  defp safe_lower_same_cycle_observation?(_evidence, _existing), do: false
 
   @spec compare_confirmed_snapshot(
           Evidence.t(),

@@ -608,6 +608,49 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       assert decision["eligible_candidate_count"] == 2
     end
 
+    test "a coherent lower account measurement is ordinary instead of windowless provider availability" do
+      snapshot_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      retained_identity = available_upstream_identity("retained-measurement", snapshot_at)
+      ordinary_identity = upstream_identity("ordinary-measurement")
+
+      retained_candidate =
+        {assignment("retained-measurement-assignment", retained_identity), retained_identity}
+
+      ordinary_candidate =
+        {assignment("ordinary-measurement-assignment", ordinary_identity), ordinary_identity}
+
+      route_state =
+        RouteState.new(%{
+          visible_model: quota_model(),
+          candidates: [retained_candidate, ordinary_candidate]
+        })
+        |> put_test_quota_snapshots(
+          %{
+            retained_identity.id => [account_window_at(Decimal.new("32"), snapshot_at)],
+            ordinary_identity.id => [account_window_at(Decimal.new("20"), snapshot_at)]
+          },
+          snapshot_at
+        )
+
+      refute CodexPooler.Gateway.Routing.CandidateEligibility.Quota.windowless_candidate?(
+               quota_model(),
+               retained_candidate,
+               route_state
+             )
+
+      assert {:ok, [^retained_candidate, ^ordinary_candidate], decision} =
+               CandidateEligibility.filter_quota_eligible_candidates(
+                 filter_input(quota_model(), %{"model" => "sample-model"}, request_options(), [
+                   retained_candidate,
+                   ordinary_candidate
+                 ]),
+                 route_state
+               )
+
+      assert decision["routing_state"] == "precise"
+      assert decision["windowless_provider_available_candidate_count"] == 0
+    end
+
     test "quota eligibility consumes route-state windows without querying the repository" do
       eligible_identity = upstream_identity("eligible-identity")
       missing_identity = upstream_identity("missing-identity")

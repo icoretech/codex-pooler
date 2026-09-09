@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
 
   alias CodexPooler.Quotas.{AdditionalMeterIdentity, Evidence}
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -25,6 +26,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
           freshness: String.t(),
           elapsed?: boolean(),
           selected?: boolean(),
+          measurement_pending?: boolean(),
+          pending_measurement: map() | nil,
+          permission_facts: %{allowed: boolean() | nil, limit_reached: boolean() | nil},
           details: [{String.t(), String.t()}]
         }
 
@@ -39,6 +43,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
   @spec project(AccountQuotaWindow.t(), DateTimeDisplay.preferences(), DateTime.t()) ::
           observation()
   def project(window, preferences, as_of) do
+    pending_measurement = pending_measurement(window, preferences)
+    permission_facts = permission_facts(window, pending_measurement)
+
     %{
       key: fingerprint({window.id, window.source, window.observed_at, window.reset_at}),
       source: Map.get(@sources, window.source, "Other source"),
@@ -52,16 +59,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
       elapsed?:
         match?(%DateTime{}, window.reset_at) and DateTime.compare(window.reset_at, as_of) != :gt,
       selected?: true,
-      details: [
-        {"Reset reported", timestamp(window.reset_at, preferences)},
-        {"Last synchronized", timestamp(window.last_sync_at, preferences)},
-        {"Source precision",
-         allowed(window.source_precision, ~w(authoritative observed inferred unknown))},
-        {"Window", window_duration(window.window_minutes)},
-        {"Reported slot", allowed(window.window_kind, ~w(primary secondary))},
-        {"Scope", allowed(window.quota_scope, ~w(account model upstream_model feature))},
-        {"Window state", window_state(window.reset_at, as_of)}
-      ]
+      measurement_pending?: not is_nil(pending_measurement),
+      pending_measurement: pending_measurement,
+      permission_facts: permission_facts,
+      details: details(window, preferences, as_of, pending_measurement, permission_facts)
     }
   end
 
@@ -98,6 +99,102 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
   end
+
+  defp details(window, preferences, as_of, pending_measurement, permission_facts) do
+    details =
+      [
+        {"Reset reported", timestamp(window.reset_at, preferences)},
+        {"Last synchronized", timestamp(window.last_sync_at, preferences)},
+        {"Source precision",
+         allowed(window.source_precision, ~w(authoritative observed inferred unknown))},
+        {"Window", window_duration(window.window_minutes)},
+        {"Reported slot", allowed(window.window_kind, ~w(primary secondary))},
+        {"Scope", allowed(window.quota_scope, ~w(account model upstream_model feature))},
+        {"Window state", window_state(window.reset_at, as_of)}
+      ]
+      |> maybe_add_permission_details(pending_measurement, permission_facts)
+
+    pending_measurement_details(pending_measurement) ++ details
+  end
+
+  defp permission_facts(_window, %{permission_facts: permission_facts}), do: permission_facts
+
+  defp permission_facts(%{metadata: metadata}, nil) when is_map(metadata) do
+    %{
+      allowed: boolean_or_nil(Map.get(metadata, "rate_limit_allowed")),
+      limit_reached: boolean_or_nil(Map.get(metadata, "rate_limit_reached"))
+    }
+  end
+
+  defp permission_facts(_window, nil), do: %{allowed: nil, limit_reached: nil}
+
+  defp boolean_or_nil(value) when is_boolean(value), do: value
+  defp boolean_or_nil(_value), do: nil
+
+  defp pending_measurement(
+         %{
+           source: "codex_usage_api",
+           used_percent: %Decimal{} = retained_percent,
+           metadata: metadata
+         },
+         preferences
+       )
+       when is_map(metadata) do
+    with {:ok, candidate} <- EvidenceStore.parse_candidate(metadata),
+         {:ok, %{allowed: true, limit_reached: false, observed_at: observed_at}} <-
+           EvidenceStore.parse_candidate_provider_status(metadata),
+         true <- positive_lower_percent?(candidate.used_percent, retained_percent) do
+      %{
+        used: percent(candidate.used_percent),
+        remaining: remaining(candidate.used_percent),
+        retained_remaining: remaining(retained_percent) <> " remaining",
+        observed_at: timestamp(observed_at, preferences),
+        permission_facts: %{allowed: true, limit_reached: false}
+      }
+    else
+      _not_pending -> nil
+    end
+  end
+
+  defp pending_measurement(_window, _preferences), do: nil
+
+  defp positive_lower_percent?(%Decimal{} = candidate, %Decimal{} = retained) do
+    Decimal.compare(candidate, Decimal.new(0)) == :gt and
+      Decimal.compare(candidate, retained) == :lt
+  end
+
+  defp pending_measurement_details(nil), do: []
+
+  defp pending_measurement_details(pending_measurement) do
+    [
+      {"Retained measurement", Map.get(pending_measurement, :retained_remaining, "Not reported")},
+      {"Measurement status",
+       "Retained measurement; newer provider measurement awaits confirmation"},
+      {"Pending provider measurement", pending_measurement.remaining <> " remaining"},
+      {"Provider observation", pending_measurement.observed_at}
+    ]
+  end
+
+  defp maybe_add_permission_details(details, nil, _permission_facts), do: details
+
+  defp maybe_add_permission_details(details, _pending_measurement, %{
+         allowed: allowed,
+         limit_reached: limit_reached
+       }) do
+    details
+    |> maybe_add_permission_detail("Routing permission", allowed, &permission_label/1)
+    |> maybe_add_permission_detail("Limit reached", limit_reached, &reached_label/1)
+  end
+
+  defp maybe_add_permission_detail(details, _label, nil, _formatter), do: details
+
+  defp maybe_add_permission_detail(details, label, value, formatter),
+    do: details ++ [{label, formatter.(value)}]
+
+  defp permission_label(true), do: "allowed"
+  defp permission_label(false), do: "not allowed"
+  defp reached_label(true), do: "yes"
+  defp reached_label(false), do: "no"
 
   defp percent(%Decimal{} = value), do: "#{Decimal.to_string(Decimal.normalize(value), :normal)}%"
   defp percent(_value), do: "Not reported"

@@ -6285,6 +6285,131 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert account.routing_readiness.label == "Routing ready"
   end
 
+  test "keeps a permitted exhausted Usage API measurement compactly qualified and preserves stale history",
+       %{
+         conn: conn
+       } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    pool = pool_fixture(%{name: "Quota measurement conflict Pool"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Quota measurement conflict Codex",
+        assignment_metadata: %{"quota_priming" => %{"status" => "known"}},
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          AccountAvailabilityStore.metadata_key() =>
+            AccountAvailabilityStore.encode!(:available, now, 1)
+        }
+      })
+
+    selected = %{
+      quota_key: "account",
+      quota_scope: "account",
+      quota_family: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("100"),
+      reset_at: DateTime.add(now, 6, :day),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      observed_at: DateTime.add(now, -2, :minute),
+      last_sync_at: DateTime.add(now, -2, :minute),
+      metadata: %{
+        "rate_limit_allowed" => true,
+        "rate_limit_reached" => false,
+        "__quota_confirmed_candidate_v1" => %{
+          "version" => 1,
+          "used_percent" => "32",
+          "reset_at" => DateTime.to_iso8601(DateTime.add(now, 6, :day)),
+          "observed_at" => DateTime.to_iso8601(DateTime.add(now, -1, :minute)),
+          "count" => 1
+        },
+        "__quota_candidate_provider_status_v1" => %{
+          "version" => 1,
+          "allowed" => true,
+          "limit_reached" => false,
+          "observed_at" => DateTime.to_iso8601(DateTime.add(now, -1, :minute))
+        }
+      }
+    }
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               selected,
+               %{
+                 selected
+                 | source: "codex_rate_limit_event",
+                   used_percent: Decimal.new("32"),
+                   observed_at: DateTime.add(now, -1, :hour),
+                   last_sync_at: DateTime.add(now, -1, :hour),
+                   metadata: %{}
+               },
+               %{
+                 selected
+                 | source: "codex_response_headers",
+                   used_percent: Decimal.new("31"),
+                   observed_at: DateTime.add(now, -2, :hour),
+                   last_sync_at: DateTime.add(now, -2, :hour),
+                   metadata: %{}
+               }
+             ])
+
+    identity
+    |> QuotaWindows.list_quota_windows()
+    |> Enum.find(&(&1.source == "codex_usage_api" and &1.window_kind == "secondary"))
+    |> Ecto.Changeset.change(metadata: selected.metadata)
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    card = "#upstream-account-#{identity.id}"
+    weekly = "#{card}-limit-weekly"
+
+    refute has_element?(view, "#{card}[data-quota-measurement-pending]")
+    assert has_element?(view, "#{weekly}[data-measurement-pending='true']", "0%")
+
+    assert has_element?(
+             view,
+             "#{weekly}-progress.progress-warning[value='0'][aria-describedby='upstream-account-#{identity.id}-limit-weekly-pending-description'][aria-label*='awaits confirmation']"
+           )
+
+    assert has_element?(
+             view,
+             "#{weekly}-observations-open[aria-label*='0% remaining'][aria-describedby='upstream-account-#{identity.id}-limit-weekly-pending-description'][title='Retained measurement; newer provider measurement awaits confirmation']"
+           )
+
+    assert has_element?(
+             view,
+             "#{weekly}-observations-dialog [data-selected='true'][data-measurement-pending='true']",
+             "Usage API"
+           )
+
+    assert has_element?(
+             view,
+             "#{weekly}-observations-dialog [data-selected='true']",
+             "retained measurement"
+           )
+
+    assert has_element?(view, "#{weekly}-observations-dialog", "Measurement status")
+    assert has_element?(view, "#{weekly}-observations-dialog", "awaits confirmation")
+    assert has_element?(view, "#{weekly}-observations-dialog", "Pending provider measurement")
+    assert has_element?(view, "#{weekly}-observations-dialog", "Routing permission")
+    assert has_element?(view, "#{weekly}-observations-dialog", "allowed")
+    assert has_element?(view, "#{weekly}-observations-dialog", "Limit reached")
+    assert has_element?(view, "#{weekly}-observations-dialog", "no")
+
+    assert has_element?(
+             view,
+             "#{weekly}-observations-dialog [data-selected='true'] details[open]"
+           )
+
+    assert has_element?(view, "#{weekly}-observations-dialog", "Rate-limit event")
+    assert has_element?(view, "#{weekly}-observations-dialog", "68%")
+    assert has_element?(view, "#{weekly}-observations-dialog", "Response headers")
+    assert has_element?(view, "#{weekly}-observations-dialog", "69%")
+  end
+
   test "requires authentication for admin upstreams", %{} do
     assert {:error, {:redirect, %{to: "/login"}}} = live(build_conn(), ~p"/admin/upstreams")
   end

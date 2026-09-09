@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
@@ -4225,6 +4226,126 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              view,
              "#upstream-assignment-#{assignment.id}-route-circuit.route-chevron.bg-success\\/80[title='Circuit clear']"
            )
+  end
+
+  test "cockpit keeps routing ready while its selected permitted exhausted weekly measurement is qualified",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "quota-measurement-conflict-#{System.unique_integer([:positive])}",
+        name: "Quota measurement conflict"
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Quota measurement conflict Codex",
+        assignment_metadata: %{"quota_priming" => %{"status" => "known"}},
+        identity_metadata: %{
+          "credential_epoch" => 1,
+          "quota_account_availability" => AccountAvailabilityStore.encode!(:available, now, 1)
+        }
+      })
+
+    selected = %{
+      quota_key: "account",
+      quota_scope: "account",
+      quota_family: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("100"),
+      reset_at: DateTime.add(now, 6, :day),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      observed_at: DateTime.add(now, -2, :minute),
+      last_sync_at: DateTime.add(now, -2, :minute),
+      metadata: %{
+        "rate_limit_allowed" => true,
+        "rate_limit_reached" => false,
+        "__quota_confirmed_candidate_v1" => %{
+          "version" => 1,
+          "used_percent" => "32",
+          "reset_at" => DateTime.to_iso8601(DateTime.add(now, 6, :day)),
+          "observed_at" => DateTime.to_iso8601(DateTime.add(now, -1, :minute)),
+          "count" => 1
+        },
+        "__quota_candidate_provider_status_v1" => %{
+          "version" => 1,
+          "allowed" => true,
+          "limit_reached" => false,
+          "observed_at" => DateTime.to_iso8601(DateTime.add(now, -1, :minute))
+        }
+      }
+    }
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               selected,
+               %{
+                 selected
+                 | source: "codex_rate_limit_event",
+                   used_percent: Decimal.new("32"),
+                   observed_at: DateTime.add(now, -1, :hour),
+                   last_sync_at: DateTime.add(now, -1, :hour),
+                   metadata: %{}
+               },
+               %{
+                 selected
+                 | source: "codex_response_headers",
+                   used_percent: Decimal.new("31"),
+                   observed_at: DateTime.add(now, -2, :hour),
+                   last_sync_at: DateTime.add(now, -2, :hour),
+                   metadata: %{}
+               }
+             ])
+
+    identity
+    |> QuotaWindows.list_quota_windows()
+    |> Enum.find(&(&1.source == "codex_usage_api" and &1.window_kind == "secondary"))
+    |> Ecto.Changeset.change(metadata: selected.metadata)
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    weekly = "#upstream-quota-limit-weekly"
+
+    assert has_element?(view, "#{weekly}[data-measurement-pending='true']", "0%")
+
+    assert has_element?(
+             view,
+             "#{weekly}-progress.progress-warning[value='0'][aria-label*='awaits confirmation']"
+           )
+
+    assert has_element?(
+             view,
+             "#{weekly}-observations-dialog [data-selected='true'][data-measurement-pending='true']",
+             "Usage API"
+           )
+
+    assert has_element?(
+             view,
+             "#{weekly}-observations-dialog [data-selected='true']",
+             "retained measurement"
+           )
+
+    assert has_element?(view, "#{weekly}-observations-dialog", "Measurement status")
+    assert has_element?(view, "#{weekly}-observations-dialog", "awaits confirmation")
+    assert has_element?(view, "#{weekly}-observations-dialog", "Pending provider measurement")
+    assert has_element?(view, "#{weekly}-observations-dialog", "Routing permission")
+
+    assert has_element?(
+             view,
+             "#{weekly}-observations-dialog [data-selected='true'] details[open]"
+           )
+
+    assert has_element?(view, "#{weekly}-observations-dialog", "Rate-limit event")
+    assert has_element?(view, "#{weekly}-observations-dialog", "68%")
+    assert has_element?(view, "#{weekly}-observations-dialog", "Response headers")
+    assert has_element?(view, "#{weekly}-observations-dialog", "69%")
   end
 
   @tag :circuit_cockpit_projection

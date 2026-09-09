@@ -118,6 +118,100 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
              "500 credits"
   end
 
+  test "qualifies a retained zero-percent measurement pending provider confirmation through the existing compact trigger" do
+    baseline_html =
+      render_component(&QuotaLimitRow.quota_limit_row/1, %{
+        id: "quota-row-baseline-structure",
+        limit: %{
+          label: "Weekly",
+          percent: Decimal.new(0),
+          percent_value: 0,
+          percent_label: "0%",
+          observations: [observation()],
+          evidence_state: :fresh,
+          meter_state: :current,
+          reset_display_state: :absent,
+          reset_semantics: :unknown
+        }
+      })
+
+    conflict_html =
+      render_component(&QuotaLimitRow.quota_limit_row/1, %{
+        id: "quota-row-conflict",
+        limit: %{
+          label: "Weekly",
+          percent: Decimal.new(0),
+          percent_value: 0,
+          percent_label: "0%",
+          observations: [%{observation() | measurement_pending?: true}],
+          measurement_pending?: true,
+          measurement_pending_label: "Retained measurement awaits confirmation",
+          measurement_pending_detail:
+            "Retained measurement; newer provider measurement awaits confirmation",
+          evidence_state: :fresh,
+          meter_state: :current,
+          reset_display_state: :absent,
+          reset_semantics: :unknown
+        }
+      })
+
+    baseline = LazyHTML.from_fragment(baseline_html)
+    conflict = LazyHTML.from_fragment(conflict_html)
+
+    assert LazyHTML.query(conflict, "#quota-row-conflict[data-measurement-pending='true']") != []
+
+    assert LazyHTML.query(
+             conflict,
+             "#quota-row-conflict-observations-open[aria-describedby='quota-row-conflict-pending-description'][aria-label*='0% remaining'][aria-label*='awaits confirmation']"
+           ) != []
+
+    assert LazyHTML.query(
+             conflict,
+             "#quota-row-conflict-progress.progress-warning[aria-describedby='quota-row-conflict-pending-description'][aria-label*='0% remaining'][aria-label*='awaits confirmation']"
+           ) != []
+
+    assert LazyHTML.query(
+             conflict,
+             "#quota-row-conflict .text-base-content.decoration-warning.decoration-dotted.underline-offset-4"
+           ) != []
+
+    assert LazyHTML.query(conflict, "#quota-row-conflict-pending-description.sr-only")
+           |> LazyHTML.text() =~ "Retained measurement awaits confirmation"
+
+    assert LazyHTML.query(conflict, "#quota-row-conflict [data-role='upstream-limit-title']")
+           |> LazyHTML.text() ==
+             LazyHTML.query(
+               baseline,
+               "#quota-row-baseline-structure [data-role='upstream-limit-title']"
+             )
+             |> LazyHTML.text()
+
+    assert LazyHTML.query(conflict, "#quota-row-conflict [data-role='upstream-limit-progress']")
+           |> Enum.count() == 1
+
+    assert LazyHTML.query(conflict, "#quota-row-conflict > div") |> Enum.count() ==
+             LazyHTML.query(baseline, "#quota-row-baseline-structure > div") |> Enum.count()
+
+    for selector <- ["> button", "> progress"] do
+      assert LazyHTML.query(conflict, "#quota-row-conflict #{selector}") |> Enum.count() ==
+               LazyHTML.query(baseline, "#quota-row-baseline-structure #{selector}")
+               |> Enum.count()
+    end
+
+    assert LazyHTML.query(conflict, "#quota-row-conflict > p") |> Enum.empty?()
+
+    assert LazyHTML.query(
+             conflict,
+             "#quota-row-conflict > details, #quota-row-conflict > section, #quota-row-conflict [data-role='upstream-reconciliation-status']"
+           )
+           |> Enum.empty?()
+
+    assert LazyHTML.query(
+             conflict,
+             "#quota-row-conflict-observations-dialog [data-selected='true'] details[open]"
+           ) != []
+  end
+
   test "keeps stale state internal while restoring the compact historical row" do
     html = render_quota_row(stale_limit(Decimal.new(75), 75, "75%"))
     document = LazyHTML.from_fragment(html)
@@ -387,6 +481,25 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
       last_sync_at: observed_at,
       updated_at: observed_at,
       metadata: %{}
+    }
+  end
+
+  defp observation do
+    %{
+      key: "selected-observation",
+      source: "Usage API",
+      slot: "secondary",
+      used: "100%",
+      remaining: "0%",
+      remaining_value: 0.0,
+      observed_at: "September 9, 2026 at 17:56 UTC",
+      reset_at: "September 15, 2026 at 02:20 UTC",
+      freshness: "fresh",
+      elapsed?: false,
+      selected?: true,
+      measurement_pending?: false,
+      permission_facts: %{allowed: true, limit_reached: false},
+      details: []
     }
   end
 end

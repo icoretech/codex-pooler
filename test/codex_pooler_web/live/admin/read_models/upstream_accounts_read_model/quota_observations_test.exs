@@ -136,6 +136,73 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
     assert Enum.count(row.observations, & &1.selected?) == 1
   end
 
+  test "keeps pending provider confirmation facts on the retained observation and never borrows stale history" do
+    retained_observed_at = DateTime.add(@now, -2, :minute)
+    candidate_observed_at = DateTime.add(@now, -1, :minute)
+    reset_at = DateTime.add(@now, 6, :day)
+
+    selected =
+      %{
+        window("codex_usage_api", retained_observed_at, "100")
+        | reset_at: reset_at,
+          metadata: %{
+            "__quota_confirmed_candidate_v1" => %{
+              "version" => 1,
+              "used_percent" => "32",
+              "reset_at" => DateTime.to_iso8601(reset_at),
+              "observed_at" => DateTime.to_iso8601(candidate_observed_at),
+              "count" => 1
+            },
+            "__quota_candidate_provider_status_v1" => %{
+              "version" => 1,
+              "allowed" => true,
+              "limit_reached" => false,
+              "observed_at" => DateTime.to_iso8601(candidate_observed_at)
+            }
+          }
+      }
+
+    stale_runtime = window("codex_rate_limit_event", DateTime.add(@now, -1, :hour), "32")
+    stale_headers = window("codex_response_headers", DateTime.add(@now, -2, :hour), "31")
+
+    rows =
+      QuotaProjection.quota_limit_rows(
+        [selected],
+        DateTimeDisplay.preferences_for_user(nil),
+        @now,
+        nil,
+        [selected, stale_runtime, stale_headers]
+      )
+
+    weekly = Enum.find(rows, &(&1.key == :weekly))
+    [selected_observation, runtime_observation, header_observation] = weekly.observations
+
+    assert selected_observation.measurement_pending?
+    assert selected_observation.permission_facts == %{allowed: true, limit_reached: false}
+    assert selected_observation.remaining == "0%"
+    assert selected_observation.pending_measurement.remaining == "68%"
+    refute runtime_observation.measurement_pending?
+    refute header_observation.measurement_pending?
+    assert runtime_observation.remaining == "68%"
+    assert header_observation.remaining == "69%"
+
+    nonzero_selected = %{selected | used_percent: Decimal.new("95")}
+
+    [nonzero_weekly] =
+      QuotaProjection.quota_limit_rows(
+        [nonzero_selected],
+        DateTimeDisplay.preferences_for_user(nil),
+        @now,
+        nil,
+        [nonzero_selected]
+      )
+      |> Enum.filter(&(&1.key == :weekly))
+
+    assert nonzero_weekly.percent_label == "5%"
+
+    assert {"Retained measurement", "5% remaining"} in hd(nonzero_weekly.observations).details
+  end
+
   defp window(source, observed_at, used) do
     %AccountQuotaWindow{
       quota_key: "account",
