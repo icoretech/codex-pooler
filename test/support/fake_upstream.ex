@@ -43,6 +43,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:strict_sequence, [mode()]}
           | {:repeat_last, [mode()]}
           | {:expect_request, keyword(), mode()}
+          | {:scenario_failure, String.t()}
           | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference()}
           | {:malformed_json, non_neg_integer(), String.t()}
           | {:json_error, non_neg_integer(), map()}
@@ -1645,9 +1646,7 @@ defmodule CodexPooler.FakeUpstream do
            {:delayed_terminal, messages, terminal, notify, release_ref},
            state
          ) do
-      if is_pid(notify) do
-        send(notify, {:fake_upstream_timeout_barrier, :before_terminal, self(), release_ref})
-      end
+      send(notify, {:fake_upstream_timeout_barrier, :before_terminal, self(), release_ref})
 
       next_state =
         Map.put(state, :delayed_terminal, %{release_ref: release_ref, messages: terminal})
@@ -1766,7 +1765,7 @@ defmodule CodexPooler.FakeUpstream do
       chunks
       |> Enum.with_index(1)
       |> Enum.flat_map(fn {chunk, index} ->
-        if is_pid(notify), do: send(notify, {:fake_upstream_chunk_sent, index})
+        send(notify, {:fake_upstream_chunk_sent, index})
         maybe_wait_for_sse_barrier(index, barrier_after, notify, release_ref)
 
         messages_from_sse_chunk(chunk)
