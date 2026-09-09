@@ -129,23 +129,27 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
 
   def import_bundle(bundle, %Pool{} = pool, %Scope{} = scope, password, opts)
       when is_binary(bundle) and is_binary(password) and is_list(opts) do
-    dry_run? = Keyword.get(opts, :dry_run, false)
+    if Repo.in_transaction?() do
+      {:error, lifecycle_error(:bundle_import_failed)}
+    else
+      dry_run? = Keyword.get(opts, :dry_run, false)
 
-    with :ok <- validate_password(password),
-         {:ok, accounts} <- open_accounts(bundle, password),
-         :ok <- validate_import_accounts(accounts),
-         {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope) do
-      if dry_run? do
-        {:ok,
-         %{
-           version: @version,
-           account_count: length(prepared_accounts),
-           valid: length(prepared_accounts),
-           imported: 0,
-           dry_run: true
-         }}
-      else
-        import_accounts(prepared_accounts, pool, scope)
+      with :ok <- validate_password(password),
+           {:ok, accounts} <- open_accounts(bundle, password),
+           :ok <- validate_import_accounts(accounts),
+           {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope) do
+        if dry_run? do
+          {:ok,
+           %{
+             version: @version,
+             account_count: length(prepared_accounts),
+             valid: length(prepared_accounts),
+             imported: 0,
+             dry_run: true
+           }}
+        else
+          import_accounts(prepared_accounts, pool, scope)
+        end
       end
     end
   end
@@ -314,7 +318,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
           true
         )
 
-      case CodexPooler.JSON.encode(Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))) do
+      case CodexPooler.JSON.encode(
+             Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))
+           ) do
         {:ok, bundle} -> {:ok, bundle}
         {:error, _reason} -> {:error, lifecycle_error(:bundle_encoding_failed)}
       end

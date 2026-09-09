@@ -26,6 +26,8 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   @assignment_deleted AssignmentStatus.deleted_status()
   @health_active AssignmentStatus.active_health_status()
   @identity_mismatch_message "OAuth account does not match the selected upstream account"
+  @stale_import_message "credentials changed after import preparation; submit the current auth data again"
+  @transaction_not_allowed_message "auto-publishing token linking is not allowed inside a caller-owned transaction"
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type link_success :: %{
@@ -44,15 +46,10 @@ defmodule CodexPooler.Upstreams.TokenLinking do
 
   def link_tokens(%Scope{} = scope, %Pool{} = pool, attrs, opts)
       when is_map(attrs) and is_list(opts) do
-    case PreparedAccount.prepare(scope, pool, attrs, opts) do
-      {:ok, prepared} ->
-        case validate_link_target(pool, prepared.attrs) do
-          :ok -> link_prepared(scope, pool, prepared, opts)
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    if Repo.in_transaction?() do
+      {:error, transaction_not_allowed_error()}
+    else
+      prepare_and_link_tokens(scope, pool, attrs, opts)
     end
   end
 
@@ -84,9 +81,10 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   @spec link_prepared(Scope.t(), Pool.t(), PreparedAccount.t(), keyword()) :: link_result()
   def link_prepared(%Scope{} = scope, %Pool{} = pool, %PreparedAccount{} = prepared, opts)
       when is_list(opts) do
-    case Repo.transaction(fn -> persist_prepared!(scope, pool, prepared, false) end) do
-      {:ok, result} -> publish_link_result(scope, pool, result, opts)
-      {:error, reason} -> {:error, reason}
+    if Repo.in_transaction?() do
+      {:error, transaction_not_allowed_error()}
+    else
+      persist_and_publish_prepared(scope, pool, prepared, opts)
     end
   end
 
@@ -122,10 +120,14 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   @spec publish_link_result(Scope.t(), Pool.t(), link_success(), keyword()) :: link_result()
   def publish_link_result(%Scope{} = scope, %Pool{} = pool, %{} = result, opts)
       when is_list(opts) do
-    {:ok, result}
-    |> tap_audit(scope, pool, opts)
-    |> tap_quota_priming(opts)
-    |> tap_upstream_change(opts)
+    if Repo.in_transaction?() do
+      {:error, transaction_not_allowed_error()}
+    else
+      {:ok, result}
+      |> tap_audit(scope, pool, opts)
+      |> tap_quota_priming(opts)
+      |> tap_upstream_change(opts)
+    end
   end
 
   def publish_link_result(_scope, _pool, _result, _opts),
@@ -133,11 +135,33 @@ defmodule CodexPooler.Upstreams.TokenLinking do
 
   @spec persist_prepared(Scope.t(), Pool.t(), PreparedAccount.t(), boolean()) ::
           {:ok, link_success()} | {:error, term()}
-  def persist_prepared(scope, pool, prepared, slots_locked? \\ false) do
-    with {:ok, prepared} <- PreparedAccount.validate(prepared, scope, pool),
-         attrs = prepared.attrs,
-         :ok <- maybe_lock_slots(attrs, slots_locked?),
-         :ok <- validate_link_target(pool, attrs),
+  def persist_prepared(scope, pool, prepared, slots_locked? \\ false)
+
+  def persist_prepared(
+        %Scope{} = scope,
+        %Pool{} = pool,
+        %PreparedAccount{} = prepared,
+        slots_locked?
+      )
+      when is_boolean(slots_locked?) do
+    if Repo.in_transaction?() do
+      with {:ok, prepared} <- PreparedAccount.validate(prepared, scope, pool),
+           :ok <- lock_and_validate_prepared_import(prepared, slots_locked?) do
+        persist_validated_prepared(scope, pool, prepared)
+      end
+    else
+      {:error,
+       lifecycle_error(:transaction_required, "token linking requires a caller-owned transaction")}
+    end
+  end
+
+  def persist_prepared(_scope, _pool, _prepared, _slots_locked?),
+    do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
+
+  defp persist_validated_prepared(scope, pool, prepared) do
+    attrs = prepared.attrs
+
+    with :ok <- validate_link_target(pool, attrs),
          {:ok, identity_status, identity, recovery_relink?} <-
            upsert_link_identity(scope, prepared),
          {:ok, _secret} <-
@@ -174,12 +198,96 @@ defmodule CodexPooler.Upstreams.TokenLinking do
     end
   end
 
+  defp lock_and_validate_prepared_import(
+         %PreparedAccount{import_witness: nil, import_binding: nil, attrs: attrs},
+         slots_locked?
+       ) do
+    maybe_lock_slots([attrs], slots_locked?)
+  end
+
+  defp lock_and_validate_prepared_import(
+         %PreparedAccount{import_witness: %{persisted: expected}, attrs: attrs},
+         slots_locked?
+       ) do
+    with :ok <- maybe_lock_slots(import_advisory_attrs(attrs, expected), slots_locked?),
+         {:ok, selected_before_lock} <- select_current_import_identity(attrs),
+         _locked_rows <-
+           IdentitySlotLock.lock_identity_rows!([
+             expected_identity_id(expected),
+             selected_identity_id(selected_before_lock)
+           ]),
+         {:ok, selected_after_lock} <- select_current_import_identity(attrs),
+         {:ok, current} <- current_import_evidence(selected_after_lock) do
+      compare_import_evidence(expected, current)
+    end
+  end
+
+  defp lock_and_validate_prepared_import(_prepared, _slots_locked?),
+    do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
+
+  defp prepare_and_link_tokens(scope, pool, attrs, opts) do
+    with {:ok, prepared} <- PreparedAccount.prepare(scope, pool, attrs, opts),
+         :ok <- validate_link_target(pool, prepared.attrs) do
+      link_prepared(scope, pool, prepared, opts)
+    end
+  end
+
+  defp persist_and_publish_prepared(scope, pool, prepared, opts) do
+    case Repo.transaction(fn -> persist_prepared!(scope, pool, prepared, false) end) do
+      {:ok, result} -> publish_link_result(scope, pool, result, opts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp maybe_lock_slots(_attrs, true), do: :ok
 
-  defp maybe_lock_slots(attrs, false) do
-    IdentitySlotLock.lock_slots!([attrs])
+  defp maybe_lock_slots(attrs, false) when is_list(attrs) do
+    IdentitySlotLock.lock_slots!(attrs)
     :ok
   end
+
+  defp import_advisory_attrs(attrs, :absent), do: [attrs]
+  defp import_advisory_attrs(attrs, %{} = expected), do: [attrs, expected]
+
+  defp select_current_import_identity(attrs) do
+    case IdentityLifecycle.select_upsert_identity(attrs) do
+      {:ok, selected} -> {:ok, selected}
+      {:error, _conflict} -> {:error, stale_import_error()}
+    end
+  end
+
+  defp current_import_evidence(nil), do: {:ok, :absent}
+
+  defp current_import_evidence(%UpstreamIdentity{} = identity) do
+    with {:ok, credential_epoch} <- CredentialFencing.validate_current_credential_epoch(identity) do
+      normalized = IdentitySlotLock.normalize(Map.from_struct(identity))
+
+      {:ok,
+       %{
+         identity_id: identity.id,
+         chatgpt_account_id: normalized.chatgpt_account_id,
+         workspace_id: normalized.workspace_id,
+         chatgpt_user_id: normalized.chatgpt_user_id,
+         account_email: normalized.account_email,
+         credential_epoch: credential_epoch,
+         status: identity.status
+       }}
+    end
+  end
+
+  defp compare_import_evidence(expected, expected), do: :ok
+  defp compare_import_evidence(_expected, _current), do: {:error, stale_import_error()}
+
+  defp expected_identity_id(:absent), do: nil
+  defp expected_identity_id(%{identity_id: identity_id}), do: identity_id
+
+  defp selected_identity_id(%UpstreamIdentity{id: identity_id}), do: identity_id
+  defp selected_identity_id(nil), do: nil
+
+  defp stale_import_error, do: lifecycle_error(:stale_import, @stale_import_message)
+
+  defp transaction_not_allowed_error,
+    do: lifecycle_error(:transaction_not_allowed, @transaction_not_allowed_message)
 
   defp upsert_link_identity(%Scope{} = scope, %PreparedAccount{attrs: attrs} = prepared) do
     timestamp = now()

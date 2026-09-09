@@ -14,6 +14,7 @@ defmodule CodexPooler.Upstreams do
     Assignments,
     Import,
     OAuth,
+    PreparedAccount,
     SavedResetPolicy,
     SavedResetRedemptionEnqueue,
     SecretStore,
@@ -123,6 +124,10 @@ defmodule CodexPooler.Upstreams do
 
   @spec import_codex_auth_json(term(), term(), binary()) :: import_result()
   defdelegate import_codex_auth_json(scope, pool, content), to: Import
+
+  @spec prepare_codex_auth_json_account(term(), term(), binary()) ::
+          {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  defdelegate prepare_codex_auth_json_account(scope, pool, content), to: Import
 
   @spec import_trusted_account(Scope.t(), Pool.t(), map()) :: import_result()
   defdelegate import_trusted_account(scope, pool, attrs), to: Import

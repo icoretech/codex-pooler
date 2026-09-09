@@ -1,9 +1,14 @@
 defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
   use CodexPooler.DataCase, async: false
 
+  import Ecto.Query
+
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.Events
   alias CodexPooler.FakeOpenAIAuthProvider
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.CodexAuth
@@ -159,6 +164,7 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
       )
 
     assert {:ok, %{flow: flow}} = Upstreams.start_device_oauth(scope, pool)
+    observer = start_event_observer(pool.id)
 
     assert {:ok,
             %{
@@ -184,6 +190,28 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
     assert assignment.upstream_identity_id == identity.id
     assert active_secret_count("access_token") == 1
     assert active_secret_count("refresh_token") == 1
+
+    matching_jobs =
+      all_enqueued(worker: AccountReconciliationWorker)
+      |> Enum.filter(&(&1.args["pool_upstream_assignment_id"] == assignment.id))
+
+    assert [job] = matching_jobs
+    assert job.args["pool_id"] == pool.id
+    assert job.args["trigger_kind"] == "account_link"
+
+    assert 1 ==
+             Repo.aggregate(
+               from(event in AuditEvent,
+                 where:
+                   event.pool_id == ^pool.id and
+                     event.action == "upstream_account.oauth_device_link" and
+                     event.target_id == ^identity.id
+               ),
+               :count
+             )
+
+    events = event_snapshot(observer)
+    assert Enum.count(events, &(&1.reason == "upstream_account_oauth_linked")) == 1
 
     assert [_start_request, poll_request, token_request] =
              FakeOpenAIAuthProvider.requests(provider)
@@ -221,6 +249,7 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
     )
 
     assert {:ok, %{flow: flow}} = Upstreams.start_device_oauth(scope, pool)
+    observer = start_event_observer(pool.id)
 
     assert {:error, %{code: :expired_flow}} = Upstreams.poll_device_oauth(scope, flow.id)
 
@@ -230,6 +259,15 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
     assert Repo.aggregate(UpstreamIdentity, :count) == 0
     assert Repo.aggregate(PoolUpstreamAssignment, :count) == 0
     assert Repo.aggregate(EncryptedSecret, :count) == 0
+
+    assert Repo.aggregate(from(event in AuditEvent, where: event.pool_id == ^pool.id), :count) ==
+             0
+
+    assert [] ==
+             all_enqueued(worker: AccountReconciliationWorker)
+             |> Enum.filter(&(&1.args["pool_id"] == pool.id))
+
+    assert event_snapshot(observer) == []
   end
 
   test "provider denied device poll stores only safe failure fields" do
@@ -372,6 +410,42 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
   defp fixture_owner_scope do
     %{user: user} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     Scope.for_user(user, ["instance_owner"])
+  end
+
+  defp start_event_observer(pool_id) do
+    parent = self()
+
+    observer =
+      spawn_link(fn ->
+        :ok = Events.subscribe_pool(pool_id, "upstreams")
+        send(parent, {:event_observer_ready, self()})
+        observe_events([])
+      end)
+
+    assert_receive {:event_observer_ready, ^observer}
+    on_exit(fn -> send(observer, :stop) end)
+    observer
+  end
+
+  defp observe_events(events) do
+    receive do
+      {Events, event} ->
+        observe_events([event | events])
+
+      {:snapshot, caller, ref} ->
+        send(caller, {ref, Enum.reverse(events)})
+        observe_events(events)
+
+      :stop ->
+        :ok
+    end
+  end
+
+  defp event_snapshot(observer) do
+    ref = make_ref()
+    send(observer, {:snapshot, self(), ref})
+    assert_receive {^ref, events}
+    events
   end
 
   defp start_provider!(routes) do

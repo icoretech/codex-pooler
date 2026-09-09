@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.Import do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.Auth.CodexAuthJson
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
@@ -18,24 +19,43 @@ defmodule CodexPooler.Upstreams.Import do
 
   @spec import_codex_auth_json(term(), term(), binary()) :: import_result()
   def import_codex_auth_json(scope, pool, content) do
+    if Repo.in_transaction?() do
+      {:error, transaction_not_allowed_error()}
+    else
+      with {:ok, prepared} <- prepare_codex_auth_json_account(scope, pool, content) do
+        TokenLinking.link_prepared(scope, pool, prepared, auth_json_link_options())
+      end
+    end
+  end
+
+  @spec prepare_codex_auth_json_account(term(), term(), binary()) ::
+          {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  def prepare_codex_auth_json_account(scope, pool, content) when is_binary(content) do
     case CodexAuthJson.parse(content) do
       {:ok, attrs} ->
-        import_trusted_auth_json_account(scope, pool, attrs)
+        prepare_trusted_auth_json_account(scope, pool, attrs)
 
       {:error, %{message: message}} ->
         {:error, auth_json_import_changeset(content, content: message)}
     end
   end
 
+  def prepare_codex_auth_json_account(_scope, _pool, _content),
+    do: {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
+
   @spec import_trusted_account(Scope.t(), Pool.t(), map()) :: import_result()
   def import_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
-    with {:ok, prepared} <- prepare_trusted_account(scope, pool, attrs) do
-      TokenLinking.link_prepared(
-        scope,
-        pool,
-        prepared,
-        trusted_account_link_options(prepared.attrs)
-      )
+    if Repo.in_transaction?() do
+      {:error, transaction_not_allowed_error()}
+    else
+      with {:ok, prepared} <- prepare_trusted_account(scope, pool, attrs) do
+        TokenLinking.link_prepared(
+          scope,
+          pool,
+          prepared,
+          trusted_account_link_options(prepared.attrs)
+        )
+      end
     end
   end
 
@@ -68,7 +88,7 @@ defmodule CodexPooler.Upstreams.Import do
           {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   def prepare_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
     with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
-      PreparedAccount.prepare(scope, pool, attrs, trusted_account_link_options(attrs))
+      prepare_import_account(scope, pool, attrs, trusted_account_link_options(attrs))
     end
   end
 
@@ -79,7 +99,7 @@ defmodule CodexPooler.Upstreams.Import do
           {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   def prepare_bundle_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
     with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
-      PreparedAccount.prepare_bundle(scope, pool, attrs, trusted_account_link_options(attrs))
+      prepare_import_bundle_account(scope, pool, attrs, trusted_account_link_options(attrs))
     end
   end
 
@@ -119,13 +139,13 @@ defmodule CodexPooler.Upstreams.Import do
   defp trusted_credential_provenance(:unclassified), do: :unclassified
   defp trusted_credential_provenance(nil), do: :unclassified
 
-  defp import_trusted_auth_json_account(scope, %Pool{} = pool, attrs) when is_map(attrs) do
+  defp prepare_trusted_auth_json_account(scope, %Pool{} = pool, attrs) when is_map(attrs) do
     attrs = normalize_import_attrs(attrs)
 
     case import_validation_errors(attrs) do
       [] ->
         with :ok <- require_import_pool_operate(scope, pool) do
-          do_import_codex_auth_json_account(scope, pool, attrs)
+          prepare_import_account(scope, pool, attrs, auth_json_link_options())
         end
 
       errors ->
@@ -133,10 +153,17 @@ defmodule CodexPooler.Upstreams.Import do
     end
   end
 
-  defp import_trusted_auth_json_account(_scope, _pool, attrs) when is_map(attrs) do
+  defp prepare_trusted_auth_json_account(_scope, _pool, attrs) when is_map(attrs) do
     attrs = normalize_import_attrs(attrs)
-
     {:error, import_identity_changeset(attrs, pool_id: "must select an active Pool")}
+  end
+
+  defp prepare_import_account(scope, pool, attrs, opts) do
+    PreparedAccount.prepare_import(scope, pool, attrs, opts)
+  end
+
+  defp prepare_import_bundle_account(scope, pool, attrs, opts) do
+    PreparedAccount.prepare_import_bundle(scope, pool, attrs, opts)
   end
 
   defp require_import_pool_operate(%Scope{} = scope, %Pool{} = pool) do
@@ -146,15 +173,22 @@ defmodule CodexPooler.Upstreams.Import do
     end
   end
 
-  defp do_import_codex_auth_json_account(%Scope{} = scope, %Pool{} = pool, attrs) do
-    TokenLinking.link_tokens(scope, pool, attrs,
+  defp auth_json_link_options do
+    [
       onboarding_method: "import",
       credential_provenance: :codex_chatgpt,
       audit_action: "upstream_account.import",
       broadcast_reason: "upstream_account_imported",
       quota_trigger_kind: "account_link",
       token_refresh_trigger_kind: "auth_json_import"
-    )
+    ]
+  end
+
+  defp transaction_not_allowed_error do
+    %{
+      code: :transaction_not_allowed,
+      message: "auto-publishing token linking is not allowed inside a caller-owned transaction"
+    }
   end
 
   defp normalize_import_attrs(attrs) do

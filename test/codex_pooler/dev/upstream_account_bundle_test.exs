@@ -16,6 +16,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
   import CodexPooler.PoolerFixtures
 
   @password "synthetic-bundle-password-12345"
+  @detection_timeout_ms 15_000
 
   test "round trips an encrypted active account through trusted token linking" do
     source_pool = pool_fixture()
@@ -58,6 +59,41 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     refute inspect(import_receipt) =~ source.access_token
     refute inspect(import_receipt) =~ source.refresh_token
     refute inspect(import_receipt) =~ source.identity.account_email
+  end
+
+  test "auto-publishing bundle import rejects a caller-owned transaction before work" do
+    source_pool = pool_fixture()
+    source = account_fixture(source_pool)
+    target_pool = pool_fixture()
+    scope = owner_scope()
+
+    assert {:ok, bundle, _receipt} =
+             UpstreamAccountBundle.export_bundle(source_pool, @password)
+
+    before = persistence_counts()
+    observer = start_event_observer(target_pool.id)
+
+    assert {:error, :intentional_rollback} =
+             Repo.transaction(fn ->
+               assert {:error, %{code: :bundle_import_failed}} =
+                        UpstreamAccountBundle.import_bundle(
+                          bundle,
+                          target_pool,
+                          scope,
+                          @password
+                        )
+
+               assert persistence_counts() == before
+               assert Upstreams.list_active_pool_assignments(target_pool) == []
+               assert event_snapshot(observer) == []
+               Repo.rollback(:intentional_rollback)
+             end)
+
+    assert persistence_counts() == before
+    assert Upstreams.list_active_pool_assignments(target_pool) == []
+    assert event_snapshot(observer) == []
+    refute inspect(before) =~ source.access_token
+    refute inspect(before) =~ source.refresh_token
   end
 
   test "rejects a wrong password, tampering, legacy, unversioned, and unsupported bundles before writes" do
@@ -707,6 +743,42 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     fixture
     |> Map.put(:identity, identity)
     |> Map.merge(%{access_token: access_token, refresh_token: refresh_token})
+  end
+
+  defp start_event_observer(pool_id) do
+    parent = self()
+
+    observer =
+      spawn_link(fn ->
+        :ok = Events.subscribe_pool(pool_id, "upstreams")
+        send(parent, {:event_observer_ready, self()})
+        observe_events([])
+      end)
+
+    assert_receive {:event_observer_ready, ^observer}, @detection_timeout_ms
+    on_exit(fn -> send(observer, :stop) end)
+    observer
+  end
+
+  defp observe_events(events) do
+    receive do
+      {Events, event} ->
+        observe_events([event | events])
+
+      {:snapshot, caller, ref} ->
+        send(caller, {ref, Enum.reverse(events)})
+        observe_events(events)
+
+      :stop ->
+        :ok
+    end
+  end
+
+  defp event_snapshot(observer) do
+    ref = make_ref()
+    send(observer, {:snapshot, self(), ref})
+    assert_receive {^ref, events}, @detection_timeout_ms
+    events
   end
 
   defp trusted_expiry_metadata(%DateTime{} = deadline) do
