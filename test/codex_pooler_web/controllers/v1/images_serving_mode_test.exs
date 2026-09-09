@@ -325,8 +325,9 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
     setup.model
     |> Ecto.Changeset.change(
       metadata:
-        put_in(
-          setup.model.metadata,
+        setup.model.metadata
+        |> Map.put("input_modalities", ["text", "image"])
+        |> put_in(
           ["source_assignment_models", setup.assignment.id, "input_modalities"],
           ["text", "image"]
         )

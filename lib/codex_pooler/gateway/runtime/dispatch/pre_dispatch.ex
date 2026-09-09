@@ -615,6 +615,49 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       |> then(&Pools.model_serving_modes_by_pool_ids([&1]))
       |> Map.get(auth.pool.id, %{})
 
+    with :ok <- validate_requested_mask_override(request_options, overrides) do
+      resolve_available_model_serving_modes(
+        policy_visible_models,
+        overrides,
+        effective_model,
+        visible_model_context,
+        request_options
+      )
+    end
+  end
+
+  defp validate_requested_mask_override(
+         %RequestOptions{
+           payload_context: %{masked_image_request?: true},
+           routing: %{effective_model: requested}
+         },
+         overrides
+       )
+       when is_binary(requested) do
+    case Map.get(overrides, ModelServingOverride.canonical_exposed_model_id(requested)) do
+      %ModelServingOverride{mode: "lite"} ->
+        {:error,
+         error(
+           400,
+           "unsupported_parameter",
+           "mask requires an eligible Full Responses backend",
+           "mask"
+         )}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_requested_mask_override(_options, _overrides), do: :ok
+
+  defp resolve_available_model_serving_modes(
+         policy_visible_models,
+         overrides,
+         effective_model,
+         visible_model_context,
+         request_options
+       ) do
     resolutions =
       Map.new(policy_visible_models, fn model ->
         resolution =

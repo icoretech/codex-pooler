@@ -2076,7 +2076,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         ModelServingOverride.canonical_exposed_model_id(model.exposed_model_id) == requested
       end)
 
-    models = if exact, do: [exact], else: sort_media_hosts(hydration.visible_models)
+    models =
+      case Map.get(overrides, requested) do
+        %ModelServingOverride{mode: "lite"} -> []
+        _ -> if exact, do: [exact], else: sort_media_hosts(hydration.visible_models)
+      end
+
     host = Enum.find(models, &full_media_host?(&1, hydration, overrides))
 
     case host do

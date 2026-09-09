@@ -8,6 +8,9 @@ defmodule CodexPoolerWeb.V1.ImagesHostSelectionTest do
 
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Repo
 
   test "native image carrier prefers listed catalog host while preserving wire image model", %{
@@ -118,6 +121,27 @@ defmodule CodexPoolerWeb.V1.ImagesHostSelectionTest do
     assert_mask_rejected(conn, setup, upstream)
   end
 
+  for state <- [:retired, :absent] do
+    @catalog_state state
+    test "masked edits retain exact Lite override when image model is #{@catalog_state}", %{
+      conn: conn
+    } do
+      upstream = start_upstream(image_stream())
+      setup = gateway_setup(upstream)
+      exact = host(setup, "gpt-image-1", %{"use_responses_lite" => false})
+      host(setup, "other-full", %{"use_responses_lite" => false})
+      Repo.delete!(setup.model)
+      serving_override(setup, exact, "lite")
+
+      case @catalog_state do
+        :retired -> exact |> Ecto.Changeset.change(status: "retired") |> Repo.update!()
+        :absent -> Repo.delete!(exact)
+      end
+
+      assert_mask_rejected(conn, setup, upstream)
+    end
+  end
+
   test "masked edits honor a persisted Full override on a Lite catalog host", %{conn: conn} do
     upstream = start_upstream(image_stream())
     setup = gateway_setup(upstream)
@@ -125,6 +149,63 @@ defmodule CodexPoolerWeb.V1.ImagesHostSelectionTest do
     Repo.delete!(setup.model)
     serving_override(setup, full, "full")
     assert_mask_host(conn, setup, upstream, full)
+  end
+
+  test "masked fallback rechecks requested Lite override after host hydration" do
+    upstream = start_upstream(image_stream())
+    setup = gateway_setup(upstream)
+    full = host(setup, "full-host", %{"use_responses_lite" => false})
+    Repo.delete!(setup.model)
+
+    {:ok, auth_context} =
+      CodexPooler.Access.authenticate_authorization_header(setup.authorization)
+
+    hydration =
+      CandidateEligibility.hydrate_model_visibility(setup.pool)
+
+    context =
+      Map.merge(hydration, %{
+        visible_model: full,
+        candidate_snapshots: hydration.candidates_by_model_id[full.id]
+      })
+
+    serving_override(setup, %{exposed_model_id: "gpt-image-1"}, "lite")
+
+    payload = %{
+      "model" => "gpt-image-1",
+      "input" => [%{"role" => "user", "content" => "synthetic"}]
+    }
+
+    options =
+      RequestOptions.build(
+        [
+          masked_image_request?: true,
+          collect_openai_image_stream: true,
+          requested_model: "gpt-image-1",
+          effective_model: "gpt-image-1"
+        ],
+        "/backend-api/codex/responses",
+        payload
+      )
+
+    {:ok, policy} = CodexPooler.Access.normalize_api_key_policy(auth_context.api_key)
+
+    options =
+      RequestOptions.put_routing(options, api_key_policy: policy)
+
+    assert {:error, %{status: 400, code: "unsupported_parameter", param: "mask"}} =
+             PreDispatch.prepare(
+               auth_context,
+               "/backend-api/codex/responses",
+               payload,
+               options,
+               full,
+               context
+             )
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   defp serving_override(setup, model, mode) do
