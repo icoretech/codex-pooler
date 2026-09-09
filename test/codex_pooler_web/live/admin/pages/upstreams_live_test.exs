@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Access.Invite
+  alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
   alias CodexPooler.Accounts
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
@@ -26,7 +27,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.CodexAuth
-  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
+  alias CodexPooler.Upstreams.Lifecycle.{CredentialFencing, IdentitySlotLock}
   alias CodexPooler.Upstreams.OAuthFlows
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -48,6 +49,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMeter
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
   alias CodexPoolerWeb.DateTimeDisplay
+  alias Ecto.Adapters.SQL
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Phoenix.LiveViewTest.ClientProxy
+  alias Phoenix.PubSub
+
+  @mounted_recovery_timeout_ms 15_000
+  @stale_import_message "credentials changed after import preparation; submit the current auth data again"
 
   setup :register_and_log_in_user
 
@@ -8832,6 +8840,521 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   defp runtime_secret(label),
     do: Enum.join(["admin", label, "secret", "do", "not", "render"], "-")
+
+  for source <- [:paste, :upload] do
+    @tag :unix_integration
+    test "auth.json #{source} stale import keeps the mounted recovery form usable until explicit resubmission",
+         %{
+           conn: conn
+         } do
+      source = unquote(source)
+      fixture = committed_auth_json_recovery_fixture!()
+      barrier = make_ref()
+      sensitive_sentinel = fixture.sensitive_sentinel
+
+      auth_json =
+        auth_json_fixture(
+          account_id: fixture.account_id,
+          email: fixture.email,
+          access_token: jwt_token(%{"exp" => future_unix(), "source" => "stale-recovery"}),
+          refresh_token: sensitive_sentinel
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+      open_auth_json_import_dialog(view)
+      assert has_element?(view, "#auth-json-import-dialog[open]")
+      observer = start_recovery_event_observer!(fixture.pool.id)
+
+      holder = start_stale_import_holder!(self(), barrier, fixture)
+      assert_receive {^barrier, :holder, :locked, holder_pid}, @mounted_recovery_timeout_ms
+
+      handler_id = "upstreams-live-stale-import-#{System.unique_integer([:positive])}"
+      monitor = start_stale_import_monitor!(self(), barrier, holder.pid, holder_pid)
+      attach_import_preparation_probe!(handler_id, monitor.pid)
+
+      try do
+        stale_submission = prepare_auth_json_submission(view, source, fixture.pool.id, auth_json)
+        pre_stale = auth_json_recovery_side_effect_snapshot(fixture)
+
+        stale_html = render_auth_json_submit(view, stale_submission)
+
+        assert {:ok, _waiter_pid, blocking_pids} =
+                 Task.await(monitor, @mounted_recovery_timeout_ms)
+
+        assert holder_pid in blocking_pids
+        assert {:ok, _updated_identity} = Task.await(holder, @mounted_recovery_timeout_ms)
+
+        assert stale_html =~ @stale_import_message
+        assert has_element?(view, "#auth-json-import-dialog[open]")
+        assert has_element?(view, "#auth-json-import-form")
+        assert has_element?(view, "#auth-json-import-submit")
+
+        assert has_element?(
+                 view,
+                 "#auth_json_pool_id option[value='#{fixture.pool.id}'][selected]"
+               )
+
+        post_stale = auth_json_recovery_snapshot(fixture)
+        assert post_stale.credential_epoch == 2
+        assert auth_json_recovery_delta(pre_stale, post_stale) == zero_auth_json_recovery_delta()
+
+        marker_receipt =
+          recovery_events_after_liveview_marker!(view, observer, fixture.pool.id)
+
+        assert marker_receipt.publisher_pid == view.pid
+        assert marker_receipt.topic == Events.pubsub_topic(fixture.pool.id, "upstreams")
+        assert marker_receipt.events == []
+
+        for sensitive <- [auth_json, sensitive_sentinel] do
+          refute stale_html =~ sensitive
+          refute render(view) =~ sensitive
+        end
+
+        success_submission =
+          prepare_auth_json_submission(view, source, fixture.pool.id, auth_json)
+
+        pre_resubmit = auth_json_recovery_snapshot(fixture)
+        success_html = render_auth_json_submit(view, success_submission)
+        _ = :sys.get_state(view.pid)
+
+        refute success_html =~ sensitive_sentinel
+        refute has_element?(view, "#auth-json-import-dialog")
+
+        identity = Repo.get!(UpstreamIdentity, fixture.identity.id)
+        assert identity.account_email == fixture.email
+        assert identity.metadata["credential_epoch"] == 3
+        assert has_element?(view, "#upstream-account-#{identity.id}", fixture.email)
+
+        assert {:ok, ^sensitive_sentinel} =
+                 Secrets.decrypt_active_secret(identity, "refresh_token")
+
+        post_resubmit = auth_json_recovery_snapshot(fixture)
+        assert post_resubmit.credential_epoch == 3
+
+        assert auth_json_recovery_delta(pre_resubmit, post_resubmit) == %{
+                 identities: 0,
+                 assignments: 0,
+                 active_secrets: 2,
+                 superseded_secrets: 0,
+                 total_secrets: 2,
+                 audits: 1,
+                 jobs: 1,
+                 requests: 0,
+                 attempts: 0,
+                 request_log_facts: 0
+               }
+
+        refute render(view) =~ auth_json
+        refute render(view) =~ sensitive_sentinel
+      after
+        :telemetry.detach(handler_id)
+        send(holder.pid, {barrier, :advance})
+        stop_live_view_proxy!(view)
+        cleanup_committed_auth_json_recovery_fixture!(fixture)
+      end
+    end
+  end
+
+  defp committed_auth_json_recovery_fixture! do
+    Sandbox.unboxed_run(Repo, fn ->
+      suffix = System.unique_integer([:positive])
+      account_id = "acct-mounted-recovery-#{suffix}"
+      email = "fixture-user@example.com"
+      pool = pool_fixture(%{slug: "mounted-recovery-#{suffix}", name: "Mounted recovery"})
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: account_id,
+          account_email: email,
+          account_label: email,
+          identity_metadata: %{"credential_epoch" => 1}
+        })
+
+      %{
+        pool: pool,
+        identity: identity,
+        account_id: account_id,
+        email: email,
+        sensitive_sentinel: runtime_secret("mounted-recovery-#{suffix}")
+      }
+    end)
+  end
+
+  defp cleanup_committed_auth_json_recovery_fixture!(fixture) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.delete_all(
+        from identity in UpstreamIdentity,
+          where: identity.id == ^fixture.identity.id
+      )
+
+      Repo.delete_all(
+        from pool in CodexPooler.Pools.Pool,
+          where: pool.id == ^fixture.pool.id
+      )
+    end)
+  end
+
+  defp stop_live_view_proxy!(view) do
+    monitor = Process.monitor(view.pid)
+    {_ref, _topic, proxy_pid} = view.proxy
+    ClientProxy.stop(proxy_pid, {:shutdown, :cleanup})
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}, @mounted_recovery_timeout_ms
+  end
+
+  defp start_stale_import_holder!(parent, barrier, fixture) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn -> run_stale_import_holder(parent, barrier, fixture) end)
+    end)
+  end
+
+  defp run_stale_import_holder(parent, barrier, fixture) do
+    Repo.transaction(fn ->
+      IdentitySlotLock.lock_slots!([
+        %{chatgpt_account_id: fixture.account_id, account_email: fixture.email}
+      ])
+
+      backend_pid = backend_pid!()
+      send(parent, {barrier, :holder, :locked, backend_pid})
+
+      receive do
+        {^barrier, :advance} ->
+          Repo.get!(UpstreamIdentity, fixture.identity.id)
+          |> Ecto.Changeset.change(metadata: %{"credential_epoch" => 2})
+          |> Repo.update!()
+      after
+        @mounted_recovery_timeout_ms -> raise "stale import holder advance timed out"
+      end
+    end)
+  end
+
+  defp attach_import_preparation_probe!(handler_id, target) do
+    :telemetry.attach(
+      handler_id,
+      [:codex_pooler, :repo, :query],
+      fn _event, _measurements, metadata, parent ->
+        query = metadata |> Map.get(:query, "") |> to_string()
+
+        if String.contains?(query, ~s(FROM "upstream_identities")) and
+             not String.contains?(query, "FOR UPDATE") do
+          send(parent, {:auth_json_import_prepared, self()})
+        end
+      end,
+      target
+    )
+  end
+
+  defp start_stale_import_monitor!(parent, barrier, holder, holder_pid) do
+    Task.async(fn ->
+      receive do
+        {:auth_json_import_prepared, _query_pid} ->
+          waiter_pid = waiting_backend_pid!(holder_pid)
+          blocking_pids = blocking_backend_pids!(waiter_pid)
+          send(parent, {barrier, :waiter, :blocked, waiter_pid, blocking_pids})
+          send(holder, {barrier, :advance})
+          {:ok, waiter_pid, blocking_pids}
+      after
+        @mounted_recovery_timeout_ms -> raise "mounted import preparation probe timed out"
+      end
+    end)
+  end
+
+  defp prepare_auth_json_submission(_view, :paste, pool_id, auth_json),
+    do: %{"auth_json" => %{"pool_id" => pool_id, "content" => auth_json}}
+
+  defp prepare_auth_json_submission(view, :upload, pool_id, auth_json) do
+    upload =
+      file_input(view, "#auth-json-import-form", :auth_json, [
+        %{name: "auth.json", content: auth_json, type: "application/json"}
+      ])
+
+    assert render_upload(upload, "auth.json") =~ "100%"
+    %{"auth_json" => %{"pool_id" => pool_id, "content" => ""}}
+  end
+
+  defp render_auth_json_submit(view, params) do
+    view
+    |> element("#auth-json-import-form")
+    |> render_submit(params)
+  end
+
+  defp auth_json_recovery_snapshot(fixture) do
+    identity = Repo.get!(UpstreamIdentity, fixture.identity.id)
+
+    %{
+      credential_epoch: identity.metadata["credential_epoch"],
+      identities:
+        Repo.aggregate(
+          from(identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id),
+          :count
+        ),
+      assignments:
+        Repo.aggregate(
+          from(assignment in PoolUpstreamAssignment,
+            where: assignment.pool_id == ^fixture.pool.id
+          ),
+          :count
+        ),
+      active_secrets:
+        Repo.aggregate(
+          from(secret in EncryptedSecret,
+            where:
+              secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
+          ),
+          :count
+        ),
+      superseded_secrets:
+        Repo.aggregate(
+          from(secret in EncryptedSecret,
+            where:
+              secret.upstream_identity_id == ^fixture.identity.id and
+                secret.status == "superseded"
+          ),
+          :count
+        ),
+      total_secrets:
+        Repo.aggregate(
+          from(secret in EncryptedSecret,
+            where: secret.upstream_identity_id == ^fixture.identity.id
+          ),
+          :count
+        ),
+      audits:
+        Repo.aggregate(
+          from(audit in AuditEvent, where: audit.pool_id == ^fixture.pool.id),
+          :count
+        ),
+      jobs:
+        Repo.aggregate(
+          from(job in Oban.Job,
+            where: fragment("? ->> 'pool_id' = ?", job.args, ^fixture.pool.id)
+          ),
+          :count
+        ),
+      requests: Repo.aggregate(Request, :count),
+      attempts: Repo.aggregate(Attempt, :count),
+      request_log_facts: Repo.aggregate(RequestLogFact, :count)
+    }
+  end
+
+  defp auth_json_recovery_side_effect_snapshot(fixture) do
+    fixture
+    |> auth_json_recovery_snapshot()
+    |> Map.delete(:credential_epoch)
+  end
+
+  defp auth_json_recovery_delta(before, later) do
+    later
+    |> Map.delete(:credential_epoch)
+    |> Map.new(fn {key, value} -> {key, value - Map.fetch!(before, key)} end)
+  end
+
+  defp zero_auth_json_recovery_delta do
+    %{
+      identities: 0,
+      assignments: 0,
+      active_secrets: 0,
+      superseded_secrets: 0,
+      total_secrets: 0,
+      audits: 0,
+      jobs: 0,
+      requests: 0,
+      attempts: 0,
+      request_log_facts: 0
+    }
+  end
+
+  defp start_recovery_event_observer!(pool_id) do
+    start_recovery_event_observer!(
+      CodexPooler.PubSub,
+      Events.pubsub_topic(pool_id, "upstreams")
+    )
+  end
+
+  defp start_recovery_event_observer!(pubsub, topic) do
+    parent = self()
+
+    {observer, monitor_ref} =
+      spawn_monitor(fn ->
+        :ok = PubSub.subscribe(pubsub, topic)
+        send(parent, {:recovery_event_observer_ready, self()})
+        observe_recovery_events([])
+      end)
+
+    assert_receive {:recovery_event_observer_ready, ^observer}, @mounted_recovery_timeout_ms
+
+    on_exit(fn ->
+      if Process.alive?(observer), do: send(observer, :stop)
+      Process.demonitor(monitor_ref, [:flush])
+    end)
+
+    observer
+  end
+
+  defp observe_recovery_events(events) do
+    receive do
+      {Events, %Event{} = event} ->
+        observe_recovery_events([event | events])
+
+      {__MODULE__, :recovery_event_marker, marker_id} ->
+        send(marker_id.caller, {
+          :recovery_event_marker_received,
+          marker_id.id,
+          self(),
+          Enum.reverse(events)
+        })
+
+        observe_recovery_events(events)
+
+      {:snapshot, caller, ref} ->
+        send(caller, {ref, Enum.reverse(events)})
+        observe_recovery_events(events)
+
+      :stop ->
+        :ok
+    end
+  end
+
+  defp recovery_event_snapshot(observer) do
+    ref = make_ref()
+    send(observer, {:snapshot, self(), ref})
+    assert_receive {^ref, events}, @mounted_recovery_timeout_ms
+    events
+  end
+
+  defp recovery_events_after_liveview_marker!(view, observer, pool_id) do
+    marker_uuid = Ecto.UUID.generate()
+    caller = self()
+    topic = Events.pubsub_topic(pool_id, "upstreams")
+
+    _state =
+      :sys.replace_state(view.pid, fn state ->
+        publisher_pid = self()
+
+        :ok =
+          PubSub.broadcast(
+            CodexPooler.PubSub,
+            topic,
+            {__MODULE__, :recovery_event_marker, %{id: marker_uuid, caller: caller}}
+          )
+
+        send(caller, {:recovery_event_marker_published, marker_uuid, publisher_pid})
+        state
+      end)
+
+    assert_receive {:recovery_event_marker_published, ^marker_uuid, publisher_pid},
+                   @mounted_recovery_timeout_ms
+
+    assert publisher_pid == view.pid
+
+    assert_receive {:recovery_event_marker_received, ^marker_uuid, ^observer, events},
+                   @mounted_recovery_timeout_ms
+
+    %{marker_id: marker_uuid, publisher_pid: publisher_pid, topic: topic, events: events}
+  end
+
+  @tag :pubsub_marker_barrier
+  test "same-publisher marker barrier retains an earlier PG2-forwarded event before acknowledging the marker" do
+    pubsub = CodexPooler.T7MarkerBarrierPubSub
+    start_supervised!({PubSub, name: pubsub, pool_size: 1})
+    topic = "t7-marker-barrier:#{System.unique_integer([:positive])}"
+    observer = start_recovery_event_observer!(pubsub, topic)
+    marker_id = %{id: Ecto.UUID.generate(), caller: self()}
+    marker_uuid = marker_id.id
+
+    event = %Event{
+      version: 1,
+      id: Ecto.UUID.generate(),
+      pool_id: Ecto.UUID.generate(),
+      topics: ["upstreams"],
+      reason: "t7_marker_barrier_regression",
+      emitted_at: DateTime.utc_now(),
+      payload: %{}
+    }
+
+    {:ok, {Phoenix.PubSub.PG2, adapter_name, _dispatcher}} = Registry.meta(pubsub, :pubsub)
+    worker = Process.whereis(adapter_name)
+    :ok = :sys.suspend(worker)
+
+    on_exit(fn ->
+      if Process.alive?(worker), do: :sys.resume(worker)
+    end)
+
+    parent = self()
+
+    {publisher, publisher_monitor} =
+      spawn_monitor(fn ->
+        :ok = PubSub.direct_broadcast(node(), pubsub, topic, {Events, event})
+        send(parent, {:t7_event_enqueued, self()})
+
+        receive do
+          :publish_marker ->
+            :ok =
+              PubSub.direct_broadcast(
+                node(),
+                pubsub,
+                topic,
+                {__MODULE__, :recovery_event_marker, marker_id}
+              )
+
+            send(parent, {:t7_marker_enqueued, self()})
+        end
+      end)
+
+    assert_receive {:t7_event_enqueued, ^publisher}, @mounted_recovery_timeout_ms
+    assert recovery_event_snapshot(observer) == []
+
+    send(publisher, :publish_marker)
+    assert_receive {:t7_marker_enqueued, ^publisher}, @mounted_recovery_timeout_ms
+    :ok = :sys.resume(worker)
+
+    assert_receive {:recovery_event_marker_received, ^marker_uuid, ^observer, [^event]},
+                   @mounted_recovery_timeout_ms
+
+    assert_receive {:DOWN, ^publisher_monitor, :process, ^publisher, :normal},
+                   @mounted_recovery_timeout_ms
+  end
+
+  defp waiting_backend_pid!(holder_pid) do
+    deadline = System.monotonic_time(:millisecond) + @mounted_recovery_timeout_ms
+    wait_for_blocking_backend!(holder_pid, deadline)
+  end
+
+  defp wait_for_blocking_backend!(holder_pid, deadline) do
+    waiter_pid =
+      Sandbox.unboxed_run(Repo, fn ->
+        case SQL.query!(
+               Repo,
+               "SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+               [holder_pid]
+             ).rows do
+          [[pid] | _rest] -> pid
+          [] -> nil
+        end
+      end)
+
+    cond do
+      is_integer(waiter_pid) ->
+        waiter_pid
+
+      System.monotonic_time(:millisecond) < deadline ->
+        wait_for_blocking_backend!(holder_pid, deadline)
+
+      true ->
+        flunk("mounted import never appeared in pg_blocking_pids")
+    end
+  end
+
+  defp blocking_backend_pids!(backend_pid) do
+    Sandbox.unboxed_run(Repo, fn ->
+      %{rows: [[pids]]} = SQL.query!(Repo, "SELECT pg_blocking_pids($1)", [backend_pid])
+      pids
+    end)
+  end
+
+  defp backend_pid! do
+    %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+    backend_pid
+  end
 
   defp auth_json_fixture(opts) do
     tokens = %{

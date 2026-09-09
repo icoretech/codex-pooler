@@ -38,7 +38,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
 
   @spec cancel_upload_entry(Phoenix.LiveView.Socket.t(), String.t()) ::
           Phoenix.LiveView.Socket.t()
-  def cancel_upload_entry(socket, ref), do: cancel_upload(socket, :auth_json, ref)
+  def cancel_upload_entry(socket, ref), do: cancel_upload_entry_safely(socket, ref)
 
   @spec import(Phoenix.LiveView.Socket.t(), map(), map() | nil, (Phoenix.LiveView.Socket.t() ->
                                                                    Phoenix.LiveView.Socket.t())) ::
@@ -66,8 +66,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
   @spec cancel_upload_entries(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def cancel_upload_entries(socket) do
     Enum.reduce(socket.assigns.uploads.auth_json.entries, socket, fn entry, socket ->
-      cancel_upload(socket, :auth_json, entry.ref)
+      cancel_upload_entry_safely(socket, entry.ref)
     end)
+  end
+
+  defp cancel_upload_entry_safely(socket, ref) do
+    cancel_upload(socket, :auth_json, ref)
+  catch
+    :exit, {:noproc, _details} -> socket
   end
 
   @spec form_for_pool(Phoenix.LiveView.Socket.t(), String.t() | nil) :: Phoenix.HTML.Form.t()
