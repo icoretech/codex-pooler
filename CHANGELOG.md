@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.7...codex-pooler-v0.7.8) (2026-09-10)
+
+
+### Bug Fixes
+
+* **quota:** let confirmed runtime readings supersede a Usage API exhaustion ([821bafe](https://github.com/icoretech/codex-pooler/commit/821bafee10396da8d548c7d5d1bcaafaefacde90))
+
 ## [0.7.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.6...codex-pooler-v0.7.7) (2026-09-10)
 
 
