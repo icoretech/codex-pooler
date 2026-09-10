@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
   alias CodexPooler.Accounts
   alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.DataCase
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
   alias CodexPooler.Events.PostgresBridge
@@ -8970,7 +8971,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     @tag :unix_integration
     test "auth.json #{source} stale import keeps the mounted recovery form usable until explicit resubmission",
          %{
-           conn: conn
+           conn: conn,
+           sandbox_owner: sandbox_owner,
+           sandbox_settings_cache: settings_cache
          } do
       source = unquote(source)
       fixture = committed_auth_json_recovery_fixture!()
@@ -9075,6 +9078,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         :telemetry.detach(handler_id)
         send(holder.pid, {barrier, :advance})
         stop_live_view_proxy!(view)
+        # The resubmitted import updated the committed identity inside the
+        # sandboxed transaction, whose row lock would block the unboxed delete
+        # until the owner exits; release the sandbox before cleaning up.
+        DataCase.stop_sandbox(sandbox_owner, settings_cache)
         cleanup_committed_auth_json_recovery_fixture!(fixture)
       end
     end
