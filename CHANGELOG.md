@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.6...codex-pooler-v0.7.7) (2026-09-10)
+
+
+### Bug Fixes
+
+* **gateway:** forward the Codex client's session headers on native HTTP routes ([7acc241](https://github.com/icoretech/codex-pooler/commit/7acc2413ff644897d09cbd1a362a8664ff263152))
+
+
+### Tests
+
+* **payloads:** pin upstream prefix stability across consecutive turns in both serving modes ([2f259e5](https://github.com/icoretech/codex-pooler/commit/2f259e5eecf8cc3ae7dd8e1704ff01d209cde29c))
+
 ## [0.7.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.5...codex-pooler-v0.7.6) (2026-09-10)
 
 
