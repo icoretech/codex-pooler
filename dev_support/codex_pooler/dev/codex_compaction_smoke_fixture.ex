@@ -25,6 +25,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
            strict: [
              run_id: :string,
              upstream_base_url: :string,
+             serving_mode: :string,
              upstream_frame_count: :integer,
              duplicate_error_count: :integer
            ]
@@ -41,9 +42,12 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       {options, ["receipt"], []} ->
         validate_args(:receipt, options)
 
+      {options, ["cache-receipt"], []} ->
+        validate_args(:cache_receipt, options)
+
       _invalid ->
         {:error,
-         "use acquire --run-id RUN_ID --upstream-base-url ORIGIN, status/release --run-id RUN_ID, or receipt --run-id RUN_ID --upstream-frame-count N --duplicate-error-count N"}
+         "use acquire --run-id RUN_ID --upstream-base-url ORIGIN [--serving-mode full|lite], status/release --run-id RUN_ID, receipt --run-id RUN_ID --upstream-frame-count N --duplicate-error-count N, or cache-receipt --run-id RUN_ID"}
     end
   end
 
@@ -141,6 +145,119 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
     end
   end
 
+  @doc """
+  Metadata-only per-request cache-fidelity projection for the websocket to
+  client-authored HTTP SSE fallback certification (issue 371 / findings 116 T12).
+
+  This is additive to `receipt/1` and intentionally reports the per-generation
+  transport, usage status, and NULL-preserving ledger token facts the exact
+  client cache-metadata receipt binds. It never persists new production
+  metadata: `provider_cached_field_present` / `parser_cached_field_present`
+  are derived by the harness receipt, not here. Cached input tokens stay
+  three-valued (NULL when the provider omitted the field, 0 when present and
+  zero) exactly as the ledger records them.
+  """
+  @spec cache_receipt(options()) :: {:ok, map()} | {:error, String.t()}
+  def cache_receipt(options) do
+    with :ok <- validate_environment(options),
+         {:ok, run_id} <- fetch_run_id(options),
+         {:ok, journal} <- read_ready_journal(options, run_id) do
+      pool_id = journal["pool_id"]
+
+      generations =
+        Repo.all(
+          from request in Request,
+            left_join: turn in CodexTurn,
+            on: turn.request_id == request.id,
+            where: request.pool_id == ^pool_id,
+            order_by: [asc: request.admitted_at],
+            select: %{
+              request_id: request.id,
+              requested_model: request.requested_model,
+              transport: request.transport,
+              status: request.status,
+              usage_status: request.usage_status,
+              codex_session_id: turn.codex_session_id,
+              turn_sequence: turn.turn_sequence
+            }
+        )
+        |> Enum.map(&cache_receipt_generation/1)
+
+      {:ok,
+       %{
+         status: "closed",
+         fidelity_scope: "metadata_fidelity_websocket_to_http_sse_fallback",
+         provider_cache_allocation_claimed: false,
+         generation_count: length(generations),
+         generations: generations
+       }}
+    end
+  end
+
+  defp cache_receipt_generation(row) do
+    settlement =
+      Repo.one(
+        from entry in LedgerEntry,
+          where: entry.request_id == ^row.request_id and entry.entry_kind == "settlement",
+          order_by: [desc: entry.id],
+          limit: 1,
+          select: %{
+            input_tokens: entry.input_tokens,
+            cached_input_tokens: entry.cached_input_tokens,
+            output_tokens: entry.output_tokens,
+            total_tokens: entry.total_tokens,
+            usage_status: entry.usage_status
+          }
+      )
+
+    attempt =
+      Repo.one(
+        from attempt in Attempt,
+          where: attempt.request_id == ^row.request_id,
+          order_by: [desc: attempt.attempt_number],
+          limit: 1,
+          select: %{
+            transport: attempt.transport,
+            status: attempt.status,
+            usage_status: attempt.usage_status,
+            pool_upstream_assignment_id: attempt.pool_upstream_assignment_id,
+            upstream_model_id: attempt.upstream_model_id,
+            response_metadata: attempt.response_metadata
+          }
+      )
+
+    %{
+      transport: row.transport,
+      status: row.status,
+      usage_status: row.usage_status,
+      turn_sequence: row.turn_sequence,
+      requested_model: row.requested_model,
+      upstream_model: attempt && attempt.upstream_model_id,
+      attempt_transport: attempt && attempt.transport,
+      attempt_status: attempt && attempt.status,
+      pool_upstream_assignment_id: attempt && fingerprint(attempt.pool_upstream_assignment_id),
+      codex_session_fingerprint: fingerprint(row.codex_session_id),
+      usage_observation_classification: usage_observation_classification(attempt),
+      # NULL-preserving: nil means the provider omitted the field entirely,
+      # 0 means it was present and zero. Never coalesce one into the other.
+      ledger_input_tokens: settlement && settlement.input_tokens,
+      ledger_cached_input_tokens: settlement && settlement.cached_input_tokens,
+      ledger_cached_input_tokens_present:
+        not is_nil(settlement) and not is_nil(settlement.cached_input_tokens),
+      ledger_output_tokens: settlement && settlement.output_tokens,
+      ledger_total_tokens: settlement && settlement.total_tokens,
+      settlement_present: not is_nil(settlement)
+    }
+  end
+
+  defp usage_observation_classification(nil), do: nil
+
+  defp usage_observation_classification(%{response_metadata: metadata}) when is_map(metadata) do
+    get_in(metadata, ["usage_observation", "classification"])
+  end
+
+  defp usage_observation_classification(_attempt), do: nil
+
   @spec with_isolated_config(String.t(), (String.t() -> result)) :: result when result: var
   def with_isolated_config(run_id, function) when is_function(function, 1) do
     previous = %{
@@ -184,7 +301,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
 
     provisioned =
       Provisioner.provision!(run_id, origin, journal, persist_journal,
-        interrupt_after: Keyword.get(options, :interrupt_after)
+        interrupt_after: Keyword.get(options, :interrupt_after),
+        serving_mode: Keyword.get(options, :serving_mode)
       )
 
     journal = Map.put(provisioned.journal, "state", "prepared")
@@ -375,9 +493,25 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   end
 
   defp exact_option_keys(:acquire, options) do
-    if Enum.sort(Keyword.keys(options)) == [:run_id, :upstream_base_url],
+    keys = Enum.sort(Keyword.keys(options))
+    serving_mode = Keyword.get(options, :serving_mode)
+
+    cond do
+      keys not in [[:run_id, :upstream_base_url], [:run_id, :serving_mode, :upstream_base_url]] ->
+        {:error, "acquire requires exact options"}
+
+      not is_nil(serving_mode) and serving_mode not in ["full", "lite"] ->
+        {:error, "serving mode must be full or lite"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp exact_option_keys(:cache_receipt, options) do
+    if Keyword.keys(options) == [:run_id],
       do: :ok,
-      else: {:error, "acquire requires exact options"}
+      else: {:error, "cache-receipt accepts only --run-id"}
   end
 
   defp exact_option_keys(:receipt, options) do

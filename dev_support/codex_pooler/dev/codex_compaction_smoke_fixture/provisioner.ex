@@ -30,6 +30,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
   def provision!(run_id, upstream_base_url, journal, persist_journal, options \\ []) do
     scope = owner_scope!()
     interrupt_after = Keyword.get(options, :interrupt_after)
+    serving_mode = serving_mode(Keyword.get(options, :serving_mode))
 
     {:ok, provisioned} =
       Repo.transact(fn ->
@@ -48,7 +49,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
 
         maybe_interrupt!(interrupt_after, :assignment)
 
-        model = create_model!(pool, assignment)
+        model = create_model!(pool, assignment, serving_mode)
         journal = journal |> Journal.put_resource(:model, model.id) |> persist_journal.()
         create_quota_windows!(identity, model)
         maybe_interrupt!(interrupt_after, :model)
@@ -88,6 +89,11 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
 
   @spec model() :: String.t()
   def model, do: @model
+
+  @spec serving_mode(term()) :: :full | :lite
+  def serving_mode(value) when value in [:full, "full"], do: :full
+  def serving_mode(value) when value in [:lite, "lite"], do: :lite
+  def serving_mode(nil), do: :lite
 
   defp owner_scope! do
     Accounts.list_operators()
@@ -145,8 +151,9 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
     assignment
   end
 
-  defp create_model!(pool, assignment) do
+  defp create_model!(pool, assignment, serving_mode) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    use_responses_lite = serving_mode == :lite
 
     %Model{}
     |> Model.changeset(%{
@@ -178,7 +185,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
               "tools" => true,
               "reasoning" => true
             },
-            "use_responses_lite" => true,
+            "use_responses_lite" => use_responses_lite,
             "input_modalities" => ["text", "image"],
             "supports_image_detail_original" => true,
             "supported_reasoning_levels" => ["low"],
