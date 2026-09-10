@@ -14,6 +14,81 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "upstream_payload/4" do
+    test "consecutive full-history turns keep a stable upstream prefix in both serving modes" do
+      # A client on the HTTP SSE path resends the whole history every turn, so
+      # the provider can only reuse its prompt cache when the projected turn N+1
+      # starts with exactly the projected turn N: same leading input items, same
+      # instructions/tools placement, same top-level fields. Lite moves tools and
+      # instructions into developer input items; that projection must be a pure
+      # function of the client's tools and instructions, never of the turn.
+      tools = [
+        %{
+          "type" => "function",
+          "name" => "shell",
+          "description" => "Run a shell command",
+          "parameters" => %{
+            "type" => "object",
+            "properties" => %{"command" => %{"type" => "string"}},
+            "required" => ["command"]
+          }
+        }
+      ]
+
+      first_turn = %{
+        "model" => "gpt-6-astra",
+        "instructions" => "You are a careful coding agent.",
+        "tools" => tools,
+        "input" => native_text_input("first question"),
+        "stream" => true,
+        "store" => false
+      }
+
+      second_turn =
+        Map.put(
+          first_turn,
+          "input",
+          first_turn["input"] ++
+            [
+              %{
+                "type" => "message",
+                "role" => "assistant",
+                "content" => [%{"type" => "output_text", "text" => "first answer"}]
+              }
+            ] ++ native_text_input("second question")
+        )
+
+      model = %Model{upstream_model_id: "provider-model"}
+      endpoint = "/backend-api/codex/responses"
+
+      for mode <- ["lite", "full"] do
+        [first, second] =
+          for payload <- [first_turn, second_turn] do
+            request_options = RequestOptions.build(serving_mode_opts(mode), endpoint, payload)
+
+            assert {:ok, encoded} =
+                     PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+            CodexPooler.JSON.decode!(encoded)
+          end
+
+        assert List.starts_with?(second["input"], first["input"]),
+               "#{mode}: turn 2 input does not start with turn 1 input"
+
+        assert length(second["input"]) == length(first["input"]) + 2
+        assert Map.drop(second, ["input"]) == Map.drop(first, ["input"])
+      end
+
+      lite_first = prepare_lite_payload(first_turn)
+
+      assert [
+               %{"type" => "additional_tools", "role" => "developer", "tools" => ^tools},
+               %{"type" => "message", "role" => "developer"} | _rest
+             ] = lite_first["input"]
+
+      refute Map.has_key?(lite_first, "tools")
+      refute Map.has_key?(lite_first, "instructions")
+    end
+
     test "finalizes three-stage compaction provenance and clears transient digests" do
       downstream = %{
         "model" => "client-model",
