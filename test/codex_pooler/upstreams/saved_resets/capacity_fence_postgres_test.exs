@@ -136,7 +136,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
 
     assert Sandbox.unboxed_run(Repo, fn ->
              SavedResetConfirmationFixtures.marker_state(window)
-           end) == nil
+           end) == "approach"
 
     refute Sandbox.unboxed_run(Repo, fn ->
              Repo.get!(UpstreamIdentity, target_identity_id).metadata["saved_reset_redemption"]

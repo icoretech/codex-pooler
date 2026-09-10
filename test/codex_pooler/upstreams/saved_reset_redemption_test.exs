@@ -215,7 +215,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         used_percent: Decimal.new("32")
       )
 
-      assert SavedResetConfirmationFixtures.marker_state(window) == nil
+      assert SavedResetConfirmationFixtures.marker_state(window) == "approach"
       send(gate_pid, {:fake_upstream_release_gate, release_ref})
 
       assert {:ok, %{status: :noop, applied?: false, code: code}} = Task.await(task, 15_000)

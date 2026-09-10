@@ -32,6 +32,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
   @provider_source "codex_usage_api"
   @default_max_age_seconds 900
   @confirmed_count 2
+  @proof_states ["candidate", "confirmed"]
+  @approach_state "approach"
   @binding_keys ~w(identity_id credential_epoch reset_identity provider_scope descriptor trigger threshold_percent bank_count keep_credits permission)a
   @permission_keys ~w(allowed reached account_state)a
   @triggers [:blocked, :threshold]
@@ -54,6 +56,11 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
           required(:bank_count) => non_neg_integer() | nil,
           required(:keep_credits) => non_neg_integer(),
           required(:permission) => permission()
+        }
+  @type approach :: %{
+          required(:used_percent) => number(),
+          required(:provider_observed_at) => DateTime.t(),
+          required(:reset_at) => DateTime.t()
         }
   @type observation :: %{
           required(:binding) => binding(),
@@ -119,6 +126,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
       next =
         case build_observation(identity, evidence, account_availability, usage_url, observed_at) do
           {:ok, observation} -> observe(metadata, observation)
+          {:approach, approach} -> observe_allowed(metadata, approach)
           :error -> clear(metadata)
         end
 
@@ -134,7 +142,13 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
     end
   end
 
-  @doc "Adds one coherent provider observation to a window metadata map."
+  @doc """
+  Adds one coherent provider observation to a window metadata map.
+
+  A qualifying threshold observation is also an allowed receipt and refreshes
+  the approach witness; a blocked observation carries the same-cycle approach
+  witness forward so the blocked proof can later be judged explained or not.
+  """
   @spec observe(map() | nil, observation()) :: map()
   def observe(metadata, observation) when is_map(observation) do
     metadata = if is_map(metadata), do: metadata, else: %{}
@@ -142,7 +156,9 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
     case normalize_observation(observation) do
       {:ok, incoming} ->
         if qualifying?(incoming) do
-          put_marker(metadata, transition(marker(metadata), incoming))
+          existing = marker(metadata)
+          approach = next_approach(existing, incoming)
+          put_marker(metadata, put_approach(transition(existing, incoming), approach))
         else
           clear(metadata)
         end
@@ -153,12 +169,53 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
   end
 
   @doc """
+  Records a coherent allowed provider receipt that qualifies for no trigger.
+
+  The proof (if any) is cleared because the account is not blocked, but the
+  receipt becomes the approach witness: the last same-cycle allowed usage the
+  provider reported before any later blocked receipt. A later blocked proof is
+  explained only when this witness already showed pressure at or above the
+  policy threshold; an unexplained jump to blocked must instead persist for the
+  policy minimum blocked span before it can authorize spend.
+  """
+  @spec observe_allowed(map() | nil, approach()) :: map()
+  def observe_allowed(metadata, approach) when is_map(approach) do
+    metadata = if is_map(metadata), do: metadata, else: %{}
+
+    case normalize_approach(approach) do
+      {:ok, incoming} ->
+        retained = newest_same_cycle_approach(current_approach(marker(metadata)), incoming)
+        put_marker(metadata, approach_marker(retained))
+
+      :error ->
+        clear(metadata)
+    end
+  end
+
+  defp newest_same_cycle_approach(%{} = existing, incoming)
+       when existing.reset_at == incoming.reset_at do
+    if DateTime.compare(incoming.provider_observed_at, existing.provider_observed_at) == :gt,
+      do: incoming,
+      else: existing
+  end
+
+  defp newest_same_cycle_approach(_absent_or_other_cycle, incoming), do: incoming
+
+  @doc """
   Returns true only for a fresh two-receipt confirmation whose binding still
   matches the caller's current trigger, policy and identity facts.
 
   `require_bank?` (default true) additionally demands a reported saved-reset
   bank above the bound keep-credits floor; a pressure member that is not the
   consuming target passes `require_bank?: false` because its bank is not spent.
+
+  A blocked proof is additionally judged against the account's trajectory:
+  it is `explained` when the same-cycle approach witness showed allowed usage
+  at or above `explained_percent`, otherwise the blocked receipts must span at
+  least `min_blocked_seconds` (an unexplained jump to blocked, such as a
+  provider incident flashing a full weekly window, must persist that long).
+  Callers pass both from the identity policy; the defaults never explain and
+  require no span only so pure callers stay explicit.
   """
   @spec confirmed?(map() | nil, DateTime.t(), keyword()) :: boolean()
   def confirmed?(metadata, %DateTime{} = now, opts \\ []) do
@@ -168,6 +225,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
          true <- parsed.state == "confirmed" and parsed.observation_count == @confirmed_count,
          latest = parsed.latest,
          true <- latest.binding.trigger == trigger,
+         true <- trajectory_ready?(parsed, trigger, opts),
          true <- threshold_matches?(latest.binding, Keyword.get(opts, :threshold_percent)),
          true <- policy_matches?(latest.binding, Keyword.get(opts, :keep_credits)),
          true <- identity_matches?(latest.binding, Keyword.get(opts, :identity)),
@@ -200,12 +258,44 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
   def clear(metadata) when is_map(metadata), do: Map.delete(metadata, @metadata_key)
   def clear(_metadata), do: %{}
 
-  @doc "Returns the persisted marker state, or nil when absent or malformed."
+  @doc "Returns the persisted marker state (approach, candidate or confirmed), or nil when absent or malformed."
   @spec state(map() | nil) :: String.t() | nil
   def state(metadata) do
     case parse(metadata) do
       {:ok, parsed} -> parsed.state
       :error -> nil
+    end
+  end
+
+  @doc """
+  Diagnostic readiness of a blocked proof under the given policy facts:
+  `:absent`, `:approach_only`, `:candidate`, `{:confirmed, :explained}`,
+  `{:confirmed, :span}` or `{:span_pending, remaining_seconds}`.
+  """
+  @spec blocked_readiness(map() | nil, keyword()) :: term()
+  def blocked_readiness(metadata, opts \\ []) do
+    case parse(metadata) do
+      :error ->
+        :absent
+
+      {:ok, %{state: @approach_state}} ->
+        :approach_only
+
+      {:ok, %{state: "candidate"}} ->
+        :candidate
+
+      {:ok, parsed} ->
+        cond do
+          explained?(parsed, Keyword.get(opts, :explained_percent)) ->
+            {:confirmed, :explained}
+
+          blocked_span_seconds(parsed) >= Keyword.get(opts, :min_blocked_seconds, 0) ->
+            {:confirmed, :span}
+
+          true ->
+            {:span_pending,
+             Keyword.get(opts, :min_blocked_seconds, 0) - blocked_span_seconds(parsed)}
+        end
     end
   end
 
@@ -240,7 +330,16 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
          epoch when is_integer(epoch) and epoch > 0 <-
            CredentialFencing.credential_epoch(identity),
          true <- state in @account_states,
-         {:ok, trigger} <- trigger_for(policy, used_percent, allowed, reached, state) do
+         {:ok, trigger} <-
+           trigger_or_approach(
+             policy,
+             used_percent,
+             allowed,
+             reached,
+             state,
+             provider_observed_at,
+             reset_at
+           ) do
       {:ok,
        %{
          binding: %{
@@ -264,7 +363,28 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
          available_count: count
        }}
     else
+      {:approach, approach} -> {:approach, approach}
       _not_qualifying -> :error
+    end
+  end
+
+  # A coherent allowed receipt that qualifies for no trigger is still the
+  # trajectory witness for a later blocked proof.
+  defp trigger_or_approach(policy, used_percent, allowed, reached, state, provider_at, reset_at) do
+    case trigger_for(policy, used_percent, allowed, reached, state) do
+      {:ok, trigger} ->
+        {:ok, trigger}
+
+      :error when allowed == true and reached == false and state == "available" ->
+        {:approach,
+         %{
+           used_percent: Decimal.to_float(used_percent),
+           provider_observed_at: provider_at,
+           reset_at: reset_at
+         }}
+
+      :error ->
+        :error
     end
   end
 
@@ -335,16 +455,79 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
   defp transition(nil, incoming), do: new_marker("candidate", incoming, incoming, 1)
 
   defp transition(existing, incoming) when is_map(existing) do
-    with {:ok, parsed} <- parse_marker(existing),
+    with {:ok, %{state: state} = parsed} when state in @proof_states <- parse_marker(existing),
          true <- equivalent?(parsed.latest, incoming) do
       case DateTime.compare(incoming.provider_observed_at, parsed.latest.provider_observed_at) do
         :gt -> new_marker("confirmed", parsed.first, incoming, @confirmed_count)
-        _replayed_or_older -> existing
+        _replayed_or_older -> Map.delete(existing, "approach")
       end
     else
       _restart -> new_marker("candidate", incoming, incoming, 1)
     end
   end
+
+  # The approach witness follows the cycle: a threshold (allowed) observation
+  # refreshes it, a blocked observation keeps the same-cycle witness and drops
+  # a witness from another cycle.
+  defp next_approach(existing, %{binding: %{trigger: :threshold}} = incoming) do
+    candidate = %{
+      used_percent: incoming.used_percent,
+      provider_observed_at: incoming.provider_observed_at,
+      reset_at: incoming.reset_at
+    }
+
+    case current_approach(existing) do
+      %{} = current
+      when current.reset_at == candidate.reset_at ->
+        if DateTime.compare(candidate.provider_observed_at, current.provider_observed_at) == :gt,
+          do: candidate,
+          else: current
+
+      _absent_or_other_cycle ->
+        candidate
+    end
+  end
+
+  defp next_approach(existing, %{binding: %{trigger: :blocked}} = incoming) do
+    case current_approach(existing) do
+      %{} = current when current.reset_at == incoming.reset_at -> current
+      _absent_or_other_cycle -> nil
+    end
+  end
+
+  defp current_approach(nil), do: nil
+
+  defp current_approach(marker) when is_map(marker) do
+    case normalize_approach(marker["approach"]) do
+      {:ok, approach} -> approach
+      :error -> nil
+    end
+  end
+
+  defp put_approach(marker, nil), do: Map.delete(marker, "approach")
+  defp put_approach(marker, approach), do: Map.put(marker, "approach", encode_approach(approach))
+
+  defp approach_marker(approach) do
+    %{"version" => @version, "state" => @approach_state, "approach" => encode_approach(approach)}
+  end
+
+  defp trajectory_ready?(_parsed, :threshold, _opts), do: true
+
+  defp trajectory_ready?(parsed, :blocked, opts) do
+    explained?(parsed, Keyword.get(opts, :explained_percent)) or
+      blocked_span_seconds(parsed) >= Keyword.get(opts, :min_blocked_seconds, 0)
+  end
+
+  defp explained?(%{approach: %{} = approach, latest: latest}, explained_percent)
+       when is_number(explained_percent) do
+    DateTime.compare(approach.reset_at, latest.reset_at) == :eq and
+      approach.used_percent >= explained_percent
+  end
+
+  defp explained?(_parsed, _explained_percent), do: false
+
+  defp blocked_span_seconds(%{first: first, latest: latest}),
+    do: DateTime.diff(latest.provider_observed_at, first.provider_observed_at, :second)
 
   defp equivalent?(left, right) do
     left.binding == right.binding and DateTime.compare(left.reset_at, right.reset_at) == :eq
@@ -443,9 +626,18 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
     end
   end
 
+  defp parse_marker(%{"state" => @approach_state} = marker) do
+    with true <- marker["version"] == @version,
+         {:ok, approach} <- normalize_approach(marker["approach"]) do
+      {:ok, %{state: @approach_state, observation_count: 0, approach: approach}}
+    else
+      _malformed -> :error
+    end
+  end
+
   defp parse_marker(marker) when is_map(marker) do
     with true <- marker["version"] == @version,
-         state when state in ["candidate", "confirmed"] <- marker["state"],
+         state when state in @proof_states <- marker["state"],
          count when is_integer(count) and count in 1..@confirmed_count <-
            marker["observation_count"],
          true <- state == "confirmed" == (count == @confirmed_count),
@@ -453,11 +645,46 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
          {:ok, latest} <- decode_observation(marker["latest"]),
          {:ok, binding} <- normalize_binding(marker["binding"]),
          true <- binding == first.binding and binding == latest.binding,
-         true <- DateTime.compare(latest.provider_observed_at, first.provider_observed_at) != :lt do
-      {:ok, %{state: state, observation_count: count, first: first, latest: latest}}
+         true <- DateTime.compare(latest.provider_observed_at, first.provider_observed_at) != :lt,
+         {:ok, approach} <- optional_approach(marker["approach"]) do
+      {:ok,
+       %{
+         state: state,
+         observation_count: count,
+         first: first,
+         latest: latest,
+         approach: approach
+       }}
     else
       _malformed -> :error
     end
+  end
+
+  defp optional_approach(nil), do: {:ok, nil}
+  defp optional_approach(value), do: normalize_approach(value)
+
+  defp normalize_approach(approach) when is_map(approach) do
+    with used_percent when is_number(used_percent) <- field(approach, :used_percent),
+         {:ok, provider_observed_at} <- datetime(field(approach, :provider_observed_at)),
+         {:ok, reset_at} <- datetime(field(approach, :reset_at)) do
+      {:ok,
+       %{
+         used_percent: used_percent,
+         provider_observed_at: provider_observed_at,
+         reset_at: reset_at
+       }}
+    else
+      _malformed -> :error
+    end
+  end
+
+  defp normalize_approach(_approach), do: :error
+
+  defp encode_approach(approach) do
+    approach
+    |> Map.update!(:provider_observed_at, &DateTime.to_iso8601/1)
+    |> Map.update!(:reset_at, &DateTime.to_iso8601/1)
+    |> stringify_keys()
   end
 
   defp normalize_observation(observation) when is_map(observation) do

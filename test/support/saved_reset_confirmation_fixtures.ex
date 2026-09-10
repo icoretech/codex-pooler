@@ -14,6 +14,7 @@ defmodule CodexPooler.SavedResetConfirmationFixtures do
   alias CodexPooler.Quotas.AccountAvailability
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -39,13 +40,43 @@ defmodule CodexPooler.SavedResetConfirmationFixtures do
     observations = Keyword.get(opts, :observations, 2)
     usage_url = Keyword.get(opts, :usage_url, @default_usage_url)
     windows = Keyword.get_lazy(opts, :windows, fn -> weekly_provider_windows(identity.id) end)
+    approach? = Keyword.get(opts, :approach, true)
 
-    for %AccountQuotaWindow{reset_at: %DateTime{}, observed_at: %DateTime{}} = window <- windows,
-        ordinal <- 1..observations do
-      observe_window!(identity, window, ordinal, observations, usage_url, opts)
+    for %AccountQuotaWindow{reset_at: %DateTime{}, observed_at: %DateTime{}} = window <- windows do
+      # An exhausted window first shows the account approaching the limit while
+      # still allowed, so the later blocked proof is an explained exhaustion.
+      if approach? and exhausted_window?(window) do
+        approach_at =
+          DateTime.add(
+            Keyword.get(opts, :observed_at, window.observed_at),
+            -(observations + 1) * @receipt_spacing_seconds,
+            :second
+          )
+
+        observe_window!(identity, window, approach_at,
+          usage_url: usage_url,
+          observed_at: Keyword.get(opts, :observed_at, window.observed_at),
+          permission: {true, false, :available},
+          used_percent: Keyword.get(opts, :approach_percent, approach_percent(identity))
+        )
+      end
+
+      for ordinal <- 1..observations do
+        observe_window!(identity, window, ordinal, observations, usage_url, opts)
+      end
     end
 
     reload!(identity)
+  end
+
+  defp exhausted_window?(%AccountQuotaWindow{used_percent: used_percent}),
+    do: Decimal.compare(used_percent, Decimal.new(100)) != :lt
+
+  defp approach_percent(identity) do
+    identity
+    |> SavedResets.auto_policy()
+    |> Map.get(:quota_threshold_percent)
+    |> Decimal.new()
   end
 
   @doc """
@@ -168,7 +199,7 @@ defmodule CodexPooler.SavedResetConfirmationFixtures do
       from window in AccountQuotaWindow,
         where:
           window.upstream_identity_id == ^identity_id and window.source == ^@provider_source and
-            window.window_kind == "secondary",
+            window.window_kind == "secondary" and window.quota_scope == "account",
         order_by: [asc: window.id]
     )
   end

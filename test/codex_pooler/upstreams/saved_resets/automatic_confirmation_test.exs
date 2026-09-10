@@ -73,6 +73,12 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmationTest do
     |> AutomaticConfirmation.observe(observation(@second))
   end
 
+  defp approach(at, used_percent) do
+    %{used_percent: used_percent, provider_observed_at: at, reset_at: @reset}
+  end
+
+  @trajectory [explained_percent: 95, min_blocked_seconds: 3600]
+
   describe "observe/2" do
     test "one coherent observation is only a candidate" do
       metadata = AutomaticConfirmation.observe(%{"other" => true}, observation(@first))
@@ -182,6 +188,130 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmationTest do
         )
 
       assert metadata == %{}
+    end
+  end
+
+  describe "trajectory" do
+    test "an allowed receipt clears the proof but records the same-cycle approach witness" do
+      metadata =
+        AutomaticConfirmation.observe_allowed(confirmed_metadata(), approach(@third, 32.0))
+
+      assert AutomaticConfirmation.state(metadata) == "approach"
+      refute AutomaticConfirmation.confirmed?(metadata, @third)
+      assert AutomaticConfirmation.blocked_readiness(metadata, @trajectory) == :approach_only
+
+      marker = metadata[AutomaticConfirmation.metadata_key()]
+      assert marker["approach"]["used_percent"] == 32.0
+      refute Map.has_key?(marker, "first")
+    end
+
+    test "an explained exhaustion confirms on the second blocked receipt" do
+      metadata =
+        %{}
+        |> AutomaticConfirmation.observe_allowed(approach(@first, 96.0))
+        |> AutomaticConfirmation.observe(observation(@second))
+        |> AutomaticConfirmation.observe(observation(@third))
+
+      assert AutomaticConfirmation.state(metadata) == "confirmed"
+      assert AutomaticConfirmation.confirmed?(metadata, @third, @trajectory)
+
+      assert AutomaticConfirmation.blocked_readiness(metadata, @trajectory) ==
+               {:confirmed, :explained}
+
+      assert metadata[AutomaticConfirmation.metadata_key()]["approach"]["used_percent"] == 96.0
+    end
+
+    test "an unexplained jump to blocked must persist for the minimum blocked span" do
+      jump =
+        %{}
+        |> AutomaticConfirmation.observe_allowed(approach(@first, 32.0))
+        |> AutomaticConfirmation.observe(observation(@second))
+        |> AutomaticConfirmation.observe(observation(@third))
+
+      assert AutomaticConfirmation.state(jump) == "confirmed"
+      refute AutomaticConfirmation.confirmed?(jump, @third, @trajectory)
+
+      assert {:span_pending, remaining} =
+               AutomaticConfirmation.blocked_readiness(jump, @trajectory)
+
+      assert remaining == 3600 - 60
+
+      later = DateTime.add(@second, 3600, :second)
+      spanned = AutomaticConfirmation.observe(jump, observation(later))
+      assert AutomaticConfirmation.confirmed?(spanned, later, @trajectory)
+      assert AutomaticConfirmation.blocked_readiness(spanned, @trajectory) == {:confirmed, :span}
+
+      # without the policy facts the pure API never explains a jump
+      refute AutomaticConfirmation.confirmed?(jump, @third,
+               explained_percent: nil,
+               min_blocked_seconds: 3600
+             )
+    end
+
+    test "a proof with no approach witness is unexplained" do
+      metadata = confirmed_metadata()
+
+      refute AutomaticConfirmation.confirmed?(metadata, @second, @trajectory)
+      assert {:span_pending, _} = AutomaticConfirmation.blocked_readiness(metadata, @trajectory)
+
+      spanned =
+        AutomaticConfirmation.observe(metadata, observation(DateTime.add(@first, 3600, :second)))
+
+      assert AutomaticConfirmation.confirmed?(
+               spanned,
+               DateTime.add(@first, 3600, :second),
+               @trajectory
+             )
+    end
+
+    test "an approach witness from another cycle does not explain the proof" do
+      other_cycle = %{
+        used_percent: 99.0,
+        provider_observed_at: @first,
+        reset_at: DateTime.add(@reset, -7, :day)
+      }
+
+      metadata =
+        %{}
+        |> AutomaticConfirmation.observe_allowed(other_cycle)
+        |> AutomaticConfirmation.observe(observation(@second))
+        |> AutomaticConfirmation.observe(observation(@third))
+
+      assert AutomaticConfirmation.state(metadata) == "confirmed"
+      refute Map.has_key?(metadata[AutomaticConfirmation.metadata_key()], "approach")
+      refute AutomaticConfirmation.confirmed?(metadata, @third, @trajectory)
+    end
+
+    test "a threshold receipt refreshes the approach witness and an older one is ignored" do
+      metadata =
+        %{}
+        |> AutomaticConfirmation.observe_allowed(approach(@second, 90.0))
+        |> AutomaticConfirmation.observe_allowed(approach(@first, 10.0))
+
+      assert metadata[AutomaticConfirmation.metadata_key()]["approach"]["used_percent"] == 90.0
+
+      refreshed = AutomaticConfirmation.observe(metadata, threshold_observation(@third))
+      assert AutomaticConfirmation.state(refreshed) == "candidate"
+      assert refreshed[AutomaticConfirmation.metadata_key()]["approach"]["used_percent"] == 96.0
+
+      blocked =
+        refreshed
+        |> AutomaticConfirmation.observe(observation(DateTime.add(@third, 60, :second)))
+        |> AutomaticConfirmation.observe(observation(DateTime.add(@third, 120, :second)))
+
+      assert AutomaticConfirmation.confirmed?(
+               blocked,
+               DateTime.add(@third, 120, :second),
+               @trajectory
+             )
+    end
+
+    test "a malformed approach witness is treated as absent" do
+      key = AutomaticConfirmation.metadata_key()
+      metadata = put_in(confirmed_metadata(), [key, "approach"], %{"used_percent" => "high"})
+
+      refute AutomaticConfirmation.confirmed?(metadata, @second, @trajectory)
+      assert AutomaticConfirmation.state(metadata) == nil
     end
   end
 

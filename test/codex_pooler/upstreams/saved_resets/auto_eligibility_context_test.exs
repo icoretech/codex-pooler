@@ -265,7 +265,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
         upstream_identity_id: @identity_id
     }
 
-    policy = %{min_blocked_minutes: 60, keep_credits: 0}
+    policy = %{min_blocked_minutes: 60, keep_credits: 0, quota_threshold_percent: 95}
     identity = %UpstreamIdentity{id: @identity_id, metadata: %{}}
     confirmed = %{window | metadata: confirmed_metadata(window)}
 
@@ -350,6 +350,11 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
     end
 
     %{}
+    |> AutomaticConfirmation.observe_allowed(%{
+      used_percent: 96.0,
+      provider_observed_at: DateTime.add(@now, -180, :second),
+      reset_at: window.reset_at
+    })
     |> AutomaticConfirmation.observe(observation.(DateTime.add(@now, -120, :second)))
     |> AutomaticConfirmation.observe(observation.(DateTime.add(@now, -60, :second)))
   end

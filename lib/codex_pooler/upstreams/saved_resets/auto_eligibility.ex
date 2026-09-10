@@ -297,8 +297,17 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
         window.metadata,
         timestamp,
         [trigger: :blocked, keep_credits: policy.keep_credits] ++
-          target_binding_opts(window, identity, bind_identity?)
+          trajectory_opts(policy) ++ target_binding_opts(window, identity, bind_identity?)
       )
+  end
+
+  # An unexplained jump to blocked (no same-cycle allowed receipt at or above
+  # the policy threshold) must persist for the policy minimum blocked span.
+  defp trajectory_opts(policy) do
+    [
+      explained_percent: policy.quota_threshold_percent,
+      min_blocked_seconds: policy.min_blocked_minutes * 60
+    ]
   end
 
   # A pressure member is corroborated either by a threshold confirmation at the
@@ -320,7 +329,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       AutomaticConfirmation.confirmed?(
         window.metadata,
         timestamp,
-        [trigger: :blocked] ++ shared_opts
+        [trigger: :blocked] ++ trajectory_opts(policy) ++ shared_opts
       )
   end
 
