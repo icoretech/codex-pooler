@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.7.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.5...codex-pooler-v0.7.6) (2026-09-10)
+
+
+### Bug Fixes
+
+* **compaction:** restore websocket envelope after compact projection ([c466d3a](https://github.com/icoretech/codex-pooler/commit/c466d3a7a2704786670324bf251f4223acc2ae30))
+* **deps:** update dependency astro to v7.3.2 ([#372](https://github.com/icoretech/codex-pooler/issues/372)) ([b96c6b4](https://github.com/icoretech/codex-pooler/commit/b96c6b4ca6e9a35941e65bd8f21e0913811f70a5))
+* **deps:** update dependency daisyui to v5.7.32 ([#373](https://github.com/icoretech/codex-pooler/issues/373)) ([6268de6](https://github.com/icoretech/codex-pooler/commit/6268de68e20153710d058126d8c5bd26dc462d3d))
+* **dev:** preserve account bundle transaction boundaries ([5704c68](https://github.com/icoretech/codex-pooler/commit/5704c68b98025208aa9b708e49eff6c69d18f9b0))
+* **diagnostics:** retain replay rejection reasons before public error mapping ([1633975](https://github.com/icoretech/codex-pooler/commit/16339755eae8e891559de768ec348efcba579140))
+* **images:** retain requested Lite overrides during masked fallback ([2c3545b](https://github.com/icoretech/codex-pooler/commit/2c3545b1065b6d9171028ee8d1493dd98c0c3b03))
+* **images:** route masked edits through Full Responses hosts ([508c896](https://github.com/icoretech/codex-pooler/commit/508c896bf8b70d05d132ce3a569fce10e4da05f8))
+* **persistence:** lock the session before the turn when completing a turn ([5229a9d](https://github.com/icoretech/codex-pooler/commit/5229a9d1ea7e113db8612784d3c45ff1bfbea54c))
+* **quality:** drop unreachable clauses reported by Dialyzer ([4350ed4](https://github.com/icoretech/codex-pooler/commit/4350ed4764a49f6673da2762a91161a381dc09a5))
+* **quota:** keep provider measurement and permission evidence coherent ([95e657f](https://github.com/icoretech/codex-pooler/commit/95e657fece51466510131efd88da8b867deaa940))
+* **quota:** let confirmed usage readings supersede header exhaustion ([0fb3419](https://github.com/icoretech/codex-pooler/commit/0fb341953e48d9d691ecebdcbc762d619fdb5205))
+* **resets:** require corroborated exhaustion before automatic redemption ([cdd1500](https://github.com/icoretech/codex-pooler/commit/cdd1500acd02291fd1023856de921adecb6b6650))
+* **resets:** require explained or sustained exhaustion before automatic spend ([abe817c](https://github.com/icoretech/codex-pooler/commit/abe817c27821ddf67e4a2528d25f02d9b313ec5a))
+* **upstreams:** fence prepared imports and post-commit publication ([495b861](https://github.com/icoretech/codex-pooler/commit/495b86151a4c7c73fcd0530ccb00cdec805d03f7))
+* **upstreams:** preflight credential import batches ([5685b91](https://github.com/icoretech/codex-pooler/commit/5685b91042958621804103f26d293b53ccb2bc1b))
+* **websocket:** retire connections after provider connection-limit errors ([4bdd7fd](https://github.com/icoretech/codex-pooler/commit/4bdd7fdb63a0497e195e81b4fae052fe2b05d8ee))
+
+
+### Performance Improvements
+
+* **upstreams:** bound credential import selection and locking ([15ea269](https://github.com/icoretech/codex-pooler/commit/15ea2696aeb51a1f82435428fc5da85b3374d6b4))
+
+
+### Tests
+
+* **admin:** order the DataCase alias in the cockpit LiveView test ([7e9ac71](https://github.com/icoretech/codex-pooler/commit/7e9ac71c9fc544a8797746da75303fc73784716e))
+* **admin:** release the sandbox before cleaning committed import fixtures ([0ea0721](https://github.com/icoretech/codex-pooler/commit/0ea07211cebe6fe7e9982c51f8237acb4773518f))
+* **compression:** cover unsupported tokenizer fail-open lifecycle ([c713a9e](https://github.com/icoretech/codex-pooler/commit/c713a9eb0309ce915b11a127ee4999998e46527d))
+* **dev:** extend the compaction smoke fixture for cache fidelity lanes ([70825d6](https://github.com/icoretech/codex-pooler/commit/70825d6795e076e4660e3b729a5b8651237d500e))
+* **gateway:** cover recovery and duplicate admission boundaries ([1038262](https://github.com/icoretech/codex-pooler/commit/103826265f47937746780a2ad91ed244c05953b4))
+* **quota:** align cockpit priming and hard-pin recovery with confirmed measurements ([8cf536d](https://github.com/icoretech/codex-pooler/commit/8cf536dd5b3195e02676f12f6975c9817a314731))
+* **quota:** execute the hard-pin recovery regression and release committed fixtures ([d8e2014](https://github.com/icoretech/codex-pooler/commit/d8e201481a189b98d0d6933ed599b45d62778d6d))
+* **runtime:** cover hard-pin recovery after quota denial ([ed9a1ed](https://github.com/icoretech/codex-pooler/commit/ed9a1edb4f304b4f4f85a2e06ab7c160acde0b0c))
+* **upstream:** align strict fixture types with scenario failures ([48152be](https://github.com/icoretech/codex-pooler/commit/48152beddd408d97041d74004025d8bc505bf10b))
+* **upstreams:** cover prepared import recovery surfaces ([e4b2844](https://github.com/icoretech/codex-pooler/commit/e4b2844ba8a7ea800ae2761acba87fe5ba66674e))
+* **websocket:** cover retirement across owner recovery paths ([98bbc66](https://github.com/icoretech/codex-pooler/commit/98bbc662fb80fd4cbdc1bf32fc0f4b6404b8d600))
+* **websocket:** enforce finite upstream fixture expectations ([0535d7b](https://github.com/icoretech/codex-pooler/commit/0535d7b323e5cd0a2f36aa0667c56117d2362e5b))
+* **websocket:** verify connection retirement across BEAM nodes ([fe776fb](https://github.com/icoretech/codex-pooler/commit/fe776fbcb3287e4a926b2c391ed18c22c7ade877))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency openai/codex to v0.154.0 ([#374](https://github.com/icoretech/codex-pooler/issues/374)) ([ae88a83](https://github.com/icoretech/codex-pooler/commit/ae88a83bc326c87dd252ed5491e282481940b9e8))
+* **deps:** update ghcr.io/icoretech/codex-docker docker tag to v0.154.0 ([#377](https://github.com/icoretech/codex-pooler/issues/377)) ([11cd2c4](https://github.com/icoretech/codex-pooler/commit/11cd2c49c36774299dd2cd27b5b07f3fac158265))
+* **deps:** update helm release codex-pooler to v0.8.5 ([#375](https://github.com/icoretech/codex-pooler/issues/375)) ([9b1cd27](https://github.com/icoretech/codex-pooler/commit/9b1cd274de1011d062b323c07e6d39e12378e216))
+
 ## [0.7.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.4...codex-pooler-v0.7.5) (2026-09-08)
 
 
