@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Admin.UpstreamRoutingReadiness
   alias CodexPooler.Audit
   alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.DataCase
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
   alias CodexPooler.FakeOpenAIAuthProvider
@@ -19,7 +20,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
-  alias CodexPooler.DataCase
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
