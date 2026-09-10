@@ -1465,8 +1465,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       provider_status_safe?(metadata)
   end
 
-  defp safe_lower_same_cycle_observation?(_evidence, _existing), do: false
-
   @spec compare_confirmed_snapshot(
           Evidence.t(),
           Quota.AccountQuotaWindow.t(),

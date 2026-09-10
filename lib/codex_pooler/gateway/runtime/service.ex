@@ -879,7 +879,6 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:error, :successor_claimed} -> replay_intent_result(:fresh, authorization_binding, nil)
       :none -> reject_replay_intent(context, session, :missing_witness)
       {:error, reason} -> reject_replay_intent(context, session, reason)
-      _invalid -> reject_replay_intent(context, session, :missing_witness)
     end
   end
 
@@ -2021,7 +2020,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp duplicate_turn_reservation_constraint?(_error, _opts), do: false
 
   @doc false
-  @spec reservation_constraint_error(Ecto.ConstraintError.t(), RequestOptions.t()) ::
+  @spec reservation_constraint_error(Exception.t(), RequestOptions.t()) ::
           {:error, gateway_error()} | :reraise
   def reservation_constraint_error(%Ecto.ConstraintError{} = error, %RequestOptions{} = opts) do
     if duplicate_turn_reservation_constraint?(error, opts) do

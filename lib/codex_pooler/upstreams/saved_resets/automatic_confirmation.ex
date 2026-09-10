@@ -421,8 +421,6 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
   defp at_or_above?(%Decimal{} = used_percent, threshold) when is_number(threshold),
     do: Decimal.compare(used_percent, Decimal.from_float(threshold / 1)) != :lt
 
-  defp at_or_above?(_used_percent, _threshold), do: false
-
   defp account_state(%{state: state}) when state in [:available, :blocked],
     do: Atom.to_string(state)
 
