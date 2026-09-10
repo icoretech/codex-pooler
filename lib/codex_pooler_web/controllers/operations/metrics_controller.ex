@@ -2,13 +2,14 @@ defmodule CodexPoolerWeb.Operations.MetricsController do
   use CodexPoolerWeb, :controller
 
   alias CodexPooler.InstanceSettings
+  alias CodexPoolerWeb.Telemetry.PrometheusReporter
 
   def show(conn, _params) do
     case authorize_metrics(conn) do
       :ok ->
         conn
         |> put_resp_content_type("text/plain; version=0.0.4")
-        |> send_resp(200, TelemetryMetricsPrometheus.Core.scrape())
+        |> send_resp(200, PrometheusReporter.scrape())
 
       {:error, reason} ->
         conn
