@@ -13695,7 +13695,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       gateway_upstream(
         setup.pool,
         fallback_upstream,
-        "upstream-token-hard-pin-header-recovery-fallback", compact?: false)
+        "upstream-token-hard-pin-header-recovery-fallback",
+        compact?: false
+      )
 
     setup =
       Map.put(
