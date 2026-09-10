@@ -12,6 +12,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
+  alias CodexPooler.Upstreams.Quota.Windows.RuntimeCoherence
   alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
 
   @fresh "fresh"
@@ -141,13 +142,23 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # and operators see the confirmed measurement instead of waiting for the
   # exhausted row to age past the freshness TTL.
   defp reject_exhaustion_overridden_by_confirmed_usage(candidates, as_of) do
-    case Enum.filter(candidates, &UsageCoherence.confirmed?(&1, as_of)) do
+    candidates
+    |> reject_overridden(UsageCoherence, as_of)
+    |> reject_overridden(RuntimeCoherence, as_of)
+  end
+
+  # Runtime readings (response headers, rate-limit events) confirmed twice in
+  # the same cycle supersede a fresh exhausted Usage API row the same way
+  # (`RuntimeCoherence`), so a provider incident that keeps reporting 100%
+  # through the Usage API while traffic succeeds does not mask the account.
+  defp reject_overridden(candidates, coherence, as_of) do
+    case Enum.filter(candidates, &coherence.confirmed?(&1, as_of)) do
       [] ->
         candidates
 
       confirmed ->
         Enum.reject(candidates, fn window ->
-          Enum.any?(confirmed, &UsageCoherence.overrides?(&1, window, as_of))
+          Enum.any?(confirmed, &coherence.overrides?(&1, window, as_of))
         end)
     end
   end

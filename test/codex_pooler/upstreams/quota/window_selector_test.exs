@@ -743,6 +743,72 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
     assert WindowSelector.logical_windows([earlier, later], @as_of) == [later]
   end
 
+  test "twice-confirmed runtime readings supersede a fresh exhausted usage reading of the same cycle" do
+    reset_at = DateTime.add(@as_of, 5, :day)
+
+    exhausted_usage =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: reset_at,
+        observed_at: DateTime.add(@as_of, -60, :second),
+        metadata: %{"rate_limit_allowed" => false, "rate_limit_reached" => true}
+      )
+
+    confirmed_headers =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        used_percent: Decimal.new("37"),
+        reset_at: reset_at,
+        observed_at: DateTime.add(@as_of, -72, :second),
+        metadata: runtime_coherence(2, reset_at, DateTime.add(@as_of, -72, :second))
+      )
+
+    single_headers = %{
+      confirmed_headers
+      | metadata: runtime_coherence(1, reset_at, DateTime.add(@as_of, -72, :second))
+    }
+
+    # One runtime reading is a suspicion: the exhausted usage row still wins.
+    assert WindowSelector.logical_windows([single_headers, exhausted_usage], @as_of) == [
+             exhausted_usage
+           ]
+
+    # Two coherent runtime readings observed within the tolerance before the
+    # exhausted usage reading supersede it.
+    assert WindowSelector.logical_windows([confirmed_headers, exhausted_usage], @as_of) == [
+             confirmed_headers
+           ]
+
+    # An exhausted usage reading observed more than the tolerance after the
+    # last runtime confirmation keeps winning.
+    later_exhausted = %{exhausted_usage | observed_at: DateTime.add(@as_of, 5, :minute)}
+    later = DateTime.add(@as_of, 6, :minute)
+
+    assert WindowSelector.logical_windows([confirmed_headers, later_exhausted], later) == [
+             later_exhausted
+           ]
+  end
+
+  defp runtime_coherence(count, reset_at, last_observed_at) do
+    %{
+      "__quota_runtime_coherence_v1" => %{
+        "version" => 1,
+        "count" => count,
+        "used_percent" => "37",
+        "reset_at" => DateTime.to_iso8601(reset_at),
+        "first_observed_at" => DateTime.to_iso8601(DateTime.add(last_observed_at, -60, :second)),
+        "last_observed_at" => DateTime.to_iso8601(last_observed_at),
+        "allowed" => true,
+        "limit_reached" => false
+      }
+    }
+  end
+
   defp usage_coherence(count, reset_at, last_observed_at) do
     %{
       "__quota_usage_coherence_v1" => %{

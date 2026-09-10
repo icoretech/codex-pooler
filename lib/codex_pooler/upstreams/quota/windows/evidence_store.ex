@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
   alias CodexPooler.Upstreams.Quota.Windows.RelativeLiveness
+  alias CodexPooler.Upstreams.Quota.Windows.RuntimeCoherence
   alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
   alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -112,6 +113,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           |> retain_spark_permission_observation(existing, evidence)
           |> AutomaticConfirmation.retain(existing)
           |> UsageCoherence.observe(evidence, timestamp)
+          |> RuntimeCoherence.observe(evidence, timestamp)
 
         result =
           existing
