@@ -287,14 +287,19 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     Repo.transaction(fn ->
       now = lifecycle_now(request_id, attempt)
 
+      # Canonical lock order is session, then turn. Every session-first path
+      # (owner binding, replay, interruption) locks the session by id and then
+      # the turn by session and request; completing the turn first and locking
+      # the session afterwards inverted that order and deadlocked in production.
+      assignment = lock_session_assignment(turn_session_id(request_id))
+
       {count, _rows} =
         request_id
         |> generation_completion_query(attempt_id, generation, status)
         |> update_completion(status, error_code, attempt_id, now)
 
       if count == 1 do
-        turn = Repo.get_by!(CodexTurn, request_id: request_id)
-        maybe_update_session_assignment(turn.codex_session_id, attempt, owner_witness)
+        update_session_assignment(assignment, attempt, owner_witness)
       end
     end)
 
@@ -514,9 +519,26 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   defp codex_turn_transport_kind("http_compact_json"), do: "http_json"
   defp codex_turn_transport_kind(transport), do: transport
 
-  defp maybe_update_session_assignment(session_id, %Attempt{} = attempt, owner_witness) do
-    session = codex_session_for_update(session_id)
-    lease = session && active_owner_lease_for_update(session_id)
+  defp turn_session_id(request_id) do
+    Repo.one(
+      from turn in CodexTurn,
+        where: turn.request_id == ^request_id,
+        select: turn.codex_session_id
+    )
+  end
+
+  defp lock_session_assignment(nil), do: nil
+
+  defp lock_session_assignment(session_id) do
+    case codex_session_for_update(session_id) do
+      %CodexSession{} = session -> {session, active_owner_lease_for_update(session_id)}
+      nil -> nil
+    end
+  end
+
+  defp update_session_assignment(nil, _attempt, _owner_witness), do: :ok
+
+  defp update_session_assignment({session, lease}, %Attempt{} = attempt, owner_witness) do
     now = db_now()
 
     if session_assignment_authorized?(session, lease, owner_witness, now) do
