@@ -123,6 +123,22 @@ defmodule CodexPooler.Pools.Routing do
           parse_boolean(
             routing_attr(attrs, "sticky_http_sessions", settings.sticky_http_sessions)
           ),
+        durable_conversation_affinity_enabled:
+          parse_boolean(
+            routing_attr(
+              attrs,
+              "durable_conversation_affinity_enabled",
+              settings.durable_conversation_affinity_enabled
+            )
+          ),
+        durable_conversation_affinity_idle_seconds:
+          parse_positive_integer(
+            routing_attr(
+              attrs,
+              "durable_conversation_affinity_idle_seconds",
+              settings.durable_conversation_affinity_idle_seconds
+            )
+          ),
         prompt_cache_affinity_enabled:
           parse_boolean(
             routing_attr(
@@ -167,6 +183,9 @@ defmodule CodexPooler.Pools.Routing do
             bridge_ring_size: settings.bridge_ring_size,
             sticky_websocket_sessions: settings.sticky_websocket_sessions,
             sticky_http_sessions: settings.sticky_http_sessions,
+            durable_conversation_affinity_enabled: settings.durable_conversation_affinity_enabled,
+            durable_conversation_affinity_idle_seconds:
+              settings.durable_conversation_affinity_idle_seconds,
             prompt_cache_affinity_enabled: settings.prompt_cache_affinity_enabled,
             request_compression_enabled: settings.request_compression_enabled,
             allow_image_generation: settings.allow_image_generation
@@ -204,6 +223,8 @@ defmodule CodexPooler.Pools.Routing do
       bridge_ring_size: 3,
       sticky_websocket_sessions: true,
       sticky_http_sessions: false,
+      durable_conversation_affinity_enabled: false,
+      durable_conversation_affinity_idle_seconds: 86_400,
       prompt_cache_affinity_enabled: true,
       v1_compatibility_enabled: true,
       request_compression_enabled: false,

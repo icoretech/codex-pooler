@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     BridgeAffinity,
     BridgeDemotion,
     CodexSession,
+    ConversationAffinity,
     RoutingCircuitState
   }
 
@@ -120,8 +121,12 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       |> apply_prompt_cache_locality(prompt_cache_locality)
       |> apply_affinity(affinity)
       |> apply_codex_session_preference(request_options)
+      |> apply_durable_affinity(affinity)
       |> apply_demotions(demotions)
       |> apply_windowless_tier(model, route_state)
+
+    {ordered, affinity} =
+      reserve_durable_route(ordered, affinity, demotions, model, route_state)
 
     ring_size = max(settings.bridge_ring_size || @default_ring_size, 1)
     candidates = Enum.take(ordered, ring_size)
@@ -203,8 +208,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       fun.()
     end)
     |> case do
-      {:ok, _result} ->
-        :ok
+      {:ok, result} ->
+        result
 
       {:error, reason} ->
         log_skipped_side_effect(side_effect, assignment, identity, skip_code(reason))
@@ -327,8 +332,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       idempotency_key: idempotency_key
     } = affinity_request_context(opts)
 
+    stable_key = opts.continuity.durable_conversation_key_hash
+
     {enabled?, kind, key_value} =
       cond do
+        settings.durable_conversation_affinity_enabled and is_binary(stable_key) ->
+          {true, ConversationAffinity.kind(), stable_key}
+
         codex_session && settings.sticky_websocket_sessions ->
           {true, "codex_session", codex_session.id}
 
@@ -352,7 +362,12 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       enabled?: enabled?,
       kind: kind,
       key_hash: key_hash,
-      seed: key_value || input.correlation_id,
+      seed:
+        if(kind == ConversationAffinity.kind(),
+          do: Base.encode16(key_hash),
+          else: key_value || input.correlation_id
+        ),
+      idle_seconds: settings.durable_conversation_affinity_idle_seconds,
       row: affinity,
       status: affinity_status(enabled?, affinity),
       fallback_reason: nil,
@@ -370,12 +385,33 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     }
   end
 
+  defp affinity_hash(auth, model, "durable_conversation", key_value) do
+    :crypto.hash(
+      :sha256,
+      :erlang.term_to_binary(
+        {auth.pool.id, auth.api_key.id, model.exposed_model_id, "durable_conversation", key_value}
+      )
+    )
+  end
+
   defp affinity_hash(auth, model, kind, key_value) do
     canonical_key =
       [auth.pool.id, auth.api_key.id, model.exposed_model_id, kind, key_value]
       |> Enum.join(":")
 
     :crypto.hash(:sha256, canonical_key)
+  end
+
+  defp active_affinity(auth, model, "durable_conversation", key_hash) do
+    ConversationAffinity.lookup(
+      %{
+        pool_id: auth.pool.id,
+        api_key_id: auth.api_key.id,
+        model_identifier: model.exposed_model_id,
+        key_hash: key_hash
+      },
+      now()
+    )
   end
 
   defp active_affinity(auth, model, kind, key_hash) do
@@ -393,6 +429,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   end
 
   defp affinity_status(false, _affinity), do: "disabled"
+
+  defp affinity_status(true, %BridgeAffinity{
+         affinity_kind: "durable_conversation",
+         last_hit_at: nil
+       }),
+       do: "reserved"
+
   defp affinity_status(true, %BridgeAffinity{}), do: "hit"
   defp affinity_status(true, _affinity), do: "miss"
 
@@ -406,6 +449,40 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
     matched ++ rest
   end
+
+  defp apply_durable_affinity(candidates, %{kind: "durable_conversation"} = affinity),
+    do: apply_affinity(candidates, affinity)
+
+  defp apply_durable_affinity(candidates, _affinity), do: candidates
+
+  defp reserve_durable_route(
+         [{assignment, identity} | _] = ordered,
+         %{kind: "durable_conversation", row: nil} = affinity,
+         demotions,
+         model,
+         route_state
+       ) do
+    case locked_side_effect(:affinity_reserve, assignment, identity, fn ->
+           ConversationAffinity.reserve(affinity, assignment, identity, now())
+         end) do
+      %BridgeAffinity{} = row ->
+        affinity = %{affinity | row: row, status: affinity_status(true, row)}
+
+        ordered =
+          ordered
+          |> apply_durable_affinity(affinity)
+          |> apply_demotions(demotions)
+          |> apply_windowless_tier(model, route_state)
+
+        {ordered, affinity}
+
+      _skipped ->
+        {ordered, affinity}
+    end
+  end
+
+  defp reserve_durable_route(ordered, affinity, _demotions, _model, _route_state),
+    do: {ordered, affinity}
 
   defp apply_codex_session_preference(
          candidates,
@@ -593,6 +670,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
   defp apply_windowless_tier(candidates, %Model{}, nil), do: candidates
 
+  defp upsert_affinity!(
+         %{affinity: %{kind: "durable_conversation"} = affinity},
+         assignment,
+         identity,
+         _now
+       ),
+       do: ConversationAffinity.succeed(affinity, assignment, identity)
+
   defp upsert_affinity!(plan, assignment, identity, now) do
     metadata = %{"source" => "gateway_success"}
 
@@ -632,6 +717,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       conflict_target: @affinity_conflict_target
     )
   end
+
+  defp mark_affinity_miss!(%{affinity: %{kind: "durable_conversation"} = affinity}, now),
+    do: ConversationAffinity.miss(affinity, now)
 
   defp mark_affinity_miss!(plan, now) do
     case plan.affinity.row do

@@ -4035,6 +4035,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "id" => pool.id,
         "name" => "Editable Routing",
         "status" => "active",
+        "durable_conversation_affinity_enabled" => "true",
+        "durable_conversation_affinity_idle_seconds" => "3600",
         "routing_strategy" => "quota_first",
         "bridge_ring_size" => "5",
         "sticky_websocket_sessions" => "false",
@@ -4050,6 +4052,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     settings = Pools.get_routing_settings(pool)
     assert settings.routing_strategy == "quota_first"
     assert settings.bridge_ring_size == 5
+    assert settings.durable_conversation_affinity_enabled
+    assert settings.durable_conversation_affinity_idle_seconds == 3600
+    assert has_element?(view, "#pool_edit_durable_conversation_affinity_enabled[checked]")
+
+    assert has_element?(
+             view,
+             "#pool_edit_durable_conversation_affinity_idle_seconds[value='3600']"
+           )
+
     assert settings.sticky_websocket_sessions == false
     assert settings.sticky_http_sessions == true
     assert settings.prompt_cache_affinity_enabled == false

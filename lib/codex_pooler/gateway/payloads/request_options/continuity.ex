@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ConversationAffinity
   alias CodexPooler.Gateway.Payloads.RequestOptions.Normalization
 
   @session_header_sources [
@@ -22,6 +23,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     :session_header_source,
     :session_key,
     :conversation_key,
+    :durable_conversation_key_hash,
     :owner_instance_id,
     :bridge_owner_lease_ttl_seconds,
     :reconnect_window_seconds,
@@ -43,6 +45,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
           session_header_source: String.t() | nil,
           session_key: String.t() | nil,
           conversation_key: String.t() | nil,
+          durable_conversation_key_hash: <<_::256>> | nil,
           owner_instance_id: String.t() | nil,
           bridge_owner_lease_ttl_seconds: pos_integer() | nil,
           reconnect_window_seconds: non_neg_integer() | nil,
@@ -67,6 +70,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       session_header_source: session_header_source(Map.get(opts, :session_header_source)),
       session_key: Map.get(opts, :session_key),
       conversation_key: Map.get(opts, :conversation_key),
+      durable_conversation_key_hash: ConversationAffinity.from_options(opts),
       owner_instance_id: Map.get(opts, :owner_instance_id),
       bridge_owner_lease_ttl_seconds:
         Normalization.optional_positive_integer(Map.get(opts, :bridge_owner_lease_ttl_seconds)),

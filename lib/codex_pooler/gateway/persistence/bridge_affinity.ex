@@ -13,6 +13,8 @@ defmodule CodexPooler.Gateway.Persistence.BridgeAffinity do
     field :affinity_key_hash, :binary
     field :pool_upstream_assignment_id, :binary_id
     field :upstream_identity_id, :binary_id
+    field :generation, :integer, default: 0
+    field :expires_at, :utc_datetime_usec
     field :status, :string
     field :last_hit_at, :utc_datetime_usec
     field :last_miss_at, :utc_datetime_usec

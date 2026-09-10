@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ConversationAffinity
   alias CodexPooler.Pools.Routing, as: PoolRouting
 
   @overload_code "server_is_overloaded"
@@ -140,6 +141,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       previous_response_id: previous_response_id(conn),
       session_header: session_header,
       session_header_source: session_header_source,
+      durable_conversation_key_hash: ConversationAffinity.from_headers(conn.req_headers),
       user_agent: get_req_header(conn, "user-agent") |> List.first(),
       request_content_type: get_req_header(conn, "content-type") |> List.first(),
       forwarded_headers: forwarded_headers(conn),

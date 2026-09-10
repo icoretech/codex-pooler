@@ -16,6 +16,8 @@ defmodule CodexPooler.Pools.RoutingSettings do
     field :bridge_ring_size, :integer
     field :sticky_websocket_sessions, :boolean
     field :sticky_http_sessions, :boolean
+    field :durable_conversation_affinity_enabled, :boolean, default: false
+    field :durable_conversation_affinity_idle_seconds, :integer, default: 86_400
     field :prompt_cache_affinity_enabled, :boolean, default: true
     field :v1_compatibility_enabled, :boolean, default: true
     field :request_compression_enabled, :boolean, default: false
@@ -34,6 +36,8 @@ defmodule CodexPooler.Pools.RoutingSettings do
       :bridge_ring_size,
       :sticky_websocket_sessions,
       :sticky_http_sessions,
+      :durable_conversation_affinity_enabled,
+      :durable_conversation_affinity_idle_seconds,
       :prompt_cache_affinity_enabled,
       :v1_compatibility_enabled,
       :request_compression_enabled,
@@ -48,6 +52,8 @@ defmodule CodexPooler.Pools.RoutingSettings do
       :bridge_ring_size,
       :sticky_websocket_sessions,
       :sticky_http_sessions,
+      :durable_conversation_affinity_enabled,
+      :durable_conversation_affinity_idle_seconds,
       :prompt_cache_affinity_enabled,
       :v1_compatibility_enabled,
       :request_compression_enabled,
@@ -58,6 +64,10 @@ defmodule CodexPooler.Pools.RoutingSettings do
     ])
     |> validate_inclusion(:routing_strategy, @routing_strategies)
     |> validate_number(:bridge_ring_size, greater_than_or_equal_to: 1)
+    |> validate_number(:durable_conversation_affinity_idle_seconds,
+      greater_than_or_equal_to: 60,
+      less_than_or_equal_to: 2_592_000
+    )
   end
 
   @spec routing_strategies() :: [String.t()]
