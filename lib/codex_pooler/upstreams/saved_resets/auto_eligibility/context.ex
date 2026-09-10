@@ -11,6 +11,11 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
           required(:model_identifier) => String.t(),
           required(:route_class) => String.t()
         }
+  @type confirmation_ref :: %{
+          required(:upstream_identity_id) => Ecto.UUID.t(),
+          required(:account_quota_window_id) => Ecto.UUID.t(),
+          required(:fingerprint) => String.t()
+        }
   @type t :: %{
           required(:trigger) => trigger(),
           required(:pool_upstream_assignment_id) => Ecto.UUID.t(),
@@ -24,6 +29,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
           required(:routable_identity_ids) => [Ecto.UUID.t()],
           required(:route_class) => String.t(),
           required(:transient_circuit_exclusions) => [transient_circuit_exclusion()],
+          required(:automatic_confirmation_refs) => [confirmation_ref()],
           optional(:quota_scope) => quota_scope() | nil,
           optional(:hard_pinned_continuity?) => boolean()
         }
@@ -95,6 +101,15 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
              candidate_identity_ids,
              quota_scope,
              route_class
+           ),
+         {:ok, automatic_confirmation_refs} <-
+           normalize_confirmation_refs(context_value(context, :automatic_confirmation_refs)),
+         :ok <-
+           validate_confirmation_refs(
+             automatic_confirmation_refs,
+             trigger,
+             identity_id,
+             candidate_identity_ids
            ) do
       {:ok,
        %{
@@ -110,6 +125,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
          routable_identity_ids: routable_identity_ids,
          route_class: route_class,
          transient_circuit_exclusions: transient_circuit_exclusions,
+         automatic_confirmation_refs: automatic_confirmation_refs,
          quota_scope: quota_scope,
          hard_pinned_continuity?: hard_pinned_continuity?
        }}
@@ -303,6 +319,75 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
 
   defp request_model_identifier(%{catalog_model: model_identifier}), do: model_identifier
   defp request_model_identifier(_quota_scope), do: nil
+
+  # The corroborated pressure proof is part of the automatic claim. A malformed,
+  # duplicate or unsorted reference set is not a valid automatic context. An
+  # absent proof normalizes to the empty set, which no locked validation ever
+  # accepts: the claim still runs its ordinary fences in order and then fails
+  # closed on the confirmation mismatch instead of consuming.
+  defp normalize_confirmation_refs(nil), do: {:ok, []}
+
+  defp normalize_confirmation_refs(refs) when is_list(refs) do
+    with {:ok, normalized} <- normalize_confirmation_ref_entries(refs),
+         true <- normalized == Enum.sort_by(normalized, &confirmation_ref_order/1),
+         true <- unique_by?(normalized, :account_quota_window_id) do
+      {:ok, normalized}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp normalize_confirmation_refs(_refs), do: :error
+
+  defp normalize_confirmation_ref_entries(refs) do
+    Enum.reduce_while(refs, {:ok, []}, fn ref, {:ok, normalized} ->
+      case normalize_confirmation_ref(ref) do
+        {:ok, entry} -> {:cont, {:ok, [entry | normalized]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      :error -> :error
+    end
+  end
+
+  defp normalize_confirmation_ref(ref) when is_map(ref) do
+    with {:ok, identity_id} <- normalize_uuid(context_value(ref, :upstream_identity_id)),
+         {:ok, window_id} <- normalize_uuid(context_value(ref, :account_quota_window_id)),
+         {:ok, fingerprint} <- normalize_fingerprint(context_value(ref, :fingerprint)) do
+      {:ok,
+       %{
+         upstream_identity_id: identity_id,
+         account_quota_window_id: window_id,
+         fingerprint: fingerprint
+       }}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp normalize_confirmation_ref(_ref), do: :error
+
+  defp normalize_fingerprint(value) when is_binary(value) and byte_size(value) == 64 do
+    if String.match?(value, ~r/\A[0-9a-f]{64}\z/), do: {:ok, value}, else: :error
+  end
+
+  defp normalize_fingerprint(_value), do: :error
+
+  defp confirmation_ref_order(ref), do: {ref.upstream_identity_id, ref.account_quota_window_id}
+
+  defp validate_confirmation_refs(refs, :blocked_weekly_exhaustion, identity_id, _candidates) do
+    if Enum.all?(refs, &(&1.upstream_identity_id == identity_id)),
+      do: :ok,
+      else: {:error, :gateway_auto_context_mismatch}
+  end
+
+  defp validate_confirmation_refs(refs, :threshold_pressure, _identity_id, candidate_identity_ids) do
+    if Enum.all?(refs, &(&1.upstream_identity_id in candidate_identity_ids)),
+      do: :ok,
+      else: {:error, :gateway_auto_context_mismatch}
+  end
 
   defp keyword_context?([]), do: true
   defp keyword_context?([{key, _value} | rest]) when is_atom(key), do: keyword_context?(rest)

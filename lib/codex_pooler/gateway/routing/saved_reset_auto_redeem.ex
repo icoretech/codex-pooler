@@ -203,7 +203,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
            trigger_kind: "gateway_auto",
            started_at: scan_timestamp,
            gateway_auto_context:
-             gateway_auto_context(refresh_plan, assignment, identity, trigger),
+             gateway_auto_context(refresh_plan, assignment, identity, trigger, scan_timestamp),
            receive_timeout: 15_000
          ) do
       {:ok, %{applied?: true, code: code} = redeem_result} ->
@@ -432,13 +432,19 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
           map(),
           PoolUpstreamAssignment.t(),
           UpstreamIdentity.t(),
-          AutoEligibility.trigger()
+          AutoEligibility.trigger(),
+          DateTime.t()
         ) :: map()
-  def gateway_auto_context(refresh_plan, assignment, identity, trigger) do
+  def gateway_auto_context(refresh_plan, assignment, identity, trigger, timestamp \\ now()) do
     candidates = candidate_order(refresh_plan)
     capacity = capacity_order(refresh_plan)
     routable = routable_order(refresh_plan)
     cohort = cohort_order(refresh_plan)
+
+    candidate_identity_ids =
+      Enum.map(candidates, fn {_candidate_assignment, candidate_identity} ->
+        candidate_identity.id
+      end)
 
     %{
       trigger: trigger,
@@ -448,10 +454,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         Enum.map(candidates, fn {candidate_assignment, _candidate_identity} ->
           candidate_assignment.id
         end),
-      candidate_identity_ids:
-        Enum.map(candidates, fn {_candidate_assignment, candidate_identity} ->
-          candidate_identity.id
-        end),
+      candidate_identity_ids: candidate_identity_ids,
       capacity_assignment_ids:
         Enum.map(capacity, fn {capacity_assignment, _capacity_identity} ->
           capacity_assignment.id
@@ -474,6 +477,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         end),
       route_class: route_class(refresh_plan),
       transient_circuit_exclusions: transient_circuit_exclusions(refresh_plan),
+      automatic_confirmation_refs:
+        AutoEligibility.confirmation_refs(trigger, identity, candidate_identity_ids, timestamp),
       quota_scope: quota_scope(refresh_plan),
       hard_pinned_continuity?: hard_pinned_continuity?(refresh_plan)
     }
@@ -596,18 +601,30 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp weekly_account_exhaustion_exclusion?(_exclusion), do: false
 
+  # Two routing shapes describe an exhausted weekly account: the percent-only
+  # weekly exclusion, and the provider-blocked account availability exclusion
+  # (no window kind) that a coherent `allowed=false` receipt produces. Both
+  # only open the scan; the candidate still needs a corroborated exhausted
+  # weekly window and every locked fence before any provider call.
   defp weekly_account_exhaustion_reason?(reason) when is_map(reason) do
     reason_code = Map.get(reason, :reason_codes) || Map.get(reason, "reason_codes")
 
-    reason_token(reason, :code) == "quota_weekly_exhausted" and
-      reason_token(reason, :quota_key) == "account" and
-      reason_token(reason, :window_kind) == "secondary" and
+    reason_token(reason, :quota_key) == "account" and
       reason_token(reason, :quota_scope) == "account" and
       reason_token(reason, :quota_family) == "account" and
-      exhausted_only_reason_codes?(reason_code)
+      exhausted_only_reason_codes?(reason_code) and
+      exhausted_account_exclusion_shape?(reason)
   end
 
   defp weekly_account_exhaustion_reason?(_reason), do: false
+
+  defp exhausted_account_exclusion_shape?(reason) do
+    case {reason_token(reason, :code), reason_token(reason, :window_kind)} do
+      {"quota_weekly_exhausted", "secondary"} -> true
+      {"quota_window_unusable", nil} -> true
+      _other -> false
+    end
+  end
 
   defp exhausted_only_reason_codes?(reason_codes) when is_list(reason_codes),
     do: reason_codes != [] and Enum.all?(reason_codes, &(&1 == "exhausted"))
@@ -642,7 +659,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     policy = SavedResets.auto_policy(identity)
 
     saved_reset_available?(identity, policy, timestamp) and policy.trigger_mode == "threshold" and
-      all_candidates_at_threshold?(candidates, timestamp)
+      all_candidates_at_threshold?(identity, candidates, timestamp)
   end
 
   defp threshold_redeemable_candidate?(_candidate, _candidates, _timestamp), do: false
@@ -656,7 +673,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
        ) do
     with {:ok, context} <-
            refresh_plan
-           |> gateway_auto_context(assignment, target_identity, :threshold_pressure)
+           |> gateway_auto_context(assignment, target_identity, :threshold_pressure, timestamp)
            |> AutoEligibility.normalize_context(),
          false <- context.hard_pinned_continuity? do
       Enum.any?(routable_order(refresh_plan), fn {_assignment, sibling} ->
@@ -688,12 +705,16 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
        ) do
     identity
     |> Windows.list_quota_windows(timestamp)
-    |> AutoEligibility.blocked_weekly_exhaustion?(policy, timestamp)
+    |> AutoEligibility.corroborated_blocked_exhaustion?(identity, policy, timestamp)
   end
 
-  defp all_candidates_at_threshold?([], _timestamp), do: false
+  defp all_candidates_at_threshold?(_target_identity, [], _timestamp), do: false
 
-  defp all_candidates_at_threshold?(candidates, timestamp) when is_list(candidates) do
+  # Every non-latched candidate must carry corroborated pressure. The target
+  # identity is threaded through so only its own windows are held to the bank
+  # requirement; sibling members prove sustained pressure, not spendability.
+  defp all_candidates_at_threshold?(%UpstreamIdentity{} = target_identity, candidates, timestamp)
+       when is_list(candidates) do
     latched_identity_ids =
       candidates
       |> Enum.filter(fn {_assignment, identity} ->
@@ -714,8 +735,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
     active_candidates != [] and
       Enum.all?(active_candidates, fn {_assignment, identity} ->
-        AutoEligibility.threshold_pressure?(
+        AutoEligibility.corroborated_threshold_pressure?(
           [identity.id],
+          target_identity,
           SavedResets.auto_policy(identity),
           windows_by_identity_id,
           MapSet.new(),

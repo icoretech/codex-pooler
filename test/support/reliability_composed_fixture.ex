@@ -32,6 +32,7 @@ defmodule CodexPooler.ReliabilityComposedFixture do
     target = enable_target!(setup.identity, fake)
     put_quota!(target, "96")
     put_quota!(identity, "75")
+    target = CodexPooler.SavedResetConfirmationFixtures.confirm_automatic_pressure!(target)
     ids = [target.id, identity.id]
     assignments = [setup.assignment.id, sibling.assignment.id]
 
@@ -57,6 +58,8 @@ defmodule CodexPooler.ReliabilityComposedFixture do
         upstream_model_id: setup.model.upstream_model_id
       }
     }
+
+    context = CodexPooler.SavedResetConfirmationFixtures.put_confirmation_refs(context)
 
     Map.merge(setup, %{
       auth: auth,

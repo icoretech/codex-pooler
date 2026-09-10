@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
   }
 
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.Quota, as: CandidateQuota
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.{AccountAvailabilityStore, AccountQuotaWindow}
@@ -632,7 +633,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
           snapshot_at
         )
 
-      refute CodexPooler.Gateway.Routing.CandidateEligibility.Quota.windowless_candidate?(
+      refute CandidateQuota.windowless_candidate?(
                quota_model(),
                retained_candidate,
                route_state

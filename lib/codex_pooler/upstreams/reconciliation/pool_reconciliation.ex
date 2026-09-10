@@ -16,6 +16,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Upstreams.Quota.CreditBalanceStore
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
   alias CodexPooler.Upstreams.SavedResets
+  alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
   alias CodexPooler.Upstreams.SavedResets.Convergence
   alias CodexPooler.Upstreams.SavedResets.FirstSeenLedger
   alias CodexPooler.Upstreams.SavedResets.ObservationOrdering
@@ -731,6 +732,18 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
           )
 
         identity = identity |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
+
+        # Automatic saved-reset corroboration reads the saved-reset snapshot and
+        # account availability persisted above from this same provider receipt.
+        Enum.each(windows, fn attrs ->
+          AutomaticConfirmation.persist_provider_observation(
+            identity,
+            attrs,
+            account_availability,
+            usage_url,
+            observed_at
+          )
+        end)
 
         {:ok,
          %{

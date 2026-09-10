@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
   alias CodexPooler.Upstreams.Quota.Windows.RelativeLiveness
+  alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @runtime_quota_sources ~w(codex_rate_limit_event codex_response_headers codex_rate_limit_error)
@@ -108,6 +109,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         timestamped_attrs =
           merge_attrs(existing, attrs, evidence, timestamp)
           |> retain_spark_permission_observation(existing, evidence)
+          |> AutomaticConfirmation.retain(existing)
 
         result =
           existing

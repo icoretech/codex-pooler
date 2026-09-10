@@ -12,6 +12,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.EndpointMetadata
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
@@ -1492,20 +1493,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          gateway_auto_context
        ) do
     Repo.transaction(fn ->
-      case lock_claim_identity(identity.id, gateway_auto_context) do
-        {:ok, locked_identity, locked_cohort} ->
-          claim_locked_identity!(
-            locked_identity,
-            locked_cohort,
-            assignment,
-            trigger_kind,
-            receive_timeout,
-            started_at,
-            gateway_auto_context
-          )
-
-        {:noop, code} ->
-          {:noop, noop_result(identity, assignment, code)}
+      with {:ok, locked_identity, locked_cohort} <-
+             lock_claim_identity(identity.id, gateway_auto_context),
+           :ok <- lock_confirmation_windows(gateway_auto_context) do
+        claim_locked_identity!(
+          locked_identity,
+          locked_cohort,
+          assignment,
+          trigger_kind,
+          receive_timeout,
+          started_at,
+          gateway_auto_context
+        )
+      else
+        {:noop, code} -> {:noop, noop_result(identity, assignment, code)}
       end
     end)
     |> case do
@@ -1514,6 +1515,34 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # The referenced proof rows are locked after the sorted identity cohort and
+  # before the assignment and capacity rows, in both the claim and the
+  # dispatch-reservation transaction. Evidence writers take the identity
+  # reference lock first, so they queue behind the claim and the order stays
+  # acyclic. A missing, moved or duplicated row means the scan-time proof no
+  # longer exists and the claim fails closed before any side effect.
+  defp lock_confirmation_windows(nil), do: :ok
+  defp lock_confirmation_windows(%{automatic_confirmation_refs: []}), do: :ok
+
+  defp lock_confirmation_windows(%{automatic_confirmation_refs: refs}) when is_list(refs) do
+    expected = Enum.map(refs, &{&1.upstream_identity_id, &1.account_quota_window_id})
+    window_ids = Enum.map(refs, & &1.account_quota_window_id)
+
+    locked =
+      Repo.all(
+        from window in AccountQuotaWindow,
+          where: window.id in ^window_ids,
+          order_by: [asc: window.upstream_identity_id, asc: window.id],
+          lock: "FOR UPDATE"
+      )
+
+    if Enum.map(locked, &{&1.upstream_identity_id, &1.id}) == expected,
+      do: :ok,
+      else: {:noop, "gateway_auto_confirmation_mismatch"}
+  end
+
+  defp lock_confirmation_windows(_context), do: {:noop, "gateway_auto_context_invalid"}
 
   defp claim_scheduled_attempt(
          assignment_id,
@@ -1667,6 +1696,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
               nil,
               gateway_auto_trigger_detail(gateway_auto_context)
             )
+            |> put_claim_gateway_auto_context(gateway_auto_context)
 
           {:noop, code} ->
             {:noop, noop_result(locked_identity, current_assignment, code)}
@@ -1685,7 +1715,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          locked_cohort,
          locked_assignment,
          gateway_auto_context,
-         timestamp
+         timestamp,
+         stage \\ :claim
        ) do
     with :ok <-
            sibling_consume_fence(
@@ -1707,7 +1738,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              locked_identity,
              locked_assignment,
              gateway_auto_context,
-             evaluated_at
+             evaluated_at,
+             stage
            ),
          :ok <-
            sibling_transient_exclusion_fence(
@@ -1717,15 +1749,30 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              gateway_auto_context,
              current_capacity,
              evaluated_at
+           ),
+         :ok <-
+           sibling_usable_capacity_fence(
+             locked_identity,
+             locked_cohort,
+             gateway_auto_context,
+             current_capacity,
+             evaluated_at
            ) do
-      sibling_usable_capacity_fence(
-        locked_identity,
-        locked_cohort,
-        gateway_auto_context,
-        current_capacity,
-        evaluated_at
-      )
+      confirmation_fence(locked_identity, gateway_auto_context, evaluated_at)
     end
+  end
+
+  # The corroborated proof is the last fence before the local claim persists
+  # and again before the irreversible dispatch reservation, so every earlier
+  # policy, latch, sibling and capacity veto keeps its own bounded code.
+  defp confirmation_fence(_locked_identity, nil, _evaluated_at), do: :ok
+
+  defp confirmation_fence(locked_identity, gateway_auto_context, evaluated_at) do
+    AutoEligibility.validate_confirmation_refs(
+      locked_identity,
+      gateway_auto_context,
+      evaluated_at
+    )
   end
 
   defp current_capacity_evaluated_at(%{evaluated_at: %DateTime{} = evaluated_at}, _timestamp),
@@ -1737,7 +1784,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          _locked_identity,
          _locked_assignment,
          nil,
-         _evaluated_at
+         _evaluated_at,
+         _stage
        ),
        do: :ok
 
@@ -1745,9 +1793,25 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          locked_identity,
          locked_assignment,
          gateway_auto_context,
-         evaluated_at
+         evaluated_at,
+         :claim
        ) do
     AutoEligibility.validate_locked_gateway_auto(
+      locked_identity,
+      locked_assignment,
+      gateway_auto_context,
+      evaluated_at
+    )
+  end
+
+  defp revalidate_current_gateway_auto(
+         locked_identity,
+         locked_assignment,
+         gateway_auto_context,
+         evaluated_at,
+         :reservation
+       ) do
+    AutoEligibility.validate_reserved_gateway_auto(
       locked_identity,
       locked_assignment,
       gateway_auto_context,
@@ -2069,6 +2133,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
+  defp put_claim_gateway_auto_context(%{identity: _identity} = claim, gateway_auto_context)
+       when is_map(gateway_auto_context),
+       do: Map.put(claim, :gateway_auto_context, gateway_auto_context)
+
+  defp put_claim_gateway_auto_context(claim_or_noop, _gateway_auto_context), do: claim_or_noop
+
   defp do_redeem(%{identity: identity, assignment: assignment} = claim, opts) do
     case Secrets.decrypt_active_secret(identity, "access_token") do
       {:ok, access_token} ->
@@ -2080,6 +2150,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         case result do
           {:error, reason} ->
             {:error, reason}
+
+          {:settled, settled_result} ->
+            broadcast_redemption(settled_result.identity)
+            {:ok, settled_result}
 
           {:ambiguous, code, ambiguous_claim} ->
             preserve_ambiguous_attempt(ambiguous_claim, code)
@@ -2250,17 +2324,26 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
        ) do
     credit_id = if endpoint_kind == :chatgpt, do: body["credit_id"]
 
-    with {:ok, reserved_claim, reserved_credit_id} <-
-           reserve_provider_dispatch(claim, url, endpoint_kind, credit_id) do
-      consume_reserved_credit(
-        url,
-        access_token,
-        body,
-        available_count_before,
-        reserved_claim,
-        reserved_credit_id,
-        endpoint_kind
-      )
+    case reserve_provider_dispatch(claim, url, endpoint_kind, credit_id) do
+      {:ok, reserved_claim, reserved_credit_id} ->
+        consume_reserved_credit(
+          url,
+          access_token,
+          body,
+          available_count_before,
+          reserved_claim,
+          reserved_credit_id,
+          endpoint_kind
+        )
+
+      {:noop, code, settled_identity} ->
+        {:settled,
+         noop_result(settled_identity, claim.assignment, code)
+         |> Map.put(:available_count_before, available_count_before)
+         |> Map.put(:available_count_after, available_count_before)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -2541,16 +2624,31 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp provider_scope(_identity, _assignment, _snapshot), do: :unsupported
 
+  # Immediately before the first provider dispatch every irreversible fence is
+  # rerun under the same lock order as the claim: sorted identity cohort,
+  # referenced proof windows, assignment, capacity circuits. An automatic claim
+  # whose proof cleared, whose policy, bank, epoch or reset changed, or whose
+  # siblings recovered while the credit list was fetched settles to
+  # `consume_not_applied` with zero dispatches instead of posting.
   defp reserve_provider_dispatch(claim, consume_url, endpoint_kind, selected_credit_id) do
     Repo.transaction(fn ->
-      identity = lock_identity!(claim.identity.id)
+      {identity, locked_cohort, cohort_result} = lock_reservation_cohort(claim)
       metadata = identity.metadata || %{}
       redemption = metadata["saved_reset_redemption"] || %{}
 
       with :ok <- validate_reservation_identity(redemption, claim),
            :ok <- validate_reservation_dispatch(redemption, claim),
+           :ok <- cohort_result,
+           :ok <- lock_confirmation_windows(claim[:gateway_auto_context]),
            {:ok, locked_assignment} <-
              lock_reservation_assignment(claim.assignment.id, identity.id),
+           :ok <-
+             gateway_auto_reservation_fence(
+               identity,
+               locked_cohort,
+               locked_assignment,
+               claim[:gateway_auto_context]
+             ),
            {:ok, endpoint_family, ^consume_url, scope_fingerprint} <-
              provider_scope(identity, locked_assignment, SavedResets.snapshot(identity)),
            :ok <-
@@ -2597,14 +2695,71 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> Map.put(:assignment, locked_assignment)
           |> Map.put(:reserved_provider_dispatches, replay["provider_dispatches"])
 
-        {reserved_claim, credit_id}
+        {:reserved, reserved_claim, credit_id}
       else
-        _invalid -> Repo.rollback(:saved_reset_dispatch_reservation_invalid)
+        {:noop, code} when is_binary(code) ->
+          settle_cancelled_reservation!(identity, claim, redemption, code)
+
+        _invalid ->
+          Repo.rollback(:saved_reset_dispatch_reservation_invalid)
       end
     end)
     |> case do
-      {:ok, {reserved_claim, credit_id}} -> {:ok, reserved_claim, credit_id}
+      {:ok, {:reserved, reserved_claim, credit_id}} -> {:ok, reserved_claim, credit_id}
+      {:ok, {:cancelled, code, settled_identity}} -> {:noop, code, settled_identity}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp lock_reservation_cohort(%{gateway_auto_context: context} = claim) when is_map(context) do
+    case lock_claim_identity(claim.identity.id, context) do
+      {:ok, identity, locked_cohort} ->
+        {identity, locked_cohort, :ok}
+
+      {:noop, code} ->
+        {lock_identity!(claim.identity.id), %{}, {:noop, code}}
+    end
+  end
+
+  defp lock_reservation_cohort(claim) do
+    {lock_identity!(claim.identity.id), %{}, :ok}
+  end
+
+  defp gateway_auto_reservation_fence(_identity, _locked_cohort, _locked_assignment, nil),
+    do: :ok
+
+  # The reservation clock is sampled after every lock and never precedes the
+  # claim's own clock, so a fence that held at claim time cannot flip purely
+  # because the caller supplied a slightly later scan timestamp.
+  defp gateway_auto_reservation_fence(identity, locked_cohort, locked_assignment, context)
+       when is_map(context) do
+    gateway_auto_sibling_fence(
+      identity,
+      locked_cohort,
+      locked_assignment,
+      context,
+      later_datetime(context_started_at(identity), now()),
+      :reservation
+    )
+  end
+
+  defp context_started_at(%UpstreamIdentity{metadata: metadata}) do
+    case parse_datetime(get_in(metadata || %{}, ["saved_reset_redemption", "started_at"])) do
+      %DateTime{} = started_at -> started_at
+      nil -> now()
+    end
+  end
+
+  # A zero-dispatch automatic claim that lost its authorization before the
+  # provider POST is settled through the existing guarded transition; the
+  # bounded fence code is returned to the caller while the record carries the
+  # lifecycle phase.
+  defp settle_cancelled_reservation!(identity, claim, redemption, code) do
+    expected = %{generation: claim.generation, attempt_id: claim.attempt_id}
+
+    case settle_consume_not_applied!(identity, claim.assignment, redemption, expected, now()) do
+      {:noop, _phase, settled_identity, _assignment} ->
+        {:cancelled, code, settled_identity}
     end
   end
 

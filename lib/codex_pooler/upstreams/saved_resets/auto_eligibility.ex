@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility.Context
+  alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
@@ -51,55 +52,286 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   def validate_locked_gateway_auto(
         %UpstreamIdentity{} = identity,
         %PoolUpstreamAssignment{} = assignment,
-        %{trigger: trigger} = context,
+        %{trigger: _trigger} = context,
         %DateTime{} = timestamp
       ) do
+    validate_gateway_auto(identity, assignment, context, timestamp, :claim)
+  end
+
+  @doc """
+  Reruns every automatic fence immediately before the irreversible provider
+  dispatch of an already persisted `consuming` claim.
+
+  Identical to the claim validation except that the identity's own in-flight
+  claim is expected: bank availability is judged on the reported count and the
+  keep-credits floor, not on the absence of a redemption in progress.
+  """
+  @spec validate_reserved_gateway_auto(
+          UpstreamIdentity.t(),
+          PoolUpstreamAssignment.t(),
+          context(),
+          DateTime.t()
+        ) :: validation_result()
+  def validate_reserved_gateway_auto(
+        %UpstreamIdentity{} = identity,
+        %PoolUpstreamAssignment{} = assignment,
+        %{trigger: _trigger} = context,
+        %DateTime{} = timestamp
+      ) do
+    validate_gateway_auto(identity, assignment, context, timestamp, :reservation)
+  end
+
+  defp validate_gateway_auto(
+         identity,
+         assignment,
+         %{trigger: trigger} = context,
+         timestamp,
+         stage
+       ) do
     with :ok <- validate_locked_lifecycle(identity, assignment),
-         :ok <- validate_context_match(identity, assignment, context) do
-      policy = SavedResets.auto_policy(identity)
-      snapshot = SavedResets.snapshot(identity, timestamp)
-      latch = identity_consume_latch(identity, timestamp)
-
-      latched_identity_ids =
-        latched_candidate_identity_ids(context.candidate_identity_ids, identity, latch, timestamp)
-
-      windows_by_identity_id =
-        context.candidate_identity_ids
-        |> Windows.list_evidence_by_identity_ids()
-        |> compatible_source_windows_by_identity(snapshot, timestamp)
-
-      identity_windows = Map.get(windows_by_identity_id, identity.id, [])
-
-      cond do
-        not policy.enabled? ->
-          {:noop, "gateway_auto_policy_disabled"}
-
-        latch == :blocked_awaiting_quota ->
-          {:noop, "gateway_auto_awaiting_post_consume_quota"}
-
-        latch == :cooldown ->
-          {:noop, "gateway_auto_consume_cooldown"}
-
-        not saved_reset_available?(snapshot, policy) ->
-          unavailable_snapshot_result(snapshot)
-
-        trigger_current?(
-          trigger,
-          identity,
-          policy,
-          windows_by_identity_id,
-          identity_windows,
-          latched_identity_ids,
-          context,
-          timestamp
-        ) ->
-          :ok
-
-        true ->
-          {:noop, "gateway_auto_trigger_not_current"}
-      end
+         :ok <- validate_context_match(identity, assignment, context),
+         state = gateway_auto_state(identity, context, timestamp),
+         :ok <- policy_and_latch_result(state.policy, state.latch),
+         :ok <- bank_result(state.snapshot, state.policy, stage),
+         true <-
+           trigger_current?(
+             trigger,
+             identity,
+             state.policy,
+             state.windows_by_identity_id,
+             state.identity_windows,
+             state.latched_identity_ids,
+             context,
+             timestamp
+           ) do
+      :ok
+    else
+      false -> {:noop, "gateway_auto_trigger_not_current"}
+      result -> result
     end
   end
+
+  defp gateway_auto_state(identity, context, timestamp) do
+    snapshot = SavedResets.snapshot(identity, timestamp)
+    latch = identity_consume_latch(identity, timestamp)
+
+    windows_by_identity_id =
+      context.candidate_identity_ids
+      |> Windows.list_evidence_by_identity_ids()
+      |> compatible_source_windows_by_identity(snapshot, timestamp)
+
+    %{
+      policy: SavedResets.auto_policy(identity),
+      snapshot: snapshot,
+      latch: latch,
+      latched_identity_ids:
+        latched_candidate_identity_ids(context.candidate_identity_ids, identity, latch, timestamp),
+      windows_by_identity_id: windows_by_identity_id,
+      identity_windows: Map.get(windows_by_identity_id, identity.id, [])
+    }
+  end
+
+  defp policy_and_latch_result(%{enabled?: false}, _latch),
+    do: {:noop, "gateway_auto_policy_disabled"}
+
+  defp policy_and_latch_result(_policy, :blocked_awaiting_quota),
+    do: {:noop, "gateway_auto_awaiting_post_consume_quota"}
+
+  defp policy_and_latch_result(_policy, :cooldown), do: {:noop, "gateway_auto_consume_cooldown"}
+  defp policy_and_latch_result(_policy, :clear), do: :ok
+
+  # The claim requires an idle bank; the dispatch reservation runs with the
+  # identity's own in-flight claim persisted, so it judges the bank on the
+  # reported count and keep-credits floor only.
+  defp bank_result(snapshot, policy, :claim) do
+    if saved_reset_available?(snapshot, policy),
+      do: :ok,
+      else: unavailable_snapshot_result(snapshot)
+  end
+
+  defp bank_result(snapshot, policy, :reservation) do
+    if scheduled_saved_reset_state(snapshot, policy) == :available,
+      do: :ok,
+      else:
+        unavailable_snapshot_result(%{snapshot | in_progress?: false, redemption_stale?: false})
+  end
+
+  @doc """
+  Final automatic fence, evaluated after every other claim or reservation
+  fence: the claim carries the exact proof rows the route scan relied on, and
+  the closed set is recomputed from the current locked rows. Any added,
+  removed, rebound or re-observed member invalidates the whole set instead of
+  shrinking to a convenient confirmed subset.
+  """
+  @spec validate_confirmation_refs(UpstreamIdentity.t(), context(), DateTime.t()) ::
+          :ok | {:noop, String.t()}
+  def validate_confirmation_refs(
+        %UpstreamIdentity{} = identity,
+        %{trigger: trigger, candidate_identity_ids: candidate_identity_ids} = context,
+        %DateTime{} = timestamp
+      ) do
+    current = confirmation_refs(trigger, identity, candidate_identity_ids, timestamp, true)
+
+    if current != [] and current == Map.get(context, :automatic_confirmation_refs),
+      do: :ok,
+      else: {:noop, "gateway_auto_confirmation_mismatch"}
+  end
+
+  @doc """
+  Sorted references to the confirmed pressure windows that currently authorize
+  `trigger` for `identity`, or `[]` when the closed proof set is not ready.
+
+  Blocked exhaustion references the target's confirmed exhausted weekly
+  account windows. Threshold pressure references every current pressure window
+  of every non-latched candidate; one unconfirmed member leaves the set empty.
+
+  The route scan evaluates an unlocked candidate struct and therefore does not
+  bind the marker to the identity's credential epoch; the locked claim and
+  reservation validation re-derive the same set with that binding enforced.
+  """
+  @spec confirmation_refs(trigger(), UpstreamIdentity.t(), [Ecto.UUID.t()], DateTime.t()) ::
+          [Context.confirmation_ref()]
+  def confirmation_refs(trigger, identity, candidate_identity_ids, timestamp),
+    do: confirmation_refs(trigger, identity, candidate_identity_ids, timestamp, false)
+
+  defp confirmation_refs(
+         trigger,
+         %UpstreamIdentity{} = identity,
+         candidate_identity_ids,
+         %DateTime{} = timestamp,
+         bind_identity?
+       )
+       when is_list(candidate_identity_ids) do
+    policy = SavedResets.auto_policy(identity)
+    snapshot = SavedResets.snapshot(identity, timestamp)
+    latch = identity_consume_latch(identity, timestamp)
+
+    latched_identity_ids =
+      latched_candidate_identity_ids(candidate_identity_ids, identity, latch, timestamp)
+
+    windows_by_identity_id =
+      candidate_identity_ids
+      |> Windows.list_evidence_by_identity_ids()
+      |> compatible_source_windows_by_identity(snapshot, timestamp)
+
+    confirmation_refs(
+      trigger,
+      identity,
+      policy,
+      windows_by_identity_id,
+      latched_identity_ids,
+      candidate_identity_ids,
+      timestamp,
+      bind_identity?
+    )
+  end
+
+  defp confirmation_refs(
+         :blocked_weekly_exhaustion,
+         identity,
+         policy,
+         windows_by_identity_id,
+         _latched_identity_ids,
+         _candidate_identity_ids,
+         timestamp,
+         bind_identity?
+       ) do
+    windows_by_identity_id
+    |> Map.get(identity.id, [])
+    |> Enum.filter(&confirmed_blocked_window?(&1, identity, policy, timestamp, bind_identity?))
+    |> confirmation_refs_for_windows()
+  end
+
+  defp confirmation_refs(
+         :threshold_pressure,
+         identity,
+         policy,
+         windows_by_identity_id,
+         latched_identity_ids,
+         candidate_identity_ids,
+         timestamp,
+         bind_identity?
+       ) do
+    active_candidate_ids =
+      Enum.reject(candidate_identity_ids, &(&1 in latched_identity_ids))
+
+    pressure_windows =
+      Enum.map(active_candidate_ids, fn identity_id ->
+        windows_by_identity_id
+        |> Map.get(identity_id, [])
+        |> Enum.filter(&weekly_pressure_window?(&1, policy, timestamp))
+      end)
+
+    confirmed? =
+      active_candidate_ids != [] and policy.trigger_mode == "threshold" and
+        Enum.all?(pressure_windows, fn windows ->
+          windows != [] and
+            Enum.all?(
+              windows,
+              &confirmed_threshold_window?(&1, identity, policy, timestamp, bind_identity?)
+            )
+        end)
+
+    if confirmed?,
+      do: pressure_windows |> List.flatten() |> confirmation_refs_for_windows(),
+      else: []
+  end
+
+  defp confirmation_refs_for_windows(windows) do
+    windows
+    |> Enum.map(fn %AccountQuotaWindow{} = window ->
+      %{
+        upstream_identity_id: window.upstream_identity_id,
+        account_quota_window_id: window.id,
+        fingerprint: AutomaticConfirmation.fingerprint(window.metadata)
+      }
+    end)
+    |> Enum.reject(&is_nil(&1.fingerprint))
+    |> Enum.sort_by(&{&1.upstream_identity_id, &1.account_quota_window_id})
+  end
+
+  defp confirmed_blocked_window?(window, identity, policy, timestamp, bind_identity?) do
+    weekly_exhausted_window?(window, timestamp) and
+      natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp) and
+      AutomaticConfirmation.confirmed?(
+        window.metadata,
+        timestamp,
+        [trigger: :blocked, keep_credits: policy.keep_credits] ++
+          target_binding_opts(window, identity, bind_identity?)
+      )
+  end
+
+  # A pressure member is corroborated either by a threshold confirmation at the
+  # policy threshold or by a blocked confirmation: a twice-observed exhausted
+  # member proves sustained pressure at least as strongly. Sibling participants
+  # are bound by their own persisted markers; only the consuming target
+  # additionally proves its current identity and credential epoch under lock.
+  defp confirmed_threshold_window?(window, identity, policy, timestamp, bind_identity?) do
+    binding_opts = target_binding_opts(window, identity, bind_identity?)
+
+    target? = window.upstream_identity_id == identity.id
+    shared_opts = [keep_credits: policy.keep_credits, require_bank?: target?] ++ binding_opts
+
+    AutomaticConfirmation.confirmed?(
+      window.metadata,
+      timestamp,
+      [trigger: :threshold, threshold_percent: policy.quota_threshold_percent] ++ shared_opts
+    ) or
+      AutomaticConfirmation.confirmed?(
+        window.metadata,
+        timestamp,
+        [trigger: :blocked] ++ shared_opts
+      )
+  end
+
+  defp target_binding_opts(
+         %AccountQuotaWindow{upstream_identity_id: identity_id},
+         %{id: identity_id} = identity,
+         true
+       ),
+       do: [identity: identity]
+
+  defp target_binding_opts(_window, _identity, _bind_identity?), do: []
 
   @doc """
   Cheap post-reconciliation gate for traffic-independent expiry rescue.
@@ -382,6 +614,65 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     end)
   end
 
+  @doc """
+  Blocked weekly exhaustion corroborated by two distinct provider receipts on
+  the exact exhausted window, bound to the identity's current credential epoch.
+  """
+  @spec corroborated_blocked_exhaustion?(
+          [AccountQuotaWindow.t()],
+          UpstreamIdentity.t(),
+          SavedResets.auto_policy_projection(),
+          DateTime.t(),
+          keyword()
+        ) :: boolean()
+  def corroborated_blocked_exhaustion?(
+        windows,
+        %UpstreamIdentity{} = identity,
+        policy,
+        timestamp,
+        opts \\ []
+      )
+      when is_list(windows) do
+    bind_identity? = Keyword.get(opts, :bind_identity?, false)
+
+    Enum.any?(
+      windows,
+      &confirmed_blocked_window?(&1, identity, policy, timestamp, bind_identity?)
+    )
+  end
+
+  @doc """
+  Threshold pressure corroborated as a closed set: every current pressure
+  window of every non-latched candidate carries a two-receipt confirmation.
+  """
+  @spec corroborated_threshold_pressure?(
+          [Ecto.UUID.t()],
+          UpstreamIdentity.t(),
+          SavedResets.auto_policy_projection(),
+          %{optional(Ecto.UUID.t()) => [AccountQuotaWindow.t()]},
+          MapSet.t(Ecto.UUID.t()),
+          DateTime.t()
+        ) :: boolean()
+  def corroborated_threshold_pressure?(
+        candidate_identity_ids,
+        %UpstreamIdentity{} = identity,
+        policy,
+        windows_by_identity_id,
+        latched_identity_ids,
+        %DateTime{} = timestamp
+      ) do
+    confirmation_refs(
+      :threshold_pressure,
+      identity,
+      policy,
+      windows_by_identity_id,
+      latched_identity_ids,
+      candidate_identity_ids,
+      timestamp,
+      false
+    ) != []
+  end
+
   @spec threshold_pressure?(
           [Ecto.UUID.t()],
           SavedResets.auto_policy_projection(),
@@ -427,16 +718,22 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     case trigger do
       :blocked_weekly_exhaustion ->
         not provider_permits_account?(identity, identity_windows, timestamp) and
-          blocked_weekly_exhaustion?(identity_windows, policy, timestamp)
+          Enum.any?(
+            identity_windows,
+            &confirmed_blocked_window?(&1, identity, policy, timestamp, true)
+          )
 
       :threshold_pressure ->
-        threshold_pressure?(
-          context.candidate_identity_ids,
+        confirmation_refs(
+          :threshold_pressure,
+          identity,
           policy,
           windows_by_identity_id,
           latched_identity_ids,
-          timestamp
-        )
+          context.candidate_identity_ids,
+          timestamp,
+          true
+        ) != []
     end
   end
 

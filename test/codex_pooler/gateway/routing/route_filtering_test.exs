@@ -23,11 +23,14 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
+  alias CodexPooler.SavedResetConfirmationFixtures
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   defmodule RouteFiltering do
@@ -2466,6 +2469,335 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     end
   end
 
+  describe "automatic saved-reset corroboration" do
+    @tag :saved_reset_redemption_cause
+    test "one uncorroborated exhausted observation cannot reach the consume seam" do
+      {:ok, upstream} = auto_redeem_fake()
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_uncorroborated_weekly_exhausted_quota!(identity)
+      [window] = SavedResetConfirmationFixtures.weekly_provider_windows(identity.id)
+      assert SavedResetConfirmationFixtures.marker_state(window) == "candidate"
+
+      filter_input = filter_input(pool, api_key, assignment, identity, "uncorroborated")
+
+      assert {:error, %{code: "quota_exhausted"}} = RouteFiltering.filter_candidates(filter_input)
+      assert [] = FakeUpstream.requests(upstream)
+      refute Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert Repo.reload!(identity).metadata["saved_resets"]["available_count"] == 1
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "a transient exhaustion flap spends nothing and stable exhaustion consumes exactly once" do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      reset_at = DateTime.add(now, 2, :hour)
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      # Four separate provider receipts, each from its own fake upstream so the
+      # wire payload and the consume endpoint are attributable per observation.
+      receipts =
+        for {kind, offset} <- [blocked: -180, allowed: -120, blocked: -60, blocked: 0] do
+          observed_at = DateTime.add(now, offset, :second)
+          {:ok, fake} = corroboration_fake(kind, reset_at, observed_at, 1)
+          on_exit(fn -> FakeUpstream.stop(fake) end)
+          {observed_at, fake}
+        end
+
+      [{at1, fake1}, {at2, fake2}, {at3, fake3}, {at4, fake4}] = receipts
+      fakes = Enum.map(receipts, &elem(&1, 1))
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(fake1, 1)})
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+
+      window_state = fn ->
+        identity.id
+        |> SavedResetConfirmationFixtures.weekly_provider_windows()
+        |> Enum.map(&SavedResetConfirmationFixtures.marker_state/1)
+      end
+
+      total_consumes = fn -> Enum.sum(Enum.map(fakes, &consume_count/1)) end
+
+      # 1. blocked 100%: one receipt is only a candidate; routing spends nothing
+      observe_provider!(identity, assignment, fake1, at1)
+      assert window_state.() == ["candidate"]
+      route_input = filter_input(pool, api_key, assignment, identity, "flap-1")
+      assert {:error, %{code: "quota_exhausted"}} = RouteFiltering.filter_candidates(route_input)
+      assert total_consumes.() == 0
+
+      # 2. allowed 32%: the provider flap clears the candidate. Whether the
+      # evidence store already trusts the lower same-cycle percent for routing
+      # is a separate quota decision; the automatic seam spends nothing either way.
+      observe_provider!(identity, assignment, fake2, at2)
+      assert window_state.() == [nil]
+      route_input = filter_input(pool, api_key, assignment, identity, "flap-2")
+      _ = RouteFiltering.filter_candidates(route_input)
+      assert total_consumes.() == 0
+      refute Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+      # 3. blocked 100% again: a fresh candidate after the flap, still no spend
+      observe_provider!(identity, assignment, fake3, at3)
+      assert window_state.() == ["candidate"]
+      route_input = filter_input(pool, api_key, assignment, identity, "flap-3")
+      assert {:error, %{code: "quota_exhausted"}} = RouteFiltering.filter_candidates(route_input)
+      assert total_consumes.() == 0
+
+      # 4. blocked 100% from a strictly newer receipt corroborates the exhaustion
+      observe_provider!(identity, assignment, fake4, at4)
+      assert window_state.() == ["confirmed"]
+      route_input = filter_input(pool, api_key, assignment, identity, "flap-4")
+
+      {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(route_input) end)
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=exhausted"
+      assert log =~ "result_code=reset applied=true"
+
+      assert match?({:ok, [_candidate], _options}, result) or
+               match?({:ok, [_candidate], _options, _probe}, result)
+
+      assert consume_count(fake4) == 1
+      assert total_consumes.() == 1
+
+      persisted = Repo.reload!(identity)
+      redemption = persisted.metadata["saved_reset_redemption"]
+      assert redemption["trigger_kind"] == "gateway_auto"
+      assert redemption["result"]["code"] == "reset"
+      assert redemption["result"]["applied"] == true
+
+      # the post-consume latch and the spent bank keep a second request from consuming again
+      route_input = filter_input(pool, api_key, assignment, identity, "flap-5")
+      _ = RouteFiltering.filter_candidates(route_input)
+      assert total_consumes.() == 1
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "threshold pressure needs every participant window corroborated before spending" do
+      {:ok, upstream} = auto_redeem_fake()
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      target =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      sibling = active_upstream_assignment_fixture(pool)
+
+      threshold = %{
+        saved_reset_auto_redeem_trigger_mode: "threshold",
+        saved_reset_auto_redeem_quota_threshold_percent: 95
+      }
+
+      target_identity = enable_saved_reset_auto_redeem!(target.identity, threshold)
+      sibling_identity = enable_saved_reset_auto_redeem!(sibling.identity, threshold)
+
+      assert {:ok, [_]} =
+               QuotaWindows.upsert_quota_windows(target_identity, [
+                 weekly_pressure_quota_attrs(Decimal.new("96"), [])
+               ])
+
+      assert {:ok, [_]} =
+               QuotaWindows.upsert_quota_windows(sibling_identity, [
+                 weekly_exhausted_quota_attrs()
+               ])
+
+      candidates = [{target.assignment, target_identity}, {sibling.assignment, sibling_identity}]
+
+      # target corroborated, sibling single-receipt: closed set not ready
+      earlier =
+        DateTime.utc_now() |> DateTime.add(-120, :second) |> DateTime.truncate(:microsecond)
+
+      SavedResetConfirmationFixtures.confirm_automatic_pressure!(target_identity)
+
+      SavedResetConfirmationFixtures.confirm_automatic_pressure!(sibling_identity,
+        observations: 1,
+        observed_at: earlier
+      )
+
+      {_result, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates(filter_input(pool, api_key, candidates, "threshold-1"))
+        end)
+
+      refute log =~ "trigger_kind=gateway_auto"
+      assert [] = FakeUpstream.requests(upstream)
+
+      # sibling receives a strictly newer receipt: every current pressure window is corroborated
+      SavedResetConfirmationFixtures.confirm_automatic_pressure!(sibling_identity,
+        observations: 1
+      )
+
+      {_result, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates(filter_input(pool, api_key, candidates, "threshold-2"))
+        end)
+
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=threshold"
+      assert log =~ "result_code=reset applied=true"
+      assert consume_count(upstream) == 1
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "two installations sharing one account spend at most once through the identity policy" do
+      # Metadata-only two-installation fixture: two identities for the same
+      # provider account, one with the existing automatic policy enabled and one
+      # disabled. Only the enabled side may reach the automatic seam.
+      # One shared fake provider bank stands in for the account; each side is a
+      # separate identity row because separate installations never share rows.
+      {:ok, upstream} = auto_redeem_fake()
+      %{pool: enabled_pool, api_key: enabled_key} = active_api_key_fixture()
+      %{pool: disabled_pool, api_key: disabled_key} = active_api_key_fixture()
+
+      enabled =
+        active_upstream_assignment_fixture(enabled_pool, %{
+          metadata: saved_reset_metadata(upstream, 1)
+        })
+
+      disabled =
+        active_upstream_assignment_fixture(disabled_pool, %{
+          metadata: saved_reset_metadata(upstream, 1)
+        })
+
+      enabled_identity = enable_saved_reset_auto_redeem!(enabled.identity)
+      disabled_identity = disabled.identity
+      refute disabled_identity.saved_reset_auto_redeem_enabled
+
+      upsert_weekly_exhausted_quota!(enabled_identity)
+      upsert_weekly_exhausted_quota!(disabled_identity)
+
+      assert Enum.map(
+               SavedResetConfirmationFixtures.weekly_provider_windows(enabled_identity.id),
+               &SavedResetConfirmationFixtures.marker_state/1
+             ) == ["confirmed"]
+
+      assert Enum.map(
+               SavedResetConfirmationFixtures.weekly_provider_windows(disabled_identity.id),
+               &SavedResetConfirmationFixtures.marker_state/1
+             ) == [nil]
+
+      assert {:error, %{code: "quota_exhausted"}} =
+               RouteFiltering.filter_candidates(
+                 filter_input(
+                   disabled_pool,
+                   disabled_key,
+                   disabled.assignment,
+                   disabled_identity,
+                   "disabled"
+                 )
+               )
+
+      assert consume_count(upstream) == 0
+      refute Repo.reload!(disabled_identity).metadata["saved_reset_redemption"]
+
+      {_result, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates(
+            filter_input(
+              enabled_pool,
+              enabled_key,
+              enabled.assignment,
+              enabled_identity,
+              "enabled"
+            )
+          )
+        end)
+
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=exhausted"
+      assert consume_count(upstream) == 1
+
+      _ =
+        RouteFiltering.filter_candidates(
+          filter_input(
+            disabled_pool,
+            disabled_key,
+            disabled.assignment,
+            disabled_identity,
+            "disabled-2"
+          )
+        )
+
+      assert consume_count(upstream) == 1
+      refute Repo.reload!(disabled_identity).metadata["saved_reset_redemption"]
+    end
+  end
+
+  # One fake upstream per provider receipt: the usage payload carries the
+  # coherent permission tuple, the exact weekly window with its countdown, and
+  # the saved-reset bank the corroboration binding must witness together.
+  defp corroboration_fake(kind, reset_at, observed_at, available_count) do
+    {allowed, reached, used_percent} =
+      case kind do
+        :blocked -> {false, true, 100}
+        :allowed -> {true, false, 32}
+      end
+
+    # Weekly-only shape: the exhausted automatic trigger engages on the
+    # weekly-account-only exclusion, the same routing precondition the
+    # existing single-window fixtures rely on.
+    payload = %{
+      "plan_type" => "pro",
+      "rate_limit_reset_credits" => %{"available_count" => available_count},
+      "rate_limit" => %{
+        "allowed" => allowed,
+        "limit_reached" => reached,
+        "secondary_window" => %{
+          "used_percent" => used_percent,
+          "limit_window_seconds" => 604_800,
+          "reset_after_seconds" => DateTime.diff(reset_at, observed_at, :second),
+          "reset_at" => DateTime.to_unix(reset_at)
+        }
+      }
+    }
+
+    FakeUpstream.start_link(
+      {:path_json,
+       %{
+         "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+         "/api/codex/usage" => {200, payload}
+       }}
+    )
+  end
+
+  defp observe_provider!(identity, assignment, fake, observed_at) do
+    point_upstream!(identity, fake)
+    point_upstream!(assignment, fake)
+
+    assert {:ok, %UpstreamIdentity{}} =
+             PoolReconciliation.refresh_quota_from_usage(
+               Repo.reload!(identity),
+               Repo.reload!(assignment),
+               observed_at: observed_at
+             )
+  end
+
+  defp point_upstream!(%UpstreamIdentity{} = identity, fake) do
+    identity = Repo.reload!(identity)
+
+    identity
+    |> Ecto.Changeset.change(
+      metadata: Map.put(identity.metadata || %{}, "usage_base_url", FakeUpstream.url(fake))
+    )
+    |> Repo.update!()
+  end
+
+  defp point_upstream!(%PoolUpstreamAssignment{} = assignment, fake) do
+    assignment = Repo.reload!(assignment)
+
+    assignment
+    |> Ecto.Changeset.change(
+      metadata: Map.put(assignment.metadata || %{}, "usage_base_url", FakeUpstream.url(fake))
+    )
+    |> Repo.update!()
+  end
+
+  defp consume_count(fake) do
+    Enum.count(
+      FakeUpstream.requests(fake),
+      &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
+    )
+  end
+
   defp filter_input(pool, api_key, assignment, identity, suffix) do
     filter_input(pool, api_key, [{assignment, identity}], suffix)
   end
@@ -2811,6 +3143,15 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   defp upsert_weekly_exhausted_quota!(identity) do
     assert {:ok, [_window]} =
              QuotaWindows.upsert_quota_windows(identity, [weekly_exhausted_quota_attrs()])
+
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
+  end
+
+  defp upsert_uncorroborated_weekly_exhausted_quota!(identity) do
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [weekly_exhausted_quota_attrs()])
+
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity, observations: 1)
   end
 
   defp upsert_primary_exhausted_quota!(identity) do
@@ -2827,6 +3168,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
              QuotaWindows.upsert_quota_windows(identity, [
                weekly_pressure_quota_attrs(used_percent, attrs)
              ])
+
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
   end
 
   defp weekly_exhausted_quota_attrs do

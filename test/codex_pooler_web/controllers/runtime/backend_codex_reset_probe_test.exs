@@ -130,6 +130,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
                })
              ])
 
+    CodexPooler.SavedResetConfirmationFixtures.confirm_automatic_pressure!(sibling_identity)
+
     _model =
       put_model_source_assignments!(setup.model, [setup.assignment, sibling.assignment])
 
@@ -153,6 +155,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
                  source: "codex_usage_api"
                })
              ])
+
+    CodexPooler.SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
 
     routing_settings = Repo.reload!(CodexPooler.Pools.routing_settings_with_defaults(setup.pool))
     assert routing_settings.routing_strategy == "deterministic_rotation"
@@ -412,6 +416,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
                })
              ])
 
+    CodexPooler.SavedResetConfirmationFixtures.confirm_automatic_pressure!(sibling_identity)
+
     model = put_model_source_assignments!(setup.model, [setup.assignment, sibling.assignment])
 
     identity =
@@ -434,6 +440,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
                  source: "codex_usage_api"
                })
              ])
+
+    CodexPooler.SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
 
     %{
       setup: %{setup | identity: identity, model: model},

@@ -664,6 +664,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
                  source: "codex_usage_api"
                })
              ])
+
+    # Automatic redemption requires two corroborating provider receipts on
+    # the exhausted window; identities without the policy or bank get none.
+    CodexPooler.SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
   end
 
   def prime_stale_routing_quota!(identity) do

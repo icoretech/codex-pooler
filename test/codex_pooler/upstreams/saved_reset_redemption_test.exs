@@ -17,6 +17,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
+  alias CodexPooler.SavedResetConfirmationFixtures
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -155,6 +156,146 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       settled = Repo.reload!(identity).metadata
       refute Map.has_key?(settled, "saved_reset_redemption_target")
       assert settled["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 1
+    end
+
+    test "gateway auto settles a zero-dispatch claim when the proof clears before the provider POST" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               FakeUpstream.gated_json_headers(
+                 %{
+                   "credits" => [%{"id" => "credit_proof_cleared", "status" => "available"}],
+                   "available_count" => 1
+                 },
+                 notify: parent,
+                 release_ref: release_ref
+               ),
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/backend-api/wham/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      [window] = SavedResetConfirmationFixtures.weekly_provider_windows(identity.id)
+      assert SavedResetConfirmationFixtures.marker_state(window) == "confirmed"
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+      assert [_ref] = context.automatic_confirmation_refs
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+
+          SavedResetRedemption.redeem(assignment,
+            trigger_kind: "gateway_auto",
+            gateway_auto_context: context
+          )
+        end)
+
+      # The local claim is persisted and the credit list is in flight: a newer
+      # allowed provider receipt lands and clears the corroboration.
+      assert_receive {:fake_upstream_gate, :before_headers, gate_pid, ^release_ref}, 15_000
+      claimed = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert claimed["phase"] == "consuming"
+      assert claimed["provider_replay"]["provider_dispatches"] == 0
+
+      SavedResetConfirmationFixtures.observe_window!(
+        identity,
+        window,
+        DateTime.utc_now() |> DateTime.truncate(:microsecond),
+        permission: {true, false, :available},
+        used_percent: Decimal.new("32")
+      )
+
+      assert SavedResetConfirmationFixtures.marker_state(window) == nil
+      send(gate_pid, {:fake_upstream_release_gate, release_ref})
+
+      assert {:ok, %{status: :noop, applied?: false, code: code}} = Task.await(task, 15_000)
+      assert code in ["gateway_auto_trigger_not_current", "gateway_auto_confirmation_mismatch"]
+
+      assert Enum.map(FakeUpstream.requests(fake), &{&1.method, &1.path}) == [
+               {"GET", "/backend-api/wham/rate-limit-reset-credits"}
+             ]
+
+      settled = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert settled["phase"] == "consume_not_applied"
+      assert settled["status"] == "failed"
+      assert settled["result"]["code"] == "consume_not_applied"
+      assert settled["result"]["applied"] == false
+      assert settled["provider_replay"]["provider_dispatches"] == 0
+      assert settled["attempt_id"] == claimed["attempt_id"]
+      assert settled["generation"] == claimed["generation"]
+      refute Map.has_key?(Repo.reload!(identity).metadata, "saved_reset_redemption_target")
+      assert Repo.reload!(identity).metadata["saved_resets"]["available_count"] == 1
+
+      # the settled lifecycle does not block a later genuine claim
+      refute RedemptionLifecycle.blocks_new_redemption?(settled, DateTime.utc_now())
+    end
+
+    test "gateway auto settles a zero-dispatch claim when the bank drops to keep credits before the POST" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               FakeUpstream.gated_json_headers(
+                 %{
+                   "credits" => [%{"id" => "credit_bank_dropped", "status" => "available"}],
+                   "available_count" => 1
+                 },
+                 notify: parent,
+                 release_ref: release_ref
+               ),
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/backend-api/wham/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+
+          SavedResetRedemption.redeem(assignment,
+            trigger_kind: "gateway_auto",
+            gateway_auto_context: context
+          )
+        end)
+
+      assert_receive {:fake_upstream_gate, :before_headers, gate_pid, ^release_ref}, 15_000
+
+      # operator raises keep-credits to the whole bank while the claim is in flight
+      identity
+      |> Repo.reload!()
+      |> UpstreamIdentity.changeset(%{saved_reset_auto_redeem_keep_credits: 1})
+      |> Repo.update!()
+
+      send(gate_pid, {:fake_upstream_release_gate, release_ref})
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_keep_credits"}} =
+               Task.await(task, 15_000)
+
+      refute Enum.any?(FakeUpstream.requests(fake), &(&1.method == "POST"))
+      settled = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert settled["phase"] == "consume_not_applied"
+      assert settled["provider_replay"]["provider_dispatches"] == 0
     end
 
     test "revalidates assignment status before reserving a provider dispatch" do
@@ -6773,6 +6914,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                    gateway_auto_context: context
                  )
 
+        # Claim phase: sorted cohort, assignment, then the capacity circuits.
         assert_receive {:claim_lock, :cohort}, 1_000
         assert_receive {:claim_lock, :assignment}, 1_000
 
@@ -6784,6 +6926,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                  ~r/ORDER BY .*pool_upstream_assignment_id.*updated_at.*created_at.*id.*FOR UPDATE/
 
         assert length(locked_ids) == 3
+
+        # Dispatch reservation: the same lock order is reacquired once before
+        # the provider POST, and nothing is locked again afterwards.
+        assert_receive {:claim_lock, :cohort}, 1_000
+        assert_receive {:claim_lock, :assignment}, 1_000
+
+        assert_receive {:claim_lock, :circuits, reservation_query,
+                        [_pool_id, reservation_locked_ids, "test-model", "proxy_http"]},
+                       1_000
+
+        assert reservation_query == query
+        assert reservation_locked_ids == locked_ids
 
         {:messages, remaining_messages} = Process.info(self(), :messages)
         refute Enum.any?(remaining_messages, &match?({:claim_lock, :circuits, _, _}, &1))
@@ -7316,24 +7470,31 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   defp gateway_auto_context(assignment, identity, trigger, overrides \\ %{}) do
-    Map.merge(
-      %{
-        trigger: trigger,
-        pool_upstream_assignment_id: assignment.id,
-        upstream_identity_id: identity.id,
-        candidate_assignment_ids: [assignment.id],
-        candidate_identity_ids: [identity.id],
-        capacity_assignment_ids: [assignment.id],
-        capacity_identity_ids: [identity.id],
-        cohort_identity_ids: [identity.id],
-        routable_assignment_ids: [assignment.id],
-        routable_identity_ids: [identity.id],
-        route_class: "proxy_http",
-        quota_scope: test_quota_scope(),
-        hard_pinned_continuity?: false
-      },
-      Map.new(overrides)
-    )
+    overrides = Map.new(overrides)
+
+    context =
+      Map.merge(
+        %{
+          trigger: trigger,
+          pool_upstream_assignment_id: assignment.id,
+          upstream_identity_id: identity.id,
+          candidate_assignment_ids: [assignment.id],
+          candidate_identity_ids: [identity.id],
+          capacity_assignment_ids: [assignment.id],
+          capacity_identity_ids: [identity.id],
+          cohort_identity_ids: [identity.id],
+          routable_assignment_ids: [assignment.id],
+          routable_identity_ids: [identity.id],
+          route_class: "proxy_http",
+          quota_scope: test_quota_scope(),
+          hard_pinned_continuity?: false
+        },
+        overrides
+      )
+
+    if Map.has_key?(overrides, :automatic_confirmation_refs),
+      do: context,
+      else: SavedResetConfirmationFixtures.put_confirmation_refs(context)
   end
 
   defp transient_circuit_exclusion(identity_id, circuit_id, overrides \\ %{}) do
@@ -7697,10 +7858,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end
   end
 
+  # Only the claim-phase circuit lock is the race barrier; the dispatch
+  # reservation re-locks the same capacity rows and must run through.
   defp handle_transient_claim_lock(metadata, parent, barrier) do
     role = Process.get({__MODULE__, barrier, :claim_role})
+    seen_key = {__MODULE__, barrier, :circuit_lock_seen}
 
-    if role in [:winner, :loser] and circuit_lock_query?(metadata) do
+    if role in [:winner, :loser] and circuit_lock_query?(metadata) and
+         is_nil(Process.get(seen_key)) do
+      Process.put(seen_key, true)
       send(parent, {barrier, :circuit_lock, role, circuit_lock_event(metadata), self()})
       maybe_await_transient_winner_release!(role, barrier)
     end
@@ -7945,6 +8111,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              QuotaWindows.upsert_quota_windows(identity, [
                weekly_quota_attrs(Decimal.new("100"), overrides)
              ])
+
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
   end
 
   defp upsert_weekly_pressure_quota!(identity, used_percent, overrides \\ []) do
@@ -7952,6 +8120,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              QuotaWindows.upsert_quota_windows(identity, [
                weekly_quota_attrs(used_percent, overrides)
              ])
+
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
   end
 
   defp weekly_quota_attrs(used_percent, overrides) do

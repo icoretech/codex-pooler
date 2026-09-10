@@ -297,6 +297,8 @@ defmodule CodexPooler.Gateway.Runtime.SavedResetCapacityFenceTest do
                  freshness_state: "fresh"
                }
              ])
+
+    CodexPooler.SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
   end
 
   defp usage_payload do
