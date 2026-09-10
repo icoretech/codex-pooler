@@ -6240,22 +6240,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   test "future tool output continuations keep previous_response_id by shape" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_future_tool_origin",
-             "object" => "response"
-           }),
-           FakeUpstream.require_json_field(
-             "previous_response_id",
-             %{
-               "id" => "resp_ws_future_tool_continuation",
-               "object" => "response",
-               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-             },
-             %{"error" => %{"code" => "missing_future_tool_context"}}
-           )
-         ]}
+        # Strict finite scenario: the anchor carries no previous response and
+        # the continuation must keep it on the same physical connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_future_tool_origin",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_ws_future_tool_origin",
+                "input.0.type" => "future_tool_call_output"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_future_tool_continuation",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -6311,6 +6337,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       assert captured.json["input"] |> List.first() |> Map.fetch!("type") ==
                "future_tool_call_output"
+
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -8022,6 +8050,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              from(entry in LedgerEntry, where: entry.entry_kind == "settlement"),
              :count
            ) == 1
+  end
+
+  defp strict_native_request(connection_ordinal, respond) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: connection_ordinal,
+      json: [valid: true, equals: %{"type" => "response.create"}],
+      respond: respond
+    )
   end
 
   defp strict_native_response(response_id, connection_ordinal, input_tokens, output_tokens) do
@@ -10338,27 +10376,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   test "websocket connection limit first event retries same assignment without demotion" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream(
-             [
-               {"error",
-                %{
-                  "type" => "error",
-                  "status" => 400,
-                  "code" => "websocket_connection_limit_reached",
-                  "param" => "reasoning.effort",
-                  "message" => "open a replacement websocket connection"
-                }}
-             ],
-             done: false
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_connection_limit_retry",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+        # Strict finite scenario: the connection-limit terminal arrives on the
+        # first physical connection and the retry must land on a replacement
+        # connection; an extra send or a reused connection fails the fixture.
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "error",
+                "status" => 400,
+                "code" => "websocket_connection_limit_reached",
+                "param" => "reasoning.effort",
+                "message" => "open a replacement websocket connection"
+              })
+            ])
+          ),
+          strict_native_response("resp_ws_connection_limit_retry", 2, 4, 3)
+        ])
       )
 
     fallback_upstream =
@@ -10425,6 +10460,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert FakeUpstream.count(upstream) == 2
     assert FakeUpstream.count(fallback_upstream) == 0
+    assert :ok = FakeUpstream.verify!(upstream)
 
     assert [first_attempt, second_attempt] =
              Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))

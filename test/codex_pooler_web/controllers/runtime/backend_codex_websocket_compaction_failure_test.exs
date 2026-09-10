@@ -531,12 +531,36 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           completed_websocket_response(anchor),
-           FakeUpstream.websocket_sse_then_close([]),
-           successful_compaction_response("incremental_retry")
-         ]}
+        # Strict finite scenario: the anchored compact fails on the first
+        # connection, the client-authored full-history retry must arrive on a
+        # replacement connection without the anchor, and nothing else is sent.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: completed_websocket_frames(anchor)
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "previous_response_id" => anchor}
+            ],
+            respond: FakeUpstream.websocket_sse_then_close([])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond: successful_compaction_frames("incremental_retry")
+          )
+        ])
       )
 
     setup = gateway_setup(upstream, compact?: true)
@@ -699,6 +723,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
              Service.prepare_replay_intent(auth, repeated_retry)
 
     assert FakeUpstream.count(upstream) == 3
+    assert :ok = FakeUpstream.verify!(upstream)
     assert_compaction_retry_successor!(request, session.id)
   end
 
@@ -1037,6 +1062,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
       ],
       done: false
     )
+  end
+
+  # Native websocket frames for strict expectations, which reject SSE-derived
+  # websocket shortcuts.
+  defp completed_websocket_frames(response_id) do
+    FakeUpstream.websocket_text_frames([
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => response_id, "status" => "completed", "output" => []}
+      })
+    ])
+  end
+
+  defp successful_compaction_frames(suffix) do
+    {"response.output_item.done", item_event} =
+      native_compaction_item_event(%{
+        "type" => "compaction",
+        "encrypted_content" => "synthetic-native-encrypted-#{suffix}"
+      })
+
+    FakeUpstream.websocket_text_frames([
+      CodexPooler.JSON.encode!(item_event),
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_#{suffix}", "status" => "completed"}
+      })
+    ])
   end
 
   defp successful_compaction_response(suffix) do

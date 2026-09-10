@@ -1,4 +1,6 @@
 defmodule CodexPooler.FakeUpstream do
+  require Logger
+
   @moduledoc """
   Local HTTP fake for gateway contract tests.
 
@@ -705,6 +707,8 @@ defmodule CodexPooler.FakeUpstream do
     failure =
       "unexpected_extra_request transport=#{request_transport(request)} method=#{request.method} path=#{request.path} websocket_connection_ordinal=#{inspect(Map.get(request, :websocket_connection_id))} remaining=0 consumed=#{state.strict_consumed}"
 
+    Logger.warning("fake upstream scenario failure " <> failure)
+
     {{:scenario_failure, failure},
      %{state | scenario_failures: [failure | state.scenario_failures]}}
   end
@@ -725,6 +729,9 @@ defmodule CodexPooler.FakeUpstream do
 
           failures ->
             diagnostic = "expectation_mismatch " <> Enum.join(failures, " ")
+            # Surface the exact field path in the test output even when the
+            # owning test fails on a downstream assertion before `verify!/1`.
+            Logger.warning("fake upstream scenario failure " <> diagnostic)
 
             {{:scenario_failure, diagnostic},
              %{state | scenario_failures: [diagnostic | state.scenario_failures]}}

@@ -5248,28 +5248,47 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "tool-output continuation after reconnect is forwarded through the owner" do
-    first_submission_ref = make_ref()
-    second_submission_ref = make_ref()
-
-    refute first_submission_ref == second_submission_ref
-
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.barrier_sse_stream(
-             [%{"id" => "resp_owner_tool_first", "object" => "response"}],
-             barrier_after: 0,
-             notify: self(),
-             release_ref: first_submission_ref
-           ),
-           FakeUpstream.barrier_sse_stream(
-             [%{"id" => "resp_owner_tool_second", "object" => "response"}],
-             barrier_after: 0,
-             notify: self(),
-             release_ref: second_submission_ref
-           )
-         ]}
+        # Strict finite scenario: both turns must reach the owner's single
+        # upstream connection, the continuation must carry the anchor, and no
+        # third send may occur across the downstream reconnect.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_tool_first",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_tool_first"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_tool_second",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream, supported_compression_model_opts())
@@ -5292,15 +5311,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:ok, first_state} =
              CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
-    assert_receive {:fake_upstream_chunk_barrier, 0, first_upstream_pid, ^first_submission_ref},
-                   5_000
-
+    assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
     assert [first_request] = FakeUpstream.requests(upstream)
     refute Map.has_key?(first_request.json, "previous_response_id")
 
-    send(first_upstream_pid, {:fake_upstream_release_chunk, first_submission_ref})
-
-    assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
     assert %{"id" => "resp_owner_tool_first"} = CodexPooler.JSON.decode!(first_frame)
     assert {:ok, first_state} = receive_owner_socket_complete(first_state)
     assert {:ok, first_state} = receive_socket_done(first_state)
@@ -5369,19 +5383,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:ok, second_state} =
                CodexResponsesSocket.handle_in({tool_payload, [opcode: :text]}, second_state)
 
-      assert_receive {:fake_upstream_chunk_barrier, 0, second_upstream_pid,
-                      ^second_submission_ref},
-                     5_000
-
-      assert second_upstream_pid == first_upstream_pid
+      assert {:push, {:text, second_frame}, second_state} =
+               receive_owner_socket_push(second_state)
 
       assert [^first_request, second_request] = FakeUpstream.requests(upstream)
       assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
-
-      send(second_upstream_pid, {:fake_upstream_release_chunk, second_submission_ref})
-
-      assert {:push, {:text, second_frame}, second_state} =
-               receive_owner_socket_push(second_state)
 
       assert %{"id" => "resp_owner_tool_second"} = CodexPooler.JSON.decode!(second_frame)
       assert {:ok, _second_state} = receive_socket_done(second_state)
@@ -5389,6 +5395,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [^first_request, ^second_request] = FakeUpstream.requests(upstream)
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
       assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
+      assert :ok = FakeUpstream.verify!(upstream)
 
       schema_bound_item =
         Enum.find(second_request.json["input"], fn item ->
