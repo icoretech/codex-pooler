@@ -224,6 +224,60 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
            ]
   end
 
+  test "a twice-confirmed usable usage reading supersedes fresh exhausted header evidence" do
+    reset_at = DateTime.add(@as_of, 7, :day)
+
+    exhausted_headers =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        used_percent: Decimal.new("100"),
+        reset_at: reset_at,
+        observed_at: DateTime.add(@as_of, -120, :second)
+      )
+
+    confirmed_usage =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("20"),
+        reset_at: reset_at,
+        observed_at: DateTime.add(@as_of, -30, :second),
+        metadata: usage_coherence(2, reset_at, DateTime.add(@as_of, -30, :second))
+      )
+
+    single_usage = %{
+      confirmed_usage
+      | metadata: usage_coherence(1, reset_at, DateTime.add(@as_of, -30, :second))
+    }
+
+    # One coherent reading is a suspicion: the exhausted row still wins.
+    assert WindowSelector.logical_windows([single_usage, exhausted_headers], @as_of) == [
+             exhausted_headers
+           ]
+
+    # Two coherent readings are a recovery: the exhausted row stops competing.
+    assert WindowSelector.logical_windows([confirmed_usage, exhausted_headers], @as_of) == [
+             confirmed_usage
+           ]
+
+    # A newer exhausted observation is not overridden by older confirmations.
+    newer_exhausted = %{exhausted_headers | observed_at: @as_of}
+
+    assert WindowSelector.logical_windows([confirmed_usage, newer_exhausted], @as_of) == [
+             newer_exhausted
+           ]
+
+    # A confirmation that aged past the freshness TTL no longer overrides.
+    later = DateTime.add(@as_of, 16, :minute)
+
+    assert WindowSelector.logical_windows([confirmed_usage, exhausted_headers], later) == [
+             exhausted_headers
+           ]
+  end
+
   test "anchored runtime Spark evidence remains selected over newer floating usage evidence" do
     floating_usage =
       spark_window(
@@ -687,6 +741,21 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
       )
 
     assert WindowSelector.logical_windows([earlier, later], @as_of) == [later]
+  end
+
+  defp usage_coherence(count, reset_at, last_observed_at) do
+    %{
+      "__quota_usage_coherence_v1" => %{
+        "version" => 1,
+        "count" => count,
+        "used_percent" => "20",
+        "reset_at" => DateTime.to_iso8601(reset_at),
+        "first_observed_at" => DateTime.to_iso8601(DateTime.add(last_observed_at, -60, :second)),
+        "last_observed_at" => DateTime.to_iso8601(last_observed_at),
+        "allowed" => true,
+        "limit_reached" => false
+      }
+    }
   end
 
   defp account_window(attrs) do

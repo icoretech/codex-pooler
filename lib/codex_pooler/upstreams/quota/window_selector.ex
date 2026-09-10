@@ -12,6 +12,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
+  alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
 
   @fresh "fresh"
 
@@ -53,6 +54,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
       |> Enum.map(fn candidates ->
         candidates
         |> reject_prior_cycle_windows(as_of)
+        |> reject_exhaustion_overridden_by_confirmed_usage(as_of)
         |> best_logical_window(as_of)
       end)
     end)
@@ -131,6 +133,25 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # rows from its future. This is strictly non-future — the clock-skew
   # tolerance applies to freshness classification, not to existence, so even
   # a row observed one second past `as_of` is excluded.
+  # A fresh exhausted row from response headers, rate-limit events or runtime
+  # evidence normally keeps winning the merge by pressure, and rightly so: one
+  # lower Usage API reading is a suspicion, not a recovery. Once the provider
+  # has reported usable capacity twice for the same cycle after that exhausted
+  # observation (`UsageCoherence`), the exhausted row stops competing so routing
+  # and operators see the confirmed measurement instead of waiting for the
+  # exhausted row to age past the freshness TTL.
+  defp reject_exhaustion_overridden_by_confirmed_usage(candidates, as_of) do
+    case Enum.filter(candidates, &UsageCoherence.confirmed?(&1, as_of)) do
+      [] ->
+        candidates
+
+      confirmed ->
+        Enum.reject(candidates, fn window ->
+          Enum.any?(confirmed, &UsageCoherence.overrides?(&1, window, as_of))
+        end)
+    end
+  end
+
   defp future_observation?(
          %Quota.AccountQuotaWindow{observed_at: %DateTime{} = observed_at},
          %DateTime{} = as_of
