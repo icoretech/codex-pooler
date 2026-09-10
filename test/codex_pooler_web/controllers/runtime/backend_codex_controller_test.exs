@@ -5137,7 +5137,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     for captured <- [first_upstream_request, second_upstream_request] do
       captured_headers = Map.new(captured.headers)
 
-      refute Map.has_key?(captured_headers, "session-id")
+      # The client's own session-id is the provider's sticky-routing key and is
+      # forwarded verbatim; the Pooler-local continuity headers stay local.
+      assert captured_headers["session-id"] == session_header
       refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
     end
@@ -5318,7 +5320,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     captured_headers = Map.new(captured.headers)
 
-    refute Map.has_key?(captured_headers, "session-id")
+    assert captured_headers["session-id"] == "session-id-lower-priority-fixture"
     refute Map.has_key?(captured_headers, "x-session-id")
     refute Map.has_key?(captured_headers, "x-session-affinity")
   end
@@ -11928,11 +11930,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [first_upstream_request, second_upstream_request, third_upstream_request] =
              FakeUpstream.requests(upstream)
 
-    for captured <- [first_upstream_request, second_upstream_request, third_upstream_request] do
+    for {captured, forwarded_session_id} <-
+          Enum.zip(
+            [first_upstream_request, second_upstream_request, third_upstream_request],
+            [session_id_header, nil, nil]
+          ) do
       assert captured.path == "/backend-api/codex/responses/compact"
       captured_headers = Map.new(captured.headers)
 
-      refute Map.has_key?(captured_headers, "session-id")
+      # Only a non-blank client session-id is forwarded as the provider's
+      # sticky-routing key; blank values and Pooler-local headers stay local.
+      assert Map.get(captured_headers, "session-id") == forwarded_session_id
       refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
     end
@@ -12135,7 +12143,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
              "x-codex-installation-id" => metadata.installation_id,
-             "x-openai-subagent" => metadata.subagent
+             "x-openai-subagent" => metadata.subagent,
+             "session-id" => "lineage-session-id",
+             "thread-id" => "lineage-thread-id",
+             "x-client-request-id" => "lineage-thread-id"
            }
 
     assert_approved_lineage_headers_forwarded!(captured, metadata)
@@ -12218,7 +12229,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
              "x-codex-installation-id" => metadata.installation_id,
-             "x-openai-subagent" => metadata.subagent
+             "x-openai-subagent" => metadata.subagent,
+             "session-id" => "lineage-session-id",
+             "thread-id" => "lineage-thread-id",
+             "x-client-request-id" => "lineage-thread-id"
            }
 
     assert_approved_lineage_headers_forwarded!(captured, metadata)
@@ -14892,6 +14906,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       {"x-codex-parent-thread-id", metadata.parent_thread_id},
       {"x-codex-installation-id", metadata.installation_id},
       {"x-openai-subagent", metadata.subagent},
+      {"session-id", "lineage-session-id"},
+      {"thread-id", "lineage-thread-id"},
+      {"x-client-request-id", "lineage-thread-id"},
       {"x-openai-internal-codex-responses-lite", "lineage-spoofed-lite"},
       {"x-codex-unapproved", "lineage-unapproved-codex"},
       {"x-openai-unapproved", "lineage-unapproved-openai"},
@@ -14905,8 +14922,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "x-codex-window-id",
       "x-codex-parent-thread-id",
       "x-codex-installation-id",
-      "x-openai-subagent"
+      "x-openai-subagent",
+      "session-id",
+      "thread-id",
+      "x-client-request-id"
     ]
+  end
+
+  defp assert_provider_session_headers_forwarded!(captured_headers) do
+    assert captured_headers["session-id"] == "lineage-session-id"
+    assert captured_headers["thread-id"] == "lineage-thread-id"
+    assert captured_headers["x-client-request-id"] == "lineage-thread-id"
   end
 
   defp assert_approved_lineage_headers_forwarded!(captured, metadata) do
@@ -14924,6 +14950,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
     assert captured_headers["x-codex-installation-id"] == metadata.installation_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
+    assert_provider_session_headers_forwarded!(captured_headers)
   end
 
   defp assert_approved_lineage_headers_except_turn_metadata_forwarded!(captured, metadata) do
@@ -14933,6 +14960,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
     assert captured_headers["x-codex-installation-id"] == metadata.installation_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
+    assert_provider_session_headers_forwarded!(captured_headers)
   end
 
   defp assert_code_mode_turn_metadata_header_projected!(captured, metadata) do

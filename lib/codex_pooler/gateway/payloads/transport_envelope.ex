@@ -10,6 +10,14 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @codex_residency_header "x-openai-internal-codex-residency"
+  # Provider session headers the Codex client sends on every backend HTTP
+  # request. The ChatGPT backend uses `session-id` for sticky routing, so a
+  # full-history HTTP turn that omits it lands on an arbitrary replica and
+  # misses the prompt cache the previous turn warmed. The values are bounded
+  # opaque identifiers (the client's thread id, also carried in the body as
+  # `prompt_cache_key` and `client_metadata`).
+  @provider_session_header_names ["session-id", "thread-id", "x-client-request-id"]
+  @provider_session_header_max_bytes 128
 
   @type timeout_settings :: %{
           required(:connect_timeout_ms) => non_neg_integer(),
@@ -37,6 +45,21 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
       ]
     ]
   end
+
+  @spec provider_session_header_names() :: [String.t()]
+  def provider_session_header_names, do: @provider_session_header_names
+
+  @doc """
+  Whether a provider session header value may be forwarded upstream: a
+  non-empty ASCII identifier of at most #{@provider_session_header_max_bytes} bytes.
+  """
+  @spec provider_session_header_value?(term()) :: boolean()
+  def provider_session_header_value?(value) when is_binary(value) do
+    byte_size(value) in 1..@provider_session_header_max_bytes and
+      Regex.match?(~r/\A[A-Za-z0-9._:-]+\z/, value)
+  end
+
+  def provider_session_header_value?(_value), do: false
 
   @spec headers(UpstreamIdentity.t(), String.t(), [{String.t(), String.t()}], keyword()) :: [
           {String.t(), String.t()}
@@ -82,10 +105,15 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
       {name, value} when is_binary(name) and is_binary(value) ->
         name = String.downcase(name)
 
-        if String.starts_with?(name, "x-openai-") or String.starts_with?(name, "x-codex-") do
-          [{name, value}]
-        else
-          []
+        cond do
+          String.starts_with?(name, "x-openai-") or String.starts_with?(name, "x-codex-") ->
+            [{name, value}]
+
+          name in @provider_session_header_names and provider_session_header_value?(value) ->
+            [{name, value}]
+
+          true ->
+            []
         end
 
       _other ->

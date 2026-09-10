@@ -140,7 +140,7 @@ Continuity headers are local routing inputs. Codex Pooler reads them in this ord
 6. `session_id`
 7. `x-codex-conversation-id`
 
-`session-id`, `x-session-id`, and `x-session-affinity` aren't forwarded upstream. They help Codex Pooler find the local routing state only.
+`x-session-id` and `x-session-affinity` aren't forwarded upstream. They help Codex Pooler find the local routing state only. On the native `/backend-api/codex/responses` and `/backend-api/codex/responses/compact` routes, the Codex client's own `session-id`, `thread-id`, and `x-client-request-id` headers are forwarded verbatim when they are short ASCII identifiers, because the provider uses them for sticky routing and a full-history HTTP turn without them misses the prompt cache the previous turn warmed. `/v1` routes keep every continuity header local.
 
 If the pinned upstream assignment is no longer eligible, Codex Pooler doesn't silently move that session to a different account. The user should check the upstream's lifecycle state, reauth status, Pool assignment, model support, quota evidence, and route health.
 

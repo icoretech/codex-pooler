@@ -291,17 +291,26 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp filter_regular_runtime_forwarded_metadata_headers(headers) do
     Enum.flat_map(headers, fn
       {name, value} when is_binary(name) and is_binary(value) ->
-        name = String.downcase(name)
-
-        if name in @regular_runtime_metadata_header_names do
-          [{name, maybe_project_turn_metadata_header(name, value)}]
-        else
-          []
-        end
+        forwarded_metadata_header(String.downcase(name), value)
 
       _other ->
         []
     end)
+  end
+
+  # Runtime lookup: the envelope owns the provider session header names and a
+  # compile-time reference would add a forbidden xref edge.
+  defp forwarded_metadata_header(name, value) do
+    cond do
+      name in TransportEnvelope.provider_session_header_names() ->
+        if TransportEnvelope.provider_session_header_value?(value), do: [{name, value}], else: []
+
+      name in @regular_runtime_metadata_header_names ->
+        [{name, maybe_project_turn_metadata_header(name, value)}]
+
+      true ->
+        []
+    end
   end
 
   defp maybe_project_turn_metadata_header("x-codex-turn-metadata", value) do

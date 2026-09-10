@@ -1677,8 +1677,17 @@ defmodule CodexPooler.CompatibilityMatrix do
           "x-codex-window-id",
           "x-codex-parent-thread-id",
           "x-codex-installation-id",
-          "x-openai-subagent"
+          "x-openai-subagent",
+          "session-id",
+          "thread-id",
+          "x-client-request-id"
         ],
+        provider_session_headers: %{
+          names: ["session-id", "thread-id", "x-client-request-id"],
+          value_contract: "ascii_identifier_max_128_bytes",
+          purpose: "provider_sticky_routing_for_prompt_cache",
+          local_only_headers: ["x-session-id", "x-session-affinity"]
+        },
         relayed_response_headers: ["x-codex-turn-state"],
         not_forwarded_on: [
           "/v1/responses",

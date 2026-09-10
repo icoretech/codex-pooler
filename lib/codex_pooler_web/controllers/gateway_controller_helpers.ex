@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Pools.Routing, as: PoolRouting
 
   @overload_code "server_is_overloaded"
@@ -313,9 +314,11 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   defp client_error_type(_code), do: "invalid_request_error"
 
   defp forwarded_headers(conn) do
+    provider_session_header_names = TransportEnvelope.provider_session_header_names()
+
     Enum.filter(conn.req_headers, fn {name, _value} ->
       name == "user-agent" or String.starts_with?(name, "x-openai-") or
-        String.starts_with?(name, "x-codex-")
+        String.starts_with?(name, "x-codex-") or name in provider_session_header_names
     end)
   end
 

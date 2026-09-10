@@ -263,7 +263,49 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"x-codex-window-id", "window-redacted"},
                {"x-codex-parent-thread-id", "thread-redacted"},
                {"x-codex-turn-state", "turn-state-redacted"},
-               {"x-openai-subagent", "subagent-redacted"}
+               {"x-openai-subagent", "subagent-redacted"},
+               {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+               {"thread-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+               {"x-client-request-id", "019a0c74-e494-7162-b789-1ba499fad58e"}
+             ]
+    end
+
+    test "forwards provider session headers only as bounded identifiers on native routes" do
+      overlong = String.duplicate("a", 129)
+
+      input_headers = [
+        {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+        {"Thread-Id", "thread_01.a:b"},
+        {"x-client-request-id", overlong},
+        {"session-id", "spaced value"},
+        {"session-id", ""},
+        {"x-session-id", "local-only"},
+        {"x-session-affinity", "local-only"},
+        {"session_id", "local-only"}
+      ]
+
+      options = runtime_options("/backend-api/codex/responses", forwarded_headers: input_headers)
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(options) == [
+               {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+               {"thread-id", "thread_01.a:b"}
+             ]
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+               runtime_options("/v1/responses", forwarded_headers: input_headers)
+             ) == []
+
+      # The envelope narrows the same way when a caller bypasses the runtime filter.
+      envelope_headers =
+        TransportEnvelope.headers(identity(), "upstream-token", [],
+          forwarded_headers: input_headers
+        )
+
+      assert Enum.filter(envelope_headers, fn {name, _value} ->
+               name in ["session-id", "thread-id", "x-client-request-id", "x-session-id"]
+             end) == [
+               {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+               {"thread-id", "thread_01.a:b"}
              ]
     end
 
@@ -510,7 +552,9 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         {"accept", "application/json"},
         {"content-type", "application/json"},
         {"x-codex-extra", "extra-redacted"},
-        {"x-openai-extra", "extra-redacted"}
+        {"x-openai-extra", "extra-redacted"},
+        {"x-session-id", "local-only"},
+        {"x-session-affinity", "local-only"}
       ]
   end
 
@@ -520,7 +564,10 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       {"x-codex-window-id", "window-redacted"},
       {"x-codex-parent-thread-id", "thread-redacted"},
       {"x-codex-turn-state", "turn-state-redacted"},
-      {"x-openai-subagent", "subagent-redacted"}
+      {"x-openai-subagent", "subagent-redacted"},
+      {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+      {"thread-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+      {"x-client-request-id", "019a0c74-e494-7162-b789-1ba499fad58e"}
     ]
   end
 
