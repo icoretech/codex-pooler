@@ -13703,7 +13703,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
       )
 
-    setup = gateway_setup(pinned_upstream)
+    # Prime the header row here rather than in the setup helper: the helper
+    # computes its own reset time, and on a slow runner it lands a few seconds
+    # after `reset_at`, so the later header exhaustion carrying `reset_at`
+    # would be rejected as an older cycle and the account would never deny.
+    setup = gateway_setup(pinned_upstream, quota?: false)
 
     fallback =
       gateway_upstream(
