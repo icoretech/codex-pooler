@@ -37,8 +37,8 @@ defmodule CodexPoolerWeb.ConnCase do
   end
 
   setup tags do
-    CodexPooler.DataCase.setup_sandbox(tags)
-    {:ok, conn: ConnTest.build_conn()}
+    sandbox = CodexPooler.DataCase.setup_sandbox(tags)
+    {:ok, Map.put(sandbox, :conn, ConnTest.build_conn())}
   end
 
   @doc """

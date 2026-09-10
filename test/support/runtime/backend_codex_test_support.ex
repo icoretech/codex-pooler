@@ -644,12 +644,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
              ])
   end
 
-  def prime_exhausted_routing_quota!(identity) do
+  def prime_exhausted_routing_quota!(identity, overrides \\ %{}) do
     reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
 
     assert {:ok, [_window]} =
              QuotaWindows.upsert_quota_windows(identity, [
-               primary_quota_window_attrs(%{reset_at: reset_at, used_percent: Decimal.new("100")})
+               primary_quota_window_attrs(
+                 Map.merge(%{reset_at: reset_at, used_percent: Decimal.new("100")}, overrides)
+               )
              ])
   end
 

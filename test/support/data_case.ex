@@ -36,7 +36,6 @@ defmodule CodexPooler.DataCase do
 
   setup tags do
     CodexPooler.DataCase.setup_sandbox(tags)
-    :ok
   end
 
   @doc """
@@ -53,9 +52,19 @@ defmodule CodexPooler.DataCase do
     settings_cache = InstanceSettings.snapshot_cache_for_test()
 
     on_exit(fn -> stop_sandbox(pid, settings_cache) end)
+
+    %{sandbox_owner: pid, sandbox_settings_cache: settings_cache}
   end
 
-  @doc false
+  @doc """
+  Stops the test's sandbox owner and restores the settings cache.
+
+  Runs automatically on exit. A test that committed rows outside the sandbox
+  (`Sandbox.unboxed_run/2`) and then touched them inside the sandboxed
+  transaction must call this before deleting those rows, because the open
+  sandbox transaction still holds their row locks; the exit callback then
+  finds the owner already stopped and does nothing more.
+  """
   @spec stop_sandbox(pid(), term()) :: :ok
   def stop_sandbox(pid, settings_cache) do
     TouchDebounce.reset()
@@ -64,7 +73,7 @@ defmodule CodexPooler.DataCase do
     # The synchronous restore drains that work and cancels its timer before owner exit.
     InstanceSettings.restore_cache_for_test(settings_cache)
 
-    Sandbox.stop_owner(pid)
+    if Process.alive?(pid), do: Sandbox.stop_owner(pid), else: :ok
   end
 
   @doc """

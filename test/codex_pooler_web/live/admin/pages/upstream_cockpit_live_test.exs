@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.DataCase
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.Lifecycle.IdentitySlotLock
@@ -6181,7 +6182,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   for source <- [:paste, :upload] do
     @tag :unix_integration
     test "cockpit auth.json #{source} stale import keeps the mounted recovery form usable until explicit resubmission",
-         %{conn: conn} do
+         %{conn: conn, sandbox_owner: sandbox_owner, sandbox_settings_cache: settings_cache} do
       source = unquote(source)
       fixture = committed_auth_json_recovery_fixture!()
       barrier = make_ref()
@@ -6287,6 +6288,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         :telemetry.detach(handler_id)
         send(holder.pid, {barrier, :advance})
         stop_live_view_proxy!(view)
+        # The resubmitted import updated the committed identity inside the
+        # sandboxed transaction, whose row lock would block the unboxed delete
+        # until the owner exits; release the sandbox before cleaning up.
+        DataCase.stop_sandbox(sandbox_owner, settings_cache)
         cleanup_committed_auth_json_recovery_fixture!(fixture)
       end
     end

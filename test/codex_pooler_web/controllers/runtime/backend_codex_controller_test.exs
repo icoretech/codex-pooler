@@ -13497,6 +13497,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              {200,
               %{
                 "rate_limit" => %{
+                  "allowed" => true,
+                  "limit_reached" => false,
                   "primary_window" => %{
                     "used_percent" => 20,
                     "limit_window_seconds" => 18_000,
@@ -13538,7 +13540,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
       )
 
-    prime_routing_quota!(setup.identity)
+    # The primed windows carry the provider's own reset and source so the
+    # fixture and the usage payload describe one observed cycle: a lower
+    # same-cycle usage reading is then retained as a candidate until a second
+    # observation confirms it, instead of competing with a fresh header row.
+    prime_routing_quota!(setup.identity, %{reset_at: reset_at, source: "codex_usage_api"})
 
     session_header = "hard-pin-recovery-session-#{System.unique_integer([:positive])}"
 
@@ -13555,7 +13561,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"id" => previous_response_id} = json_response(first_conn, 200)
     assert FakeUpstream.count(pinned_upstream) == 1
 
-    prime_exhausted_routing_quota!(setup.identity)
+    prime_exhausted_routing_quota!(setup.identity, %{
+      reset_at: reset_at,
+      source: "codex_usage_api"
+    })
 
     denied_conn =
       conn
@@ -13605,7 +13614,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert %{"id" => ^previous_response_id} = json_response(recovered_conn, 200)
-    assert FakeUpstream.count(pinned_upstream) == 2
+
+    assert pinned_upstream
+           |> FakeUpstream.requests()
+           |> Enum.frequencies_by(& &1.path) ==
+             %{"/backend-api/codex/responses" => 2, "/backend-api/wham/usage" => 2}
+
     assert FakeUpstream.count(fallback_upstream) == 0
 
     requests =
@@ -13620,7 +13634,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                {"succeeded", nil}
              ]
 
-    assert Repo.aggregate(from(a in Attempt, where: a.pool_id == ^setup.pool.id), :count) == 2
+    request_ids = Enum.map(requests, & &1.id)
+
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id in ^request_ids), :count) == 2
 
     assert Repo.aggregate(
              from(entry in LedgerEntry,
