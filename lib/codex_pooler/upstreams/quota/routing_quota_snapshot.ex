@@ -86,10 +86,11 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
   end
 
   @spec effective_windows(t()) :: [AccountQuotaWindow.t()]
-  def effective_windows(%__MODULE__{as_of: as_of} = snapshot) do
+  @spec effective_windows(t(), keyword()) :: [AccountQuotaWindow.t()]
+  def effective_windows(%__MODULE__{as_of: as_of} = snapshot, opts \\ []) do
     snapshot
     |> time_visible_raw_windows()
-    |> Routing.reject_superseded_primary_windows(as_of)
+    |> Routing.reject_superseded_primary_windows(as_of, opts)
     |> WindowSelector.logical_windows(as_of)
   end
 

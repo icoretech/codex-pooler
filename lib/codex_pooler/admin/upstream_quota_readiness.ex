@@ -56,17 +56,21 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
   end
 
   @spec from_snapshot(RoutingQuotaSnapshot.t()) :: t()
-  def from_snapshot(%RoutingQuotaSnapshot{} = snapshot) do
+  @spec from_snapshot(RoutingQuotaSnapshot.t(), keyword()) :: t()
+  def from_snapshot(%RoutingQuotaSnapshot{} = snapshot, opts \\ []) do
     routing_snapshot = %{
       snapshot
       | raw_windows: Enum.reject(snapshot.raw_windows, &usage_zero_capacity_primary_window?/1)
     }
 
     eligibility =
-      QuotaWindows.routing_quota_eligibility_from_snapshot(routing_snapshot, account_only: true)
+      QuotaWindows.routing_quota_eligibility_from_snapshot(
+        routing_snapshot,
+        Keyword.put(opts, :account_only, true)
+      )
 
     snapshot
-    |> RoutingQuotaSnapshot.effective_windows()
+    |> RoutingQuotaSnapshot.effective_windows(opts)
     |> project_readiness(eligibility, snapshot.as_of)
   end
 

@@ -285,3 +285,131 @@ CODEX_POOLER_MEMORY_SAMPLER_LIMIT_BYTES=1073741824
 ```
 
 Use a lower threshold or shorter interval only during active investigation, because logs are the only signal likely to capture a worker or scheduler spike that reaches OOM before the next Prometheus scrape. Worker and scheduler pods do not expose the app `/metrics` endpoint and do not start the Prometheus reporter, so combine their sampler logs with Kubernetes cgroup memory, restart, OOM, and memory-limit metrics.
+
+## Retained account quota evidence
+
+The authorized native `/metrics` response also exposes account gauges. It reads
+all non-deleted identities, including paused, disabled, never-success and
+unassigned accounts, in one `REPEATABLE READ, READ ONLY` transaction with three
+set-based queries and a five-second total deadline, including connection-pool
+checkout. Timeout or request termination cancels the owned collector task, so
+queued work cannot run after its scrape has ended. It does not read account
+secrets, refresh OAuth, poll providers, enqueue work, call models, switch accounts
+or redeem credits. Inactive accounts' retained observations can become stale.
+Allow the scrape timeout to exceed the account read deadline plus normal response
+processing. HTTP success (`up=1`) alone does not establish collector coverage.
+
+There are 36 account gauge families. Every name below has prefix `codex_pooler_` and type **gauge**. Label groups are:
+`A = account_id,provider`; `P = A,pool_id`;
+`M = A,scope,bucket,window,window_kind,meter_id`;
+`O = M,source,observation_id`. Account and pool IDs are internal UUIDs. Provider
+is `codex_chatgpt_oauth` or `unknown`; meter and observation identities are opaque
+SHA-256 digests, never raw model names, provider meter strings, emails or aliases.
+Quota groups have no pool label, even when an account belongs to several pools.
+
+| Metric suffix | Labels | Meaning |
+| --- | --- | --- |
+| `account_metrics_collection_success` | none | 1 only for a complete read and every complete account projection. |
+| `account_metrics_collection_duration_seconds` | none | Actual collection duration. |
+| `account_metrics_snapshot_timestamp_seconds` | none | Captured evaluation time; not provider freshness. Absent on read failure. |
+| `account_metrics_accounts`, `account_metrics_memberships` | none | Inventory and distinct membership counts. Absent on read failure. |
+| `account_metrics_quota_groups`, `account_metrics_observations` | none | Emitted group and observation counts. Absent on read failure. |
+| `account_metrics_evidence_ttl_seconds` | none | Actual configured Evidence TTL (default 900 seconds). |
+| `account_info` | A | One per non-deleted enrolled identity. |
+| `account_state` | A,state | Persisted lifecycle state. |
+| `account_disabled`, `account_reauth_required` | A | Explicit disabled flag and persisted reauthentication requirement. Zero does not certify credentials. |
+| `account_projection_complete`, `account_projection_overflow` | A | Complete projection and measured cardinality overflow flags. |
+| `account_has_quota_observation` | A | At least one time-visible observation; absence is not zero consumption. |
+| `account_last_quota_observation_timestamp_seconds` | A | Latest valid non-future observation time, when known. |
+| `account_provider_availability_state` | A,state | `available`, `blocked` or `unknown`, using credential-epoch and TTL rules. Same-epoch blocking persists beyond the TTL. |
+| `account_provider_availability_observed_timestamp_seconds` | A | Valid non-future current-epoch provider availability time, when known. |
+| `account_quota_readiness` | A,state | `ready`, `weekly_only_probe`, `provider_available_no_windows`, `exhausted`, `stale`, `missing_evidence`, `blocked` or `unknown`. This does not establish pool/model eligibility. |
+| `account_pool_membership` | P | Membership presence, including paused/disabled memberships. |
+| `account_pool_state` | P,status,health,eligibility | Persisted bounded membership state. |
+| `account_pool_reconciliation_state` | P,state | Latest valid terminal `succeeded`, `partial`, `failed`, or `unknown`. |
+| `account_pool_reconciliation_timestamp_seconds` | P | Valid non-future terminal reconciliation completion time. |
+| `account_pool_last_successful_reconciliation_timestamp_seconds` | P | Whole-reconciliation success time; not quota-only poll success. |
+| `account_quota_info` | M | Canonical quota group presence. |
+| `account_quota_window_duration_seconds` | M | Actual positive stored duration. |
+| `account_quota_routing_selection_present` | M | Whether routing selected a known-time observation in this group. |
+| `account_quota_observation_info` | O | Retained time-visible source observation. |
+| `account_quota_observation_used_percent`, `account_quota_observation_remaining_percent` | O | Valid reported used percentage and `100-used`; missing or invalid values are omitted. |
+| `account_quota_observation_reset_timestamp_seconds` | O | Original reported reset time, including elapsed resets; missing reset omitted. |
+| `account_quota_observation_timestamp_seconds` | O | Original valid non-future observation time; missing time omitted. |
+| `account_quota_observation_freshness` | O,state | Current `fresh`, `stale` or `unknown` Evidence classification. |
+| `account_quota_observation_elapsed` | O | 1 when a known reset elapsed; zero proves no current capacity. |
+| `account_quota_observation_used_known` | O | 1 only for a finite reported percentage in `[0,100]`. |
+| `account_quota_observation_routing_selected` | O | The exact routing-selected known-time observation. |
+
+Lifecycle and assignment states are `pending`, `active`, `paused`, `refresh_due`,
+`refreshing`, `refresh_failed`, `reauth_required`, `disabled`, `errored`, or
+`unknown`. Deleted identities and memberships disappear on the next successful
+scrape. Health is `unknown`, `active`, `cooldown`, `degraded`, `disabled`, or
+`errored`; eligibility is `eligible`, `ineligible`, or `unknown`. Reconciliation
+errors, step messages and HTTP response bodies are never metric labels.
+
+Scope is `account`, `model`, `upstream_model`, `feature`, or `unknown`; bucket is
+`account`, `spark`, `reserve`, or `other`. Reserve requires the exact stored
+`GPT-Reserve` / `base_model_inference` descriptor pair. Window labels derive from
+duration: `5h`, `7d`, `30d`, or `other`; `window_kind` is `primary`, `secondary`, or
+`unknown`, with legacy weekly primary normalized only for the group identity.
+Sources are `codex_usage_api`, `codex_response_headers`, `codex_rate_limit_event`,
+`codex_rate_limit_error`, `local_reconciliation`, or `unknown`.
+
+Only valid future observation times are excluded. Legacy missing/malformed times
+retain source presence, valid percentages and reset evidence, with freshness
+forced to `unknown`. These rows are excluded from the
+time-dependent routing adapter; when any is present, readiness is conservative
+`unknown` unless the existing evaluator already establishes `blocked` or
+`exhausted`. No missing time becomes scrape time. The normal routing path is
+unchanged, and metric evaluation does not emit routing decision events.
+
+Each retained source keeps its own reported percentage, reset and observation
+age. The routing-selection gauges identify the selected observation; selection
+does not certify provider capacity or establish that other observations describe
+the same quota cycle. Differences are not automatically classified as conflicts,
+and no combined percentage is computed. The admin evidence dialog, selected
+percentage and countdown are unchanged. Account Weekly, model, Spark, Reserve
+and distinct unknown meters stay separate. Never sum percentages across sources, windows,
+meters, memberships or replicas. Windowless provider availability is not unlimited
+quota. There are no new account token/cost/request counters: existing storage
+cannot establish monotonic totals or consumption through other clients.
+
+Bounds are 64 groups, 8 observations per group, 512 stored window rows and 64
+memberships per account. Overflow preserves inventory, sets projection incomplete
+and overflow, and omits that account's entire quota/membership section. A malformed
+account leaves other accounts visible. Database failure exposes operational
+metrics and collector failure, without cached or fabricated account samples.
+The maximum current sample count is `8 + 11*A + 5*P + 3*M + 9*O`.
+
+For example, report age for each original observation, retaining its identity:
+
+```promql
+time() - codex_pooler_account_quota_observation_timestamp_seconds
+```
+
+Display age beside `account_quota_observation_freshness`, routing selection,
+`account_projection_complete` and `account_metrics_collection_success`. Missing
+age means unknown observation time. Multiple app replicas export the same DB
+facts: scrape one logical account target or deduplicate equivalent observation
+identities across instances; never sum replicas. Operational counters keep their
+existing per-process aggregation. Historical retention belongs to the monitoring
+backend; Pooler retains only each source's current stored observation.
+
+### Metric identity and earlier fork exporters
+
+`meter_id` is the existing admin source-evidence group digest: SHA-256 of the
+Erlang external-term encoding of the canonical logical window key and additional
+meter token, with a legacy weekly primary normalized to secondary. It does not
+include the observed value, reset, time or source. `observation_id` hashes the
+persisted observation index fields with the `quota-persisted-observation-v1:`
+prefix; changing a report's values or timestamps does not create a new identity.
+
+An earlier experimental 38-family fork exporter used a
+`quota-observation-group-v1:` prefix for `meter_id` and exposed two automatic
+source/reset conflict families. This 36-family upstream contract follows the
+current evidence dialog's unprefixed group digest and omits those classifications.
+It is not a drop-in replacement for that fork's time series: account and
+observation IDs stay compatible, but meter labels and therefore series identities
+change. Preserve existing backend history and update dashboards explicitly when
+migrating; do not concatenate or sum the two identities as equivalent samples.
