@@ -29,6 +29,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias Ecto.Adapters.SQL.Sandbox, as: Sandbox
 
   import Ecto.Query
@@ -13571,6 +13572,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_pinned_unavailable_recovery_response!(denied_conn)
     assert FakeUpstream.count(pinned_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
+
+    # A single lower same-cycle provider observation after an exhausted
+    # snapshot is retained as a candidate; the second equivalent observation
+    # confirms it and restores the measured usage.
+    assert {:ok, _refreshed_identity} =
+             PoolReconciliation.refresh_quota_from_usage(setup.identity, setup.assignment)
+
+    assert [%{used_percent: pending_percent, metadata: pending_metadata}] =
+             QuotaWindows.list_quota_windows(setup.identity)
+
+    assert Decimal.equal?(pending_percent, Decimal.new("100"))
+    assert {:ok, candidate} = EvidenceStore.parse_candidate(pending_metadata)
+    assert Decimal.equal?(candidate.used_percent, Decimal.new("20"))
 
     assert {:ok, _refreshed_identity} =
              PoolReconciliation.refresh_quota_from_usage(setup.identity, setup.assignment)

@@ -529,18 +529,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert Map.fetch!(assignments_by_id, stale_assignment.id).assignment_label ==
              "Current Shared Codex"
 
-    assert Map.fetch!(assignments_by_id, stale_assignment.id).quota_priming_status == "failed"
+    # Historical assignment-local failed or blocked priming does not override
+    # the fresh identity-wide usable quota for active, eligible assignments.
+    assert Map.fetch!(assignments_by_id, stale_assignment.id).quota_priming_status == "known"
 
     assert Map.fetch!(assignments_by_id, stale_assignment.id).quota_priming_label ==
-             "Quota failed"
+             "Quota known"
 
     assert Map.fetch!(assignments_by_id, fresh_assignment.id).quota_priming_status == "known"
     assert Map.fetch!(assignments_by_id, fresh_assignment.id).quota_priming_label == "Quota known"
 
-    assert Map.fetch!(assignments_by_id, blocked_assignment.id).quota_priming_status == "blocked"
+    assert Map.fetch!(assignments_by_id, blocked_assignment.id).quota_priming_status == "known"
 
     assert Map.fetch!(assignments_by_id, blocked_assignment.id).quota_priming_label ==
-             "Priming blocked"
+             "Quota known"
 
     assert Map.fetch!(assignments_by_id, fresh_assignment.id).assignment_label ==
              "Current Shared Codex"
@@ -555,8 +557,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     # The stale stored label resolves to the account name, which the lane
     # hides as redundant — so neither string may render in the row.
     refute has_element?(view, stale_selector, "Current Shared Codex")
-    assert has_element?(view, "#{stale_selector}-route-quota[title='Quota failed']")
-    assert has_element?(view, "#{blocked_selector}-route-quota[title='Priming blocked']")
+    assert has_element?(view, "#{stale_selector}-route-quota[title='Quota known']")
+    assert has_element?(view, "#{blocked_selector}-route-quota[title='Quota known']")
     assert has_element?(view, "#upstream-quota", "Fresh")
 
     refute html =~ "old-shared-label@example.com"

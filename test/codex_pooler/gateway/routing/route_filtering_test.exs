@@ -2591,7 +2591,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {observed_at, fake}
         end
 
-      [{at1, fake1} | _] = receipts
+      [{_at1, fake1} | _] = receipts
 
       %{identity: identity, assignment: assignment} =
         active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(fake1, 1)})
