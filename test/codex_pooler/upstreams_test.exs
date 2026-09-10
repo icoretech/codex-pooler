@@ -5163,11 +5163,18 @@ defmodule CodexPooler.UpstreamsTest do
 
       {:ok, upstream} =
         FakeUpstream.start_link(
-          {:sequence,
-           [
-             {:timeout_before_headers, self(), release_ref},
-             FakeUpstream.json_response(%{"error" => "unavailable"}, 503)
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              respond: {:timeout_before_headers, self(), release_ref}
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/codex/usage",
+              respond: FakeUpstream.json_response(%{"error" => "unavailable"}, 503)
+            )
+          ])
         )
 
       on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -5194,6 +5201,7 @@ defmodule CodexPooler.UpstreamsTest do
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
       assert {:ok, _result} = Task.await(task)
       assert Enum.any?(QuotaWindows.list_evidence(identity), &(&1.id == existing.id))
+      assert :ok = FakeUpstream.verify!(upstream)
     end
 
     @tag :quota_descriptor_coverage
@@ -5856,30 +5864,39 @@ defmodule CodexPooler.UpstreamsTest do
 
       {:ok, upstream} =
         FakeUpstream.start_link(
-          {:sequence,
-           [
-             FakeUpstream.raw_response(html_403,
-               status: 403,
-               headers: [{"content-type", "text/html; charset=utf-8"}]
-             ),
-             FakeUpstream.json_response(
-               weekly_only_payload(%{
-                 "additional_rate_limits" => [
-                   %{
-                     "limit_name" => "GPT-5.3-Codex-Spark",
-                     "metered_feature" => "codex_bengalfox",
-                     "rate_limit" => %{
-                       "primary_window" => %{
-                         "used_percent" => 45,
-                         "limit_window_seconds" => 604_800,
-                         "reset_after_seconds" => 1_200
-                       }
-                     }
-                   }
-                 ]
-               })
-             )
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              respond:
+                FakeUpstream.raw_response(html_403,
+                  status: 403,
+                  headers: [{"content-type", "text/html; charset=utf-8"}]
+                )
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/codex/usage",
+              respond:
+                FakeUpstream.json_response(
+                  weekly_only_payload(%{
+                    "additional_rate_limits" => [
+                      %{
+                        "limit_name" => "GPT-5.3-Codex-Spark",
+                        "metered_feature" => "codex_bengalfox",
+                        "rate_limit" => %{
+                          "primary_window" => %{
+                            "used_percent" => 45,
+                            "limit_window_seconds" => 604_800,
+                            "reset_after_seconds" => 1_200
+                          }
+                        }
+                      }
+                    ]
+                  })
+                )
+            )
+          ])
         )
 
       on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -5898,6 +5915,8 @@ defmodule CodexPooler.UpstreamsTest do
                "/backend-api/wham/usage",
                "/backend-api/codex/usage"
              ]
+
+      assert :ok = FakeUpstream.verify!(upstream)
     end
 
     test "does not reuse Cloudflare cookies from non-ChatGPT usage probe origins" do
@@ -5905,30 +5924,40 @@ defmodule CodexPooler.UpstreamsTest do
 
       {:ok, upstream} =
         FakeUpstream.start_link(
-          {:sequence,
-           [
-             FakeUpstream.raw_response(html_403,
-               status: 403,
-               headers: [
-                 {"content-type", "text/html; charset=utf-8"},
-                 {"set-cookie", "__cf_bm=cf-token; Path=/; HttpOnly; Secure"}
-               ]
-             ),
-             FakeUpstream.json_response(%{
-               "rate_limit" => %{
-                 "primary_window" => %{
-                   "used_percent" => 42,
-                   "limit_window_seconds" => 18_000,
-                   "reset_after_seconds" => 300
-                 },
-                 "secondary_window" => %{
-                   "used_percent" => 51,
-                   "limit_window_seconds" => 604_800,
-                   "reset_after_seconds" => 3_600
-                 }
-               }
-             })
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              respond:
+                FakeUpstream.raw_response(html_403,
+                  status: 403,
+                  headers: [
+                    {"content-type", "text/html; charset=utf-8"},
+                    {"set-cookie", "__cf_bm=cf-token; Path=/; HttpOnly; Secure"}
+                  ]
+                )
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/codex/usage",
+              headers: [forbidden: ["cookie"]],
+              respond:
+                FakeUpstream.json_response(%{
+                  "rate_limit" => %{
+                    "primary_window" => %{
+                      "used_percent" => 42,
+                      "limit_window_seconds" => 18_000,
+                      "reset_after_seconds" => 300
+                    },
+                    "secondary_window" => %{
+                      "used_percent" => 51,
+                      "limit_window_seconds" => 604_800,
+                      "reset_after_seconds" => 3_600
+                    }
+                  }
+                })
+            )
+          ])
         )
 
       on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -5952,6 +5981,7 @@ defmodule CodexPooler.UpstreamsTest do
       [_first_request, second_request | _rest] = FakeUpstream.requests(upstream)
       second_headers = Map.new(second_request.headers)
       refute Map.has_key?(second_headers, "cookie")
+      assert :ok = FakeUpstream.verify!(upstream)
     end
 
     test "stores 5h and weekly quota windows from Codex response headers" do

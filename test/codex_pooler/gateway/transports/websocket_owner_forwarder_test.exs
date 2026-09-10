@@ -1973,13 +1973,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     terminal = native_retry_terminal()
     release_ref = make_ref()
 
+    # Strict finite scenario: the warmup rides the first physical connection;
+    # the guarded continuation must send nothing, and the retry must land on
+    # the replacement connection opened after invalidation.
     upstream =
       start_fake_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           websocket_success_without_id()
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            respond: websocket_success_without_id()
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            respond: websocket_success_without_id()
+          )
+        ])
       )
 
     persistence =
@@ -2100,6 +2110,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert [warmup_request, retry_request] = FakeUpstream.requests(upstream)
     assert warmup_request.websocket_connection_id != retry_request.websocket_connection_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "remote owner cancels an active turn when the local forwarding proxy dies", %{

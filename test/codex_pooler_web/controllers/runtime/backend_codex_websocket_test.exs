@@ -728,19 +728,36 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             FakeUpstream.json_response(%{
-               "id" => "resp_ws_mode_lite_#{route_label}",
-               "object" => "response",
-               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-             }),
-             FakeUpstream.json_response(%{
-               "id" => "resp_ws_mode_full_#{route_label}",
-               "object" => "response",
-               "usage" => %{"input_tokens" => 5, "output_tokens" => 4, "total_tokens" => 9}
-             })
-           ]}
+          # Strict finite scenario: exactly one native turn per serving mode;
+          # a replayed or extra upstream send fails the fixture.
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{
+                    "id" => "resp_ws_mode_lite_#{route_label}",
+                    "object" => "response",
+                    "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                  })
+                ])
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{
+                    "id" => "resp_ws_mode_full_#{route_label}",
+                    "object" => "response",
+                    "usage" => %{"input_tokens" => 5, "output_tokens" => 4, "total_tokens" => 9}
+                  })
+                ])
+            )
+          ])
         )
 
       setup = gateway_setup(upstream)
@@ -791,6 +808,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
         assert_model_serving_accounting!(lite_request, "lite")
         assert_model_serving_accounting!(full_request, "full")
+        assert :ok = FakeUpstream.verify!(upstream)
       after
         Mint.HTTP.close(conn)
       end
@@ -802,29 +820,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.barrier_sse_stream(
-             [
-               {"error",
-                %{
-                  "type" => "error",
-                  "status" => 400,
-                  "code" => "websocket_connection_limit_reached",
-                  "param" => "reasoning.effort"
-                }}
-             ],
-             notify: self(),
-             barrier_after: 0,
-             release_ref: release_ref,
-             done: false
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_mode_same_assignment_retry",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+        # Strict finite scenario: the connection-limit terminal is held behind
+        # a native barrier so the Pool edit lands while the first attempt is in
+        # flight; the retry must open a replacement connection and stay Lite.
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_connection_limit_terminal_barrier(
+              shape: :top_level,
+              notify: self(),
+              release_ref: release_ref
+            )
+          ),
+          strict_native_response("resp_ws_mode_same_assignment_retry", 2, 4, 3)
+        ])
       )
 
     fallback_upstream =
@@ -877,14 +886,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         )
       end)
 
-    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
+                    ^release_ref},
+                   1_000
 
     try do
       _revision = set_model_serving_mode!(scope, setup, "full", revision)
-      send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+      send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
       assert :ok = Task.await(task, 3_000)
     after
-      send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+      send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
     end
 
     assert_received {:websocket_frame, frame}
@@ -912,6 +923,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert first_attempt.status == "retryable_failed"
     assert second_attempt.status == "succeeded"
     assert_model_serving_accounting!(request, "lite", [first_attempt, second_attempt])
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "cross-assignment pre-visible failover keeps Full after the Pool changes to Lite" do
@@ -5171,19 +5183,47 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => previous_response_id,
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_generation_boundary_full_retry",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 8, "output_tokens" => 5, "total_tokens" => 13}
-           })
-         ]}
+        # Strict finite scenario: the guarded continuation never reaches the
+        # upstream, so only the anchor (connection 1) and the explicit full
+        # retry (replacement connection 2, no previous response) are sent.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "message"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => previous_response_id,
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "message"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_generation_boundary_full_retry",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 8, "output_tokens" => 5, "total_tokens" => 13}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -5459,6 +5499,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         refute persisted_metadata =~ private_sentinel
         refute continuation_logs =~ private_sentinel
       end
+
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -5995,19 +6037,51 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   test "websocket Full-to-Lite tool continuations keep previous_response_id after the tools prefix" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_tool_origin",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_tool_continuation",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+        # Strict finite scenario: the anchor carries no previous response and
+        # the Lite continuation keeps it behind the tools prefix on the same
+        # physical connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_tool_origin",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_ws_tool_origin",
+                "input.0.type" => "additional_tools",
+                "input.1.type" => "function_call_output"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_tool_continuation",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -6146,6 +6220,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       refute persistence_text =~ tool_call_id
       refute persistence_text =~ tool_output
       refute persistence_text =~ "upstream-token"
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -6154,29 +6229,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   test "websocket custom tool output continuations keep previous_response_id for upstream context" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_custom_tool_origin",
-             "object" => "response"
-           }),
-           FakeUpstream.require_json_field(
-             "previous_response_id",
-             %{
-               "id" => "resp_ws_custom_tool_continuation",
-               "object" => "response",
-               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-             },
-             %{
-               "error" => %{
-                 "type" => "invalid_request_error",
-                 "message" =>
-                   "No tool call found for custom tool call output with call_id call_sample.",
-                 "param" => "input"
-               }
-             }
-           )
-         ]}
+        # Strict finite scenario: the custom tool continuation must carry the
+        # anchor response id on the same physical connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_custom_tool_origin",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_ws_custom_tool_origin",
+                "input.0.type" => "custom_tool_call_output"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_custom_tool_continuation",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -6232,6 +6326,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert captured.json["previous_response_id"] == "resp_ws_custom_tool_origin"
       assert captured.json["type"] == "response.create"
       assert captured.json["generate"] == true
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -6398,22 +6493,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_debug_tool_origin",
-             "object" => "response"
-           }),
-           FakeUpstream.require_json_field(
-             "previous_response_id",
-             %{
-               "id" => "resp_ws_debug_tool_continuation",
-               "object" => "response",
-               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-             },
-             %{"error" => %{"code" => "missing_debug_tool_context"}}
-           )
-         ]}
+        # Strict finite scenario: the debug-logged continuation must still
+        # preserve the anchor response id on the same physical connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_debug_tool_origin",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_ws_debug_tool_origin",
+                "input.0.type" => "custom_tool_call_output"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_ws_debug_tool_continuation",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -6547,6 +6668,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       refute metadata_text =~ "metadata value must stay hidden"
       refute metadata_text =~ "resp_ws_debug_too"
       refute metadata_text =~ "call_debug_sample"
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -8052,6 +8174,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
            ) == 1
   end
 
+  defp strict_native_response_payload(payload, connection_ordinal) when is_map(payload) do
+    strict_native_request(
+      connection_ordinal,
+      FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(payload)])
+    )
+  end
+
   defp strict_native_request(connection_ordinal, respond) do
     FakeUpstream.expect_request(
       method: "WEBSOCKET",
@@ -8163,21 +8292,43 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_close_without_terminal_barrier(
-             notify: self(),
-             release_ref: first_release_ref,
-             code: 1001,
-             reason: "synthetic generation zero disconnect"
-           ),
-           FakeUpstream.websocket_close_without_terminal_barrier(
-             notify: self(),
-             release_ref: second_release_ref,
-             code: 1001,
-             reason: "synthetic generation one disconnect"
-           )
-         ]}
+        # Strict finite scenario: generation zero and the single replay each
+        # get one send on their own connection; the third client attempt is
+        # fenced as a duplicate turn and must never reach the upstream.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "function_call_output"}
+            ],
+            respond:
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: first_release_ref,
+                code: 1001,
+                reason: "synthetic generation zero disconnect"
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "function_call_output"}
+            ],
+            respond:
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: second_release_ref,
+                code: 1001,
+                reason: "synthetic generation one disconnect"
+              )
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -8325,6 +8476,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end)
 
     await_websocket_owner_absent!(turn.codex_session_id)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :duplicate_turn
@@ -9100,18 +9252,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     initial_access_token = synthetic_access_token(initial_residency)
     refreshed_access_token = synthetic_access_token(refreshed_residency)
 
+    # Strict: a 401 handshake, one provider token refresh, then the retried
+    # handshake succeeds and the turn lands on the first accepted connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_upgrade_error(
-             %{"error" => %{"code" => "invalid_api_key"}},
-             status: 401,
-             headers: [{"x-openai-authorization-error", "invalid_api_key"}]
-           ),
-           FakeUpstream.json_response(%{"access_token" => refreshed_access_token}, 200),
-           FakeUpstream.json_response(websocket_auth_retry_success_payload("handshake_401"))
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            respond:
+              FakeUpstream.websocket_upgrade_error(
+                %{"error" => %{"code" => "invalid_api_key"}},
+                status: 401,
+                headers: [{"x-openai-authorization-error", "invalid_api_key"}]
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/oauth/token",
+            respond: FakeUpstream.json_response(%{"access_token" => refreshed_access_token}, 200)
+          ),
+          strict_native_response_payload(websocket_auth_retry_success_payload("handshake_401"), 1)
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9289,19 +9450,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     # No /oauth/token entry in the sequence: a provider refresh would consume
     # the retry success payload and fail the test loudly.
+    # Strict: a held 401 handshake, then the retried handshake succeeds
+    # without any provider refresh in between.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_upgrade_error(
-             %{"error" => %{"code" => "invalid_api_key"}},
-             status: 401,
-             headers: [{"x-openai-authorization-error", "invalid_api_key"}],
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.json_response(websocket_auth_retry_success_payload("stale_epoch"))
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            respond:
+              FakeUpstream.websocket_upgrade_error(
+                %{"error" => %{"code" => "invalid_api_key"}},
+                status: 401,
+                headers: [{"x-openai-authorization-error", "invalid_api_key"}],
+                notify: self(),
+                release_ref: release_ref
+              )
+          ),
+          strict_native_response_payload(websocket_auth_retry_success_payload("stale_epoch"), 1)
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9377,12 +9543,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             websocket_terminal_auth_failure(auth_code),
-             FakeUpstream.json_response(%{"access_token" => "upstream-token-refreshed"}, 200),
-             FakeUpstream.json_response(websocket_auth_retry_success_payload(auth_code))
-           ]}
+          # Strict finite scenario: one terminal auth failure, exactly one
+          # provider refresh, then one retry on a replacement connection.
+          FakeUpstream.strict_sequence([
+            strict_native_request(1, websocket_terminal_auth_failure(auth_code)),
+            strict_oauth_refresh(
+              FakeUpstream.json_response(%{"access_token" => "upstream-token-refreshed"}, 200)
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              websocket_connection_ordinal: 2,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              headers: [required: %{"authorization" => "Bearer upstream-token-refreshed"}],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(websocket_auth_retry_success_payload(auth_code))
+                ])
+            )
+          ])
         )
 
       setup = gateway_setup(upstream)
@@ -9444,6 +9623,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ "refresh-token-ws-terminal-do-not-leak"
       refute metadata_text =~ "upstream-token-refreshed"
+      assert :ok = FakeUpstream.verify!(upstream)
     end
   end
 
@@ -9453,27 +9633,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.barrier_sse_stream(
-             [
-               {"response.failed",
-                %{
-                  "type" => "response.failed",
-                  "response" => %{
-                    "id" => "resp_ws_auth_refresh_in_progress",
-                    "error" => %{"code" => "invalid_api_key"},
-                    "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
-                  }
-                }}
-             ],
-             done: false,
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.json_response(%{"access_token" => "provider-should-not-run"}, 200),
-           FakeUpstream.json_response(%{"id" => "retry-should-not-run", "object" => "response"})
-         ]}
+        # Strict finite scenario: the terminal auth failure is held behind a
+        # native barrier so the identity can be marked refreshing first; no
+        # /oauth/token entry and no retry entry exist, so either request fails
+        # the fixture as an unexpected extra request.
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_terminal_then_close_barrier(
+              %{
+                "type" => "response.failed",
+                "response" => %{
+                  "id" => "resp_ws_auth_refresh_in_progress",
+                  "error" => %{"code" => "invalid_api_key"},
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
+                }
+              },
+              notify: self(),
+              release_ref: release_ref
+            )
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9499,7 +9679,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         )
       end)
 
-    assert_receive {:fake_upstream_chunk_barrier, 1, upstream_pid, ^release_ref}, 1_000
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
+                    ^release_ref},
+                   1_000
 
     metadata = active_token_refresh_metadata()
 
@@ -9509,8 +9691,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                metadata: Map.put(setup.identity.metadata || %{}, "token_refresh", metadata)
              })
 
-    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
     assert :ok = Task.await(task, 2_000)
+
+    # The native barrier holds the post-terminal close as well; release it so
+    # the fake connection can retire cleanly after the failure has been
+    # observed.
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, ^upstream_pid, ^release_ref},
+                   1_000
+
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
 
     assert_received {:websocket_frame, frame}
 
@@ -9545,8 +9735,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     metadata_text = inspect({request.request_metadata, attempt.response_metadata})
     refute metadata_text =~ setup.authorization
     refute metadata_text =~ "refresh-token-ws-in-progress-do-not-leak"
-    refute metadata_text =~ "provider-should-not-run"
-    refute metadata_text =~ "retry-should-not-run"
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   for {refresh_status, refresh_response_status, refresh_response_body} <- [
@@ -9562,12 +9751,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             websocket_terminal_auth_failure("invalid_authentication"),
-             FakeUpstream.json_response(@refresh_response_body, @refresh_response_status),
-             FakeUpstream.json_response(%{"id" => "retry-should-not-run", "object" => "response"})
-           ]}
+          # Strict finite scenario: one terminal auth failure and one failed
+          # provider refresh; there is no retry entry, so a redispatch fails
+          # the fixture as an unexpected extra request.
+          FakeUpstream.strict_sequence([
+            strict_native_request(1, websocket_terminal_auth_failure("invalid_authentication")),
+            strict_oauth_refresh(
+              FakeUpstream.json_response(@refresh_response_body, @refresh_response_status)
+            )
+          ])
         )
 
       setup = gateway_setup(upstream)
@@ -9616,7 +9808,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       metadata_text = inspect({request.request_metadata, attempt.response_metadata})
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ "refresh-token-ws-#{refresh_status}-do-not-leak"
-      refute metadata_text =~ "retry-should-not-run"
+      assert :ok = FakeUpstream.verify!(upstream)
     end
   end
 
@@ -9626,16 +9818,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_terminal_auth_failure("invalid_api_key"),
-           FakeUpstream.barrier_json_response(
-             %{"access_token" => "upstream-token-refreshed"},
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.json_response(websocket_auth_retry_success_payload("disconnect_refresh"))
-         ]}
+        # Strict finite scenario: one terminal auth failure, one held provider
+        # refresh, then exactly one retry drained after the client disconnect.
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, websocket_terminal_auth_failure("invalid_api_key")),
+          strict_oauth_refresh(
+            FakeUpstream.barrier_json_response(
+              %{"access_token" => "upstream-token-refreshed"},
+              notify: self(),
+              release_ref: release_ref
+            )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(
+                  websocket_auth_retry_success_payload("disconnect_refresh")
+                )
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9846,17 +10051,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   @tag :feature_websocket_connection_limit_retry
   test "websocket pre-visible upstream close does not replay an accepted request" do
+    # Strict finite scenario: the accepted request is sent exactly once and the
+    # upstream closes before any terminal; there is no retry entry, so a replay
+    # fails the fixture as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close([]),
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_pre_visible_close_retry",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, FakeUpstream.websocket_sse_then_close([]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9928,6 +10130,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     metadata_text = inspect({request.request_metadata, first_attempt.response_metadata})
     refute metadata_text =~ setup.authorization
     refute metadata_text =~ "upstream-token"
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   for {family, error} <- [
@@ -10257,29 +10460,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   test "live direct websocket keeps an accepted assignment model miss on its established lane" do
+    # Strict finite scenario: the anchor and the model-miss turn both ride the
+    # established first physical connection; a sibling dispatch or a retry
+    # would be an unexpected extra request and fail the fixture.
     pinned_upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_live_direct_anchor",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
-           }),
-           FakeUpstream.sse_stream(
-             [
-               {"response.failed",
-                %{
-                  "type" => "response.failed",
-                  "response" => %{
-                    "id" => "resp_live_direct_model_miss",
-                    "error" => %{"code" => "model_not_found", "param" => "model"}
-                  }
-                }}
-             ],
-             done: false
-           )
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_native_response("resp_live_direct_anchor", 1, 2, 1),
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.failed",
+                "response" => %{
+                  "id" => "resp_live_direct_model_miss",
+                  "error" => %{"code" => "model_not_found", "param" => "model"}
+                }
+              })
+            ])
+          )
+        ])
       )
 
     fallback_upstream =
@@ -10367,6 +10567,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
       assert failed_attempt.status == "failed"
       assert failed_attempt.usage_status == "usage_unknown"
+      assert :ok = FakeUpstream.verify!(pinned_upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -10519,20 +10720,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   @tag :feature_websocket_connection_limit_retry
   test "websocket connection limit retry emits only the eventual exhausted native outcome" do
     connection_limit_failure =
-      FakeUpstream.sse_stream(
-        [
-          {"error",
-           %{
-             "type" => "error",
-             "status" => 400,
-             "code" => "websocket_connection_limit_reached",
-             "message" => "open a replacement websocket connection"
-           }}
-        ],
-        done: false
+      FakeUpstream.websocket_text_frames([
+        CodexPooler.JSON.encode!(%{
+          "type" => "error",
+          "status" => 400,
+          "code" => "websocket_connection_limit_reached",
+          "message" => "open a replacement websocket connection"
+        })
+      ])
+
+    # Strict finite scenario: the first-event connection limit retires the
+    # first physical connection and the single retry lands on a replacement
+    # connection; a third send fails the fixture as an unexpected extra request.
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, connection_limit_failure),
+          strict_native_request(2, connection_limit_failure)
+        ])
       )
 
-    upstream = start_upstream({:sequence, [connection_limit_failure, connection_limit_failure]})
     setup = gateway_setup(upstream)
 
     fallback_upstream =
@@ -10610,35 +10817,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.status == "failed"
     assert request.retry_count == 1
     assert request.last_error_code == "websocket_connection_limit_reached"
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :feature_websocket_connection_limit_retry
   test "websocket connection limit retries after internal rate limit event" do
     reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
 
+    # Strict finite scenario: the internal rate-limit event precedes the
+    # connection-limit terminal on the first physical connection, and the
+    # single retry lands on a replacement connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream(
-             [
-               {"codex.rate_limits", codex_rate_limits_payload(29, reset_at)},
-               {"error",
-                %{
-                  "type" => "error",
-                  "status" => 400,
-                  "code" => "websocket_connection_limit_reached",
-                  "message" => "open a replacement websocket connection"
-                }}
-             ],
-             done: false
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_connection_limit_after_rate_limits",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(codex_rate_limits_payload(29, reset_at)),
+              CodexPooler.JSON.encode!(%{
+                "type" => "error",
+                "status" => 400,
+                "code" => "websocket_connection_limit_reached",
+                "message" => "open a replacement websocket connection"
+              })
+            ])
+          ),
+          strict_native_response("resp_ws_connection_limit_after_rate_limits", 2, 4, 3)
+        ])
       )
 
     fallback_upstream =
@@ -10738,6 +10943,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert window.source == "codex_rate_limit_event"
     assert Decimal.equal?(window.used_percent, Decimal.new("29.0"))
     assert DateTime.compare(window.reset_at, reset_at) == :eq
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :feature_websocket_connection_limit_retry
@@ -10967,38 +11173,36 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     provider_wording = "Provider policy wording remains transient."
 
+    # Strict finite scenario: the neutral policy terminal and the following
+    # ordinary turn both ride the first physical connection, and the trailing
+    # generate:false warmup never reaches the upstream; a reconnect, fallback
+    # dispatch, or warmup send fails the fixture.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream(
-             [
-               {"response.failed",
-                %{
-                  "type" => "response.failed",
-                  "sequence_number" => 9,
-                  "headers" => %{"authorization" => "must-not-survive"},
-                  "response" => %{
-                    "id" => "resp_ws_policy_terminal",
-                    "status" => "failed",
-                    "error" => %{
-                      "type" => "provider_policy_type",
-                      "code" => "misalignment_policy_violation",
-                      "message" => provider_wording,
-                      "param" => "provider.policy.param",
-                      "provider_sibling" => "native-sentinel"
-                    }
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.failed",
+                "sequence_number" => 9,
+                "headers" => %{"authorization" => "must-not-survive"},
+                "response" => %{
+                  "id" => "resp_ws_policy_terminal",
+                  "status" => "failed",
+                  "error" => %{
+                    "type" => "provider_policy_type",
+                    "code" => "misalignment_policy_violation",
+                    "message" => provider_wording,
+                    "param" => "provider.policy.param",
+                    "provider_sibling" => "native-sentinel"
                   }
-                }}
-             ],
-             done: false
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_after_policy_terminal",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+                }
+              })
+            ])
+          ),
+          strict_native_response("resp_ws_after_policy_terminal", 1, 4, 3)
+        ])
       )
 
     fallback_upstream =
@@ -11272,6 +11476,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       refute persisted =~ provider_wording
       refute persisted =~ "provider.policy.param"
       refute persisted =~ "provider_policy_type"
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       Mint.HTTP.close(conn)
     end
@@ -13280,20 +13485,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   defp websocket_terminal_auth_failure(code) do
-    FakeUpstream.sse_stream(
-      [
-        {"response.failed",
-         %{
-           "type" => "response.failed",
-           "response" => %{
-             "id" => "resp_ws_terminal_auth_#{code}",
-             "error" => %{"code" => code, "param" => "reasoning.effort"},
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
-           }
-         }}
-      ],
-      done: false
-    )
+    FakeUpstream.websocket_text_frames([
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.failed",
+        "response" => %{
+          "id" => "resp_ws_terminal_auth_#{code}",
+          "error" => %{"code" => code, "param" => "reasoning.effort"},
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
+        }
+      })
+    ])
+  end
+
+  defp strict_oauth_refresh(respond) do
+    FakeUpstream.expect_request(method: "POST", path: "/oauth/token", respond: respond)
   end
 
   defp active_token_refresh_metadata(opts \\ []) do
@@ -13944,31 +14149,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     release_ref = make_ref()
 
+    # Strict finite scenario: the initial send dies pre-visibly on the first
+    # physical connection, the byte-identical replay lands on a replacement
+    # connection, and the single fresh turn after the replay continues from
+    # the replayed response; the altered and duplicate sends are fenced before
+    # the upstream, so any further send fails the fixture.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_close_without_terminal_barrier(
-             notify: self(),
-             release_ref: release_ref,
-             code: 1001,
-             reason: "synthetic pre-visible downstream death"
-           ),
-           FakeUpstream.websocket_text_frames([
-             CodexPooler.JSON.encode!(%{
-               "type" => "response.completed",
-               "response" => %{
-                 "id" => "resp_replay_completed_123456",
-                 "status" => "completed",
-                 "usage" => %{
-                   "input_tokens" => 3,
-                   "output_tokens" => 2,
-                   "total_tokens" => 5
-                 }
-               }
-             })
-           ])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_close_without_terminal_barrier(
+              notify: self(),
+              release_ref: release_ref,
+              code: 1001,
+              reason: "synthetic pre-visible downstream death"
+            )
+          ),
+          strict_native_request(
+            2,
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_replay_completed_123456",
+                  "status" => "completed",
+                  "usage" => %{
+                    "input_tokens" => 3,
+                    "output_tokens" => 2,
+                    "total_tokens" => 5
+                  }
+                }
+              })
+            ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_replay_completed_123456"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "type" => "response.completed",
+                  "response" => %{
+                    "id" => "resp_replay_fresh_turn_123456",
+                    "status" => "completed",
+                    "usage" => %{
+                      "input_tokens" => 2,
+                      "output_tokens" => 1,
+                      "total_tokens" => 3
+                    }
+                  }
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -14155,6 +14396,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end)
 
     await_websocket_owner_absent!(turn.codex_session_id)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   defp assert_replay_followup_requests(

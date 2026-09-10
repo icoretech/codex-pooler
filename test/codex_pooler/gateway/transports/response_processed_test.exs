@@ -133,6 +133,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
         barrier_after: 99
       )
 
+    # strict migration blocked: the shared processed-ack entry is an SSE chunk barrier whose
+    # `{:fake_upstream_chunk_sent, 1}` notification the callers observe, and one caller sends
+    # two acks against it; no native websocket mode emits per-frame send notifications.
     {:ok, upstream} =
       FakeUpstream.start_link({:sequence, [FakeUpstream.sse_stream(events), processed_mode]})
 

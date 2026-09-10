@@ -439,13 +439,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   test "GET /v1/responses websocket forwards a named standalone continuation with its anchor" do
     anchor = "resp_v1_websocket_standalone_anchor"
 
+    # The anchor turn carries no previous response; the named standalone
+    # continuation must keep its anchor on the same physical connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           completed_websocket_response(anchor),
-           completed_websocket_response("resp_v1_websocket_standalone_continuation")
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_native_turn(1, completed_websocket_frames(anchor),
+            forbidden: ["previous_response_id"]
+          ),
+          strict_native_turn(
+            1,
+            completed_websocket_frames("resp_v1_websocket_standalone_continuation"),
+            equals: %{"previous_response_id" => anchor, "input.0.type" => "item_reference"}
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -501,6 +508,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert second_request.json["type"] == "response.create"
       assert second_request.json["previous_response_id"] == anchor
       assert second_request.json["input"] == input
+      assert :ok = FakeUpstream.verify!(upstream)
 
       {conn, websocket}
     after
@@ -512,34 +520,35 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     provider_wording = "Provider policy wording must not persist."
 
     policy_terminal =
-      FakeUpstream.sse_stream(
-        [
-          {"response.failed",
-           %{
-             "type" => "response.failed",
-             "sequence_number" => 41,
-             "headers" => %{"authorization" => "must-not-survive"},
-             "response" => %{
-               "id" => "resp_public_policy_terminal",
-               "status" => "failed",
-               "error" => %{
-                 "type" => "provider_policy_type",
-                 "code" => "misalignment_policy_violation",
-                 "message" => provider_wording,
-                 "param" => "provider.policy.param",
-                 "provider_sibling" => "must-not-survive"
-               }
-             },
-             "ordinary_sibling" => "must-not-survive"
-           }}
-        ],
-        done: false
-      )
+      websocket_frames([
+        {"response.failed",
+         %{
+           "type" => "response.failed",
+           "sequence_number" => 41,
+           "headers" => %{"authorization" => "must-not-survive"},
+           "response" => %{
+             "id" => "resp_public_policy_terminal",
+             "status" => "failed",
+             "error" => %{
+               "type" => "provider_policy_type",
+               "code" => "misalignment_policy_violation",
+               "message" => provider_wording,
+               "param" => "provider.policy.param",
+               "provider_sibling" => "must-not-survive"
+             }
+           },
+           "ordinary_sibling" => "must-not-survive"
+         }}
+      ])
 
+    # The ordinary turn after the policy terminal must reuse the same physical
+    # upstream connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [policy_terminal, completed_websocket_response("resp_after_public_policy_terminal")]}
+        FakeUpstream.strict_sequence([
+          strict_native_turn(1, policy_terminal),
+          strict_native_turn(1, completed_websocket_frames("resp_after_public_policy_terminal"))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -664,6 +673,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       refute persistence_text =~ "provider.policy.param"
       refute persistence_text =~ "provider_policy_type"
       refute persistence_text =~ "provider_sibling"
+      assert :ok = FakeUpstream.verify!(upstream)
 
       {conn, websocket}
     after
@@ -2031,16 +2041,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         "summary" => "plaintext-websocket-summary-must-drop"
       }
 
+      # The anchored compaction turn must keep its lineage anchor and ride the
+      # same physical connection as the lineage turn in every lane.
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             completed_websocket_response(previous_response_id),
-             public_compaction_websocket_response(
-               "resp_v1_websocket_compaction_trigger_#{mode}",
-               compact_item
-             )
-           ]}
+          FakeUpstream.strict_sequence([
+            strict_native_turn(1, completed_websocket_frames(previous_response_id),
+              forbidden: ["previous_response_id"]
+            ),
+            strict_native_turn(
+              1,
+              public_compaction_websocket_frames(
+                "resp_v1_websocket_compaction_trigger_#{mode}",
+                compact_item
+              ),
+              equals: %{"previous_response_id" => previous_response_id}
+            )
+          ])
         )
 
       setup = gateway_setup(upstream, compact?: true)
@@ -2161,6 +2178,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         refute persisted =~ "native-websocket-turn-must-drop"
         refute persisted =~ "plaintext-websocket-summary-must-drop"
         refute persisted =~ "returned metadata must not select request transport"
+        assert :ok = FakeUpstream.verify!(upstream)
       after
         Mint.HTTP.close(conn)
       end
@@ -2277,21 +2295,28 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   test "owner-forwarded websocket completes local compact work and starts the queued ordinary turn" do
     enable_owner_forwarding!()
 
+    # Local compact work is plain HTTP; the queued ordinary turn then rides
+    # the owner's websocket.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_local_compact",
-             "output" => [
-               %{
-                 "type" => "compaction",
-                 "encrypted_content" => "synthetic-local-compact-content"
-               }
-             ]
-           }),
-           completed_websocket_response("resp_after_local_compact")
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond:
+              FakeUpstream.json_response(%{
+                "id" => "resp_local_compact",
+                "output" => [
+                  %{
+                    "type" => "compaction",
+                    "encrypted_content" => "synthetic-local-compact-content"
+                  }
+                ]
+              })
+          ),
+          strict_native_turn(1, completed_websocket_frames("resp_after_local_compact"))
+        ])
       )
 
     setup = gateway_setup(upstream, compact?: true)
@@ -2338,6 +2363,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert [compact_request, ordinary_request] = FakeUpstream.requests(upstream)
       assert compact_request.method == "POST"
       assert ordinary_request.method == "WEBSOCKET"
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       Mint.HTTP.close(conn)
     end
@@ -3249,16 +3275,25 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
          }
        }}
 
+    # Both creates must be submitted in FIFO order on the same physical
+    # connection. The held-terminal barrier has no native websocket flavour,
+    # so the first entry cannot declare `method: "WEBSOCKET"`; the connection
+    # ordinal pins the transport instead.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.delayed_terminal_sse_stream([], first_terminal,
-             notify: self(),
-             release_ref: release_ref
-           ),
-           completed_websocket_response("resp_fifo_second")
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.delayed_terminal_sse_stream([], first_terminal,
+                notify: self(),
+                release_ref: release_ref
+              )
+          ),
+          strict_native_turn(1, completed_websocket_frames("resp_fifo_second"))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -3310,6 +3345,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                not Map.has_key?(captured.json, "stream_id")
              end)
 
+      assert :ok = FakeUpstream.verify!(upstream)
+
       {conn, websocket}
     after
       Mint.HTTP.close(conn)
@@ -3320,13 +3357,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     first_id = "lane-different-first"
     second_id = "lane-different-second"
 
+    # Distinct stream ids still share one physical upstream connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           completed_websocket_response("resp_different_first"),
-           completed_websocket_response("resp_different_second")
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_native_turn(1, completed_websocket_frames("resp_different_first")),
+          strict_native_turn(1, completed_websocket_frames("resp_different_second"))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -3371,6 +3408,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert Enum.all?(FakeUpstream.requests(upstream), fn captured ->
                not Map.has_key?(captured.json, "stream_id")
              end)
+
+      assert :ok = FakeUpstream.verify!(upstream)
 
       {conn, websocket}
     after
@@ -3463,26 +3502,66 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     )
   end
 
-  defp public_compaction_websocket_response(response_id, item) do
-    FakeUpstream.sse_stream(
-      [
-        {"response.output_item.done",
-         %{
-           "type" => "response.output_item.done",
-           "item" => item
-         }},
-        {"response.completed",
-         %{
-           "type" => "response.completed",
-           "response" => %{
-             "id" => response_id,
-             "status" => "completed",
-             "output" => [item],
-             "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
-           }
-         }}
-      ],
-      done: false
+  # Native websocket frames for `{event_type, payload}` tuples: one text frame
+  # per event, no SSE framing.
+  defp websocket_frames(events) do
+    FakeUpstream.websocket_text_frames(
+      Enum.map(events, fn {_type, payload} -> CodexPooler.JSON.encode!(payload) end)
+    )
+  end
+
+  defp completed_websocket_frames(response_id, output \\ []) do
+    websocket_frames([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => response_id,
+           "status" => "completed",
+           "output" => output,
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+         }
+       }}
+    ])
+  end
+
+  defp public_compaction_websocket_frames(response_id, item) do
+    websocket_frames([
+      {"response.output_item.done",
+       %{
+         "type" => "response.output_item.done",
+         "item" => item
+       }},
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => response_id,
+           "status" => "completed",
+           "output" => [item],
+           "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+         }
+       }}
+    ])
+  end
+
+  # One strict native public websocket turn pinned to a physical upstream
+  # connection.
+  defp strict_native_turn(connection_ordinal, respond, json_expectations \\ []) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: connection_ordinal,
+      json:
+        Keyword.merge(
+          [valid: true, equals: %{"type" => "response.create"}],
+          json_expectations,
+          fn
+            :equals, base, extra -> Map.merge(base, extra)
+            _key, _base, extra -> extra
+          end
+        ),
+      respond: respond
     )
   end
 

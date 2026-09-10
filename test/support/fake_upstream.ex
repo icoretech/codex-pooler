@@ -618,13 +618,88 @@ defmodule CodexPooler.FakeUpstream do
   defp handle_websocket(
          pid,
          conn,
-         {:websocket_upgrade_error, status, payload, headers, notify, release_ref}
+         {:websocket_upgrade_error, _status, _payload, _headers, _notify, _release_ref} = mode
        ) do
     Agent.update(pid, fn state ->
       {_mode, next_mode} = next_response_mode(state.mode)
       %{state | mode: next_mode}
     end)
 
+    send_websocket_upgrade_error(conn, mode)
+  end
+
+  defp handle_websocket(
+         pid,
+         conn,
+         {:sequence,
+          [{:websocket_upgrade_error, _status, _payload, _headers, _notify, _ref} = mode | _rest]}
+       ) do
+    handle_websocket(pid, conn, mode)
+  end
+
+  # A strict scenario may reject the handshake itself: the leading entry (bare
+  # or wrapped in `expect_request`) is consumed with the usual strict
+  # accounting and its expectations are checked against the upgrade request
+  # (method GET, path, headers; no JSON, no connection ordinal). The handshake
+  # is not recorded as a request, matching the legacy upgrade-error path, so
+  # request counts keep describing accepted connections and HTTP calls.
+  defp handle_websocket(pid, conn, {kind, [head | _rest]} = mode)
+       when kind in [:strict_sequence, :repeat_last] do
+    if websocket_upgrade_error_head?(head) do
+      reject_websocket_handshake(pid, conn)
+    else
+      upgrade_websocket(pid, conn, mode)
+    end
+  end
+
+  # An exhausted strict scenario refuses further handshakes as extra requests
+  # instead of upgrading into a connection that has nothing to serve.
+  defp handle_websocket(pid, conn, {:strict_sequence, []}),
+    do: reject_websocket_handshake(pid, conn)
+
+  defp handle_websocket(pid, conn, mode), do: upgrade_websocket(pid, conn, mode)
+
+  defp upgrade_websocket(pid, conn, mode) do
+    WebSockAdapter.upgrade(
+      conn,
+      CodexPooler.FakeUpstream.Websocket,
+      %{pid: pid, mode: mode, headers: conn.req_headers},
+      []
+    )
+  end
+
+  defp reject_websocket_handshake(pid, conn) do
+    handshake = %{
+      method: conn.method,
+      path: conn.request_path,
+      query_string: conn.query_string,
+      headers: conn.req_headers,
+      body: "",
+      json: nil
+    }
+
+    taken =
+      Agent.get_and_update(pid, fn state -> take_response_mode_from_state(state, handshake) end)
+
+    case taken do
+      {:websocket_upgrade_error, _status, _payload, _headers, _notify, _ref} = error ->
+        send_websocket_upgrade_error(conn, error)
+
+      {:scenario_failure, _diagnostic} = failure ->
+        respond(pid, conn, failure, handshake)
+    end
+  end
+
+  defp websocket_upgrade_error_head?({:expect_request, _expectations, respond}),
+    do: websocket_upgrade_error_head?(respond)
+
+  defp websocket_upgrade_error_head?({:websocket_upgrade_error, _, _, _, _, _}), do: true
+  defp websocket_upgrade_error_head?(_mode), do: false
+
+  defp send_websocket_upgrade_error(
+         conn,
+         {:websocket_upgrade_error, status, payload, headers, notify, release_ref}
+       ) do
     if is_pid(notify) do
       wait_for_timeout_release(:before_headers, notify, release_ref)
     end
@@ -637,24 +712,6 @@ defmodule CodexPooler.FakeUpstream do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
-  end
-
-  defp handle_websocket(
-         pid,
-         conn,
-         {:sequence,
-          [{:websocket_upgrade_error, _status, _payload, _headers, _notify, _ref} = mode | _rest]}
-       ) do
-    handle_websocket(pid, conn, mode)
-  end
-
-  defp handle_websocket(pid, conn, mode) do
-    WebSockAdapter.upgrade(
-      conn,
-      CodexPooler.FakeUpstream.Websocket,
-      %{pid: pid, mode: mode, headers: conn.req_headers},
-      []
-    )
   end
 
   defp handle_http(pid, conn) do

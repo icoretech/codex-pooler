@@ -51,6 +51,10 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   import CodexPooler.PoolerFixtures
   import CodexPooler.AccountsFixtures
 
+  # Identities per stale-consuming recovery cohort; enough to prove that
+  # per-identity recovery decisions do not leak across identities.
+  @stale_consuming_cohort_size 5
+
   setup do
     Repo.delete_all(Oban.Job)
     Repo.delete_all(Settings)
@@ -1254,15 +1258,28 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             FakeUpstream.json_response(%{"error" => "expired"}, 401),
-             FakeUpstream.json_response(%{
-               "access_token" => refreshed_access_token,
-               "expires_in" => 3_600
-             }),
-             FakeUpstream.json_response(usage_payload())
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              respond: FakeUpstream.json_response(%{"error" => "expired"}, 401)
+            ),
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/oauth/token",
+              respond:
+                FakeUpstream.json_response(%{
+                  "access_token" => refreshed_access_token,
+                  "expires_in" => 3_600
+                })
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              headers: [required: %{"authorization" => "Bearer " <> refreshed_access_token}],
+              respond: FakeUpstream.json_response(usage_payload())
+            )
+          ])
         )
 
       {pool, assignment} =
@@ -1293,6 +1310,8 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       assert {"authorization", "Bearer " <> ^refreshed_access_token} =
                List.keyfind(retried_usage_request.headers, "authorization", 0)
+
+      assert :ok = FakeUpstream.verify!(upstream)
     end
 
     test "successful token refresh persists the retried probe observation timestamp" do
@@ -1303,18 +1322,44 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             FakeUpstream.json_response(%{"error" => "expired"}, 401),
-             FakeUpstream.json_response(%{
-               "access_token" => refreshed_access_token,
-               "expires_in" => 3_600
-             }),
-             FakeUpstream.json_response(%{
-               "plan_type" => "plus",
-               "rate_limit" => %{"allowed" => true, "limit_reached" => false}
-             })
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              respond: FakeUpstream.json_response(%{"error" => "expired"}, 401)
+            ),
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/oauth/token",
+              respond:
+                FakeUpstream.json_response(%{
+                  "access_token" => refreshed_access_token,
+                  "expires_in" => 3_600
+                })
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              headers: [required: %{"authorization" => "Bearer " <> refreshed_access_token}],
+              respond:
+                FakeUpstream.json_response(%{
+                  "plan_type" => "plus",
+                  "rate_limit" => %{"allowed" => true, "limit_reached" => false}
+                })
+            ),
+            # A window-less payload does not halt the multi-path probe, so the
+            # rotated token is also carried to the second ChatGPT usage path.
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/codex/usage",
+              headers: [required: %{"authorization" => "Bearer " <> refreshed_access_token}],
+              respond:
+                FakeUpstream.json_response(%{
+                  "plan_type" => "plus",
+                  "rate_limit" => %{"allowed" => true, "limit_reached" => false}
+                })
+            )
+          ])
         )
 
       {pool, assignment} =
@@ -1353,6 +1398,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                )
 
       refute snapshot["observed_at"] == DateTime.to_iso8601(initial_observed_at)
+      assert :ok = FakeUpstream.verify!(upstream)
     end
 
     test "definitive provider usage auth rejection disables the identity assignment" do
@@ -1787,16 +1833,34 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             FakeUpstream.json_response(%{"error" => "expired"}, 401),
-             FakeUpstream.json_response(%{
-               "access_token" => refreshed_access_token,
-               "expires_in" => 3_600
-             }),
-             FakeUpstream.json_response(%{"error" => "rejected"}, 401),
-             FakeUpstream.json_response(%{"error" => "rejected"}, 403)
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              respond: FakeUpstream.json_response(%{"error" => "expired"}, 401)
+            ),
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/oauth/token",
+              respond:
+                FakeUpstream.json_response(%{
+                  "access_token" => refreshed_access_token,
+                  "expires_in" => 3_600
+                })
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              headers: [required: %{"authorization" => "Bearer " <> refreshed_access_token}],
+              respond: FakeUpstream.json_response(%{"error" => "rejected"}, 401)
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/codex/usage",
+              headers: [required: %{"authorization" => "Bearer " <> refreshed_access_token}],
+              respond: FakeUpstream.json_response(%{"error" => "rejected"}, 403)
+            )
+          ])
         )
 
       {pool, assignment} =
@@ -1823,6 +1887,8 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                "/backend-api/wham/usage",
                "/backend-api/codex/usage"
              ]
+
+      assert :ok = FakeUpstream.verify!(upstream)
     end
 
     test "provider usage failures short of definitive auth rejection preserve active state" do
@@ -3918,23 +3984,37 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
         upstream =
           start_upstream(
-            {:sequence,
-             [
-               FakeUpstream.barrier_json_response(usage_payload(),
-                 notify: self(),
-                 release_ref: success_release_ref
-               ),
-               FakeUpstream.barrier_json_response(%{"error" => "rejected"},
-                 status: 401,
-                 notify: self(),
-                 release_ref: rejection_release_ref
-               ),
-               FakeUpstream.barrier_json_response(%{"error" => "rejected"},
-                 status: 401,
-                 notify: self(),
-                 release_ref: rejection_release_ref
-               )
-             ]}
+            FakeUpstream.strict_sequence([
+              FakeUpstream.expect_request(
+                method: "GET",
+                path: "/backend-api/wham/usage",
+                respond:
+                  FakeUpstream.barrier_json_response(usage_payload(),
+                    notify: self(),
+                    release_ref: success_release_ref
+                  )
+              ),
+              FakeUpstream.expect_request(
+                method: "GET",
+                path: "/backend-api/wham/usage",
+                respond:
+                  FakeUpstream.barrier_json_response(%{"error" => "rejected"},
+                    status: 401,
+                    notify: self(),
+                    release_ref: rejection_release_ref
+                  )
+              ),
+              FakeUpstream.expect_request(
+                method: "GET",
+                path: "/backend-api/codex/usage",
+                respond:
+                  FakeUpstream.barrier_json_response(%{"error" => "rejected"},
+                    status: 401,
+                    notify: self(),
+                    release_ref: rejection_release_ref
+                  )
+              )
+            ])
           )
 
         {_pool, assignment} = active_usage_probe_assignment(upstream)
@@ -3990,6 +4070,8 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
             rejection_windows: rejection_windows
           }
         )
+
+        assert :ok = FakeUpstream.verify!(upstream)
       end
     end
 
@@ -4471,13 +4553,15 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                3
     end
 
+    # Recovery enqueue is a per-identity decision with no batching or paging
+    # boundary, so a handful of identities proves the same property as a large
+    # cohort; the count below is scenario size, not a contract.
     @tag :stale_consuming_recovery
-    @tag timeout: 120_000
-    test "two hundred clean scheduled reconciliations create no recovery jobs" do
+    test "several clean scheduled reconciliations create no recovery jobs" do
       upstream = start_upstream(successful_usage_response())
 
       fixtures =
-        Enum.map(1..200, fn _index ->
+        Enum.map(1..@stale_consuming_cohort_size, fn _index ->
           {pool, assignment} = active_usage_probe_assignment(upstream)
           identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
           {pool, assignment, identity}
@@ -4493,7 +4577,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       assert stale_consuming_recovery_jobs() == []
       assert Repo.aggregate(Request, :count) == 0
-      assert FakeUpstream.count(upstream) == 200
+      assert FakeUpstream.count(upstream) == @stale_consuming_cohort_size
       assert FakeUpstream.requests(upstream) |> Enum.all?(&(&1.method == "GET"))
     end
 
@@ -4527,13 +4611,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
 
     @tag :stale_consuming_recovery
-    @tag timeout: 120_000
-    test "two hundred not-due identities stay quiet while one due identity enqueues once" do
+    test "several not-due identities stay quiet while one due identity enqueues once" do
       upstream = start_upstream(successful_usage_response())
       next_action_at = DateTime.add(DateTime.utc_now(), 1, :hour)
 
       not_due_fixtures =
-        Enum.map(1..200, fn _index ->
+        Enum.map(1..@stale_consuming_cohort_size, fn _index ->
           {pool, assignment} = active_usage_probe_assignment(upstream)
           identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
 
@@ -4579,13 +4662,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
 
     @tag :stale_consuming_recovery
-    @tag timeout: 180_000
-    test "two hundred due observe-only identities retain one incomplete recovery job each" do
+    test "several due observe-only identities retain one incomplete recovery job each" do
       upstream = start_upstream(successful_usage_response())
       next_action_at = DateTime.add(DateTime.utc_now(), -1, :minute)
 
       fixtures =
-        Enum.map(1..200, fn _index ->
+        Enum.map(1..@stale_consuming_cohort_size, fn _index ->
           {pool, assignment} = active_usage_probe_assignment(upstream)
           identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
           attempt_id = Ecto.UUID.generate()
@@ -4620,13 +4702,13 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       expected_attempt_ids =
         MapSet.new(fixtures, fn {_pool, _assignment, _identity, attempt_id} -> attempt_id end)
 
-      assert length(jobs) == 200
+      assert length(jobs) == @stale_consuming_cohort_size
       assert MapSet.new(jobs, & &1.args["upstream_identity_id"]) == expected_identity_ids
       assert MapSet.new(jobs, & &1.args["attempt_id"]) == expected_attempt_ids
       assert Enum.all?(jobs, &(&1.state in ~w(available scheduled executing retryable suspended)))
       assert Repo.aggregate(Request, :count) == 0
       assert scheduled_consume_count(upstream) == 0
-      assert FakeUpstream.count(upstream) == 400
+      assert FakeUpstream.count(upstream) == 2 * @stale_consuming_cohort_size
       assert FakeUpstream.requests(upstream) |> Enum.all?(&(&1.method == "GET"))
     end
 
@@ -5378,7 +5460,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert scheduled_saved_reset_redemption_jobs() == []
 
       if System.get_env("RECONCILIATION_MANUAL_QA") == "1" do
-        IO.puts(
+        CodexPooler.TestDiagnostics.puts(
           "RECONCILIATION_ZERO_TRAFFIC pending_phase=#{pending["phase"]} " <>
             "probe_present=#{Map.has_key?(pending, "probe")} " <>
             "accounting_count=#{Repo.aggregate(Request, :count)} " <>

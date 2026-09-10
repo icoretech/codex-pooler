@@ -126,7 +126,18 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence, [{:json, 200, payload}, {:json, 200, canonical_payload}]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(payload)
+          ),
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(canonical_payload)
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -146,6 +157,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
            ) == snapshot
 
     assert Repo.aggregate(CodexPooler.Catalog.Model, :count) == models_before
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "HTTP status, invalid JSON and incompatible catalogs fail without writes" do
@@ -153,12 +165,23 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           {:raw_body, 503, "temporary upstream error", []},
-           {:raw_body, 200, "not JSON", []},
-           {:json, 200, %{"models" => []}}
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: {:raw_body, 503, "temporary upstream error", []}
+          ),
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: {:raw_body, 200, "not JSON", []}
+          ),
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(%{"models" => []})
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -173,6 +196,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
              OpenAIPricingImporter.import_url(url)
 
     assert Repo.aggregate(PricingSnapshot, :count) == before_count
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "malformed URL strings return bounded errors without writes" do

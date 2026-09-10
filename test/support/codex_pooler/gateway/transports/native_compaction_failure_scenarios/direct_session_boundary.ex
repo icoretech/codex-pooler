@@ -96,15 +96,18 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
   defp caller_death_after_send(context, _handle) do
     release_ref = make_ref()
 
+    # Warm-up and the barrier-held compact turn both ride the lineage
+    # connection; nothing may be resubmitted after the caller dies.
     mode =
-      {:sequence,
-       [
-         success_mode(),
-         FakeUpstream.websocket_terminal_then_close_barrier(completed_frame(),
-           notify: context.test_pid,
-           release_ref: release_ref
-         )
-       ]}
+      FakeUpstream.strict_sequence([
+        strict_turn(success_mode()),
+        strict_turn(
+          FakeUpstream.websocket_terminal_then_close_barrier(completed_frame(),
+            notify: context.test_pid,
+            release_ref: release_ref
+          )
+        )
+      ])
 
     with_session(context, mode, fn session, upstream ->
       binding = arm_direct_after_warmup!(session, upstream)
@@ -235,8 +238,13 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
   end
 
   defp terminal_failure(context, _handle) do
-    with_session(context, {:sequence, [success_mode(), terminal_failure_mode()]}, fn session,
-                                                                                     upstream ->
+    mode =
+      FakeUpstream.strict_sequence([
+        strict_turn(success_mode()),
+        strict_turn(terminal_failure_mode())
+      ])
+
+    with_session(context, mode, fn session, upstream ->
       binding = arm_direct_after_warmup!(session, upstream)
       capability = reserve_accounted!(session, :compact, binding)
       baseline = FakeUpstream.count(upstream)
@@ -298,7 +306,14 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
 
   defp final_response(context, _handle, outcome) do
     final_mode = if outcome == :success, do: success_mode(), else: terminal_failure_mode()
-    mode = {:sequence, [success_mode(), success_mode(), final_mode]}
+
+    # Warm-up, compact, and final turns all ride the lineage connection.
+    mode =
+      FakeUpstream.strict_sequence([
+        strict_turn(success_mode()),
+        strict_turn(success_mode()),
+        strict_turn(final_mode)
+      ])
 
     with_session(context, mode, fn session, upstream ->
       binding = arm_direct_after_warmup!(session, upstream)
@@ -327,11 +342,26 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
     monitor = Process.monitor(session)
 
     try do
-      fun.(session, upstream)
+      observed = fun.(session, upstream)
+      :ok = FakeUpstream.verify!(upstream)
+      observed
     after
       cleanup_session(session, monitor)
       FakeUpstream.stop(upstream)
     end
+  end
+
+  # One strict native turn on the lineage connection. The direct-session
+  # request body is the bare `{"model": ...}` payload, so that is the only
+  # JSON fact asserted here.
+  defp strict_turn(respond) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: 1,
+      json: [valid: true, equals: %{"model" => "gpt-test"}],
+      respond: respond
+    )
   end
 
   defp arm_direct_after_warmup!(session, upstream) do

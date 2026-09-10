@@ -2326,11 +2326,20 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           hosted_shell_completed_response("resp_hosted_shell_json"),
-           hosted_shell_completed_response("resp_hosted_shell_sse")
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: hosted_shell_completed_response("resp_hosted_shell_json")
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: hosted_shell_completed_response("resp_hosted_shell_sse")
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2398,6 +2407,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       })
 
     assert_hosted_shell_sentinels_absent!(observable_text, fixture.sentinels)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :hosted_shell_history
@@ -2487,11 +2497,20 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           hosted_shell_completed_response("resp_hosted_shell_curl_json"),
-           FakeUpstream.sse_stream(hosted_shell_sse_events())
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: hosted_shell_completed_response("resp_hosted_shell_curl_json")
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: FakeUpstream.sse_stream(hosted_shell_sse_events())
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2557,6 +2576,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     refute Enum.any?(events, &(&1["event"] == "response.created"))
     assert FakeUpstream.count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :prompt_cache_product_characterization

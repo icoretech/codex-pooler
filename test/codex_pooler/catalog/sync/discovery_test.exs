@@ -29,14 +29,24 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
   test "model discovery does not reuse Cloudflare cookies for non-ChatGPT upstream origins" do
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           FakeUpstream.json_response_with_headers(
-             %{"data" => [%{"id" => "gpt-example"}]},
-             [{"set-cookie", "__cf_bm=models-token; Path=/; HttpOnly; Secure"}]
-           ),
-           FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-example"}]})
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/backend-api/codex/models",
+            headers: [forbidden: ["cookie"]],
+            respond:
+              FakeUpstream.json_response_with_headers(
+                %{"data" => [%{"id" => "gpt-example"}]},
+                [{"set-cookie", "__cf_bm=models-token; Path=/; HttpOnly; Secure"}]
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/backend-api/codex/models",
+            headers: [forbidden: ["cookie"]],
+            respond: FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-example"}]})
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -78,6 +88,7 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
 
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   defp assert_codex_client_identity_headers(headers) do

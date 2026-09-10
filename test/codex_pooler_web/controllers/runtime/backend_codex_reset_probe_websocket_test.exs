@@ -166,14 +166,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       auth_code = @auth_code
       refresh_token = "refresh-token-bound-reset-probe-#{auth_code}-do-not-leak"
 
+      # Strict finite scenario: the bound reset probe gets exactly one native
+      # send; there is no /oauth/token entry and no retry entry, so a provider
+      # refresh or a redispatch fails the fixture as an unexpected extra request.
       fixture =
         reset_probe_fixture(
-          {:sequence,
-           [
-             websocket_terminal_failure(auth_code),
-             FakeUpstream.json_response(%{"access_token" => "replacement-token-should-not-run"}),
-             FakeUpstream.json_response(%{"id" => "replacement-response-should-not-run"})
-           ]}
+          FakeUpstream.strict_sequence([
+            strict_bound_probe_request(websocket_terminal_failure(auth_code))
+          ])
         )
 
       assert {:ok, _secret} =
@@ -193,22 +193,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
         1
       )
 
-      assert_bound_probe_metadata_omits!(fixture, [
-        refresh_token,
-        "replacement-token-should-not-run",
-        "replacement-response-should-not-run"
-      ])
+      assert_bound_probe_metadata_omits!(fixture, [refresh_token])
+      assert :ok = FakeUpstream.verify!(fixture.dispatch_upstream)
     end
   end
 
   test "websocket connection limit does not retry or replace a bound reset probe dispatch" do
+    # Strict finite scenario: one native send only; a connection-limit retry
+    # would be an unexpected extra request and fail the fixture.
     fixture =
       reset_probe_fixture(
-        {:sequence,
-         [
-           websocket_terminal_failure("websocket_connection_limit_reached"),
-           FakeUpstream.json_response(%{"id" => "connection-limit-retry-should-not-run"})
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bound_probe_request(
+            websocket_terminal_failure("websocket_connection_limit_reached")
+          )
+        ])
       )
 
     assert :ok = execute_reset_probe(fixture)
@@ -222,17 +221,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       1
     )
 
-    assert_bound_probe_metadata_omits!(fixture, ["connection-limit-retry-should-not-run"])
+    assert :ok = FakeUpstream.verify!(fixture.dispatch_upstream)
   end
 
   test "upstream model unavailable does not dispatch a sibling for a bound reset probe" do
+    # Strict finite scenario: one native send only; a sibling or replacement
+    # dispatch would be an unexpected extra request and fail the fixture.
     fixture =
       reset_probe_fixture(
-        {:sequence,
-         [
-           websocket_terminal_failure("model_not_found"),
-           FakeUpstream.json_response(%{"id" => "model-replacement-should-not-run"})
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bound_probe_request(websocket_terminal_failure("model_not_found"))
+        ])
       )
 
     assert :ok = execute_reset_probe(fixture)
@@ -246,7 +245,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       1
     )
 
-    assert_bound_probe_metadata_omits!(fixture, ["model-replacement-should-not-run"])
+    assert :ok = FakeUpstream.verify!(fixture.dispatch_upstream)
   end
 
   test "client websocket disconnect leaves the guarded reset probe claimed" do
@@ -547,20 +546,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     end)
   end
 
+  # Native websocket frame for strict expectations, which reject SSE-derived
+  # websocket shortcuts.
   defp websocket_terminal_failure(error_code) do
-    FakeUpstream.sse_stream(
-      [
-        {"response.failed",
-         %{
-           "type" => "response.failed",
-           "response" => %{
-             "id" => "resp_ws_bound_probe_terminal_failure",
-             "status" => "failed",
-             "error" => %{"code" => error_code}
-           }
-         }}
-      ],
-      done: false
+    FakeUpstream.websocket_text_frames([
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.failed",
+        "response" => %{
+          "id" => "resp_ws_bound_probe_terminal_failure",
+          "status" => "failed",
+          "error" => %{"code" => error_code}
+        }
+      })
+    ])
+  end
+
+  defp strict_bound_probe_request(respond) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: 1,
+      json: [valid: true, equals: %{"type" => "response.create"}],
+      respond: respond
     )
   end
 

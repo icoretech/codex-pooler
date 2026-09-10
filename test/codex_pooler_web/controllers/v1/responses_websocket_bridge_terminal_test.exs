@@ -110,30 +110,30 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
        %{conn: conn} do
     release_ref = make_ref()
 
-    replay_event =
-      {"response.completed",
-       %{
-         "type" => "response.completed",
-         "response" => %{"id" => "unexpected_http_replay", "status" => "completed"}
-       }}
-
+    # The strict scenario permits exactly one native websocket turn; an HTTP
+    # replay would surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_terminal_then_close_barrier(
-             %{
-               "type" => "response.completed",
-               "response" => %{
-                 "id" => "resp_dropped_before_bridge_close",
-                 "status" => "in_progress"
-               }
-             },
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.sse_stream([replay_event])
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_terminal_then_close_barrier(
+                %{
+                  "type" => "response.completed",
+                  "response" => %{
+                    "id" => "resp_dropped_before_bridge_close",
+                    "status" => "in_progress"
+                  }
+                },
+                notify: self(),
+                release_ref: release_ref
+              )
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -226,6 +226,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
            } = attempt.response_metadata["public_openai_responses_stream"]
 
     assert settlement_count(request.id) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   for {terminal_type, terminal, public_type} <- @terminal_cases do
@@ -236,22 +237,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     test "#{terminal_type} survives an immediate websocket peer close exactly once", %{conn: conn} do
       release_ref = make_ref()
 
+      # Exactly one native websocket turn is permitted; an HTTP replay would
+      # surface as an unexpected extra request.
       upstream =
         start_upstream(
-          {:sequence,
-           [
-             FakeUpstream.websocket_terminal_then_close_barrier(@terminal,
-               notify: self(),
-               release_ref: release_ref
-             ),
-             FakeUpstream.sse_stream([
-               {"response.completed",
-                %{
-                  "type" => "response.completed",
-                  "response" => %{"id" => "unexpected_http_replay", "status" => "completed"}
-                }}
-             ])
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_terminal_then_close_barrier(@terminal,
+                  notify: self(),
+                  release_ref: release_ref
+                )
+            )
+          ])
         )
 
       setup = gateway_setup(upstream)
@@ -359,6 +361,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
              ) == 1
 
       assert settlement_count(request.id) == 1
+      assert :ok = FakeUpstream.verify!(upstream)
     end
   end
 
@@ -366,22 +369,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
        %{conn: conn} do
     release_ref = make_ref()
 
+    # Exactly one native websocket turn is permitted; an HTTP resubmission
+    # would surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_close_without_terminal_barrier(
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.sse_stream([
-             {"response.completed",
-              %{
-                "type" => "response.completed",
-                "response" => %{"id" => "resp_close_fallback", "status" => "completed"}
-              }}
-           ])
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: release_ref
+              )
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -425,54 +429,57 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
            ) == 1
 
     assert settlement_count(request.id) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :owner_drained_terminal_state
   test "post-budget bridge drain emits one owner_drained terminal without replay", %{conn: conn} do
     release_ref = make_ref()
 
+    # Exactly one upstream turn is permitted; an HTTP replay would surface as
+    # an unexpected extra request. The held-terminal barrier has no native
+    # websocket equivalent, so the entry cannot declare `method: "WEBSOCKET"`;
+    # the transport claim is asserted on the recorded request below.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.delayed_terminal_sse_stream(
-             [
-               {"response.created",
-                %{
-                  "type" => "response.created",
-                  "response" => %{
-                    "id" => "resp_terminal_owner_drained",
-                    "status" => "in_progress"
-                  }
-                }},
-               {"response.output_text.delta",
-                %{
-                  "type" => "response.output_text.delta",
-                  "response_id" => "resp_terminal_owner_drained",
-                  "output_index" => 0,
-                  "content_index" => 0,
-                  "delta" => "visible before terminal drain"
-                }}
-             ],
-             {"response.completed",
-              %{
-                "type" => "response.completed",
-                "response" => %{
-                  "id" => "resp_terminal_owner_drained",
-                  "status" => "completed"
-                }
-              }},
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.sse_stream([
-             {"response.completed",
-              %{
-                "type" => "response.completed",
-                "response" => %{"id" => "unexpected_http_replay", "status" => "completed"}
-              }}
-           ])
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.delayed_terminal_sse_stream(
+                [
+                  {"response.created",
+                   %{
+                     "type" => "response.created",
+                     "response" => %{
+                       "id" => "resp_terminal_owner_drained",
+                       "status" => "in_progress"
+                     }
+                   }},
+                  {"response.output_text.delta",
+                   %{
+                     "type" => "response.output_text.delta",
+                     "response_id" => "resp_terminal_owner_drained",
+                     "output_index" => 0,
+                     "content_index" => 0,
+                     "delta" => "visible before terminal drain"
+                   }}
+                ],
+                {"response.completed",
+                 %{
+                   "type" => "response.completed",
+                   "response" => %{
+                     "id" => "resp_terminal_owner_drained",
+                     "status" => "completed"
+                   }
+                 }},
+                notify: self(),
+                release_ref: release_ref
+              )
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -589,6 +596,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
            } = Repo.reload!(turn)
 
     assert settlement_count(request.id) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   defp stream_event_types(body) do

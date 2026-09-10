@@ -16,7 +16,20 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
   @endpoint_path "/backend-api/codex/responses"
 
   test "a same-model tool continuation keeps its explicit response anchor", %{conn: conn} do
-    upstream = start_upstream({:sequence, [tool_response(), success()]})
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          strict_http_turn(tool_response(), valid: true, forbidden: ["previous_response_id"]),
+          strict_http_turn(success(),
+            valid: true,
+            equals: %{
+              "previous_response_id" => "resp_example_transition_anchor",
+              "input.0.type" => "function_call_output"
+            }
+          )
+        ])
+      )
+
     setup = gateway_setup(upstream)
     {anchor, call_id} = complete_first_model!(conn, setup)
 
@@ -33,10 +46,24 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
     assert [%{"type" => "function_call_output", "call_id" => ^call_id}] = second.json["input"]
     assert Repo.aggregate(Request, :count) == 2
     assert Repo.aggregate(Attempt, :count) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "a target-model error with an explicit prior-model anchor stays terminal", %{conn: conn} do
-    upstream = start_upstream({:sequence, [tool_response(), model_error()]})
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          strict_http_turn(tool_response(), valid: true, forbidden: ["previous_response_id"]),
+          strict_http_turn(model_error(),
+            valid: true,
+            equals: %{
+              "previous_response_id" => "resp_example_transition_anchor",
+              "input.0.type" => "function_call_output"
+            }
+          )
+        ])
+      )
+
     setup = gateway_setup(upstream)
     target = target_model(setup)
     {anchor, call_id} = complete_first_model!(conn, setup)
@@ -63,6 +90,8 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
                from l in LedgerEntry, where: l.request_id == ^failed.id, select: l.entry_kind
              )
            ) == ["release", "reservation", "settlement"]
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "an allowed first model does not authorize the anchored target model", %{conn: conn} do
@@ -151,6 +180,15 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
         %{"type" => "function_call_output", "call_id" => call_id, "output" => "synthetic"}
       ]
     }
+  end
+
+  defp strict_http_turn(respond, json_expectations) do
+    FakeUpstream.expect_request(
+      method: "POST",
+      path: @endpoint_path,
+      json: json_expectations,
+      respond: respond
+    )
   end
 
   defp tool_response do

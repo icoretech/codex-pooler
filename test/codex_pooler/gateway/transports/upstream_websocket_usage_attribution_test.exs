@@ -32,13 +32,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketUsageAttribu
         "response" => %{"status" => "completed", "usage" => nil}
       })
 
+    # Strict finite scenario: both turns must ride the first physical
+    # connection, because the second result claims connection reuse.
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           FakeUpstream.websocket_text_frames([first]),
-           FakeUpstream.websocket_text_frames([second])
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true],
+            respond: FakeUpstream.websocket_text_frames([first])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true],
+            respond: FakeUpstream.websocket_text_frames([second])
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -69,6 +80,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketUsageAttribu
     assert second_digest == digest(second)
     assert length(FakeUpstream.requests(upstream)) == 2
     assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "mapped delivery preserves upstream aggregate counters without retaining attribution" do

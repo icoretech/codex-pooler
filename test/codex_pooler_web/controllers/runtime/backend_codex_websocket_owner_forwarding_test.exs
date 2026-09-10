@@ -406,6 +406,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       "encrypted_content" => "synthetic-owner-collect-encrypted"
     }
 
+    # strict migration blocked: the final turn depends on the pre-visible SSE
+    # chunk barrier (barrier_sse_stream barrier_after: 0), which has no native
+    # websocket equivalent yet.
     upstream =
       start_upstream(
         {:sequence,
@@ -1449,18 +1452,58 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
        }}
     end
 
+    {_event_name, anchor_terminal} = terminal.("resp_socket_compact_anchor", [])
+    {_event_name, retry_terminal} = terminal.("resp_socket_compact_retry", [compact_item])
+
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream([terminal.("resp_socket_compact_anchor", [])]),
-           FakeUpstream.websocket_sse_then_close([]),
-           FakeUpstream.sse_stream([
-             {"response.output_item.done",
-              %{"type" => "response.output_item.done", "item" => compact_item}},
-             terminal.("resp_socket_compact_retry", [compact_item])
-           ])
-         ]}
+        # Strict finite scenario: the anchor and the anchored incremental compact
+        # share the first connection, the incremental stream closes without a
+        # terminal, and the projected full-history retry must arrive without the
+        # anchor on the replacement connection with nothing else sent.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(anchor_terminal)])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_socket_compact_anchor",
+                "input.0.type" => "function_call_output"
+              }
+            ],
+            respond: FakeUpstream.websocket_sse_then_close([])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "function_call_output"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "type" => "response.output_item.done",
+                  "item" => compact_item
+                }),
+                CodexPooler.JSON.encode!(retry_terminal)
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream, compact?: true)
@@ -1546,6 +1589,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              :count
            ) == 1
 
+    assert :ok = FakeUpstream.verify!(upstream)
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
   end
 
@@ -1663,29 +1707,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "owner-forwarded websocket terminal auth refresh retries through the same owner session" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream(
-             [
-               {"response.failed",
-                %{
+        # Strict finite scenario: the terminal auth failure on the first
+        # connection triggers exactly one token refresh over HTTP, and the retry
+        # must carry the refreshed bearer on a replacement connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
                   "type" => "response.failed",
                   "response" => %{
                     "id" => "resp_owner_auth_terminal",
                     "error" => %{"code" => "invalid_api_key"},
                     "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
                   }
-                }}
-             ],
-             done: true
-           ),
-           FakeUpstream.json_response(%{"access_token" => "owner-upstream-token-refreshed"}, 200),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_auth_retry_success",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/oauth/token",
+            respond:
+              FakeUpstream.json_response(
+                %{"access_token" => "owner-upstream-token-refreshed"},
+                200
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            headers: [required: %{"authorization" => "Bearer owner-upstream-token-refreshed"}],
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_auth_retry_success",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -1776,6 +1841,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ "refresh-token-owner-ws-terminal-do-not-leak"
       refute metadata_text =~ "owner-upstream-token-refreshed"
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -1784,12 +1850,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "owner-forwarded pre-visible assignment model miss retries a later assignment" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream(
-             [
-               {"response.failed",
-                %{
+        # Strict finite scenario: the pre-visible model miss is retried exactly
+        # once on a replacement connection. The bridge ring does not fix which
+        # assignment is tried first, so the bearer is asserted by the accounting
+        # rows below rather than by the fixture.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
                   "type" => "response.failed",
                   "response" => %{
                     "id" => "resp_owner_assignment_model_miss",
@@ -1798,16 +1870,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                       "message" => "raw owner model miss sentinel"
                     }
                   }
-                }}
-             ],
-             done: true
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_assignment_model_fallback_success",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_assignment_model_fallback_success",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
@@ -1925,6 +2004,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       refute persisted =~ "owner assignment model failover"
       refute persisted =~ setup.authorization
       refute persisted =~ "upstream-token-owner-model-fallback"
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -2061,25 +2141,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_close_without_terminal_barrier(
-             notify: self(),
-             release_ref: release_ref,
-             code: 1001,
-             reason: "synthetic remote replay disconnect"
-           ),
-           FakeUpstream.websocket_text_frames([
-             CodexPooler.JSON.encode!(%{
-               "type" => "response.completed",
-               "response" => %{
-                 "id" => "resp_remote_replay_complete",
-                 "status" => "completed",
-                 "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
-               }
-             })
-           ])
-         ]}
+        # Strict finite scenario: the first connection closes before any
+        # terminal, the replay must be the only other send and must arrive on a
+        # replacement connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "function_call_output"}
+            ],
+            respond:
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: release_ref,
+                code: 1001,
+                reason: "synthetic remote replay disconnect"
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "function_call_output"}
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "type" => "response.completed",
+                  "response" => %{
+                    "id" => "resp_remote_replay_complete",
+                    "status" => "completed",
+                    "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+                  }
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2241,6 +2341,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              Repo.all(from(turn in CodexTurn, where: turn.request_id == ^request.id))
 
     assert final_attempt_id == attempt_n_plus_one.id
+    assert :ok = FakeUpstream.verify!(upstream)
     assert :ok = CodexResponsesSocket.terminate(:closed, replay_state)
     assert Process.alive?(owner_pid)
   end
@@ -2258,25 +2359,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_close_without_terminal_barrier(
-             notify: self(),
-             release_ref: release_ref,
-             code: 1001,
-             reason: "synthetic real peer replay disconnect"
-           ),
-           FakeUpstream.websocket_text_frames([
-             CodexPooler.JSON.encode!(%{
-               "type" => "response.completed",
-               "response" => %{
-                 "id" => "resp_real_peer_replay_complete",
-                 "status" => "completed",
-                 "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
-               }
-             })
-           ])
-         ]}
+        # Strict finite scenario: the real peer owner's first connection closes
+        # before any terminal, the replay is the only other send on a
+        # replacement connection, and the duplicate retry sends nothing.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "function_call_output"}
+            ],
+            respond:
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: release_ref,
+                code: 1001,
+                reason: "synthetic real peer replay disconnect"
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "function_call_output"}
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "type" => "response.completed",
+                  "response" => %{
+                    "id" => "resp_real_peer_replay_complete",
+                    "status" => "completed",
+                    "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+                  }
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2428,6 +2549,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert CodexPooler.JSON.decode!(duplicate_frame)["error"]["code"] == "duplicate_turn"
     assert FakeUpstream.count(upstream) == 2
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
 
     assert :ok = CodexResponsesSocket.terminate(:closed, duplicate_state)
     assert :ok = CodexResponsesSocket.terminate(:closed, replay_state)
@@ -3075,17 +3197,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "local and remote owners emit identical native metadata bytes for one turn snapshot" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_local_metadata_parity",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_remote_metadata_parity",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the local and the remote owner each forward
+        # exactly one native turn upstream and nothing else is sent.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_local_metadata_parity",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_remote_metadata_parity",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -3148,6 +3285,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert owner_response_id(remote_response) == "resp_remote_metadata_parity"
       assert {:ok, _remote_state} = receive_owner_socket_complete(remote_state)
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, local_state)
       CodexResponsesSocket.terminate(:closed, remote_state)
@@ -3506,19 +3644,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "remote owner executes the proxy turn snapshot and the next turn observes the Pool edit" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_mode_lite_snapshot",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_mode_full_next_turn",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+        # Strict finite scenario: the remote owner forwards exactly one lite
+        # turn and then exactly one full turn; the canonical request shapes are
+        # asserted on the captured requests below.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_mode_lite_snapshot",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_mode_full_next_turn",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -3611,6 +3765,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [lite_request, full_request] = request_logs(setup.pool.id)
       assert_owner_mode_accounting!(lite_request, "lite", "succeeded", remote_node)
       assert_owner_mode_accounting!(full_request, "full", "succeeded", remote_node)
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
@@ -3721,23 +3876,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.barrier_sse_stream(
-             [%{"id" => "resp_owner_mode_killed", "object" => "response"}],
-             barrier_after: 0,
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_mode_kill_recovered",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_mode_kill_next_turn",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the first send is held pre-visible until the
+        # owner is killed and the connection then closes without a terminal, the
+        # replacement owner replays exactly one lite turn, and the next socket
+        # sends exactly one full turn.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: release_ref,
+                code: 1001,
+                reason: "synthetic pre-visible owner death close"
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_mode_kill_recovered",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_mode_kill_next_turn",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -3802,7 +3979,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
-      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid,
+                      ^release_ref},
+                     1_000
 
       try do
         assert [projected_lite_request] = await_upstream_requests(upstream, 1)
@@ -3828,7 +4007,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         Process.exit(old_owner_pid, :kill)
         assert_receive {:DOWN, ^old_owner_ref, :process, ^old_owner_pid, :killed}, 1_000
-        send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+        send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
 
         assert :ok = Task.await(interrupted_turn, 3_000)
 
@@ -3950,8 +4129,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         assert active_owner_lease(state.codex_session.id).lease_token ==
                  replacement_lease.lease_token
+
+        assert :ok = FakeUpstream.verify!(upstream)
       after
-        send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+        send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
 
         if Process.alive?(interrupted_turn.pid) do
           Task.shutdown(interrupted_turn, :brutal_kill)
@@ -4159,27 +4340,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "live owner-forwarded websocket keeps an accepted model miss on its established lane" do
     pinned_upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_live_anchor",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
-           }),
-           FakeUpstream.sse_stream(
-             [
-               {"response.failed",
-                %{
+        # Strict finite scenario: the pinned lane receives the anchor and the
+        # model-miss turn only; the accepted miss is not retried anywhere.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_live_anchor",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
                   "type" => "response.failed",
                   "response" => %{
                     "id" => "resp_owner_live_model_miss",
                     "error" => %{"code" => "model_not_found", "param" => "model"}
                   }
-                }}
-             ],
-             done: false
-           )
-         ]}
+                })
+              ])
+          )
+        ])
       )
 
     fallback_upstream =
@@ -4252,6 +4443,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert failed_attempt.usage_status == "usage_unknown"
 
     assert MapSet.size(state.tasks) == 0
+    assert :ok = FakeUpstream.verify!(pinned_upstream)
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
   end
 
@@ -4262,25 +4454,39 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     initial_access_token = synthetic_access_token(initial_residency)
     refreshed_access_token = synthetic_access_token(refreshed_residency)
 
+    # Strict: a 401 handshake, one provider token refresh, then the retried
+    # handshake succeeds through the same owner on the first accepted connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_upgrade_error(
-             %{"error" => %{"code" => "invalid_api_key"}},
-             status: 401,
-             headers: [{"x-openai-authorization-error", "invalid_api_key"}]
-           ),
-           FakeUpstream.json_response(
-             %{"access_token" => refreshed_access_token},
-             200
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_auth_handshake_retry_success",
-             "object" => "response",
-             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-           })
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            respond:
+              FakeUpstream.websocket_upgrade_error(
+                %{"error" => %{"code" => "invalid_api_key"}},
+                status: 401,
+                headers: [{"x-openai-authorization-error", "invalid_api_key"}]
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/oauth/token",
+            respond: FakeUpstream.json_response(%{"access_token" => refreshed_access_token}, 200)
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_auth_handshake_retry_success",
+                  "object" => "response",
+                  "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -4468,17 +4674,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "owner-forwarded immediate response create retargets socket owner runtime before spawning" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_immediate_retarget_anchor",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_immediate_retarget_success",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the anchor and the retargeted continuation are
+        # the only sends, both on the target owner's single connection, and the
+        # continuation carries the anchor id.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_immediate_retarget_anchor",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_immediate_retarget_anchor"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_immediate_retarget_success",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -4562,29 +4796,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
     assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
 
+    assert :ok = FakeUpstream.verify!(upstream)
     assert :ok = CodexResponsesSocket.terminate(:closed, retargeted_state)
   end
 
   test "owner-forwarded response create retargets from frame turn-state before spawning" do
+    target_turn_state = "stable-ws-owner-frame-turn-state-retarget"
+    origin_turn_state = "stable-ws-owner-frame-turn-state-origin"
+
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_turn_state_retarget_anchor",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_turn_state_retarget_success",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the anchor and the turn-state retargeted
+        # continuation are the only sends, both on the target owner's single
+        # connection, and the continuation still carries the target turn state.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_turn_state_retarget_anchor",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "client_metadata.x-codex-turn-state" => target_turn_state
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_turn_state_retarget_success",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    target_turn_state = "stable-ws-owner-frame-turn-state-retarget"
-    origin_turn_state = "stable-ws-owner-frame-turn-state-origin"
 
     {:ok, target_state} =
       owner_socket(
@@ -4662,23 +4922,52 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     refute_raw_turn_state_session_key!(setup.pool.id, target_turn_state)
     assert_no_leak_in_persistence!(setup.pool.id)
 
+    assert :ok = FakeUpstream.verify!(upstream)
     assert :ok = CodexResponsesSocket.terminate(:closed, retargeted_state)
   end
 
   test "owner-forwarded retarget ignores stale origin downstream and cleans up target owner" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_retarget_cleanup_anchor",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_retarget_cleanup_success",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the anchor and the retargeted continuation are
+        # the only sends, both on the target owner's single connection, and the
+        # continuation carries the anchor id.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_retarget_cleanup_anchor",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_retarget_cleanup_anchor"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_retarget_cleanup_success",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -4790,6 +5079,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_native_turn_correlation!(retargeted_log.correlation_id)
     refute inspect(request_logs(setup.pool.id)) =~ "owner_unavailable"
     refute inspect(request_logs(setup.pool.id)) =~ "owner_drained"
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "owner-forwarded retarget keeps the current runtime for a cross-pool alias cache miss before the generation guard" do
@@ -4949,17 +5239,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_reused_alias_miss_anchor",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_reused_alias_miss_continuation",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the anchor and the alias-miss continuation are
+        # the only sends, both on the reused first connection, and the unknown
+        # previous_response_id is forwarded unchanged.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_reused_alias_miss_anchor",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => previous_response_id
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_reused_alias_miss_continuation",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -5025,6 +5343,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert anchor_log.status == "succeeded"
       assert continuation_log.status == "succeeded"
       assert_no_leak_in_persistence!(setup.pool.id)
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -5036,17 +5355,43 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_replacement_alias_miss_anchor",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_replacement_alias_miss_full_retry",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the anchor is the only send on the first
+        # connection, the guarded alias-miss continuation sends nothing, and the
+        # explicit full retry is the only send on the replacement connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_replacement_alias_miss_anchor",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_replacement_alias_miss_full_retry",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -5182,6 +5527,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              } = full_retry_attempt.response_metadata["upstream_websocket_connection"]
 
       assert_no_leak_in_persistence!(setup.pool.id)
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -5462,14 +5808,58 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "owner-forwarded processed ack followed by tool continuation records three succeeded websocket rows" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_chain_first",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{"id" => "resp_owner_chain_tool", "object" => "response"})
-         ]}
+        # Strict finite scenario: the first turn, the processed ack, and the
+        # tool continuation are the only three sends, all on the owner's single
+        # connection, and the continuation carries the first response id.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_chain_first",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.processed"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_chain_processed",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_chain_first",
+                "input.0.type" => "function_call_output"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_chain_tool",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -5569,6 +5959,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
       assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
     end
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "owner-forwarded socket queues processed and tool continuation frames sent back to back" do
@@ -5675,25 +6067,80 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_queue_alias_anchor_a",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_queue_alias_anchor_b",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_queue_alias_a",
-             "object" => "response"
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_queue_alias_b",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the two anchors open the two target owner
+        # connections, the active turn runs through the blocking boundary and
+        # never reaches this upstream, and each queued continuation is the only
+        # other send on its own target's connection with its own anchor id.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_queue_alias_anchor_a",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_queue_alias_anchor_b",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_queue_alias_anchor_a"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_queue_alias_a",
+                  "object" => "response"
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_queue_alias_anchor_b"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_queue_alias_b",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -5877,6 +6324,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert active_log.request_metadata["codex_session_id"] == origin_session.id
     assert queued_a_log.request_metadata["codex_session_id"] == target_a_session.id
     assert queued_b_log.request_metadata["codex_session_id"] == target_b_session.id
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "owner-forwarded response processed close while in flight is not pre-request lifecycle" do
@@ -6253,6 +6701,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert event_count(third_log, WebsocketConnectionLogger.reconnect_disposition_message()) == 1
     assert third_log =~ "reconnect_disposition=owner_busy"
     assert length(request_logs(setup.pool.id)) == 1
+
+    # The predecessor upstream never finishes cancelling, so readiness can only
+    # come from the owner's soft handoff timeout (1 s by default and not
+    # configurable through the socket). Fire that timer now; the fencing under
+    # test is the pending state asserted above, not the wait for the timer.
+    owner_pending = :sys.get_state(owner_pid).pending_handoff
+    assert %{status: :waiting, control_ref: control_ref, soft_token: soft_token} = owner_pending
+    send(owner_pid, {:websocket_owner_handoff_soft_timeout, control_ref, soft_token})
 
     assert_receive {:websocket_owner_handoff_ready, _, _, _, _, _} = ready,
                    @handoff_detection_timeout_ms
@@ -7004,6 +7460,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           )
     }
 
+    stop_parked_response_tasks!(remote_state)
+
     try do
       logs =
         capture_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, remote_state) end)
@@ -7086,6 +7544,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       | codex_session: %{state.codex_session | owner_instance_id: Atom.to_string(remote_node)},
         opts: typed_opts
     }
+
+    stop_parked_response_tasks!(remote_state)
 
     try do
       assert %RequestOptions{} = remote_state.opts
@@ -7250,6 +7710,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
            ).metadata["release_reason"] == "owner_crashed"
 
     release_task.()
+    stop_parked_response_tasks!(stopped_state)
 
     CodexResponsesSocket.terminate(
       :closed,
@@ -8098,6 +8559,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           )
     }
 
+    stop_parked_response_tasks!(remote_state)
+
     try do
       logs =
         capture_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, remote_state) end)
@@ -8178,6 +8641,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
               )
           )
     }
+
+    stop_parked_response_tasks!(remote_state)
 
     try do
       logs =
@@ -8899,12 +9364,49 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "owner-forwarded success processed and tool continuation keep sentinel out of persisted logs and process state" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{"id" => "resp_owner_leak_first"}),
-           FakeUpstream.json_response(%{"id" => "resp_owner_leak_processed"}),
-           FakeUpstream.json_response(%{"id" => "resp_owner_leak_tool"})
-         ]}
+        # Strict finite scenario: the first turn, the processed ack, and the
+        # tool continuation are the only three sends, all on the owner's single
+        # connection; the sentinel may appear only in the captured requests.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{"id" => "resp_owner_leak_first"})
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.processed"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{"id" => "resp_owner_leak_processed"})
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_leak_first",
+                "input.0.type" => "function_call_output"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{"id" => "resp_owner_leak_tool"})
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9005,6 +9507,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       )
 
     assert_no_leak!("owner state after success", :sys.get_state(owner_pid))
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :leakage
@@ -9296,18 +9799,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.barrier_sse_stream(
-             [%{"id" => "resp_owner_timeline_interrupted", "object" => "response"}],
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_timeline_recovered",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the interrupted turn is held pre-visible until
+        # the client has disconnected and then closes without a terminal; the
+        # takeover owner sends exactly one recovered turn and nothing else.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: release_ref,
+                code: 1001,
+                reason: "synthetic interrupted timeline close"
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_timeline_recovered",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9324,7 +9842,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
-    assert_receive {:fake_upstream_chunk_barrier, 1, upstream_pid, ^release_ref}, 1_000
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
+                   1_000
 
     assert_receive {:websocket_owner_cleanup_witness, _, _, _, _} = cleanup_message,
                    @handoff_detection_timeout_ms
@@ -9337,7 +9857,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              "owner timeline interrupted"
 
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
-    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
 
     interrupted_request =
       Repo.one!(
@@ -9472,6 +9992,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
            end) == ["owner timeline interrupted", "owner timeline recovered"]
 
     assert FakeUpstream.count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :leakage
@@ -9603,19 +10124,41 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{
-             "id" => "resp_synthetic_history",
-             "object" => "response",
-             "output" => [call]
-           }),
-           FakeUpstream.json_response(%{
-             "id" => "resp_synthetic_continuation",
-             "object" => "response",
-             "output" => []
-           })
-         ]}
+        # Strict finite scenario: the historical turn and the fresh tool
+        # continuation are the only two sends, both opening with the compaction
+        # history item; the duplicate client retry sends nothing.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "compaction"}
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_synthetic_history",
+                  "object" => "response",
+                  "output" => [call]
+                })
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "compaction"}
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_synthetic_continuation",
+                  "object" => "response",
+                  "output" => []
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -9739,6 +10282,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         assert Enum.sort(kinds) == ["release", "reservation", "settlement"]
       end
+
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, next_state)
     end
@@ -10218,12 +10763,43 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         "resp_owner_three_turn_#{route}_#{turn}_#{System.unique_integer([:positive])}"
       end)
 
+    # Strict finite scenario: the three chained turns are the only sends, all on
+    # the owner's single connection, each carrying its predecessor's response id.
     upstream =
       start_upstream(
-        {:sequence,
-         Enum.map(response_ids, fn response_id ->
-           FakeUpstream.json_response(%{"id" => response_id, "object" => "response"})
-         end)}
+        FakeUpstream.strict_sequence(
+          response_ids
+          |> Enum.with_index()
+          |> Enum.map(fn {response_id, index} ->
+            previous_expectation =
+              case index do
+                0 -> [forbidden: ["previous_response_id"]]
+                _ -> []
+              end
+
+            equals =
+              case index do
+                0 ->
+                  %{"type" => "response.create"}
+
+                _ ->
+                  %{
+                    "type" => "response.create",
+                    "previous_response_id" => Enum.at(response_ids, index - 1)
+                  }
+              end
+
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: equals] ++ previous_expectation,
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{"id" => response_id, "object" => "response"})
+                ])
+            )
+          end)
+        )
       )
 
     setup = gateway_setup(upstream)
@@ -10269,6 +10845,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert length(Enum.uniq(correlations)) == 3
 
       assert_no_leak_in_persistence!(setup.pool.id)
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -10382,14 +10959,41 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{"id" => previous_response_id, "object" => "response"}),
-           FakeUpstream.json_response(%{
-             "id" => "resp_owner_generation_retry_#{route}",
-             "object" => "response"
-           })
-         ]}
+        # Strict finite scenario: the anchor is the only send on the first
+        # connection, the guarded continuation sends nothing after the
+        # invalidation, and the explicit full retry is the only send on the
+        # replacement connection.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{"id" => previous_response_id, "object" => "response"})
+              ])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "id" => "resp_owner_generation_retry_#{route}",
+                  "object" => "response"
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -10488,6 +11092,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       refute persisted =~ setup.authorization
       refute persisted =~ retry_terminal
       assert_no_leak_in_persistence!(setup.pool.id)
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -11678,6 +12283,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       {:websocket_owner_cleanup_witness, _, _, _, _} = message ->
         handle_native_collect_socket_push_message(message, state)
 
+      # After an upstream transport failure the owner retains its result until
+      # the socket acks this probe (or 5 s elapse); route it through the socket
+      # like the real connection does instead of letting the owner time out.
+      {:websocket_owner_output_commit_probe, _, _, _, _, _, _} = message ->
+        handle_native_collect_socket_push_message(message, state)
+
       {:codex_response_chunk, _task_pid, _frame} = message ->
         handle_native_collect_socket_push_message(message, state)
 
@@ -11999,6 +12610,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              state.codex_session.owner_lease_token
            ).metadata["release_reason"] == "owner_crashed"
 
+    stop_parked_response_tasks!(stopped_state)
+
     CodexResponsesSocket.terminate(
       :closed,
       Map.delete(stopped_state, :websocket_owner_downstream)
@@ -12057,6 +12670,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              state.codex_session.owner_lease_token
            ).metadata["release_reason"] == "owner_drained"
 
+    stop_parked_response_tasks!(kept_state)
+
     CodexResponsesSocket.terminate(
       :closed,
       Map.delete(kept_state, :websocket_owner_downstream)
@@ -12105,6 +12720,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert Process.alive?(state.websocket_owner_pid)
     release_task.()
     CodexResponsesSocket.terminate(:closed, state)
+  end
+
+  # `active_socket_turn_fixture/3` parks the forwarded response task inside
+  # `WebsocketOwnerSession.submit_request/4` (a `:infinity` call) until `on_exit`
+  # releases the fake upstream. Once the owner-lifecycle outcome has been
+  # asserted that task is an orphan, and `CodexResponsesSocket.terminate/2`
+  # would otherwise burn its full post-cleanup drain budget (15 s for
+  # owner-forwarded state, 5 s otherwise) before killing it itself. Stop it
+  # here so terminate observes an immediate `:DOWN`; the pid stays in
+  # `state.tasks`, so cleanup still treats the socket as holding an active turn.
+  defp stop_parked_response_tasks!(state) do
+    state
+    |> Map.get(:tasks, MapSet.new())
+    |> Enum.each(fn task_pid ->
+      monitor = Process.monitor(task_pid)
+      Process.exit(task_pid, :kill)
+
+      assert_receive {:DOWN, ^monitor, :process, ^task_pid, _reason},
+                     @handoff_detection_timeout_ms
+    end)
+
+    state
   end
 
   defp suspend_cleanup_task!(state) do

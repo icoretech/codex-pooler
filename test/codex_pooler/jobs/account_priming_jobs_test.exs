@@ -100,14 +100,29 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
 
       {:ok, upstream} =
         FakeUpstream.start_link(
-          {:sequence,
-           [
-             {:path_json, %{"/backend-api/wham/usage" => {401, %{"error" => "expired"}}}},
-             {:path_json, %{"/oauth/token" => {200, %{"access_token" => new_access_token}}}},
-             {:path_json, %{"/backend-api/wham/usage" => {200, usage_payload}}},
-             {:path_json,
-              %{"/backend-api/codex/models" => {200, %{"models" => [%{"id" => "gpt-refreshed"}]}}}}
-           ]}
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              respond: FakeUpstream.json_response(%{"error" => "expired"}, 401)
+            ),
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/oauth/token",
+              respond: FakeUpstream.json_response(%{"access_token" => new_access_token})
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/wham/usage",
+              headers: [required: %{"authorization" => "Bearer " <> new_access_token}],
+              respond: FakeUpstream.json_response(usage_payload)
+            ),
+            FakeUpstream.expect_request(
+              method: "GET",
+              path: "/backend-api/codex/models",
+              respond: FakeUpstream.json_response(%{"models" => [%{"id" => "gpt-refreshed"}]})
+            )
+          ])
         )
 
       on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -138,6 +153,7 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
       assert token_refresh.path == "/oauth/token"
       assert usage_retry.path == "/backend-api/wham/usage"
       assert catalog.path == "/backend-api/codex/models"
+      assert :ok = FakeUpstream.verify!(upstream)
     end
 
     test "account reconciliation does not report stale existing quota as refreshed after auth failure" do
@@ -458,12 +474,17 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
   defp active_assignment_fixture(metadata) do
     pool = pool_fixture()
 
+    # Reconciliation still runs its catalog-sync step against the identity's
+    # base URL; without one it would leave the test and reach the production
+    # default host. A route-less local fake answers 404 instantly instead.
+    upstream = start_path_upstream(%{})
+
     assert {:ok, identity} =
              IdentityLifecycle.create_upstream_identity(%{
                chatgpt_account_id: "acct_#{System.unique_integer([:positive])}",
                account_label: "Job account",
                onboarding_method: "import",
-               metadata: %{}
+               metadata: %{"base_url" => FakeUpstream.url(upstream)}
              })
 
     assert {:ok, identity} =

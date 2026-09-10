@@ -101,7 +101,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     for {case_name, request_options, expected_output} <- cases do
       {:ok, upstream} =
-        FakeUpstream.start_link({:sequence, [FakeUpstream.websocket_text_frames([completed])]})
+        FakeUpstream.start_link(
+          FakeUpstream.strict_sequence([
+            strict_websocket_turn(FakeUpstream.websocket_text_frames([completed]))
+          ])
+        )
 
       on_exit(fn -> FakeUpstream.stop(upstream) end)
       parent = self()
@@ -119,6 +123,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assert_receive {:direct_mapper_output, ^expected_output},
                      100,
                      "#{case_name} mapper changed direct writer bytes"
+
+      assert :ok = FakeUpstream.verify!(upstream)
     end
   end
 
@@ -137,14 +143,31 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       ]
     end
 
+    # Strict finite scenario: every anchored collection must reuse the warmup
+    # connection and carry its tool-output item first.
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           websocket_success("collect-warmup"),
-           FakeUpstream.websocket_text_frames(compact_frames.("custom")),
-           FakeUpstream.websocket_text_frames(compact_frames.("future"))
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("collect-warmup"),
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(FakeUpstream.websocket_text_frames(compact_frames.("custom")),
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              required: ["previous_response_id"],
+              equals: %{"input.0.type" => "custom_tool_call_output"}
+            ]
+          ),
+          strict_websocket_turn(FakeUpstream.websocket_text_frames(compact_frames.("future")),
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              required: ["previous_response_id"],
+              equals: %{"input.0.type" => "future_tool_output"}
+            ]
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -216,6 +239,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              "future_tool_output",
              "compaction_trigger"
            ]
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :collect_compaction
@@ -232,13 +257,23 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         "response" => %{"id" => "resp_collect_lite", "status" => "completed"}
       })
 
+    # Strict finite scenario: the anchored Lite collection must reuse the Lite
+    # warmup connection with its function output first.
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           websocket_success("lite-warmup"),
-           FakeUpstream.websocket_text_frames([compact_item, terminal])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("lite-warmup"),
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(FakeUpstream.websocket_text_frames([compact_item, terminal]),
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              required: ["previous_response_id"],
+              equals: %{"input.0.type" => "function_call_output"}
+            ]
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -292,6 +327,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              "function_call_output",
              "compaction_trigger"
            ]
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "remote owner dispatch sends only a validated v1 envelope and keeps submission observer local",
@@ -881,7 +918,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       )
 
     {:ok, websocket_upstream} =
-      FakeUpstream.start_link({:sequence, [websocket_success("egress-observation")]})
+      FakeUpstream.start_link(
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("egress-observation"),
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          )
+        ])
+      )
 
     on_exit(fn -> FakeUpstream.stop(http_upstream) end)
     on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
@@ -960,24 +1003,26 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     Application.put_env(:codex_pooler, :permanent_full_mode_egress_observation_enabled, false)
     assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(http_request)
     refute_receive {:egress_observation, _silent}, 100
+    assert :ok = FakeUpstream.verify!(websocket_upstream)
   end
 
   test "multi-agent round product observation emits bounded websocket stage metadata only" do
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           FakeUpstream.websocket_text_frames([
-             CodexPooler.JSON.encode!(%{
-               "type" => "response.output_text.delta",
-               "delta" => "forbidden raw text"
-             }),
-             CodexPooler.JSON.encode!(%{
-               "type" => "response.completed",
-               "response" => %{"id" => "multi-agent-round-product-observer"}
-             })
-           ])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.output_text.delta",
+                "delta" => "forbidden raw text"
+              }),
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.completed",
+                "response" => %{"id" => "multi-agent-round-product-observer"}
+              })
+            ])
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
@@ -1048,13 +1093,25 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       refute Map.has_key?(observation, :frame)
       refute Map.has_key?(observation, :token)
     end
+
+    assert :ok = FakeUpstream.verify!(websocket_upstream)
   end
 
   test "native Responses websocket dispatch derives the model-only routing hint, including prewarm payloads" do
+    routing_hint_headers = [required: %{"x-codex-routing-hint" => "model=upstream-routing-model"}]
+
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [websocket_success("routing-hint-response"), websocket_success("routing-hint-warmup")]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("routing-hint-response"),
+            headers: routing_hint_headers,
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          ),
+          strict_websocket_turn(websocket_success("routing-hint-warmup"),
+            headers: routing_hint_headers,
+            json: [valid: true, equals: %{"generate" => false}]
+          )
+        ])
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
@@ -1079,6 +1136,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assert Map.new(captured.headers)["x-codex-routing-hint"] ==
                "model=upstream-routing-model"
     end
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "native-shaped provider-specific and API-key paths omit routing hints on HTTP and websocket dispatch" do
@@ -1088,7 +1147,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       )
 
     {:ok, websocket_upstream} =
-      FakeUpstream.start_link({:sequence, [websocket_success("provider-routing-hint")]})
+      FakeUpstream.start_link(
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("provider-routing-hint"),
+            headers: [forbidden: ["x-codex-routing-hint"]],
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          )
+        ])
+      )
 
     on_exit(fn -> FakeUpstream.stop(http_upstream) end)
     on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
@@ -1133,6 +1199,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     refute Map.has_key?(Map.new(http_capture.headers), "x-codex-routing-hint")
     refute Map.has_key?(Map.new(websocket_capture.headers), "x-codex-routing-hint")
+    assert :ok = FakeUpstream.verify!(websocket_upstream)
   end
 
   test "custom non-prefixed credentials omit routing hints on HTTP and websocket dispatch" do
@@ -1142,7 +1209,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       )
 
     {:ok, websocket_upstream} =
-      FakeUpstream.start_link({:sequence, [websocket_success("custom-routing-hint")]})
+      FakeUpstream.start_link(
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("custom-routing-hint"),
+            headers: [forbidden: ["x-codex-routing-hint"]],
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          )
+        ])
+      )
 
     on_exit(fn -> FakeUpstream.stop(http_upstream) end)
     on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
@@ -1185,6 +1259,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     refute Map.has_key?(Map.new(http_capture.headers), "x-codex-routing-hint")
     refute Map.has_key?(Map.new(websocket_capture.headers), "x-codex-routing-hint")
+    assert :ok = FakeUpstream.verify!(websocket_upstream)
   end
 
   test "public and translated Responses dispatch never forwards caller routing hints" do
@@ -1510,15 +1585,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   end
 
   test "direct websocket request preserves exact connection metadata through result recording" do
+    # Strict finite scenario: the first three sends share the first physical
+    # connection, and the later request must open a replacement connection.
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           websocket_success("direct-initial"),
-           websocket_success("direct-reused"),
-           FakeUpstream.websocket_sse_then_close([]),
-           websocket_success("direct-later-request")
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("direct-initial"),
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(websocket_success("direct-reused"),
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(websocket_success("direct-later-request"),
+            websocket_connection_ordinal: 2
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -1567,15 +1651,18 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              reconnected: false
            }
 
+    assert :ok = FakeUpstream.verify!(upstream)
+
+    # Strict replacement scenario: the ambiguous close on the reused
+    # generation-two connection must not be followed by a transparent
+    # reconnect send; an extra request would fail the fixture.
     FakeUpstream.set_mode(
       upstream,
-      {:sequence,
-       [
-         FakeUpstream.websocket_sse_then_close([]),
-         FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "reconnect_rejected"}},
-           status: 503
-         )
-       ]}
+      FakeUpstream.strict_sequence([
+        strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
+          websocket_connection_ordinal: 2
+        )
+      ])
     )
 
     assert {:error, failed_reconnect} = UpstreamDispatch.websocket_request(request)
@@ -1587,6 +1674,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              reused: true,
              reconnected: false
            }
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :replay_generation_race
@@ -2199,6 +2289,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         "response" => %{"id" => id}
       })
     ])
+  end
+
+  defp strict_websocket_turn(respond, expectations \\ []) do
+    FakeUpstream.expect_request(
+      [method: "WEBSOCKET", path: "/backend-api/codex/responses", json: [valid: true]]
+      |> Keyword.merge(expectations)
+      |> Keyword.put(:respond, respond)
+    )
   end
 
   defp websocket_rate_limit_event(used_percent) do

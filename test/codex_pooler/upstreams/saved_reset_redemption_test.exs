@@ -4394,7 +4394,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       fixture = committed_scheduled_expiry_race_fixture!(fake)
       on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(fixture) end)
 
-      decision_before = DateTime.utc_now() |> DateTime.add(3, :second)
+      # The reset must still be expiring when the redemption task starts (so a
+      # pre-lock decision time would have consumed it) and must be a whole
+      # second past expiry when the lock is released, because `expires_soon?`
+      # compares truncated seconds. One second of pre-expiry margin covers the
+      # identity update, the holder lock, and the task start.
+      decision_before = DateTime.utc_now() |> DateTime.add(1, :second)
       expires_at = DateTime.add(decision_before, 1, :second)
       assignment_id = List.first(fixture.assignment_ids)
 
@@ -5016,12 +5021,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     test "an ambiguous sibling consume keeps the cohort fenced without a second POST" do
       {:ok, fake} =
         FakeUpstream.start_link(
-          {:sequence,
-           [
-             {:json, 500, %{"error" => "synthetic failure"}},
-             {:json, 200, %{"code" => "reset"}},
-             {:json, 200, usage_payload(0)}
-           ]}
+          # The ambiguous first consume is the only provider request this
+          # scenario permits; the sibling barrier must never issue a second POST.
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/api/codex/rate-limit-reset-credits/consume",
+              respond: FakeUpstream.json_response(%{"error" => "synthetic failure"}, 500)
+            )
+          ])
         )
 
       on_exit(fn -> FakeUpstream.stop(fake) end)
@@ -5041,6 +5049,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                end)
 
       assert provider_consume_count(fake) == 1
+      assert :ok = FakeUpstream.verify!(fake)
     end
 
     @tag :saved_reset_cohort_lock_reversed_order
@@ -8604,12 +8613,26 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end
       end)
 
-    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+    case await_cohort_fixture_task(task, timeout) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, fixture}} -> fixture
       {:ok, {:raised, kind, reason, stacktrace}} -> :erlang.raise(kind, reason, stacktrace)
       nil -> raise "timed out creating committed cohort fixture"
     end
   end
+
+  # `{:after_signal, ref, budget_ms}` starts the fixture budget only once the
+  # fixture body has sent `{ref, :cohort_fixture_entered}`, so an injected
+  # timeout scenario does not have to guess how long entry creation takes
+  # under partition load. The outer wait is failure detection only.
+  defp await_cohort_fixture_task(task, {:after_signal, ref, budget_ms}) do
+    receive do
+      {^ref, :cohort_fixture_entered} -> Task.yield(task, budget_ms)
+    after
+      @cohort_fixture_task_timeout -> Task.yield(task, 0)
+    end
+  end
+
+  defp await_cohort_fixture_task(task, timeout), do: Task.yield(task, timeout)
 
   defp assert_failed_cohort_fixture_cleanup!(failure) do
     {:ok, fake} = codex_reset_fake(0)
@@ -8623,21 +8646,25 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       send(parent, {barrier, self(), entry})
 
       case failure do
-        :failure -> raise "injected cohort fixture failure"
-        :timeout -> receive do: ({^barrier, :release} -> :ok)
+        :failure ->
+          raise "injected cohort fixture failure"
+
+        :timeout ->
+          send(parent, {barrier, :cohort_fixture_entered})
+          receive do: ({^barrier, :release} -> :ok)
       end
     end
 
-    message =
+    {message, timeout} =
       if failure == :failure,
-        do: "injected cohort fixture failure",
-        else: "timed out creating committed cohort fixture"
+        do: {"injected cohort fixture failure", 5_000},
+        else: {"timed out creating committed cohort fixture", {:after_signal, barrier, 100}}
 
     ExUnit.CaptureLog.capture_log(fn ->
       assert_raise RuntimeError, message, fn ->
         committed_gateway_auto_cohort_fixture!(fake, :cross_pool, 2,
           after_entry: after_entry,
-          timeout: 5_000
+          timeout: timeout
         )
       end
     end)
@@ -10128,11 +10155,17 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end)
   end
 
-  defp release_probe_claim_task(task) do
-    case Task.yield(task, 5_000) do
-      {:ok, _result} -> :ok
-      {:exit, _reason} -> :ok
-      nil -> Task.shutdown(task, :brutal_kill)
+  # Tasks already awaited in the `try` body have no reply left to yield;
+  # waiting on them would burn the whole timeout in every `after` block.
+  defp release_probe_claim_task(%Task{pid: pid} = task) do
+    if is_pid(pid) and Process.alive?(pid) do
+      case Task.yield(task, 5_000) do
+        {:ok, _result} -> :ok
+        {:exit, _reason} -> :ok
+        nil -> Task.shutdown(task, :brutal_kill)
+      end
+    else
+      :ok
     end
   end
 

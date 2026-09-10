@@ -1136,11 +1136,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
         upstream =
           start_upstream(
-            {:sequence,
-             [
-               FakeUpstream.websocket_text_frames([terminal]),
-               websocket_success("resp_after_optional_observer_failure")
-             ]}
+            FakeUpstream.strict_sequence([
+              strict_websocket_turn(FakeUpstream.websocket_text_frames([terminal])),
+              strict_websocket_success("resp_after_optional_observer_failure")
+            ])
           )
 
         {:ok, session} = GenServer.start(UpstreamWebsocketSession, :new)
@@ -1187,6 +1186,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
                  )
 
         assert Process.alive?(session)
+        assert :ok = FakeUpstream.verify!(upstream)
         :ok = UpstreamWebsocketSession.close(session)
       end
     )
@@ -1381,11 +1381,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_text_frames([retryable]),
-           FakeUpstream.websocket_text_frames([accepted])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(FakeUpstream.websocket_text_frames([retryable])),
+          strict_websocket_turn(FakeUpstream.websocket_text_frames([accepted]))
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -1418,6 +1417,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive {:retry_metadata_frame, ^accepted}
     assert_receive {:retry_metadata_observer, ^accepted, %{"type" => "response.completed"}}
     refute_received {:retry_metadata_frame, _extra}
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "native websocket preserves a structural child text delta byte-for-byte" do
@@ -1449,13 +1449,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   test "same-key requests reuse one FakeUpstream connection and process replacement opens another" do
     upstream =
       start_upstream(
-        {:sequence,
-         Enum.map(1..3, fn index ->
-           FakeUpstream.json_response(%{
-             "id" => "resp_ws_connection_characterization_#{index}",
-             "object" => "response"
-           })
-         end)}
+        # Strict finite scenario: the same-key requests share the first physical
+        # connection and the replacement session must open a second one.
+        FakeUpstream.strict_sequence(
+          Enum.map([{1, 1}, {2, 1}, {3, 2}], fn {index, connection_ordinal} ->
+            strict_websocket_success("resp_ws_connection_characterization_#{index}",
+              websocket_connection_ordinal: connection_ordinal
+            )
+          end)
+        )
       )
 
     request = websocket_request(FakeUpstream.url(upstream))
@@ -1501,17 +1503,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert first_request.websocket_connection_id == second_request.websocket_connection_id
     assert replacement_request.websocket_connection_id != first_request.websocket_connection_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "ordinary successful and request-terminal work keep one connection reusable" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_ordinary_success_before_terminal"),
-           FakeUpstream.websocket_terminal_failure("invalid_request_error"),
-           websocket_success("resp_ws_ordinary_success_after_terminal")
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_response("resp_ws_ordinary_success_before_terminal", 1),
+          strict_websocket_turn(FakeUpstream.websocket_terminal_failure("invalid_request_error"),
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          ),
+          strict_websocket_response("resp_ws_ordinary_success_after_terminal", 1)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -1529,6 +1534,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert %{1 => 3} = generation_request_counts(upstream)
     assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :findings116
@@ -1537,16 +1543,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_limit_fixture_warmup"),
-           FakeUpstream.websocket_connection_limit_terminal_barrier(
-             shape: :nested,
-             notify: self(),
-             release_ref: terminal_ref
-           ),
-           websocket_success("resp_ws_limit_fixture_next")
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_response("resp_ws_limit_fixture_warmup", 1),
+          strict_websocket_turn(
+            FakeUpstream.websocket_connection_limit_terminal_barrier(
+              shape: :nested,
+              notify: self(),
+              release_ref: terminal_ref
+            ),
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          ),
+          strict_websocket_response("resp_ws_limit_fixture_next", 2)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -1589,6 +1598,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
                notify: self(),
                close_ref: make_ref()
              )
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   for terminal_shape <- [:top_level, :nested] do
@@ -1703,12 +1714,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_limit_after_control_warmup"),
-           FakeUpstream.websocket_text_frames([rate_limits, limit]),
-           websocket_success("resp_ws_limit_after_control_next")
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_response("resp_ws_limit_after_control_warmup", 1),
+          strict_websocket_turn(FakeUpstream.websocket_text_frames([rate_limits, limit]),
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          ),
+          strict_websocket_response("resp_ws_limit_after_control_next", 2)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -1759,6 +1772,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     generation_two = %{generation_one | generation: generation_one.generation + 1}
     assert_connection_metadata(next_result, generation_two, false, false)
     assert %{1 => 2, 2 => 1} = generation_request_counts(upstream)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :findings116
@@ -1773,12 +1787,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_limit_visible_warmup"),
-           FakeUpstream.websocket_text_frames([created, limit]),
-           websocket_success("resp_ws_limit_visible_next")
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_response("resp_ws_limit_visible_warmup", 1),
+          strict_websocket_turn(FakeUpstream.websocket_text_frames([created, limit]),
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}]
+          ),
+          strict_websocket_response("resp_ws_limit_visible_next", 2)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -1818,16 +1834,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     generation_two = %{generation_one | generation: generation_one.generation + 1}
     assert_connection_metadata(next_result, generation_two, false, false)
     assert %{1 => 2, 2 => 1} = generation_request_counts(upstream)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "a preterminal peer close does not replay the accepted request" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_characterized_initial"),
-           FakeUpstream.websocket_sse_then_close([])
-         ]}
+        # Strict finite scenario: the accepted request must not be replayed after
+        # the reused connection closes without a terminal.
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_characterized_initial",
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
+            websocket_connection_ordinal: 1
+          )
+        ])
       )
 
     request = websocket_request(FakeUpstream.url(upstream))
@@ -1847,6 +1869,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert lifecycle_state(session).generation == generation_one.generation
     assert FakeUpstream.websocket_connection_count(upstream) == 1
     assert length(FakeUpstream.requests(upstream)) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "controlled terminal-plus-close releases the terminal before the peer close" do
@@ -2261,13 +2284,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   test "reused failure records finite connection age ordinal and idle buckets" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_before_reused_close"),
-           FakeUpstream.websocket_sse_then_close([
-             %{"type" => "response.created", "response" => %{"id" => "resp_ws_reused_close"}}
-           ])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_before_reused_close",
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(
+            FakeUpstream.websocket_sse_then_close([
+              %{"type" => "response.created", "response" => %{"id" => "resp_ws_reused_close"}}
+            ]),
+            websocket_connection_ordinal: 1
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -2295,17 +2322,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              "connection_age_bucket" => "under_1m",
              "connection_idle_bucket" => "under_5s"
            }
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "invalidation closes only the current connection and reconnects on the next explicit request" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_before_invalidation"),
-           websocket_success("resp_ws_after_invalidation"),
-           websocket_success("resp_ws_reused_after_invalidation")
-         ]}
+        # Strict finite scenario: the request after invalidation must open a
+        # replacement connection, and the following request must reuse it.
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_before_invalidation",
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_success("resp_ws_after_invalidation",
+            websocket_connection_ordinal: 2
+          ),
+          strict_websocket_success("resp_ws_reused_after_invalidation",
+            websocket_connection_ordinal: 2
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -2336,6 +2372,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert first_request.websocket_connection_id != second_request.websocket_connection_id
     assert second_request.websocket_connection_id == third_request.websocket_connection_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "invalidation without a current connection returns a bounded error and preserves lifecycle" do
@@ -2445,12 +2482,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   test "does not transparently replay an accepted request after a reused connection closes" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_generation_1"),
-           websocket_success("resp_ws_generation_1_reused"),
-           FakeUpstream.websocket_sse_then_close([])
-         ]}
+        # Strict finite scenario: all three sends ride the first physical
+        # connection and the interrupted request must not be replayed.
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_generation_1",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}, required: ["input.0"]]
+          ),
+          strict_websocket_success("resp_ws_generation_1_reused",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}, required: ["input.0"]]
+          ),
+          strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}, required: ["input.0"]]
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -2492,16 +2539,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
            end) == List.duplicate([handoff], 3)
 
     assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "request_once uses an invocation-scoped lifecycle and reaches generation one" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_once_first"),
-           websocket_success("resp_ws_once_second")
-         ]}
+        # Strict finite scenario: each request_once invocation opens its own
+        # physical connection.
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_once_first", websocket_connection_ordinal: 1),
+          strict_websocket_success("resp_ws_once_second", websocket_connection_ordinal: 2)
+        ])
       )
 
     request = websocket_request(FakeUpstream.url(upstream))
@@ -2523,6 +2572,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_connection_metadata(second_result, second_connected, false, false)
     assert second_initial.lifecycle_id != first_initial.lifecycle_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "does not advance generation when TCP connection fails" do
@@ -2874,12 +2924,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   test "ambiguous close preserves the last successful generation without reconnect" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success("resp_ws_before_failed_reconnect"),
-           FakeUpstream.websocket_sse_then_close([]),
-           websocket_success("resp_ws_after_explicit_request")
-         ]}
+        # Strict finite scenario: the ambiguous close must not trigger a
+        # transparent reconnect send; only the later explicit request opens the
+        # replacement connection.
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_before_failed_reconnect",
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_success("resp_ws_after_explicit_request",
+            websocket_connection_ordinal: 2
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -2911,6 +2969,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert lifecycle_state(session) == recovered_lifecycle
     assert_connection_metadata(recovered_result, recovered_lifecycle, false, false)
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "failure after a successful initial send carries only safe connection metadata" do
@@ -3044,6 +3103,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       }
     ]
 
+    # strict migration blocked: both entries are SSE chunk barriers whose
+    # `{:fake_upstream_chunk_sent, n}` and `{:fake_upstream_chunk_barrier, ...}`
+    # notifications drive the test; no native websocket mode emits them.
     upstream =
       start_upstream(
         {:sequence,
@@ -3119,11 +3181,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   test "opens a new upstream websocket connection when bearer changes between turns" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.json_response(%{"id" => "resp_ws_old_token", "object" => "response"}),
-           FakeUpstream.json_response(%{"id" => "resp_ws_new_token", "object" => "response"})
-         ]}
+        # Strict finite scenario: the bearer change must open a second physical
+        # connection carrying the new authorization header.
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_old_token",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"authorization" => "Bearer old-upstream-token"}]
+          ),
+          strict_websocket_success("resp_ws_new_token",
+            websocket_connection_ordinal: 2,
+            headers: [required: %{"authorization" => "Bearer new-upstream-token"}]
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3176,6 +3245,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert Map.new(first_request.headers)["authorization"] == "Bearer old-upstream-token"
     assert Map.new(second_request.headers)["authorization"] == "Bearer new-upstream-token"
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :upstream_websocket_pong_liveness
@@ -3907,11 +3977,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   test "marked continuation forwards unchanged on a reused connection" do
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           websocket_success_without_id()
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1),
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3928,6 +3997,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert [warmup_request, continuation_request] = FakeUpstream.requests(upstream)
     assert continuation_request.body == marked_request.payload
     assert warmup_request.websocket_connection_id == continuation_request.websocket_connection_id
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :collect_compaction
@@ -4002,11 +4072,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           FakeUpstream.websocket_text_frames([item, terminal])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1),
+          strict_websocket_turn(FakeUpstream.websocket_text_frames([item, terminal]),
+            websocket_connection_ordinal: 1
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -4032,6 +4103,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert [warmup_request, collect_request] = FakeUpstream.requests(upstream)
     assert warmup_request.websocket_connection_id == collect_request.websocket_connection_id
     assert collect_request.body == collect.payload
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   for {failure_mode, phase, source} <- [
@@ -4098,13 +4170,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @tag :collect_compaction
   test "collect compaction rejects fresh mode-mismatched and invalidated connections without send or reconnect" do
+    # Strict finite scenario: only the warmup reaches the upstream; every
+    # guarded collection must send nothing and open no connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           websocket_success_without_id()
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1)
+        ])
       )
 
     request = websocket_request(FakeUpstream.url(upstream))
@@ -4162,18 +4234,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert [_warmup_request] = FakeUpstream.requests(upstream)
     assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :collect_compaction
   test "collect compaction does not reconnect after a preterminal close" do
+    # Strict finite scenario: the collection rides the warmup connection and
+    # the preterminal close must not be followed by a reconnect send.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           FakeUpstream.websocket_sse_then_close([]),
-           websocket_success_without_id()
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1),
+          strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
+            websocket_connection_ordinal: 1
+          )
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -4200,17 +4275,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert [_warmup_request, collect_request] = FakeUpstream.requests(upstream)
     assert collect_request.body == collect.payload
     assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :continuation_generation_boundary
   test "marked continuation on a replacement connection writes one retry terminal and keeps it reusable" do
+    # Strict finite scenario: the guarded continuation sends nothing, and the
+    # later full request must open the replacement connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           websocket_success_without_id()
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1),
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 2)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -4237,17 +4314,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert [warmup, later_full_request] = FakeUpstream.requests(upstream)
     assert warmup.websocket_connection_id != later_full_request.websocket_connection_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :continuation_generation_boundary
   test "marked continuation after invalidation writes one retry terminal and keeps reconnect reusable" do
+    # Strict finite scenario: the guarded continuation sends nothing after
+    # invalidation, and the later request must open the reconnect connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           websocket_success_without_id()
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1),
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 2)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -4270,18 +4349,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert later_result.upstream_websocket_connection.reused
     assert length(FakeUpstream.requests(upstream)) == 2
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :continuation_generation_boundary
   test "ambiguous marked continuation close requires a later explicit request" do
+    # Strict finite scenario: the marked continuation rides the warmup
+    # connection, its ambiguous close triggers no reconnect send, and only the
+    # later explicit request opens the replacement connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           websocket_success_without_id(),
-           FakeUpstream.websocket_sse_then_close([]),
-           websocket_success_without_id()
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1),
+          strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
+            websocket_connection_ordinal: 1
+          ),
+          strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 2)
+        ])
       )
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -4308,6 +4392,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert [_warmup, continuation, later_full_request] = FakeUpstream.requests(upstream)
     assert later_full_request.websocket_connection_id != continuation.websocket_connection_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :continuation_generation_boundary
@@ -4522,6 +4607,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         FakeUpstream.websocket_text_frames([
           CodexPooler.JSON.encode!(%{"id" => response_id, "object" => "response"})
         ])
+    )
+  end
+
+  defp strict_websocket_turn(respond, expectations \\ []) do
+    FakeUpstream.expect_request(
+      [method: "WEBSOCKET", path: "/backend-api/codex/responses", json: [valid: true]]
+      |> Keyword.merge(expectations)
+      |> Keyword.put(:respond, respond)
+    )
+  end
+
+  defp strict_websocket_success(response_id, expectations \\ []) do
+    strict_websocket_turn(
+      FakeUpstream.websocket_text_frames([
+        CodexPooler.JSON.encode!(%{"id" => response_id, "object" => "response"})
+      ]),
+      expectations
     )
   end
 

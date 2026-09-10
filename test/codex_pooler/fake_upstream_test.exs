@@ -4,6 +4,11 @@ defmodule CodexPooler.FakeUpstreamTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.PoolerFixtures
 
+  # The client's own receive timeout is the scenario clock in the timeout
+  # cases: the fake holds the response until released, so the client gives up
+  # first regardless of load. Keep it short; the barrier waits stay separate.
+  @client_receive_timeout_ms 250
+
   describe "local fake upstream" do
     @tag :fake_upstream_pin
     test "legacy sequences remain permissive and repeat their final response" do
@@ -58,6 +63,82 @@ defmodule CodexPooler.FakeUpstreamTest do
       assert_raise ExUnit.AssertionError, ~r/unexpected_extra_request.*transport=http/s, fn ->
         FakeUpstream.verify!(upstream)
       end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "a strict scenario can reject the websocket handshake and keeps its accounting" do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              headers: [required: %{"authorization" => "Bearer handshake-token"}],
+              respond:
+                FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "invalid_api_key"}},
+                  status: 401
+                )
+            )
+          ])
+        )
+
+      upgrade_headers = [
+        {"upgrade", "websocket"},
+        {"connection", "upgrade"},
+        {"authorization", "Bearer handshake-token"}
+      ]
+
+      assert %{status: 401, body: %{"error" => %{"code" => "invalid_api_key"}}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+                 headers: upgrade_headers,
+                 retry: false
+               )
+
+      # The rejected handshake is neither a request nor a connection.
+      assert FakeUpstream.requests(upstream) == []
+      assert FakeUpstream.websocket_connection_count(upstream) == 0
+      assert :ok = FakeUpstream.verify!(upstream)
+
+      # A second handshake is an extra request against the finite scenario.
+      assert %{status: 500, body: %{"error" => %{"code" => "fake_upstream_scenario_failure"}}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+                 headers: upgrade_headers,
+                 retry: false
+               )
+
+      assert_raise ExUnit.AssertionError, ~r/unexpected_extra_request/, fn ->
+        FakeUpstream.verify!(upstream)
+      end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "a strict handshake rejection checks its expectations against the upgrade request" do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "GET",
+              headers: [required: %{"authorization" => "Bearer expected-token"}],
+              respond:
+                FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "invalid_api_key"}},
+                  status: 401
+                )
+            )
+          ])
+        )
+
+      assert %{status: 500, body: %{"error" => %{"code" => "fake_upstream_scenario_failure"}}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+                 headers: [
+                   {"upgrade", "websocket"},
+                   {"connection", "upgrade"},
+                   {"authorization", "Bearer other-token"}
+                 ],
+                 retry: false
+               )
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/expectation_mismatch field=headers\.authorization expected="Bearer expected-token" actual="Bearer other-token"/,
+                   fn -> FakeUpstream.verify!(upstream) end
     end
 
     @tag :fake_upstream_strict_contract
@@ -448,7 +529,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       assert {:error, error} =
                Req.get(FakeUpstream.url(upstream) <> "/slow",
-                 receive_timeout: 1_000,
+                 receive_timeout: @client_receive_timeout_ms,
                  retry: false
                )
 
@@ -555,7 +636,7 @@ defmodule CodexPooler.FakeUpstreamTest do
           send(parent, {:fake_upstream_stream_data, data})
           {:cont, {request, response}}
         end,
-        receive_timeout: 1_000,
+        receive_timeout: @client_receive_timeout_ms,
         retry: false
       )
     end)

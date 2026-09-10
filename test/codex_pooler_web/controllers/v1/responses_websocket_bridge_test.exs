@@ -139,6 +139,25 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
      %{"type" => "response.created", "response" => %{"id" => id, "status" => "in_progress"}}}
   end
 
+  # Native websocket frames for `{event_type, payload}` tuples: one text frame
+  # per event, no SSE framing.
+  defp websocket_frames(events) do
+    FakeUpstream.websocket_text_frames(
+      Enum.map(events, fn {_type, payload} -> CodexPooler.JSON.encode!(payload) end)
+    )
+  end
+
+  # One strict native bridge turn pinned to a physical upstream connection.
+  defp strict_bridge_turn(connection_ordinal, respond) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: connection_ordinal,
+      json: [valid: true, equals: %{"type" => "response.create"}],
+      respond: respond
+    )
+  end
+
   defp event_types(body) do
     Enum.map(event_payloads(body), & &1["type"])
   end
@@ -323,14 +342,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   test "three healthy sessioned turns reuse one websocket lifecycle and generation", %{
     conn: conn
   } do
+    # All three turns must ride the first physical websocket connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream([completed_event("resp_bridge_t1")]),
-           FakeUpstream.sse_stream([completed_event("resp_bridge_t2")]),
-           FakeUpstream.sse_stream([completed_event("resp_bridge_t3")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, websocket_frames([completed_event("resp_bridge_t1")])),
+          strict_bridge_turn(1, websocket_frames([completed_event("resp_bridge_t2")])),
+          strict_bridge_turn(1, websocket_frames([completed_event("resp_bridge_t3")]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -417,6 +436,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert length(requests) == 3
     assert Enum.all?(requests, &(&1.status == "succeeded"))
     assert Enum.all?(requests, &(&1.transport == "http_sse"))
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "bridged turns preserve the downstream SSE", %{conn: conn} do
@@ -1482,15 +1502,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   test "falls back to HTTP on the same attempt when the websocket bridge cannot start", %{
     conn: conn
   } do
+    # Strict: the handshake is rejected, then exactly one HTTP fallback turn.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "bad_gateway"}},
-             status: 502
-           ),
-           FakeUpstream.sse_stream([completed_event("resp_fallback_t1")])
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            respond:
+              FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "bad_gateway"}},
+                status: 502
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            json: [valid: true],
+            respond: FakeUpstream.sse_stream([completed_event("resp_fallback_t1")])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -1511,6 +1539,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert FakeUpstream.websocket_connection_ids(upstream) == []
     assert FakeUpstream.http_request_count(upstream) == 1
     assert length(FakeUpstream.requests(upstream)) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
     assert settlement_count(request) == 1
   end
 
@@ -1611,17 +1640,29 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
          "summary" => reasoning_frame_sentinel
        }}
 
+    # The failed turn reuses connection 1 and carries no continuation anchor;
+    # the recovery turn must open a fresh physical connection.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream([completed_event("resp_opencode_established")]),
-           FakeUpstream.websocket_sse_then_close([reasoning_event],
-             code: 1011,
-             reason: private_close_reason
-           ),
-           FakeUpstream.sse_stream([completed_event("resp_opencode_recovered")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, websocket_frames([completed_event("resp_opencode_established")])),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_sse_then_close([reasoning_event],
+                code: 1011,
+                reason: private_close_reason
+              )
+          ),
+          strict_bridge_turn(2, websocket_frames([completed_event("resp_opencode_recovered")]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -1778,6 +1819,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     refute persisted =~ reasoning_frame_sentinel
     refute persisted =~ "previous_response_not_found"
     refute persisted =~ "continuation_generation_guard"
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :owner_drained_terminal_state
@@ -1905,13 +1947,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
          "rate_limits" => %{"primary" => %{"used_percent" => 12.5}}
        }}
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close([rate_limits_event]),
-           FakeUpstream.sse_stream([completed_event("resp_previsible_t1")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, FakeUpstream.websocket_sse_then_close([rate_limits_event]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -1924,46 +1966,25 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert websocket_request.path == "/backend-api/codex/responses"
 
     assert_precontent_committed_failure(response, upstream, setup)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "a reused websocket close persists one scrubbed committed failure", %{
     conn: conn
   } do
     close_reason = "synthetic websocket close reason"
-    upgrade_reason = "synthetic reconnect upgrade reason"
 
-    failed_terminal =
-      {"response.failed",
-       %{
-         "type" => "response.failed",
-         "error" => %{
-           "type" => "server_error",
-           "code" => "internal_error",
-           "message" => "synthetic fallback failure"
-         },
-         "response" => %{
-           "id" => "resp_failed_reconnect_fallback",
-           "status" => "failed"
-         }
-       }}
-
+    # Strict: the initial turn and the closed second turn share connection 1
+    # and nothing else is sent. The legacy scenario also carried a reconnect
+    # rejection and an HTTP fallback failure that were never consumed; under a
+    # finite sequence a transparent reconnect or fallback now fails as an
+    # unexpected extra request instead of being absorbed.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream([completed_event("resp_reconnect_initial")]),
-           FakeUpstream.websocket_sse_then_close([], reason: close_reason),
-           FakeUpstream.websocket_upgrade_error(
-             %{
-               "error" => %{
-                 "code" => "reconnect_rejected",
-                 "message" => upgrade_reason
-               }
-             },
-             status: 503
-           ),
-           FakeUpstream.sse_stream([failed_terminal])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, websocket_frames([completed_event("resp_reconnect_initial")])),
+          strict_bridge_turn(1, FakeUpstream.websocket_sse_then_close([], reason: close_reason))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -1991,7 +2012,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert response.status == 200
     assert event_types(response.resp_body) == ["error"]
     refute response.resp_body =~ close_reason
-    refute response.resp_body =~ upgrade_reason
     refute response.resp_body =~ "synthetic fallback failure"
 
     request = latest_request(setup.pool)
@@ -2014,9 +2034,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
     refute inspect(request) =~ close_reason
-    refute inspect(request) =~ upgrade_reason
     refute inspect(attempt) =~ close_reason
-    refute inspect(attempt) =~ upgrade_reason
     assert attempt.response_metadata["upstream_transport"] == "websocket"
     assert Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
 
@@ -2024,19 +2042,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert [^connection_id] = FakeUpstream.websocket_connection_ids(upstream)
     assert length(FakeUpstream.requests(upstream)) == 2
     assert FakeUpstream.http_request_count(upstream) == 0
+    assert :ok = FakeUpstream.verify!(upstream)
     assert settlement_count(request) == 1
   end
 
   test "a websocket close before any frame stays on one submission", %{
     conn: conn
   } do
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close([]),
-           FakeUpstream.sse_stream([completed_event("resp_complete_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, FakeUpstream.websocket_sse_then_close([]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2048,6 +2067,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert websocket_request.method == "WEBSOCKET"
 
     assert_precontent_committed_failure(response, upstream, setup)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :codex_buffering
@@ -2207,13 +2227,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         "rate_limits" => %{"primary" => %{"used_percent" => 12.5}}
       })
 
+    # Exactly one websocket submission is permitted; an HTTP replay after the
+    # preflight timeout would surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_text_frames([internal_event]),
-           FakeUpstream.sse_stream([completed_event("resp_timeout_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, FakeUpstream.websocket_text_frames([internal_event]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2241,6 +2261,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     turn = Repo.one!(from t in CodexTurn, where: t.request_id == ^request.id)
     assert {:ok, owner} = WebsocketOwnerSession.lookup(turn.codex_session_id)
     assert %{active_turn: nil, downstream: nil} = await_owner_bridge_idle(owner)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "an accepted websocket request that stays silent past bridge preflight is never replayed over HTTP",
@@ -2249,13 +2270,21 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     set_upstream_receive_timeout!(1_000)
     release_ref = make_ref()
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request. The idle-timeout mode has no
+    # native websocket flavour, so the entry cannot declare `method:
+    # "WEBSOCKET"`; the connection ordinal and the recorded request pin the
+    # transport instead.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_idle_timeout(notify: self(), release_ref: release_ref),
-           FakeUpstream.sse_stream([completed_event("resp_silent_http_replay")])
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: FakeUpstream.websocket_idle_timeout(notify: self(), release_ref: release_ref)
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2286,6 +2315,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     turn = Repo.one!(from t in CodexTurn, where: t.request_id == ^request.id)
     assert {:ok, owner} = WebsocketOwnerSession.lookup(turn.codex_session_id)
     assert %{active_turn: nil, downstream: nil} = await_owner_bridge_idle(owner)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "a failure-coded incomplete websocket terminal is preserved without HTTP replay", %{
@@ -2302,13 +2332,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
          }
        }}
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream([failed_incomplete]),
-           FakeUpstream.sse_stream([completed_event("resp_incomplete_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, websocket_frames([failed_incomplete]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2331,6 +2361,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert websocket_request.method == "WEBSOCKET"
     assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "a compact completed-only turn bridges with the synthesized visible prefix", %{conn: conn} do
@@ -2380,16 +2411,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   test "a downstream disconnect during a bridged turn finalizes as client_disconnected and frees the owner",
        %{conn: _conn} do
+    # The follow-up turn must bridge on a fresh physical connection after the
+    # abandoned socket is closed.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream([
-             created_event("resp_disconnect_t1"),
-             completed_event("resp_disconnect_t1")
-           ]),
-           FakeUpstream.sse_stream([completed_event("resp_disconnect_t2")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(
+            1,
+            websocket_frames([
+              created_event("resp_disconnect_t1"),
+              completed_event("resp_disconnect_t1")
+            ])
+          ),
+          strict_bridge_turn(2, websocket_frames([completed_event("resp_disconnect_t2")]))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2470,6 +2505,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
            } = upstream_connection(second_attempt)
 
     assert settlement_count(second_request) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   # ── Pre-content retry family (bridged-pre-content-retry plan) ──
@@ -2527,13 +2563,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       codex_marker_event()
     ]
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close(events),
-           FakeUpstream.sse_stream([completed_event("resp_precontent_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, FakeUpstream.websocket_sse_then_close(events))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2542,6 +2578,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     response = post_stream(conn, setup, session, stream_payload(setup, "precontent close turn"))
 
     assert_precontent_committed_failure(response, upstream, setup)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "multi-item envelopes without content stay on one submission", %{conn: conn} do
@@ -2552,13 +2589,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       content_part_added_event("resp_multi_item_ws")
     ]
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close(events),
-           FakeUpstream.sse_stream([completed_event("resp_multi_item_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, FakeUpstream.websocket_sse_then_close(events))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2567,6 +2604,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     response = post_stream(conn, setup, session, stream_payload(setup, "multi item turn"))
 
     assert_precontent_committed_failure(response, upstream, setup)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "a reasoning summary delta commits the bridge so a later close stays fatal", %{conn: conn} do
@@ -2583,13 +2621,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
        }}
     ]
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close(events),
-           FakeUpstream.sse_stream([completed_event("resp_reasoning_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, FakeUpstream.websocket_sse_then_close(events))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2607,6 +2645,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.transport == "websocket"
     assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "an unknown event type commits the bridge so a later close stays fatal", %{conn: conn} do
@@ -2616,13 +2655,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
        %{"type" => "response.entirely_new_event", "response_id" => "resp_unknown_commit"}}
     ]
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close(events),
-           FakeUpstream.sse_stream([completed_event("resp_unknown_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(1, FakeUpstream.websocket_sse_then_close(events))
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2639,18 +2678,22 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.transport == "websocket"
     assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "pre-content buffer overflow commits so a later close stays fatal", %{conn: conn} do
     markers = List.duplicate(codex_marker_event(), 65)
 
+    # Exactly one websocket submission is permitted; an HTTP replay would
+    # surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_sse_then_close([created_event("resp_overflow_ws") | markers]),
-           FakeUpstream.sse_stream([completed_event("resp_overflow_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(
+            1,
+            FakeUpstream.websocket_sse_then_close([created_event("resp_overflow_ws") | markers])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2667,6 +2710,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.transport == "websocket"
     assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   @tag :rollout_drain_precontent_fallback
@@ -2680,16 +2724,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   defp assert_precontent_drain_fails_closed(conn) do
     release_ref = make_ref()
 
+    # Exactly one websocket submission is permitted; an HTTP resubmission
+    # after the drain cut would surface as an unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.websocket_close_without_terminal_barrier(
-             notify: self(),
-             release_ref: release_ref
-           ),
-           FakeUpstream.sse_stream([completed_event("resp_drain_precontent_fallback")])
-         ]}
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(
+            1,
+            FakeUpstream.websocket_close_without_terminal_barrier(
+              notify: self(),
+              release_ref: release_ref
+            )
+          )
+        ])
       )
 
     setup = gateway_setup(upstream)
@@ -2758,6 +2805,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              ),
              :count
            ) == 1
+
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   defp oversized_completed_frame(response_id, sentinel, include_usage?) do

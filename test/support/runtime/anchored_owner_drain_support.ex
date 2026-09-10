@@ -33,21 +33,37 @@ defmodule CodexPoolerWeb.Runtime.AnchoredOwnerDrainSupport do
 
     release_ref = make_ref()
 
+    # Every entry is consumed exactly once: the completed anchor turns, then
+    # the barrier-held continuation. Callers supply SSE-shaped completed
+    # responses and the held terminal has no native websocket flavour, so the
+    # entries assert the native discriminator rather than `method:
+    # "WEBSOCKET"`; consumers pin the transport on the recorded requests.
     upstream =
       start_upstream(
-        {:sequence,
-         Keyword.get(opts, :completed_responses, [completed_tool_response()]) ++
-           [
-             FakeUpstream.delayed_terminal_sse_stream(
-               [%{"type" => "response.output_text.delta", "delta" => "synthetic"}],
-               %{
-                 "type" => "response.completed",
-                 "response" => %{"id" => "resp_synthetic_continuation", "status" => "completed"}
-               },
-               notify: self(),
-               release_ref: release_ref
-             )
-           ]}
+        FakeUpstream.strict_sequence(
+          Enum.map(
+            Keyword.get(opts, :completed_responses, [completed_tool_response()]) ++
+              [
+                FakeUpstream.delayed_terminal_sse_stream(
+                  [%{"type" => "response.output_text.delta", "delta" => "synthetic"}],
+                  %{
+                    "type" => "response.completed",
+                    "response" => %{
+                      "id" => "resp_synthetic_continuation",
+                      "status" => "completed"
+                    }
+                  },
+                  notify: self(),
+                  release_ref: release_ref
+                )
+              ],
+            &FakeUpstream.expect_request(
+              path: "/backend-api/codex/responses",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond: &1
+            )
+          )
+        )
       )
 
     setup = gateway_setup(upstream)

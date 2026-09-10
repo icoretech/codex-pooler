@@ -398,12 +398,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
         terminal_frame("resp_connection_#{kind}")
       end)
 
+    # Strict finite scenario: the fresh and reused turns share the first
+    # physical connection, and the invalidated third turn must reconnect.
     upstream =
       start_fake_upstream(
-        {:sequence,
-         Enum.map(terminals, fn terminal ->
-           FakeUpstream.websocket_text_frames([terminal])
-         end)}
+        FakeUpstream.strict_sequence(
+          Enum.zip_with(terminals, [1, 1, 2], fn terminal, connection_ordinal ->
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: connection_ordinal,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond: FakeUpstream.websocket_text_frames([terminal])
+            )
+          end)
+        )
       )
 
     identity = active_upstream_identity_fixture()
@@ -453,6 +461,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     assert reconnected.reused == false
     assert reconnected.reconnected == true
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "v1 stale epoch is rejected before upstream submission", %{auth: auth} do

@@ -340,15 +340,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   test "connection-bound compact suppresses websocket auth refresh and reconnect" do
     anchor = "resp_connection_bound_auth_anchor"
 
+    # Strict finite scenario: the anchor and the connection-bound compact both
+    # ride the first physical connection; there is no /oauth/token entry and no
+    # retry entry, so a provider refresh or a reconnect fails the fixture as an
+    # unexpected extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           completed_websocket_response(anchor),
-           FakeUpstream.sse_stream(
-             [
-               {"response.failed",
-                %{
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: completed_websocket_frames(anchor)
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "previous_response_id" => anchor}
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
                   "type" => "response.failed",
                   "response" => %{
                     "status" => "failed",
@@ -358,13 +372,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
                       "message" => @raw_sentinel
                     }
                   }
-                }}
-             ],
-             done: false
-           ),
-           FakeUpstream.json_response(%{"access_token" => "refresh-must-not-run"}, 200),
-           successful_compaction_response("auth_retry_must_not_run")
-         ]}
+                })
+              ])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream, compact?: true)
@@ -442,22 +453,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     refute_received {:unexpected_native_frame, _frame}
     refute inspect({compact_request, compact_attempt}) =~ @raw_sentinel
     refute inspect({compact_request, compact_attempt}) =~ "synthetic-compact-refresh-token"
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "connection-bound compact suppresses pre-visible close reconnect" do
     anchor = "resp_connection_bound_close_anchor"
 
+    # Strict finite scenario: the anchor and the connection-bound compact both
+    # ride the first physical connection, and the compact's pre-visible close
+    # has no retry entry, so a reconnect fails the fixture as an unexpected
+    # extra request.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           completed_websocket_response(anchor),
-           FakeUpstream.websocket_sse_then_close([]),
-           FakeUpstream.json_response(%{
-             "id" => "resp_close_retry_must_not_run",
-             "object" => "response"
-           })
-         ]}
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: completed_websocket_frames(anchor)
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "previous_response_id" => anchor}
+            ],
+            respond: FakeUpstream.websocket_sse_then_close([])
+          )
+        ])
       )
 
     setup = gateway_setup(upstream, compact?: true)
@@ -524,6 +548,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
            ) == 1
 
     assert_health(setup.assignment, compact_request, "upstream_stream_error", :failed)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "full-history native compact retry after an incremental stream close does not become a duplicate turn" do
@@ -1051,19 +1076,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   defp maybe_put_previous_response_id(payload, anchor),
     do: Map.put(payload, "previous_response_id", anchor)
 
-  defp completed_websocket_response(response_id) do
-    FakeUpstream.sse_stream(
-      [
-        {"response.completed",
-         %{
-           "type" => "response.completed",
-           "response" => %{"id" => response_id, "status" => "completed", "output" => []}
-         }}
-      ],
-      done: false
-    )
-  end
-
   # Native websocket frames for strict expectations, which reject SSE-derived
   # websocket shortcuts.
   defp completed_websocket_frames(response_id) do
@@ -1089,23 +1101,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
         "response" => %{"id" => "resp_#{suffix}", "status" => "completed"}
       })
     ])
-  end
-
-  defp successful_compaction_response(suffix) do
-    FakeUpstream.sse_stream(
-      [
-        native_compaction_item_event(%{
-          "type" => "compaction",
-          "encrypted_content" => "synthetic-native-encrypted-#{suffix}"
-        }),
-        {"response.completed",
-         %{
-           "type" => "response.completed",
-           "response" => %{"id" => "resp_#{suffix}", "status" => "completed"}
-         }}
-      ],
-      done: false
-    )
   end
 
   defp native_compaction_item_event(item \\ nil)
