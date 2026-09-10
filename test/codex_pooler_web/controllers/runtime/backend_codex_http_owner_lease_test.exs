@@ -263,7 +263,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     register_unboxed_pool_cleanup!(setup)
     session_key = unique_session_key("takeover")
     payload = Map.put(http_payload(setup), "stream", true)
-    task = controller_request(conn, setup, session_key, payload, self(), ttl_seconds: 30)
+
+    # The old heartbeat only notices the takeover on its next renewal, which is
+    # scheduled at ttl / 3 (staggered); a 3 s ttl makes that ~1 s instead of
+    # ~10 s while keeping the lease comfortably live across the gate.
+    task = controller_request(conn, setup, session_key, payload, self(), ttl_seconds: 3)
 
     assert_receive {:fake_upstream_gate, :before_terminal, upstream_pid, ^release_ref},
                    @detection_budget

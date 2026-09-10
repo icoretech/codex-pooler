@@ -865,7 +865,9 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
 
   defp evidence(label, data) do
     if System.get_env("PR366_T3_EVIDENCE_MODE") in ["RED", "GREEN"] do
-      IO.puts("PR366_T3_EVIDENCE " <> Jason.encode!(%{label: label, data: data}))
+      CodexPooler.TestDiagnostics.puts(
+        "PR366_T3_EVIDENCE " <> Jason.encode!(%{label: label, data: data})
+      )
     end
   end
 

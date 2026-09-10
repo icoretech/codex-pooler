@@ -790,6 +790,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert elapsed_ms < 2_000
   end
 
+  # The owner task times out at floor + post-deadline budget + finish margin
+  # (10 + 100 + 500 ms here); the property is the waiter cleanup after that
+  # kill, so a small explicit budget replaces the harness default of 1_000 ms.
+  @task_timeout_owner_budget_ms 100
+  @task_timeout_min_elapsed_ms 600
+
   test "task timeout leaves no hung deadline waiter process" do
     harness = start_rollout_drain_harness(self())
     owner_key = owner_key()
@@ -803,7 +809,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
           name: harness.name,
           timeout_ms: 25,
           deadline_margin_ms: 20,
-          deadline_floor_ms: 10
+          deadline_floor_ms: 10,
+          owner_post_deadline_call_budget_ms: @task_timeout_owner_budget_ms
         ] ++ deadline_options(harness.deadline)
       )
 
@@ -822,9 +829,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              already_draining?: false
            } = summary
 
-    assert summary_elapsed_ms >= 1_000
+    assert summary_elapsed_ms >= @task_timeout_min_elapsed_ms
     assert summary_elapsed_ms < 2_000
-    assert elapsed_ms >= 1_000
+    assert elapsed_ms >= @task_timeout_min_elapsed_ms
     assert elapsed_ms < 2_000
     assert VirtualDeadline.waiter_pids(harness.deadline) == []
   end

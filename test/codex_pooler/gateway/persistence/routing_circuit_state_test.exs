@@ -1254,11 +1254,17 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     end
   end
 
-  defp finish_task(task) do
-    case Task.yield(task, 5_000) do
-      {:ok, _result} -> :ok
-      {:exit, _reason} -> :ok
-      nil -> Task.shutdown(task, :brutal_kill)
+  # A task that was already awaited has no reply left to yield; waiting on it
+  # would burn the whole timeout for nothing (this helper runs in `after`).
+  defp finish_task(%Task{pid: pid} = task) do
+    if is_pid(pid) and Process.alive?(pid) do
+      case Task.yield(task, 5_000) do
+        {:ok, _result} -> :ok
+        {:exit, _reason} -> :ok
+        nil -> Task.shutdown(task, :brutal_kill)
+      end
+    else
+      :ok
     end
   end
 

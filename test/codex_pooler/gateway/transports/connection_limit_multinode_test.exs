@@ -40,7 +40,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
       assert :erpc.call(proxy_node, Node, :self, []) == proxy_node
       assert owner_node in :erpc.call(proxy_node, Node, :list, [:connected])
 
-      IO.puts(
+      CodexPooler.TestDiagnostics.puts(
         "T7_NODE_TOPOLOGY owner=#{owner_node} proxy=#{proxy_node} coordinator=#{Node.self()} " <>
           "owner_peers=#{inspect(:erpc.call(owner_node, Node, :list, [:connected]))} " <>
           "proxy_peers=#{inspect(:erpc.call(proxy_node, Node, :list, [:connected]))}"
@@ -78,7 +78,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
       assert before_cleanup.ledger == after_cleanup.ledger
       assert_live_binding(after_cleanup, current, proxy_node)
 
-      IO.puts(
+      CodexPooler.TestDiagnostics.puts(
         "T7_STALE_CLEANUP owner_task=#{inspect(old_state.active_turn.task_pid)} " <>
           "replacement_owner=#{inspect(current.owner)} request_unchanged=true attempt_unchanged=true " <>
           "turn_unchanged=true lease_unchanged=true ledger_unchanged=true"

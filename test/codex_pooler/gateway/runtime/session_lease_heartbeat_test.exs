@@ -21,7 +21,10 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
   @detection_timeout 15_000
   @handoff_ttl_ms 1_000
   @handoff_early_observation_ms 500
-  @handoff_post_stop_observation_ms 750
+  # The heartbeat has already exited (:DOWN) when this window starts, so it
+  # only guards against a renewal write racing the exit; it is not a renewal
+  # interval and does not need to span one.
+  @handoff_post_stop_observation_ms 100
   @handoff_max_elapsed_ms 5_000
 
   test "run renews synchronously before a deferred callback and advances both PostgreSQL deadlines" do

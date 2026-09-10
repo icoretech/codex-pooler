@@ -163,7 +163,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
           RequestOptions.build(
             %{
               accepted_turn_state: "native-sse-owner-#{System.unique_integer([:positive])}",
-              bridge_owner_lease_ttl_seconds: 3
+              bridge_owner_lease_ttl_seconds: 3,
+              session_lease_heartbeat_test_observer: parent
             },
             @endpoint_path,
             payload
@@ -184,6 +185,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
 
     assert_receive {:native_sse_stream_ready, task_pid}, @detection_timeout_ms
     assert task.pid == task_pid
+    assert_receive {:session_lease_heartbeat, :started, heartbeat}, @detection_timeout_ms
+    heartbeat_monitor = Process.monitor(heartbeat)
 
     session = Repo.one!(from(session in CodexSession, where: session.pool_id == ^fixture.pool.id))
     lease = active_lease!(session.id)
@@ -203,7 +206,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
     stopped_session = Repo.get!(CodexSession, session.id)
     stopped_lease = active_lease!(session.id)
     assert stopped_session.owner_lease_expires_at == stopped_lease.expires_at
-    assert_owner_heartbeat_stops!(session.id, stopped_session.owner_lease_expires_at)
+
+    assert_owner_heartbeat_stops!(
+      session.id,
+      stopped_session.owner_lease_expires_at,
+      heartbeat,
+      heartbeat_monitor
+    )
   end
 
   test "returned but uninvoked sessioned HTTP stream stops its service heartbeat at handoff ttl" do
@@ -413,9 +422,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
     end
   end
 
-  defp assert_owner_heartbeat_stops!(session_id, stopped_expiry) do
-    Process.send_after(self(), :observe_stopped_owner_heartbeat, 1_200)
-    assert_receive :observe_stopped_owner_heartbeat, @detection_timeout_ms
+  # The heartbeat process is the only renewer, so its observed stop and exit
+  # prove no further renewal can move the deadline; no renewal-interval sleep.
+  defp assert_owner_heartbeat_stops!(session_id, stopped_expiry, heartbeat, monitor) do
+    assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, @detection_timeout_ms
+    assert_receive {:DOWN, ^monitor, :process, ^heartbeat, :normal}, @detection_timeout_ms
+    refute Process.alive?(heartbeat)
 
     session = Repo.get!(CodexSession, session_id)
     lease = active_lease!(session_id)

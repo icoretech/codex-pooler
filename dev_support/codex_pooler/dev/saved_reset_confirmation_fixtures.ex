@@ -99,15 +99,21 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
         :ssl_opts
       ])
       |> Keyword.put(:parameters, application_name: "saved_reset_confirmation_fixture_lock")
+      # One-shot inspector: an unreachable database must fail in a fraction of
+      # a second instead of waiting out the pool's default queue budget.
+      |> Keyword.merge(queue_target: 100, queue_interval: 200)
 
     case Postgrex.start_link(config) do
       {:ok, inspector} ->
+        lock_result =
+          Postgrex.query(
+            inspector,
+            "SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))",
+            [@lock_namespace, Keyword.fetch!(repo_config, :database)]
+          )
+
         try do
-          case Postgrex.query(
-                 inspector,
-                 "SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))",
-                 [@lock_namespace, Keyword.fetch!(repo_config, :database)]
-               ) do
+          case lock_result do
             {:ok, %{rows: [[true]]}} ->
               {:ok, function.()}
 
@@ -118,8 +124,13 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
               {:error, "saved-reset confirmation fixture lock could not connect"}
           end
         after
+          # Only a held lock needs releasing; a failed lock query means no
+          # connection, and a second query would just wait out the budget again.
           if Process.alive?(inspector) do
-            _ = Postgrex.query(inspector, "SELECT pg_advisory_unlock_all()", [])
+            if match?({:ok, %{rows: [[true]]}}, lock_result) do
+              _ = Postgrex.query(inspector, "SELECT pg_advisory_unlock_all()", [])
+            end
+
             GenServer.stop(inspector)
           end
         end
@@ -426,7 +437,10 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
 
     File.write!(
       temporary,
-      CodexPooler.JSON.encode!(%{"email" => browser_auth.email, "password" => browser_auth.password})
+      CodexPooler.JSON.encode!(%{
+        "email" => browser_auth.email,
+        "password" => browser_auth.password
+      })
     )
 
     File.chmod!(temporary, 0o600)

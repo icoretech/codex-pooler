@@ -411,7 +411,7 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
 
   defp report_lock_evidence(lock_id, caller, id, signature) do
     if System.get_env("CODEX_POOLER_LOCKING_CONTRACT_REPORT") == "1" do
-      IO.puts(
+      CodexPooler.TestDiagnostics.puts(
         "LOCKING_CONTRACT " <>
           CodexPooler.JSON.encode!(%{
             lock_id: lock_id,

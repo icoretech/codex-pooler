@@ -55,7 +55,9 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
              locked_active_secret_count: 0
            }
 
-    IO.puts("GREEN empty queries=0 resources=0 loads=0 locks=0 result=ok_empty")
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN empty queries=0 resources=0 loads=0 locks=0 result=ok_empty"
+    )
   end
 
   test "exact duplicate entries preflight once and the final input is authoritative" do
@@ -114,7 +116,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     assert Repo.aggregate(UpstreamIdentity, :count) == 1
     assert Repo.aggregate(PoolUpstreamAssignment, :count) == 1
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN duplicate order=0,1 targets=new0,existing0 result=created,existing last_authoritative=true"
     )
   end
@@ -137,7 +139,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
 
     assert Enum.map(results, & &1.status) == [:created, :created]
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN distinct order=0,1 targets=new0,new1 result=created,created dry_real_parity=true"
     )
   end
@@ -172,7 +174,10 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
 
     assert result.identity.id == existing.identity.id
     assert result.identity.workspace_id == attrs.workspace_id
-    IO.puts("GREEN legacy_workspace order=0 target=existing result=existing")
+
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN legacy_workspace order=0 target=existing result=existing"
+    )
   end
 
   test "subjectless identity adoption resolves to the witnessed identity" do
@@ -207,7 +212,10 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
 
     assert result.identity.id == existing.identity.id
     assert result.identity.chatgpt_user_id == attrs.chatgpt_user_id
-    IO.puts("GREEN subjectless_subject order=0 target=existing result=existing")
+
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN subjectless_subject order=0 target=existing result=existing"
+    )
   end
 
   test "a stale later entry rejects the whole batch before mutation" do
@@ -236,7 +244,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     assert Upstreams.get_upstream_identity_by_chatgpt_account(first_attrs.chatgpt_account_id) ==
              nil
 
-    IO.puts("GREEN stale_later error=stale_import deltas=zero")
+    CodexPooler.TestDiagnostics.puts("GREEN stale_later error=stale_import deltas=zero")
   end
 
   test "an incompatible projected second entry rejects before the first mutation" do
@@ -268,7 +276,10 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
 
     assert counts() == before
     refute_received {Events, _event}
-    IO.puts("GREEN incompatible_overlap error=identity_conflict deltas=zero")
+
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN incompatible_overlap error=identity_conflict deltas=zero"
+    )
   end
 
   test "diagnostics include the account closure reached through an email-only witness" do
@@ -304,7 +315,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     assert diagnostics.locked_assignment_count == 1
     assert diagnostics.locked_active_secret_count == 1
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN email_account_closure resources=#{Enum.join(diagnostics.advisory_resources, ",")} sorted=true domains=1,1 loads=3,3 identities=1 assignments=1 active_secrets=1"
     )
   end
@@ -336,7 +347,10 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
              )
 
     assert counts() == before
-    IO.puts("GREEN unexpected_closure error=stale_import missing_resource=true deltas=zero")
+
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN unexpected_closure error=stale_import missing_resource=true deltas=zero"
+    )
   end
 
   test "email fallback rejects a concurrently inserted account resource outside its locked closure" do
@@ -446,7 +460,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     assert is_binary(sibling_id)
     refute_received {Events, _event}
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN closure_race holder_pid=#{holder_pid} planner_pid=#{planner_pid} blocking=#{holder_pid} error=stale_import external_identity_delta=1 planner_other_deltas=zero pubsub=0"
     )
 
@@ -478,7 +492,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     assert restored_sentinel.chatgpt_account_id == sentinel.chatgpt_account_id
     assert restored_sentinel.metadata == sentinel.metadata
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN closure_race_cleanup restoration_observed=true external_mutation_removed_or_reverted=true unrelated_sentinel_survived=true restored_identity_delta=0 restored_other_deltas=zero"
     )
   end
@@ -518,7 +532,10 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
 
     assert counts() == before
     refute_received {Events, _event}
-    IO.puts("GREEN malformed_epoch error=invalid_credential_epoch deltas=zero")
+
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN malformed_epoch error=invalid_credential_epoch deltas=zero"
+    )
   end
 
   test "reverse-input complete batch plans serialize real backends without deadlock" do
@@ -537,14 +554,14 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
 
       assert_waiting_on!(waiter_pid, holder_pid)
 
-      IO.puts(
+      CodexPooler.TestDiagnostics.puts(
         "GREEN reverse_batch holder_pid=#{holder_pid} waiter_pid=#{waiter_pid} blocking=#{holder_pid}"
       )
 
       send(holder.pid, {barrier, :release})
       assert {:ok, :holder} = Task.await(holder, @detection_timeout_ms)
       assert {:ok, :waiter} = Task.await(waiter, @detection_timeout_ms)
-      IO.puts("GREEN reverse_batch terminal=ok,ok sqlstate_40P01=0")
+      CodexPooler.TestDiagnostics.puts("GREEN reverse_batch terminal=ok,ok sqlstate_40P01=0")
     after
       cleanup_committed_batch_fixture!(fixture)
     end

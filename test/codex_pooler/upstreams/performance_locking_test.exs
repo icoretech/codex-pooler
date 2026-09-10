@@ -172,7 +172,7 @@ defmodule CodexPooler.Upstreams.PerformanceLockingTest do
     assert {:ok, ^refresh_pid} = Task.await(refresh, @detection_timeout_ms)
     assert {:ok, ^lifecycle_pid} = Task.await(lifecycle, @detection_timeout_ms)
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN mixed_writers holder=#{holder_pid} refresh=#{refresh_pid} lifecycle=#{lifecycle_pid} refresh_blocking=#{inspect(refresh_blocking)} lifecycle_blocking=#{inspect(lifecycle_blocking)} terminal=ok,ok,ok sqlstate_40P01=0"
     )
   end

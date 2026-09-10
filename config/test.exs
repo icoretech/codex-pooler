@@ -91,6 +91,10 @@ config :codex_pooler, CodexPoolerWeb.Endpoint,
 
 config :codex_pooler, CodexPooler.Mailer, adapter: Swoosh.Adapters.Test
 config :codex_pooler, dev_features_build_enabled: true
+
+# Tests must never reach the real provider: an identity without an explicit
+# base URL points at a closed local port and fails with connection refused.
+config :codex_pooler, codex_upstream_base_url: "http://127.0.0.1:9"
 config :codex_pooler, dev_features_enabled: false
 config :codex_pooler, dev_seeds_enabled: true
 
@@ -102,6 +106,11 @@ config :codex_pooler, impeccable_live_dir: "tmp/test-no-impeccable-live"
 config :swoosh, :api_client, false
 
 config :logger, level: :warning
+
+# Dev tracing restorer: keep the three bounded restore attempts but not a
+# second each (see CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer).
+config :codex_pooler, CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer,
+  restore_timeout_ms: 50
 
 config :phoenix, :plug_init_mode, :runtime
 

@@ -24,6 +24,13 @@ defmodule CodexPooler.Upstreams.EndpointMetadataTest do
 
       assert EndpointMetadata.base_url(identity(%{}), assignment(%{}), nil) == nil
 
+      # Without an explicit default the configured provider base URL applies;
+      # the test environment points it at a closed local port.
+      assert EndpointMetadata.default_base_url() == "http://127.0.0.1:9"
+
+      assert EndpointMetadata.base_url(identity(%{}), assignment(%{})) ==
+               EndpointMetadata.default_base_url()
+
       assert EndpointMetadata.endpoint_url(
                identity(%{}),
                assignment(%{}),

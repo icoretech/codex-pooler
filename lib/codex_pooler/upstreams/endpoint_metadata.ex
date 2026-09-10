@@ -3,21 +3,44 @@ defmodule CodexPooler.Upstreams.EndpointMetadata do
 
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
-  @default_base_url "https://chatgpt.com"
+  @production_default_base_url "https://chatgpt.com"
   @base_url_keys ~w(base_url api_base_url upstream_base_url)
   @usage_base_url_keys ~w(usage_base_url codex_usage_base_url)
 
-  @spec base_url(UpstreamIdentity.t(), PoolUpstreamAssignment.t(), String.t()) ::
-          String.t() | nil
-  def base_url(identity, assignment, default \\ @default_base_url) do
-    metadata_value(assignment.metadata, @base_url_keys) ||
-      metadata_value(identity.metadata, @base_url_keys) ||
-      default
+  @doc """
+  The provider base URL used when neither the assignment nor the identity
+  carries one. Production keeps the ChatGPT backend; the test environment
+  points it at a closed local port so a test that forgets its fake upstream
+  fails in milliseconds instead of reaching the real provider.
+  """
+  @spec default_base_url() :: String.t()
+  def default_base_url do
+    Application.get_env(:codex_pooler, :codex_upstream_base_url, @production_default_base_url)
   end
 
-  @spec endpoint_url(UpstreamIdentity.t(), PoolUpstreamAssignment.t(), String.t(), String.t()) ::
+  @type default :: String.t() | nil | :configured
+
+  # `:configured` selects `default_base_url/0`; an explicit `nil` opts out of
+  # any default so callers can detect a missing base URL.
+  @spec base_url(UpstreamIdentity.t(), PoolUpstreamAssignment.t(), default()) ::
+          String.t() | nil
+  def base_url(identity, assignment, default \\ :configured) do
+    metadata_value(assignment.metadata, @base_url_keys) ||
+      metadata_value(identity.metadata, @base_url_keys) ||
+      resolve_default(default)
+  end
+
+  defp resolve_default(:configured), do: default_base_url()
+  defp resolve_default(default), do: default
+
+  @spec endpoint_url(
+          UpstreamIdentity.t(),
+          PoolUpstreamAssignment.t(),
+          String.t(),
+          default()
+        ) ::
           {:ok, String.t()} | {:error, :invalid_upstream_base_url}
-  def endpoint_url(identity, assignment, endpoint, default \\ @default_base_url) do
+  def endpoint_url(identity, assignment, endpoint, default \\ :configured) do
     case base_url(identity, assignment, default) do
       base when is_binary(base) and base != "" ->
         base = normalize_base_url(base)
@@ -36,9 +59,9 @@ defmodule CodexPooler.Upstreams.EndpointMetadata do
     end
   end
 
-  @spec usage_base_url(UpstreamIdentity.t(), PoolUpstreamAssignment.t(), String.t()) ::
+  @spec usage_base_url(UpstreamIdentity.t(), PoolUpstreamAssignment.t(), default()) ::
           String.t() | nil
-  def usage_base_url(identity, assignment, default \\ @default_base_url) do
+  def usage_base_url(identity, assignment, default \\ :configured) do
     metadata_value(assignment.metadata, @usage_base_url_keys) ||
       metadata_value(identity.metadata, @usage_base_url_keys) ||
       base_url(identity, assignment, default)

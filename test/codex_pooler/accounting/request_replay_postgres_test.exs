@@ -242,10 +242,14 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
           now = DateTime.utc_now()
           {:ok, digest} = RequestReplayEntitlement.owner_lease_digest(fixture.owner_lease_token)
 
+          # The entitlement must outlive consume's path to the session lock and
+          # expire only while it waits there; `await_replay_blocked!/4` fails
+          # loudly if consume never blocks, so a one-second remainder is the
+          # scenario budget rather than a detection budget.
           entitlement =
             insert_entitlement!(fixture, %{
-              armed_at: DateTime.add(now, -28, :second),
-              expires_at: DateTime.add(now, 2, :second),
+              armed_at: DateTime.add(now, -29, :second),
+              expires_at: DateTime.add(now, 1, :second),
               owner_lease_digest: digest,
               owner_lease_key_version: AppSecretCrypto.key_version()
             })

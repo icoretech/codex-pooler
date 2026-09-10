@@ -256,8 +256,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     refute_receive {^ref, :done}, 100
   end
 
+  # An owner error that lands pre-content is reported only after the relay has
+  # given the in-flight submit its settle window (`settle_task/1`), so these
+  # fail-closed cases pass a short window instead of burning the 5 s default.
   test "internal-only frames followed by an owner error fail closed" do
-    stream = start_armed(blocking_submit())
+    stream = start_armed(blocking_submit(), settle_timeout_ms: 50)
     ref = stream.ref
 
     owner_frame(stream, {:data, ~s({"type":"codex.rate_limits","rate_limits":{}})})
@@ -461,7 +464,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   test "an owner error after buffered envelopes fails closed pre-content" do
-    stream = start_armed(registered_submit(self()))
+    stream = start_armed(registered_submit(self()), settle_timeout_ms: 50)
     ref = stream.ref
 
     assert_receive {:submit_task, task_pid}, @detection_timeout_ms
@@ -549,7 +552,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
 
   test "an owner error before data fails closed with the owner error reason" do
     attach_fallback_handler(self())
-    stream = start_armed(blocking_submit())
+    stream = start_armed(blocking_submit(), settle_timeout_ms: 50)
     ref = stream.ref
 
     owner_frame(stream, {:error, :owner_busy, %{"status" => 409}})
@@ -1019,9 +1022,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   test "precommit overflow after submit success retains the successful settlement" do
     # The submit settles before any frame, so the relay is already counting
     # down its pre-content fallback while the test is still delivering frames.
-    # The window has to outlast that delivery and still expire inside the
-    # detection budget, since the closing :done is the settle timeout firing.
-    stream = start_armed(registered_submit(self()), settle_timeout_ms: 2_000)
+    # The window has to outlast that delivery (65 local sends, milliseconds)
+    # and still expire inside the detection budget, since the closing :done is
+    # the settle timeout firing; it is a scenario budget, not a detection one.
+    stream = start_armed(registered_submit(self()), settle_timeout_ms: 500)
     ref = stream.ref
     relay = stream.relay
 

@@ -8,7 +8,6 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Secrets
 
-  @default_codex_upstream_base_url "https://chatgpt.com"
   @secret_kind "access_token"
 
   @type catalog_error :: %{required(:code) => atom(), required(:message) => String.t()}
@@ -103,12 +102,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   end
 
   defp model_catalog_url(identity, assignment) do
-    case EndpointMetadata.endpoint_url(
-           identity,
-           assignment,
-           model_catalog_path(),
-           @default_codex_upstream_base_url
-         ) do
+    case EndpointMetadata.endpoint_url(identity, assignment, model_catalog_path()) do
       {:ok, url} ->
         {:ok, url}
 

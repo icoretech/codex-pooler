@@ -4,8 +4,16 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
   use GenServer
 
   @name __MODULE__
-  @restore_timeout_ms 1_000
+  @default_restore_timeout_ms 1_000
   @restore_attempts 3
+
+  # The attempt count is the contract; the per-attempt wait is only a budget
+  # and the test environment shortens it (config :codex_pooler, __MODULE__).
+  defp restore_timeout_ms do
+    :codex_pooler
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:restore_timeout_ms, @default_restore_timeout_ms)
+  end
 
   @spec start(reference(), reference()) :: {:ok, pid()} | {:error, term()}
   def start(generation, authorization) do
@@ -110,7 +118,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
     if restore_complete?(state) do
       {:stop, :normal, {:ok, status_map(state)}, state}
     else
-      timer = Process.send_after(self(), :restore_timeout, @restore_timeout_ms)
+      timer = Process.send_after(self(), :restore_timeout, restore_timeout_ms())
       {:noreply, %{state | stop_from: from, stop_timer: timer}}
     end
   end
@@ -141,7 +149,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
           |> cleanup_tracing()
           |> request_restore()
 
-        timer = Process.send_after(self(), :restore_timeout, @restore_timeout_ms)
+        timer = Process.send_after(self(), :restore_timeout, restore_timeout_ms())
         state = %{state | stop_timer: timer, restore_attempt: 1}
         {:noreply, state}
 
@@ -159,11 +167,11 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
   def handle_info(:restore_timeout, state) do
     if state.restore_attempt < @restore_attempts do
       state = request_restore(%{state | restore_attempt: state.restore_attempt + 1})
-      timer = Process.send_after(self(), :restore_timeout, @restore_timeout_ms)
+      timer = Process.send_after(self(), :restore_timeout, restore_timeout_ms())
       {:noreply, %{state | stop_timer: timer}}
     else
       state = force_terminate_pending(state)
-      timer = Process.send_after(self(), :forced_down_timeout, @restore_timeout_ms)
+      timer = Process.send_after(self(), :forced_down_timeout, restore_timeout_ms())
       {:noreply, %{state | stop_timer: timer}}
     end
   end

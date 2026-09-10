@@ -77,7 +77,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
         %{chatgpt_account_id: "acct_beta", account_email: "shared@example.COM"}
       )
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN broad_domain account_holder=#{account_holder} account_waiter=#{account_waiter} account_blocking=#{inspect(account_blocking)} email_holder=#{email_holder} email_waiter=#{email_waiter} email_blocking=#{inspect(email_blocking)} terminal=ok sqlstate_40P01=0"
     )
   end
@@ -102,7 +102,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     assert waiter_blocking == []
     assert {:ok, ^waiter_backend_pid} = Task.await(waiter, @detection_timeout_ms)
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN disjoint holder=#{blocker_backend_pid} peer=#{waiter_backend_pid} holder_blocking=#{inspect(blocker_blocking)} peer_blocking=#{inspect(waiter_blocking)} terminal=ok sqlstate_40P01=0"
     )
 
@@ -130,7 +130,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     assert_receive {^barrier, :waiter, :locked, ^waiter_backend_pid}, @detection_timeout_ms
     assert {:ok, ^waiter_backend_pid} = Task.await(waiter, @detection_timeout_ms)
 
-    IO.puts(
+    CodexPooler.TestDiagnostics.puts(
       "GREEN reverse_union holder=#{blocker_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} terminal=ok sqlstate_40P01=0"
     )
   end

@@ -21,7 +21,13 @@ native_turn_console_filter = :codex_pooler_test_native_turn_console_filter
 # load-sensitive files already pick explicitly. Assertions that must stay tight
 # keep passing their own budget; refute_receive keeps the fast default so
 # proving a message never arrives stays cheap.
-ExUnit.start(assert_receive_timeout: 5_000, exclude: [unix_integration: true])
+# Logs are captured per test and shown only for failures, so expected
+# warnings from fault-injection scenarios do not interleave with the dots.
+ExUnit.start(
+  assert_receive_timeout: 5_000,
+  capture_log: true,
+  exclude: [unix_integration: true]
+)
 
 # The cache process can start while the reset test database is still being
 # migrated. Publish one authoritative snapshot before manual sandbox ownership
