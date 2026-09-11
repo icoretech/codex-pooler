@@ -760,6 +760,14 @@ reasoning effort, so the model's default effort applies. Set
 `auxiliary.title_generation.reasoning_effort: low` to keep those short calls
 on a fixed, cheap effort.
 
+Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends
+`service_tier: priority` only when the provider is `openai` on `api.openai.com`
+or `openai-codex` on `chatgpt.com`. Since the Hermes 0.21 releases, an
+`openai-api` provider pointed at Codex Pooler never sends it, even though
+`/fast` and its tip still report fast mode as on. Codex Pooler accepts
+`service_tier: priority` (and `fast` as an alias) whenever a client sends it,
+so this is a Hermes routing rule, not a Pooler limitation.
+
 Remote HTTP MCP servers require Hermes' `mcp` extra. If
 `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not
 available`, install MCP support into the Hermes environment, following the

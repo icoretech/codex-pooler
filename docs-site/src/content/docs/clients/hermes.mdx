@@ -64,6 +64,8 @@ Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/mo
 
 Hermes generates session titles with a separate auxiliary call that sends no reasoning effort, so the model's default effort applies. Set `auxiliary.title_generation.reasoning_effort: low` to keep those short calls on a fixed, cheap effort.
 
+Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends `service_tier: priority` only when the provider is `openai` on `api.openai.com` or `openai-codex` on `chatgpt.com`. Since the Hermes 0.21 releases, an `openai-api` provider pointed at Codex Pooler never sends it, even though `/fast` and its tip still report fast mode as on. Codex Pooler accepts `service_tier: priority` (and `fast` as an alias) whenever a client sends it, so this is a Hermes routing rule, not a Pooler limitation.
+
 ## Verify the connection
 
 Test the model path with a one-shot prompt:

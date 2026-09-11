@@ -694,6 +694,8 @@ provider account 可能暂时报告不同目录上限，请把这个 per-model e
 
 Hermes 会用单独的辅助调用生成会话标题，该调用不发送 reasoning effort，因此使用模型的默认 effort。设置 `auxiliary.title_generation.reasoning_effort: low`，让这些短调用固定使用较低成本的 effort。
 
+Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provider 为 `api.openai.com` 上的 `openai` 或 `chatgpt.com` 上的 `openai-codex` 时才发送 `service_tier: priority`。从 Hermes 0.21 版本开始，指向 Codex Pooler 的 `openai-api` provider 永远不会发送它，即使 `/fast` 及其提示仍显示 fast 模式已开启。只要客户端发送 `service_tier: priority`（或别名 `fast`），Codex Pooler 就会接受，因此这是 Hermes 的路由规则，而不是 Pooler 的限制。
+
 远程 HTTP MCP servers 需要 Hermes 的 `mcp` extra。如果
 `hermes mcp test codex_pooler` 报告 `mcp.client.streamable_http is not available`，
 请按照 [Hermes MCP Integration docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp)
