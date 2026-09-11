@@ -12,8 +12,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "01dc932452a681345966f3224b1e46107a2bf9c0242f280a4707100a02dab0ae"
-  @target_generated_at "2026-09-11T09:35:15.225268Z"
+  @target_sha256 "ec83632287a87bd9a7b6da694ed32482d6b91bfc59810c7cfa89c2914827adfb"
+  @target_generated_at "2026-09-11T19:30:13.718153Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -338,7 +338,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
-    assert first.inserted == 181
+    assert first.inserted == 182
     assert first.skipped == 87
 
     rows =
@@ -346,7 +346,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
         from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
       )
 
-    assert length(rows) == 181
+    assert length(rows) == 182
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
     refute Enum.any?(rows, &(&1.model_identifier in @removed_identifiers))
