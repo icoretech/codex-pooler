@@ -167,7 +167,6 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   defp failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp failure_reason({:exit, _reason}), do: "exit"
   defp failure_reason(%module{}), do: inspect(module)
-  defp failure_reason(_reason), do: "unknown"
 
   defp terminal_class_value(nil), do: @none
   defp terminal_class_value(value), do: vocabulary(value, @terminal_classes, @unknown)

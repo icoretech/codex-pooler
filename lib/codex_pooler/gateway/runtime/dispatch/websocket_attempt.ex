@@ -1,4 +1,5 @@
 defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
+  @websocket_refresh_metadata_operation :merge_websocket_auth_refresh_metadata
   @moduledoc false
 
   alias CodexPooler.Accounting
@@ -187,7 +188,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       {:ok, _recorded_failure} ->
         with {:ok, refresh_metadata, refreshed_identity} <-
                AuthRefresh.refresh(context, :websocket),
-             {:ok, refreshed_context} <- record_auth_refresh_metadata(context, refresh_metadata),
+             {:ok, refreshed_context} <-
+               AuthRefresh.record_metadata(
+                 context,
+                 refresh_metadata,
+                 @websocket_refresh_metadata_operation
+               ),
              {:ok, retry_context} <-
                create_same_assignment_retry_context(%{
                  refreshed_context
@@ -474,7 +480,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
          failure,
          started
        ) do
-    with {:ok, refreshed_context} <- record_auth_refresh_metadata(context, refresh_metadata) do
+    with {:ok, refreshed_context} <-
+           AuthRefresh.record_metadata(
+             context,
+             refresh_metadata,
+             @websocket_refresh_metadata_operation
+           ) do
       finalize_exhausted_auth_refresh(
         refreshed_context,
         dispatch_request,
@@ -510,10 +521,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       end
     })
   end
-
-  # The fenced provider refresh itself lives in the shared AuthRefresh helper.
-  defp record_auth_refresh_metadata(context, metadata),
-    do: AuthRefresh.record_metadata(context, metadata, :merge_websocket_auth_refresh_metadata)
 
   defp maybe_put_websocket_callbacks(%{terminal: terminal} = finalization, callbacks) do
     case websocket_terminal_outcome(terminal, Map.get(finalization, :body, "")) do

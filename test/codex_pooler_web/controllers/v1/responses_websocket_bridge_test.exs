@@ -652,8 +652,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     {_result, log} =
       with_log(fn ->
-        assert {:push, {:text, payload}, ^state} =
+        assert {:push, {:text, payload}, next_state} =
                  CodexResponsesSocket.handle_info(owner_frame, state)
+
+        # The terminal push only adds delivery-receipt bookkeeping to the state.
+        assert Map.delete(next_state, :downstream_delivery_evidence) ==
+                 Map.delete(state, :downstream_delivery_evidence)
 
         assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-owner-upstream"
       end)

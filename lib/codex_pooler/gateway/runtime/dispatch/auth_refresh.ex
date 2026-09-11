@@ -157,6 +157,4 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AuthRefresh do
   defp maybe_put_safe_metadata(attrs, _key, _value), do: attrs
 
   defp safe_refresh_reason(%{code: code}), do: to_string(code)
-  defp safe_refresh_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp safe_refresh_reason(_reason), do: "token_refresh_failed"
 end

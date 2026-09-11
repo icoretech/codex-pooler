@@ -699,8 +699,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     end
   end
 
-  defp settle_owner_terminal_task(%{task: nil} = state), do: state
-
   # The take is the last consumer of attempt metadata, so a submit left pending
   # by an owner-terminal report gets the remainder of its settle budget here,
   # after the client-visible report, before it is discarded.
