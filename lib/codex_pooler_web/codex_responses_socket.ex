@@ -413,6 +413,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     {remaining_tasks, state} = await_response_task_cleanup_results(state)
 
+    # An owner recovery may already have replaced the lease this socket still
+    # carries; a detach with the old token is a silent no-op, so take the
+    # replacement runtime from any unprocessed notification first.
+    state = absorb_recovered_owner_runtime(state)
+
     cleanup_websocket_session(reason, state)
 
     cancel_abandoned_response_tasks(state, remaining_tasks)
@@ -421,13 +426,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     acknowledge_response_task_cleanup(state)
 
-    remaining_tasks = remaining_response_tasks_after_cleanup(state, remaining_tasks)
+    {remaining_tasks, state} =
+      remaining_response_tasks_after_cleanup(state, reason, remaining_tasks)
 
     cancel_response_tasks(remaining_tasks, :websocket_terminated)
-    remaining_tasks = await_response_tasks(remaining_tasks, @post_cleanup_response_task_drain_ms)
+
+    {remaining_tasks, state} =
+      await_response_tasks(state, reason, remaining_tasks, response_task_drain_ms(state))
 
     Enum.each(remaining_tasks, &Process.exit(&1, :kill))
-    remaining_tasks = await_response_tasks(remaining_tasks, @post_cleanup_response_task_drain_ms)
+
+    {remaining_tasks, state} =
+      await_response_tasks(state, reason, remaining_tasks, response_task_drain_ms(state))
 
     await_response_task_registry_cleanup(
       state,
@@ -448,11 +458,107 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     :ok
   end
 
-  defp remaining_response_tasks_after_cleanup(state, remaining_tasks) do
+  defp remaining_response_tasks_after_cleanup(state, reason, remaining_tasks) do
     if owner_forwarded_socket?(state) do
-      await_response_tasks(remaining_tasks, @post_cleanup_owner_response_task_drain_ms)
+      await_response_tasks(state, reason, remaining_tasks, owner_response_task_drain_ms(state))
     else
-      await_response_tasks(remaining_tasks, @post_cleanup_response_task_drain_ms)
+      await_response_tasks(state, reason, remaining_tasks, response_task_drain_ms(state))
+    end
+  end
+
+  # Both post-cleanup drain budgets default to the module constants and can be
+  # shortened per socket through the websocket transport options. They bound
+  # a task that is still finishing; a task that reports done or is provably
+  # detached ends the drain on that signal instead.
+  defp owner_response_task_drain_ms(state) do
+    transport_drain_ms(
+      state,
+      :websocket_owner_response_task_drain_ms,
+      @post_cleanup_owner_response_task_drain_ms
+    )
+  end
+
+  defp response_task_drain_ms(state) do
+    transport_drain_ms(
+      state,
+      :websocket_response_task_drain_ms,
+      @post_cleanup_response_task_drain_ms
+    )
+  end
+
+  defp transport_drain_ms(%{opts: %RequestOptions{transport: transport}}, key, default)
+       when is_map(transport) do
+    case Map.get(transport, key) do
+      drain_ms when is_integer(drain_ms) and drain_ms > 0 -> drain_ms
+      _absent_or_invalid -> default
+    end
+  end
+
+  defp transport_drain_ms(_state, _key, default), do: default
+
+  # Owner recovery notifies the downstream socket before it re-submits the
+  # parked request to the replacement owner. Consuming that notification here
+  # keeps the socket's session, lease token, and downstream current so the
+  # detach below reaches the replacement instead of failing as a stale owner.
+  defp absorb_recovered_owner_runtime(state) do
+    if owner_forwarded_socket?(state) do
+      receive do
+        {:websocket_owner_runtime_recovered, _correlation_id, _epoch, _runtime} = message ->
+          state
+          |> accept_recovered_owner_runtime(message)
+          |> absorb_recovered_owner_runtime()
+      after
+        0 -> state
+      end
+    else
+      state
+    end
+  end
+
+  defp accept_recovered_owner_runtime(state, message) do
+    case Adapter.accept_recovered_runtime(message, state) do
+      {:ok, state} -> state
+      :drop -> state
+    end
+  end
+
+  # A recovery notification that arrives while the drain is already waiting
+  # means the parked task moved to a replacement owner this socket never
+  # detached from; detach it now so the owner settles the turn and the task
+  # exits on that signal rather than on the drain timer.
+  defp detach_recovered_owner_runtime(state, reason, message) do
+    case Adapter.accept_recovered_runtime(message, state) do
+      {:ok, state} ->
+        _cleanup = Adapter.cleanup_owner_session(state, reason)
+        state
+
+      :drop ->
+        state
+    end
+  end
+
+  # A tracked task that reports done during the drain is waiting only for its
+  # delivery acknowledgement. The terminate-time acknowledgement was sent
+  # before the callback returned and may have gone to the cancellation watcher
+  # that has since handed off, so re-query the registry and acknowledge the
+  # task itself once it is the authoritative recipient.
+  defp acknowledge_drained_response_task(state, pid, result) do
+    if tracked_response_task?(state, pid) do
+      state = put_response_task_cleanup_result(state, pid, result)
+      registry = response_task_activity_registry(state)
+
+      case authoritative_delivery_target(state, pid, registry) do
+        {:ok, token, ^pid} ->
+          outcome = response_task_cleanup_outcome(state, pid, token, pid, registry)
+          ResponseTask.acknowledge_delivery(pid, token, outcome)
+          record_downstream_delivery_receipt(state, pid, outcome)
+          state
+
+        _watcher_or_unknown ->
+          state
+      end
+    else
+      state
     end
   end
 
@@ -4035,14 +4141,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp payload_input_count(nil), do: nil
   defp payload_input_count(_input), do: 1
 
-  defp await_response_tasks(tasks, timeout_ms) do
+  defp await_response_tasks(state, reason, tasks, timeout_ms) do
     if MapSet.size(tasks) == 0 do
-      tasks
+      {tasks, state}
     else
       monitors = Map.new(tasks, &{&1, Process.monitor(&1)})
       deadline = response_task_deadline(timeout_ms)
 
-      do_await_response_tasks(tasks, monitors, deadline)
+      do_await_response_tasks(state, reason, tasks, monitors, deadline)
     end
   end
 
@@ -4050,23 +4156,29 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     System.monotonic_time(:millisecond) + timeout_ms
   end
 
-  defp do_await_response_tasks(tasks, monitors, deadline) do
+  defp do_await_response_tasks(state, reason, tasks, monitors, deadline) do
     if MapSet.size(tasks) == 0 do
-      tasks
+      {tasks, state}
     else
       timeout = response_task_wait_timeout(deadline)
 
       receive do
-        {:codex_response_done, _pid, _result} ->
-          do_await_response_tasks(tasks, monitors, deadline)
+        {:codex_response_done, pid, result} ->
+          state = acknowledge_drained_response_task(state, pid, result)
+          do_await_response_tasks(state, reason, tasks, monitors, deadline)
+
+        {:websocket_owner_runtime_recovered, _correlation_id, _epoch, _runtime} = message ->
+          state = detach_recovered_owner_runtime(state, reason, message)
+          do_await_response_tasks(state, reason, tasks, monitors, deadline)
 
         {:DOWN, ref, :process, pid, _reason}
         when is_map_key(monitors, pid) and :erlang.map_get(pid, monitors) == ref ->
-          do_await_response_tasks(remove_response_task(tasks, monitors, pid), monitors, deadline)
+          tasks = remove_response_task(tasks, monitors, pid)
+          do_await_response_tasks(state, reason, tasks, monitors, deadline)
       after
         timeout ->
           demonitor_response_tasks(monitors)
-          tasks
+          {tasks, state}
       end
     end
   end
@@ -4091,7 +4203,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp await_response_task_registry_cleanup(state, owned_tasks, remaining_tasks) do
     if MapSet.size(remaining_tasks) == 0 do
       registry = response_task_activity_registry(state)
-      deadline = response_task_deadline(@post_cleanup_response_task_drain_ms)
+      deadline = response_task_deadline(response_task_drain_ms(state))
       do_await_response_task_registry_cleanup(owned_tasks, registry, deadline)
     end
 

@@ -430,6 +430,69 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
   end
 
+  # Findings #119 follow-up: the recovery start path forwarded only the
+  # upstream boundary into `start_owner/1`, so a recovered owner silently kept
+  # the default handoff timeouts that the caller options carried.
+  test "local missing-owner recovery starts the owner with the caller handoff timeouts", %{
+    auth: auth
+  } do
+    local_node_string = Atom.to_string(node())
+    handoff_soft_timeout_ms = 25
+    handoff_absolute_timeout_ms = 2_000
+
+    %{session: session, token: token} =
+      owner_session_fixture(auth, local_node_string, "recovery-handoff")
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame("resp_local_recovery_handoff")],
+        return_request_result?: true
+      )
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             WebsocketOwnerForwarder.submit_request(
+               session,
+               token,
+               downstream("corr-local-recovery-handoff"),
+               request("local-recovery-handoff"),
+               upstream: upstream,
+               request_id: "local-recovery-handoff",
+               handoff_soft_timeout_ms: handoff_soft_timeout_ms,
+               handoff_absolute_timeout_ms: handoff_absolute_timeout_ms
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert {:ok, recovered_owner} = WebsocketOwnerSession.lookup(session.id)
+
+    assert %{
+             handoff_soft_timeout_ms: ^handoff_soft_timeout_ms,
+             handoff_absolute_timeout_ms: ^handoff_absolute_timeout_ms
+           } = :sys.get_state(recovered_owner)
+
+    %{session: default_session, token: default_token} =
+      owner_session_fixture(auth, local_node_string, "recovery-handoff-default")
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             WebsocketOwnerForwarder.submit_request(
+               default_session,
+               default_token,
+               downstream("corr-local-recovery-handoff-default"),
+               request("local-recovery-handoff-default"),
+               upstream: upstream,
+               request_id: "local-recovery-handoff-default",
+               handoff_soft_timeout_ms: "25",
+               handoff_absolute_timeout_ms: 0
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _default_upstream_pid}
+    assert {:ok, default_owner} = WebsocketOwnerSession.lookup(default_session.id)
+    default_state = :sys.get_state(default_owner)
+    refute default_state.handoff_soft_timeout_ms == handoff_soft_timeout_ms
+    refute default_state.handoff_absolute_timeout_ms == handoff_absolute_timeout_ms
+    assert is_integer(default_state.handoff_soft_timeout_ms)
+    assert is_integer(default_state.handoff_absolute_timeout_ms)
+  end
+
   @tag :rollout_drain_t3
   test "T3 marker refuses target-side missing-owner resurrection", %{auth: auth} do
     local_node_string = Atom.to_string(node())

@@ -93,6 +93,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :owner_renewal_ref,
     :handoff_soft_timeout_ms,
     :handoff_absolute_timeout_ms,
+    :output_commit_probe_timeout_ms,
     :native_compaction_trace_sensitivity,
     :native_compaction_admission,
     :native_compaction_admission_downstream,
@@ -1093,6 +1094,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     handoff_absolute_timeout_ms =
       Keyword.get(opts, :handoff_absolute_timeout_ms, @handoff_absolute_timeout_ms)
 
+    output_commit_probe_timeout_ms = output_commit_probe_timeout_ms(opts)
+
     owner_renewal_delay =
       Keyword.get(opts, :owner_renewal_delay, &jittered_owner_renewal_delay/1)
 
@@ -1129,6 +1132,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          native_compaction_trace_sensitivity: sensitivity,
          handoff_soft_timeout_ms: handoff_soft_timeout_ms,
          handoff_absolute_timeout_ms: handoff_absolute_timeout_ms,
+         output_commit_probe_timeout_ms: output_commit_probe_timeout_ms,
          draining?: false,
          retire_after_active_turn?: false,
          native_compaction_admission: nil,
@@ -3125,11 +3129,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:websocket_owner_output_commit_probe, downstream.correlation_id, downstream.epoch,
        downstream.owner_turn_id, active_turn_ref, self(), probe_ref}
 
+    # The timer only bounds a live downstream that never acks. A downstream
+    # that is provably gone (monitor DOWN, detach, or a reconnect on a newer
+    # epoch) settles the retained result immediately through its own path.
     timer_ref =
       Process.send_after(
         self(),
         {:websocket_owner_output_commit_timeout, active_turn_ref, probe_ref},
-        WebsocketOwnerContract.default_forward_timeout_ms()
+        state.output_commit_probe_timeout_ms
       )
 
     output_commit_probe = %{
@@ -4610,4 +4617,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp exact_keys?(_map, _keys), do: false
 
   defp owner_call_timeout, do: WebsocketOwnerContract.default_owner_call_timeout_ms()
+
+  # Test-facing knob for the output-commit probe budget; production callers
+  # never pass it, so the owner keeps the forward timeout unless the override
+  # is a positive integer.
+  defp output_commit_probe_timeout_ms(opts) do
+    case Keyword.get(opts, :output_commit_probe_timeout_ms) do
+      timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 -> timeout_ms
+      _absent_or_invalid -> WebsocketOwnerContract.default_forward_timeout_ms()
+    end
+  end
 end

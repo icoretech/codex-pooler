@@ -2520,6 +2520,39 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "section updaters" do
+    # The socket drain budgets are transport knobs so tests can shorten the
+    # post-cleanup response task drains without changing production defaults;
+    # only positive integers are carried, anything else falls back to nil.
+    test "carries websocket response task drain budgets as positive integers" do
+      options =
+        RequestOptions.for_websocket(%{
+          websocket_response_task_drain_ms: 250,
+          websocket_owner_response_task_drain_ms: 750
+        })
+
+      assert options.transport.websocket_response_task_drain_ms == 250
+      assert options.transport.websocket_owner_response_task_drain_ms == 750
+
+      updated =
+        RequestOptions.put_transport(options,
+          websocket_response_task_drain_ms: 100,
+          websocket_owner_response_task_drain_ms: 0
+        )
+
+      assert updated.transport.websocket_response_task_drain_ms == 100
+      assert updated.transport.websocket_owner_response_task_drain_ms == 750
+
+      invalid =
+        RequestOptions.for_websocket(%{
+          websocket_response_task_drain_ms: "250",
+          websocket_owner_response_task_drain_ms: -1
+        })
+
+      assert invalid.transport.websocket_response_task_drain_ms == nil
+      assert invalid.transport.websocket_owner_response_task_drain_ms == nil
+      assert RequestOptions.for_websocket(%{}).transport.websocket_response_task_drain_ms == nil
+    end
+
     test "apply known keyword updates to typed sections" do
       writer = fn _frame -> :ok end
 

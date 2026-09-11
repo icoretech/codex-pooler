@@ -12,6 +12,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
     :upstream_websocket_session,
     :websocket_owner,
     :websocket_owner_submission_observer,
+    :websocket_response_task_drain_ms,
+    :websocket_owner_response_task_drain_ms,
     :route_class,
     forwarded_metadata_headers: [],
     upstream_websocket_bridge?: false,
@@ -28,6 +30,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
           upstream_websocket_session: term(),
           websocket_owner: WebsocketOwnerContext.t(),
           websocket_owner_submission_observer: (-> any()) | nil,
+          websocket_response_task_drain_ms: pos_integer() | nil,
+          websocket_owner_response_task_drain_ms: pos_integer() | nil,
           route_class: String.t() | nil,
           upstream_websocket_bridge?: boolean(),
           websocket_delivery_mode: :relay | :collect_compaction | :collect_full_history
@@ -46,6 +50,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
       upstream_websocket_session: Map.get(opts, :upstream_websocket_session),
       websocket_owner: WebsocketOwnerContext.build(opts),
       websocket_owner_submission_observer: Map.get(opts, :websocket_owner_submission_observer),
+      websocket_response_task_drain_ms:
+        Normalization.optional_positive_integer(Map.get(opts, :websocket_response_task_drain_ms)),
+      websocket_owner_response_task_drain_ms:
+        Normalization.optional_positive_integer(
+          Map.get(opts, :websocket_owner_response_task_drain_ms)
+        ),
       route_class: route_class(opts, endpoint, payload)
     }
   end
@@ -74,6 +84,14 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
       |> Normalization.normalize_optional_update(
         :forwarded_metadata_headers,
         &Normalization.forwarded_headers_update/1
+      )
+      |> Normalization.normalize_optional_update(
+        :websocket_response_task_drain_ms,
+        &Normalization.optional_positive_integer/1
+      )
+      |> Normalization.normalize_optional_update(
+        :websocket_owner_response_task_drain_ms,
+        &Normalization.optional_positive_integer/1
       )
       |> then(&struct!(transport, &1))
 

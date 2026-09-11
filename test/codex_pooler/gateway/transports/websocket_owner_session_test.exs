@@ -2300,6 +2300,117 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     refute_received {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, _payload}
   end
 
+  # Findings #119 item 3: a downstream that is provably gone must release the
+  # owner's retained failure result on the monitor signal, never on the
+  # forward-timeout timer. The elapsed bound is strict: a timer-driven
+  # settlement cannot finish before the full default budget.
+  test "output-commit probe settles the failure result when the downstream process dies",
+       context do
+    upstream = interrupted_upstream(self(), "visible-downstream-down")
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    parent = self()
+
+    downstream_pid = spawn(fn -> receive_probe_messages(parent) end)
+    downstream_monitor = Process.monitor(downstream_pid)
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, %{
+        pid: downstream_pid,
+        correlation_id: "commit-downstream-down"
+      })
+
+    owner_turn_id = self()
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    assert_receive {:probe_downstream_message,
+                    {:websocket_owner_frame, "commit-downstream-down", epoch, ^owner_turn_id,
+                     {:data, "visible-downstream-down"}}}
+
+    assert_receive {:probe_downstream_message,
+                    {:websocket_owner_output_commit_probe, "commit-downstream-down", ^epoch,
+                     ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref}}
+
+    assert Task.yield(submit_task, 0) == nil
+
+    started_at_ms = System.monotonic_time(:millisecond)
+    Process.exit(downstream_pid, :kill)
+    assert_receive {:DOWN, ^downstream_monitor, :process, ^downstream_pid, :killed}
+
+    assert Task.await(submit_task, @pending_terminal_observation_timeout_ms * 3) ==
+             interrupted_result()
+
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at_ms
+    assert elapsed_ms < WebsocketOwnerContract.default_forward_timeout_ms()
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    refute_received {:probe_downstream_message,
+                     {:websocket_owner_frame, "commit-downstream-down", ^epoch, ^owner_turn_id,
+                      {:error, :owner_forward_timeout, _payload}}}
+  end
+
+  test "output-commit probe keeps the configured budget for a live downstream that never acks",
+       context do
+    upstream = interrupted_upstream(self(), "visible-silent")
+    probe_timeout_ms = 50
+
+    {:ok, owner} =
+      start_owner(context, upstream: upstream, output_commit_probe_timeout_ms: probe_timeout_ms)
+
+    assert %{output_commit_probe_timeout_ms: ^probe_timeout_ms} = :sys.get_state(owner)
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("commit-silent"))
+
+    owner_turn_id = self()
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    assert_receive {:websocket_owner_frame, "commit-silent", epoch, ^owner_turn_id,
+                    {:data, "visible-silent"}}
+
+    assert_receive {:websocket_owner_output_commit_probe, "commit-silent", ^epoch, ^owner_turn_id,
+                    _active_turn_ref, ^owner, _probe_ref}
+
+    # The downstream stays alive and attached but deliberately never acks, so
+    # the only exit is the (shortened) budget timer.
+    assert_receive {:websocket_owner_frame, "commit-silent", ^epoch, ^owner_turn_id,
+                    {:error, :owner_forward_timeout, timeout_payload}},
+                   @pending_terminal_observation_timeout_ms
+
+    assert timeout_payload.code == "owner_forward_timeout"
+    assert_receive {:websocket_owner_frame, "commit-silent", ^epoch, ^owner_turn_id, :complete}
+    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
+  test "output-commit probe budget defaults to the forward timeout and ignores invalid overrides",
+       context do
+    {:ok, default_owner} = start_owner(context, upstream: interrupted_upstream(self(), "x"))
+
+    assert %{output_commit_probe_timeout_ms: default_ms} = :sys.get_state(default_owner)
+    assert default_ms == WebsocketOwnerContract.default_forward_timeout_ms()
+
+    invalid_context = %{context | codex_session_id: Ecto.UUID.generate()}
+    on_exit(fn -> cleanup_owner_session(invalid_context.codex_session_id) end)
+
+    {:ok, invalid_owner} =
+      start_owner(invalid_context,
+        upstream: interrupted_upstream(self(), "y"),
+        output_commit_probe_timeout_ms: 0
+      )
+
+    assert %{output_commit_probe_timeout_ms: ^default_ms} = :sys.get_state(invalid_owner)
+  end
+
   test "native owner interruption probe is acknowledged by the sole socket task", context do
     upstream = interrupted_upstream(self(), "visible-native-ack")
     {:ok, owner} = start_owner(context, upstream: upstream)

@@ -1791,7 +1791,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       idle_shutdown_ms: OperationalSettings.current().websocket_owner_idle_timeout_ms
     ]
 
-    start_opts = maybe_put_recovery_upstream(start_opts, opts)
+    start_opts =
+      start_opts
+      |> maybe_put_recovery_upstream(opts)
+      |> maybe_put_recovery_handoff_timeouts(opts)
 
     case WebsocketOwnerSession.start_owner(start_opts) do
       {:ok, owner_pid} -> {:ok, owner_pid}
@@ -1805,6 +1808,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       {:ok, upstream} -> Keyword.put(start_opts, :upstream, upstream)
       :error -> start_opts
     end
+  end
+
+  @recovery_handoff_timeout_keys [:handoff_soft_timeout_ms, :handoff_absolute_timeout_ms]
+
+  # The caller options are the only request-scoped carrier for the handoff
+  # timeouts `WebsocketOwnerSession.start_owner/1` accepts, so a recovered
+  # owner copies positive integer values through beside the upstream boundary
+  # exactly like the local gateway start path. Absent or malformed values keep
+  # the owner defaults.
+  defp maybe_put_recovery_handoff_timeouts(start_opts, opts) do
+    Enum.reduce(@recovery_handoff_timeout_keys, start_opts, fn key, acc ->
+      case Keyword.get(opts, key) do
+        timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 ->
+          Keyword.put(acc, key, timeout_ms)
+
+        _absent_or_invalid ->
+          acc
+      end
+    end)
   end
 
   defp attach_recovered_downstream(

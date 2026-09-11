@@ -63,9 +63,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTerminalCloseTest do
             activity_registry: registry
           )
 
+        # The unsettled-callback order never finishes its callback, so the
+        # post-cleanup drain is the scenario's own timer: shorten it through
+        # the transport option rather than waiting out the production budget.
+        # Every other order finishes on a signal and keeps the default as its
+        # failure-detection budget.
+        drain_ms = if order == :active_callback, do: 100, else: nil
+
         state = %{
           auth: nil,
-          opts: RequestOptions.for_websocket(%{}),
+          opts: RequestOptions.for_websocket(%{websocket_response_task_drain_ms: drain_ms}),
           codex_session: nil,
           upstream_websocket_session: nil,
           request_response_work_started?: true,
