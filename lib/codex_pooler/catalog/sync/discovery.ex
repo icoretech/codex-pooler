@@ -3,6 +3,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   Upstream model catalog discovery and payload normalization.
   """
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.EndpointMetadata
@@ -70,6 +71,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
       case Req.get(url,
              retry: false,
              receive_timeout: 30_000,
+             finch: OperationalSettings.upstream_http_pool_options(),
              headers:
                CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
            )

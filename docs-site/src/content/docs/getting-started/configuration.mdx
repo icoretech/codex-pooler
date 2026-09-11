@@ -202,7 +202,7 @@ a websocket already revoked by the prior policy must reconnect.
 
 ### Upstream connection idle bound
 
-Upstream HTTP requests reuse pooled keep-alive connections to each provider origin. `upstream_conn_max_idle_time_ms` is the longest time a pooled connection may sit idle before it is replaced instead of reused. Change it on the System page, Gateway tab, in the Upstream timing group, next to the connect, pool, and receive timeouts. The default is `45000` ms and the accepted range is `1000..3600000` ms. New upstream requests use a saved value without a restart; the first requests after a change open new connections.
+Upstream HTTP requests reuse pooled keep-alive connections to each provider origin. `upstream_conn_max_idle_time_ms` is the longest time a pooled connection may sit idle before it is replaced instead of reused. It applies to every HTTP request Codex Pooler sends to a provider origin: gateway traffic, usage and quota probes, token refresh and device sign-in, saved-reset redemption, and model catalog sync. Those background requests run less often than gateway traffic, so their connections are the most likely to sit idle past an egress timeout. Change it on the System page, Gateway tab, in the Upstream timing group, next to the connect, pool, and receive timeouts. The default is `45000` ms and the accepted range is `1000..3600000` ms. New upstream requests use a saved value without a restart; the first requests after a change open new connections.
 
 The bound is checked only when a connection is taken for a new request, so it never interrupts an in-flight or streaming request, however long that request runs.
 

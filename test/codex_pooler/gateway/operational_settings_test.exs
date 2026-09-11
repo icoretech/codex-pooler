@@ -245,6 +245,17 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     end
   end
 
+  test "upstream_http_pool_options/0 carries the saved upstream connection idle bound for every provider Req caller" do
+    assert OperationalSettings.upstream_http_pool_options() == [conn_max_idle_time: 45_000]
+
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "gateway" => %{"upstream_conn_max_idle_time_ms" => 12_345}
+             })
+
+    assert OperationalSettings.upstream_http_pool_options() == [conn_max_idle_time: 12_345]
+  end
+
   test "current/0 clamps legacy cached websocket idle timeout values above the safe maximum" do
     stale_settings = %{
       Settings.default()

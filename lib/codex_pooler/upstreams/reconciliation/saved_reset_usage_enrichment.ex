@@ -1,6 +1,7 @@
 defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
   @moduledoc false
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -83,7 +84,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
              decode_body: false,
              into: &collect_bounded_body/2,
              retry: false,
-             receive_timeout: timeout
+             receive_timeout: timeout,
+             finch: OperationalSettings.upstream_http_pool_options()
            ) do
         {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
           handle_successful_reset_credits_response(url, response, observed_at)

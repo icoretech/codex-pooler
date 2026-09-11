@@ -2,6 +2,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.FakeOpenAIAuthProvider
+  alias CodexPooler.UpstreamConnPoolTelemetry
   alias CodexPooler.Upstreams.Auth.CodexAuth
 
   @browser_redirect_uri "http://localhost:1455/auth/callback"
@@ -485,6 +486,43 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
   end
 
   describe "refresh-token OAuth protocol" do
+    test "device-code, token exchange, and refresh POSTs carry the upstream connection idle bound from settings" do
+      provider =
+        start_provider!(%{
+          "/api/accounts/deviceauth/usercode" =>
+            {200, FakeOpenAIAuthProvider.device_code_response()},
+          "/api/accounts/deviceauth/token" =>
+            {200, FakeOpenAIAuthProvider.authorization_code_response()},
+          "/oauth/token" => {200, FakeOpenAIAuthProvider.token_response()}
+        })
+
+      UpstreamConnPoolTelemetry.put_idle_bound!(0)
+      UpstreamConnPoolTelemetry.attach!(FakeOpenAIAuthProvider.url(provider))
+
+      assert {:ok, _device_code} = CodexAuth.request_device_code()
+
+      assert {:ok, %{access_token: "access-token-example"}} =
+               CodexAuth.poll_device_authorization(%{
+                 "device_auth_id" => "device-auth-123",
+                 "user_code" => "USER-CODE",
+                 "poll_interval_seconds" => 5
+               })
+
+      assert {:ok, %{access_token: "access-token-example"}} =
+               CodexAuth.refresh_token("refresh-token-example")
+
+      assert provider |> FakeOpenAIAuthProvider.requests() |> Enum.map(&{&1.method, &1.path}) ==
+               [
+                 {"POST", "/api/accounts/deviceauth/usercode"},
+                 {"POST", "/api/accounts/deviceauth/token"},
+                 {"POST", "/oauth/token"},
+                 {"POST", "/oauth/token"}
+               ]
+
+      assert UpstreamConnPoolTelemetry.drain_events() ==
+               List.duplicate(:conn_max_idle_time_exceeded, 3)
+    end
+
     test "refresh token exchange posts the refresh grant and client id" do
       provider =
         start_provider!(%{

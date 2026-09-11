@@ -18,6 +18,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.SavedResetConfirmationFixtures
+  alias CodexPooler.UpstreamConnPoolTelemetry
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -91,6 +92,76 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       metadata_json = CodexPooler.JSON.encode!(persisted.metadata)
       refute metadata_json =~ "credit_1"
       refute metadata_json =~ redeem_request_id
+    end
+
+    test "redemption list and consume carry the upstream connection idle bound from settings" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200,
+                %{
+                  "credits" => [%{"id" => "credit_1", "status" => "available"}],
+                  "available_count" => 1
+                }},
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/backend-api/wham/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      UpstreamConnPoolTelemetry.put_idle_bound!(0)
+      UpstreamConnPoolTelemetry.attach!(FakeUpstream.url(fake))
+
+      %{assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      assert {:ok, %{status: :succeeded, applied?: true}} =
+               SavedResetRedemption.redeem(assignment)
+
+      requests = fake |> FakeUpstream.requests() |> Enum.map(&{&1.method, &1.path})
+
+      assert Enum.take(requests, 2) == [
+               {"GET", "/backend-api/wham/rate-limit-reset-credits"},
+               {"POST", "/backend-api/wham/rate-limit-reset-credits/consume"}
+             ]
+
+      assert UpstreamConnPoolTelemetry.drain_events() ==
+               List.duplicate(:conn_max_idle_time_exceeded, length(requests) - 1)
+    end
+
+    test "redemption list, consume, and stale-recovery replay carry the upstream connection idle bound from settings" do
+      UpstreamConnPoolTelemetry.put_idle_bound!(0)
+      fixture = ambiguous_chatgpt_recovery_fixture!()
+      UpstreamConnPoolTelemetry.attach!(FakeUpstream.url(fixture.fake))
+      recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
+      fixture = make_recovery_due!(fixture, recovery_now)
+
+      FakeUpstream.set_mode(fixture.fake, {
+        :path_json,
+        %{
+          "/backend-api/wham/rate-limit-reset-credits" =>
+            {200, %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]}},
+          "/backend-api/wham/rate-limit-reset-credits/consume" =>
+            {200, %{"code" => "already_redeemed"}},
+          "/backend-api/wham/usage" => {200, usage_payload(0)}
+        }
+      })
+
+      assert {:ok, %{status: :succeeded}} = resume_recovery(fixture, recovery_now)
+
+      recovery_requests =
+        fixture.fake |> FakeUpstream.requests() |> Enum.drop(2) |> Enum.map(&{&1.method, &1.path})
+
+      assert Enum.take(recovery_requests, 2) == [
+               {"GET", "/backend-api/wham/rate-limit-reset-credits"},
+               {"POST", "/backend-api/wham/rate-limit-reset-credits/consume"}
+             ]
+
+      assert UpstreamConnPoolTelemetry.drain_events() ==
+               List.duplicate(:conn_max_idle_time_exceeded, length(recovery_requests))
     end
 
     test "persists the ChatGPT target and dispatch reservation before the consume POST" do

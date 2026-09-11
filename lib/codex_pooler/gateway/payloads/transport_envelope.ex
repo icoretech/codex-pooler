@@ -64,22 +64,25 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   # `protocols: [:http1]` holds and upstream HTTP never negotiates HTTP/2.
   # `conn_max_idle_time` exists only for Finch HTTP/1 pools; an HTTP/2 pool
   # would need `http2: [ping_interval:]` or `max_connection_age` instead. The
-  # idle bound is explained at `OperationalSettings`. It is read from the
-  # current settings snapshot here rather than carried in `TimeoutConfig`:
-  # that struct travels inside versioned websocket owner requests whose field
-  # set is validated exactly across nodes, and an owner never opens a Finch
-  # HTTP connection. `pool_max_idle_time` stays unset: stopping an idle
-  # per-origin pool can race a request that has just looked it up, and stale
-  # connections are already dropped at checkout.
+  # idle bound is explained at `OperationalSettings`, whose
+  # `upstream_http_pool_options/0` also bounds the non-gateway provider Req
+  # callers; they land on a different Finch instance because they keep their
+  # own connect timeout. The bound is read from the current settings snapshot
+  # here rather than carried in `TimeoutConfig`: that struct travels inside
+  # versioned websocket owner requests whose field set is validated exactly
+  # across nodes, and an owner never opens a Finch HTTP connection.
+  # `pool_max_idle_time` stays unset: stopping an idle per-origin pool can race
+  # a request that has just looked it up, and stale connections are already
+  # dropped at checkout.
   @spec req_timeout_options(TimeoutConfig.t() | timeout_settings()) :: keyword()
   def req_timeout_options(timeouts) do
     [
       receive_timeout: timeouts.receive_timeout_ms,
-      finch: [
-        pool_timeout: timeouts.pool_timeout_ms,
-        conn_opts: [transport_opts: [timeout: timeouts.connect_timeout_ms]],
-        conn_max_idle_time: OperationalSettings.current().upstream_conn_max_idle_time_ms
-      ]
+      finch:
+        [
+          pool_timeout: timeouts.pool_timeout_ms,
+          conn_opts: [transport_opts: [timeout: timeouts.connect_timeout_ms]]
+        ] ++ OperationalSettings.upstream_http_pool_options()
     ]
   end
 

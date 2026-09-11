@@ -293,6 +293,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   defmodule HTTPClient do
     @moduledoc false
 
+    alias CodexPooler.Gateway.OperationalSettings
     alias CodexPooler.Upstreams.Auth.CodexAuth
     alias CodexPooler.Upstreams.CloudflareCookies
 
@@ -336,7 +337,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
              headers: [{"content-type", "application/json"} | browser_request_headers()],
              body: CodexPooler.JSON.encode_to_iodata!(%{client_id: CodexAuth.client_id()}),
              retry: false,
-             receive_timeout: 30_000
+             receive_timeout: 30_000,
+             finch: OperationalSettings.upstream_http_pool_options()
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           decode_device_code(body)
@@ -364,7 +366,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
              headers: [{"content-type", "application/json"} | browser_request_headers()],
              body: CodexPooler.JSON.encode_to_iodata!(body),
              retry: false,
-             receive_timeout: 30_000
+             receive_timeout: 30_000,
+             finch: OperationalSettings.upstream_http_pool_options()
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           case body do
@@ -400,7 +403,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
              headers: browser_request_headers(),
              form: form,
              retry: false,
-             receive_timeout: 30_000
+             receive_timeout: 30_000,
+             finch: OperationalSettings.upstream_http_pool_options()
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           decode_authorization_code_token_response(body)
@@ -436,7 +440,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
       case post_with_cloudflare(token_url,
              form: form,
              retry: false,
-             receive_timeout: receive_timeout
+             receive_timeout: receive_timeout,
+             finch: OperationalSettings.upstream_http_pool_options()
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           decode_refresh_token_response(body)

@@ -203,6 +203,22 @@ defmodule CodexPooler.Gateway.OperationalSettings do
     }
   end
 
+  @doc """
+  Finch HTTP/1 pool options for every Req request that reaches a provider
+  origin: gateway dispatch through `TransportEnvelope.req_timeout_options/1`,
+  and the usage probe, token refresh and device sign-in, saved-reset
+  redemption, and model catalog discovery directly. Req starts a dedicated
+  Finch instance keyed by these options instead of using the global unbounded
+  `Req.Finch`, so a pooled connection idle past the bound is replaced at
+  checkout. Callers add only these options and keep their own connect,
+  receive, and retry settings; the options are read from the current snapshot
+  on each request, so a saved change applies without a restart.
+  """
+  @spec upstream_http_pool_options() :: [conn_max_idle_time: pos_integer()]
+  def upstream_http_pool_options do
+    [conn_max_idle_time: current().upstream_conn_max_idle_time_ms]
+  end
+
   @spec firewall_enabled?(t()) :: boolean()
   def firewall_enabled?(%__MODULE__{firewall_allowlist: allowlist}), do: allowlist != []
 

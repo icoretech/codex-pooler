@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.UpstreamConnPoolTelemetry
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
 
   @account_id "acct_usage_header_contract"
@@ -56,5 +57,46 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
       assert headers["chatgpt-account-id"] == @account_id
       refute Map.has_key?(headers, "accept")
     end)
+  end
+
+  test "usage and reset-credit GETs carry the upstream connection idle bound from settings" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    payload = %{
+      "plan_type" => "plus",
+      "rate_limit" => %{"allowed" => true, "limit_reached" => false},
+      "rate_limit_reset_credits" => %{"available_count" => 1}
+    }
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/backend-api/wham/usage" => {200, payload},
+           "/backend-api/codex/usage" => {200, payload},
+           "/backend-api/wham/rate-limit-reset-credits" => {200, %{"items" => []}}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    UpstreamConnPoolTelemetry.put_idle_bound!(0)
+    UpstreamConnPoolTelemetry.attach!(FakeUpstream.url(fake))
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: @account_id,
+        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+      })
+
+    assert {:ok, %UsageProbe.Result{}} =
+             UsageProbe.fetch_from_identity(identity, assignment, observed_at, [])
+
+    paths = fake |> FakeUpstream.requests() |> Enum.map(& &1.path)
+    assert "/backend-api/wham/rate-limit-reset-credits" in paths
+    assert length(paths) >= 2
+
+    assert UpstreamConnPoolTelemetry.drain_events() ==
+             List.duplicate(:conn_max_idle_time_exceeded, length(paths) - 1)
   end
 end
