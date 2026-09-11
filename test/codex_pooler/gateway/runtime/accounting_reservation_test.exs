@@ -25,9 +25,11 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
+    BridgeDemotion,
     BridgeOwnerLease,
     CodexSession,
     CodexTurn,
+    RoutingCircuitState,
     SessionContinuity
   }
 
@@ -1516,6 +1518,75 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     refute log =~ "forged_field=value"
   end
 
+  test "a reserved websocket turn without a websocket upstream settles once without route health" do
+    upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_must_not_dispatch_transport"}))
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = websocket_payload(setup.model.exposed_model_id, "transport required")
+
+    opts =
+      auth
+      |> request_options(payload, setup.model.exposed_model_id, "transport-required")
+      |> RequestOptions.put_continuity(
+        accepted_turn_state:
+          "transport-required-#{System.unique_integer([:positive, :monotonic])}"
+      )
+
+    assert {:ok, %CodexSession{} = session} = Websocket.start_codex_session(auth, opts)
+
+    # Prepared frames meet the same decision before reservation; a direct
+    # execute with a websocket transport and no writer reaches the reserved
+    # dispatch branch instead.
+    opts =
+      opts
+      |> RequestOptions.put_continuity(codex_session: session)
+      |> RequestOptions.put_transport(websocket_writer: nil)
+
+    assert {:error, %{status: 500, code: "websocket_transport_required"}} =
+             Service.execute(auth, @endpoint, payload, opts)
+
+    assert FakeUpstream.count(upstream) == 0
+
+    assert [request] = Repo.all(Request)
+    assert request.status == "failed"
+    assert request.last_error_code == "websocket_transport_required"
+    assert request.response_status_code == 500
+    assert request.retry_count == 0
+    refute get_in(request.request_metadata, ["routing", "demotion_reason"])
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.retryable == false
+    assert attempt.response_metadata["error_kind"] == "websocket_transport_required"
+    refute Map.has_key?(attempt.response_metadata, "upstream_transport")
+
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    assert turn.status == "failed"
+    assert turn.error_code == "websocket_transport_required"
+    assert turn.final_attempt_id == attempt.id
+
+    request_id = request.id
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request_id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(BridgeDemotion, :count) == 0
+
+    assert Repo.all(
+             from(circuit in RoutingCircuitState,
+               where:
+                 circuit.pool_upstream_assignment_id == ^setup.assignment.id and
+                   (circuit.failure_count > 0 or circuit.status != "closed")
+             )
+           ) == []
+  end
+
   defp request_options(auth, payload, model, request_id \\ "pre-attempt-rollback") do
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
 
@@ -1523,10 +1594,13 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       "codex-turn:" <>
         (:crypto.hash(:sha256, request_id) |> Base.url_encode64(padding: false))
 
+    # A websocket turn dispatches only through the upstream websocket, which
+    # needs a downstream writer; without one it fails closed before HTTP.
     %{
       request_id: request_id,
       upstream_endpoint: @endpoint,
       transport: "websocket",
+      websocket_writer: fn _frame -> :ok end,
       turn_claim_key: turn_claim_key,
       request_claim_key: turn_claim_key
     }
@@ -1548,7 +1622,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
           "content" => [%{"type" => "input_text", "text" => text}]
         }
       ],
-      "stream" => false
+      "stream" => true
     }
   end
 

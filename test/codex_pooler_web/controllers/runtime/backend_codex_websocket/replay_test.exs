@@ -911,10 +911,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     assert Enum.count(results, &match?(:ok, &1)) == 1
     assert Enum.count(results, &match?({:error, %{code: "duplicate_turn"}}, &1)) == 1
 
-    assert_receive {:websocket_frame, _label, _frame}, @websocket_frame_timeout
+    # The admitted continuation uses the upstream websocket on a fresh
+    # connection, so it receives the exact client retry signal before its
+    # payload is sent: only the anchor reaches the upstream.
+    assert_receive {:websocket_frame, _label, frame}, @websocket_frame_timeout
     refute_received {:websocket_frame, _label, _frame}
 
-    assert FakeUpstream.count(upstream) == 2
+    assert %{"type" => "error", "error" => %{"code" => "previous_response_not_found"}} =
+             CodexPooler.JSON.decode!(frame)
+
+    assert FakeUpstream.count(upstream) == 1
     assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
     assert Repo.aggregate(from(a in Attempt), :count) == 2
 

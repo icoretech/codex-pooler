@@ -1323,13 +1323,22 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           prepared.request_options
       end
 
-    execute_with_validation(
-      auth,
-      prepared.endpoint,
-      prepared.payload,
-      request_options,
-      {:prepared_websocket, prepared.provenance.validation, runtime_proof}
-    )
+    # A websocket turn must reach the upstream websocket; fail closed before
+    # validation, reservation, or upstream work rather than posting its body
+    # to the HTTP endpoint.
+    case UpstreamAttempt.transport_decision(request_options) do
+      :websocket_without_upstream ->
+        {:error, UpstreamAttempt.websocket_transport_required_error()}
+
+      _decision ->
+        execute_with_validation(
+          auth,
+          prepared.endpoint,
+          prepared.payload,
+          request_options,
+          {:prepared_websocket, prepared.provenance.validation, runtime_proof}
+        )
+    end
   end
 
   defp websocket_admission_metadata(%{endpoint: endpoint, request_options: request_options}) do

@@ -689,22 +689,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
+    # The websocket turn uses the upstream websocket even without a stream
+    # flag, so a continuation on a fresh upstream connection receives the exact
+    # client retry signal before its payload is sent; the HTTP-created durable
+    # session still resumes and owns the websocket turn.
     assert_received {:websocket_frame, frame}
-    assert %{"id" => "resp_http_to_ws"} = CodexPooler.JSON.decode!(frame)
 
-    assert websocket_request =
-             Enum.find(
-               FakeUpstream.requests(upstream),
-               &(&1.json["previous_response_id"] == "resp_http_to_ws")
+    assert %{
+             "type" => "error",
+             "status" => 400,
+             "error" => %{"code" => "previous_response_not_found"}
+           } = CodexPooler.JSON.decode!(frame)
+
+    refute Enum.any?(
+             FakeUpstream.requests(upstream),
+             &(&1.method == "WEBSOCKET" or
+                 (is_map(&1.json) and Map.has_key?(&1.json, "previous_response_id")))
+           )
+
+    # The client answers the retry signal with the full request; it reaches the
+    # upstream websocket and stays on the HTTP-created durable session.
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               CodexPooler.JSON.encode!(%{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("ws continuity full retry")
+               }),
+               %{request_id: "ws-continuity-full-retry", codex_session: websocket_session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    assert websocket_request.json["previous_response_id"] == "resp_http_to_ws"
+    assert_received {:websocket_frame, full_retry_frame}
+    assert %{"id" => "resp_http_to_ws"} = CodexPooler.JSON.decode!(full_retry_frame)
+
+    assert [websocket_request] =
+             Enum.filter(FakeUpstream.requests(upstream), &(&1.method == "WEBSOCKET"))
+
+    refute Map.has_key?(websocket_request.json, "previous_response_id")
 
     assert Repo.aggregate(
              from(t in CodexTurn, where: t.codex_session_id == ^http_session.id),
              :count
            ) ==
-             2
+             3
   end
 
   test "HTTP response id continuity refreshes sticky session quota before fallback candidates", %{

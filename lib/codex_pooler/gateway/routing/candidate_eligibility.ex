@@ -11,7 +11,6 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
-  alias CodexPooler.RouteClass
   alias CodexPooler.ServiceTier
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
@@ -574,7 +573,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     case source_assignment_model_metadata(model, assignment) do
       %{} = metadata ->
         endpoint_compatible?(endpoint, metadata, request_options) and
-          streaming_compatible?(payload, metadata) and
+          streaming_compatible?(payload, request_options, metadata) and
           image_input_compatible?(has_input_image?, metadata) and
           tools_compatible?(payload, metadata) and
           reasoning_compatible?(payload, metadata) and
@@ -611,8 +610,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     ])
   end
 
-  defp streaming_compatible?(payload, metadata) do
-    not RouteClass.streaming?(payload) or
+  defp streaming_compatible?(payload, request_options, metadata) do
+    not RequestOptions.upstream_streaming?(request_options, payload) or
       not ModelMetadata.streaming_explicitly_unsupported?(metadata)
   end
 

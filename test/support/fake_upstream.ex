@@ -2026,6 +2026,25 @@ defmodule CodexPooler.FakeUpstream do
         })
       ]
 
+    # Path-routed modes answer a native websocket turn like the matching HTTP
+    # route: a JSON route pushes its payload as one text frame (an error status
+    # as one type:error frame), and a nested mode keeps its websocket shape.
+    defp websocket_messages({:path_json, routes}, request) do
+      case Map.get(routes, request.path) do
+        {status, payload} when is_integer(status) and status in 200..299 ->
+          [CodexPooler.JSON.encode!(payload)]
+
+        {status, payload} when is_integer(status) ->
+          websocket_messages({:json_error, status, payload}, request)
+
+        nil ->
+          {:close, 1011, "unsupported fake websocket mode"}
+
+        mode ->
+          websocket_messages(mode, request)
+      end
+    end
+
     defp websocket_messages(_mode, _request),
       do: {:close, 1011, "unsupported fake websocket mode"}
 

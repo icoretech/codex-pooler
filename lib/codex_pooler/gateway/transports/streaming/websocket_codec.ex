@@ -109,6 +109,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp prepare_decoded_frame(%{"type" => "response.create"} = payload, opts, push_frame) do
     with :ok <- validate_native_response_model(payload, opts),
+         :ok <- validate_native_stream_flag(payload, opts),
          :ok <- validate_native_compaction_placement(payload, opts),
          {:ok, coerced} <- coerce_request(payload, opts, push_frame) do
       request_options = coerced.request_options
@@ -181,6 +182,30 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp validate_native_response_model(_payload, %RequestOptions{}),
     do: {:error, Error.invalid_request("model is required", "model")}
+
+  # The provider websocket answers an explicit `stream: false` with a 400
+  # invalid_request_error, so it is rejected before admission or accounting.
+  # An omitted flag still relays; compaction frames keep their bridge rules.
+  defp validate_native_stream_flag(
+         _payload,
+         %RequestOptions{openai_compatibility: %{public_openai_responses_stream: true}}
+       ),
+       do: :ok
+
+  defp validate_native_stream_flag(%{"stream" => false} = payload, %RequestOptions{}) do
+    if compaction_trigger_frame?(payload) do
+      :ok
+    else
+      {:error, Error.invalid_request("stream must be true for websocket responses", "stream")}
+    end
+  end
+
+  defp validate_native_stream_flag(_payload, %RequestOptions{}), do: :ok
+
+  defp compaction_trigger_frame?(%{"input" => input}) when is_list(input),
+    do: Enum.any?(input, &match?(%{"type" => "compaction_trigger"}, &1))
+
+  defp compaction_trigger_frame?(_payload), do: false
 
   defp validate_optional_model(payload) do
     case Map.fetch(payload, "model") do

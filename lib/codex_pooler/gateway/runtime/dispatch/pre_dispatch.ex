@@ -842,13 +842,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
-  defp ensure_model_supports(%Model{} = model, _endpoint, payload, _opts, has_input_image?) do
+  defp ensure_model_supports(%Model{} = model, _endpoint, payload, opts, has_input_image?) do
     cond do
       not model.supports_responses ->
         {:error,
          error(400, "unsupported_model_capability", "model does not support responses", "model")}
 
-      RouteClass.streaming?(payload) and not model.supports_streaming ->
+      RequestOptions.upstream_streaming?(opts, payload) and not model.supports_streaming ->
         {:error,
          error(400, "unsupported_model_capability", "model does not support streaming", "stream")}
 

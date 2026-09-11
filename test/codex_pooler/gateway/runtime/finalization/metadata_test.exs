@@ -680,6 +680,60 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     refute Enum.any?(Map.keys(metadata), &String.starts_with?(&1, "rejection_"))
   end
 
+  test "response metadata records a bounded class for provider detail rejection bodies" do
+    stream_detail = "Stream must be set to true"
+    free_text_detail = "Invalid value near: synthetic prompt sentinel"
+
+    detail_metadata = fn status, detail ->
+      %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"detail" => detail})}
+      |> Metadata.response_metadata("full_upstream_rejection", %{})
+    end
+
+    stream_metadata = detail_metadata.(400, stream_detail)
+    assert stream_metadata["rejection_detail_class"] == "stream_must_be_true"
+    assert stream_metadata["rejection_message_present"] == true
+    assert stream_metadata["rejection_message_bytes"] == byte_size(stream_detail)
+    refute Map.has_key?(stream_metadata, "rejection_error_code")
+    refute inspect(stream_metadata) =~ stream_detail
+
+    assert detail_metadata.(404, "Not_Found.v2")["rejection_detail_class"] == "Not_Found.v2"
+
+    free_text_metadata = detail_metadata.(400, free_text_detail)
+    assert "sha256_" <> fingerprint = free_text_metadata["rejection_detail_class"]
+    assert fingerprint =~ ~r/\A[0-9a-f]{12}\z/
+    assert free_text_metadata["rejection_message_bytes"] == byte_size(free_text_detail)
+    refute inspect(free_text_metadata) =~ "synthetic prompt sentinel"
+
+    for detail <- [[%{"loc" => ["body", "stream"], "msg" => "synthetic"}], %{"msg" => "x"}, nil] do
+      structured = detail_metadata.(422, detail)
+      assert structured["rejection_detail_class"] == "non_string_detail"
+      assert structured["rejection_message_present"] == false
+      assert structured["rejection_message_bytes"] == 0
+      refute inspect(structured) =~ "synthetic"
+    end
+
+    assert detail_metadata.(400, "")["rejection_detail_class"] == "empty_detail"
+
+    refute Enum.any?(
+             Map.keys(detail_metadata.(429, stream_detail)),
+             &String.starts_with?(&1, "rejection_")
+           )
+
+    error_precedence =
+      %Req.Response{
+        status: 400,
+        body:
+          CodexPooler.JSON.encode!(%{
+            "error" => %{"code" => "invalid_request", "type" => "invalid_request_error"},
+            "detail" => stream_detail
+          })
+      }
+      |> Metadata.response_metadata("upstream_status", %{})
+
+    assert error_precedence["rejection_error_code"] == "invalid_request"
+    refute Map.has_key?(error_precedence, "rejection_detail_class")
+  end
+
   test "response metadata records response body limit evidence without retaining body bytes" do
     collect = BoundedResponseBody.collector(8)
 

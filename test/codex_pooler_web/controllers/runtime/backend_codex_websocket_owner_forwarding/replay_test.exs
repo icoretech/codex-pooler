@@ -36,6 +36,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
 
   @blocking_owner_receive_timeout_ms 5_000
   @handoff_detection_timeout_ms 15_000
+  # Owner handoff timers for tests that send the deadline messages themselves;
+  # well beyond @handoff_detection_timeout_ms so no real deadline races them.
+  @signal_driven_handoff_soft_timeout_ms 30_000
+  @signal_driven_handoff_absolute_timeout_ms 60_000
 
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -1388,12 +1392,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     turn_state = "stable-ws-owner-handoff-timeout"
 
+    # The test drives both handoff deadlines with explicit token messages. The
+    # owner's own timers stay far beyond every detection budget so a real
+    # deadline cannot fail the handoff while the predecessor is still settling
+    # after the soft timeout, which takes well over 100 ms under load.
     {:ok, first_state} =
       owner_socket(auth, "ws-owner-handoff-timeout-a", turn_state,
         websocket_owner_forwarder_opts: [
           upstream: upstream_boundary,
-          handoff_soft_timeout_ms: 25,
-          handoff_absolute_timeout_ms: 100
+          handoff_soft_timeout_ms: @signal_driven_handoff_soft_timeout_ms,
+          handoff_absolute_timeout_ms: @signal_driven_handoff_absolute_timeout_ms
         ]
       )
 
@@ -1439,6 +1447,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
              )
 
     owner_pending = :sys.get_state(owner_pid).pending_handoff
+    soft_timeout_sent_at = System.monotonic_time(:millisecond)
 
     send(
       owner_pid,
@@ -1447,6 +1456,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
 
     assert length(request_logs(setup.pool.id)) == 1
     assert_receive {:websocket_owner_handoff_ready, _, _, _, _, _}, @handoff_detection_timeout_ms
+
+    CodexPooler.TestDiagnostics.puts(
+      "handoff soft_timeout_to_ready_ms=#{System.monotonic_time(:millisecond) - soft_timeout_sent_at}"
+    )
 
     owner_pending = :sys.get_state(owner_pid).pending_handoff
 

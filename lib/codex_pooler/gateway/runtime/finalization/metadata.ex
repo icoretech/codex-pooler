@@ -8,12 +8,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
   @canonical_uuid_byte_size 36
   @rejection_body_max_bytes 65_536
   @rejection_token_max_bytes 80
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
+  @rejection_detail_classes %{"Stream must be set to true" => "stream_must_be_true"}
   @rejection_param_max_bytes 160
   @rejection_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
   @upstream_websocket_connection_atom_keys [
@@ -159,12 +161,38 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
         )
         |> put_rejection_message_metadata(error["message"])
 
+      {:ok, %{"detail" => detail}} ->
+        detail_rejection_metadata(detail)
+
       _other ->
         %{}
     end
   end
 
   defp decode_rejection_metadata(_body), do: %{}
+
+  # `{"detail": ...}` rejection bodies carry free provider text that may echo
+  # request content. Only a fixed class, an identifier-shaped value, or a
+  # 12-character fingerprint is recorded, next to the bounded message size.
+  defp detail_rejection_metadata(detail) when is_binary(detail) do
+    put_rejection_message_metadata(
+      %{"rejection_detail_class" => rejection_detail_class(detail)},
+      detail
+    )
+  end
+
+  defp detail_rejection_metadata(_detail) do
+    put_rejection_message_metadata(%{"rejection_detail_class" => "non_string_detail"}, nil)
+  end
+
+  defp rejection_detail_class(""), do: "empty_detail"
+
+  defp rejection_detail_class(detail) do
+    case Map.fetch(@rejection_detail_classes, detail) do
+      {:ok, class} -> class
+      :error -> DiagnosticTaxonomy.identifier(detail)
+    end
+  end
 
   defp decode_rejection_error(body)
        when is_binary(body) and byte_size(body) <= @rejection_body_max_bytes do

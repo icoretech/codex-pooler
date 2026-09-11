@@ -2466,6 +2466,18 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "every frame authored through the shared websocket error envelope carries error type invalid_request_error, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed when its reason has no code and message"
 
       assert feature.contract =~
+               "a native backend websocket response.create turn uses the upstream websocket whether its stream flag is true or omitted and never falls back to the HTTP Responses endpoint"
+
+      assert feature.contract =~
+               "an explicit stream false is rejected before admission, accounting, or upstream work with status 400 wire code invalid_request and param stream"
+
+      assert feature.contract =~
+               "fails closed before reservation with one type:error frame carrying status 500 and wire code websocket_transport_required"
+
+      assert feature.contract =~
+               "a stream-less websocket turn on a non-streaming model receives the same local 400 unsupported_model_capability param stream rejection as stream true"
+
+      assert feature.contract =~
                "an unresolved previous-response alias retains the current authenticated runtime"
 
       assert feature.contract =~
@@ -3836,15 +3848,6 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert captured.json["reasoning"] == %{"effort" => "max"}
     end
 
-    test "supported reasoning contract preserves non-minimal efforts", %{conn: conn} do
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_medium"}))
-      setup = gateway_setup(upstream)
-
-      conn =
-        conn
-        |> auth(setup)
-        |> post(~p"/backend-api/codex/responses", %{
-          "model" => setup.model.exposed_model_id,
     test "supported reasoning ultra contract rewrites ultra to the highest catalog level when the model lacks max",
          %{conn: conn} do
       upstream =
@@ -3905,6 +3908,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert captured.json["reasoning"] == %{"effort" => "none"}
     end
 
+    test "supported reasoning contract preserves non-minimal efforts", %{conn: conn} do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_medium"}))
+      setup = gateway_setup(upstream)
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post(~p"/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
           "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "medium"}
         })
@@ -3913,6 +3925,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.json["reasoning"] == %{"effort" => "medium"}
     end
+  end
+
+  defp put_catalog_reasoning_levels!(setup, levels) do
+    metadata = Map.put(setup.model.metadata, "supported_reasoning_levels", levels)
+    model = setup.model |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
+    Map.put(setup, :model, model)
   end
 
   defp gateway_setup(upstream, opts \\ []) do
@@ -3924,12 +3942,6 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     if Keyword.get(opts, :quota?, true) do
       prime_routing_quota!(upstream.identity)
     end
-  defp put_catalog_reasoning_levels!(setup, levels) do
-    metadata = Map.put(setup.model.metadata, "supported_reasoning_levels", levels)
-    model = setup.model |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
-    Map.put(setup, :model, model)
-  end
-
 
     model =
       model_fixture(pool, %{

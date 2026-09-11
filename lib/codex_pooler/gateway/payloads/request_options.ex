@@ -25,6 +25,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
+  alias CodexPooler.RouteClass
 
   @enforce_keys [
     :request_metadata,
@@ -752,6 +753,16 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   def put_transport(%__MODULE__{} = options, updates) when is_list(updates) do
     %{options | transport: Transport.update(options.transport, updates)}
   end
+
+  @doc """
+  Whether the upstream request streams. A websocket turn always streams
+  upstream whatever its `stream` flag; any other transport follows the flag.
+  """
+  @spec upstream_streaming?(t(), map()) :: boolean()
+  def upstream_streaming?(%__MODULE__{transport: %{transport: "websocket"}}, _payload), do: true
+
+  def upstream_streaming?(%__MODULE__{}, payload) when is_map(payload),
+    do: RouteClass.streaming?(payload)
 
   @spec connection_bound_compaction?(t()) :: boolean()
   def connection_bound_compaction?(%__MODULE__{

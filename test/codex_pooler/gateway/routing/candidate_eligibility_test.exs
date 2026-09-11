@@ -189,6 +189,44 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       assert candidate_ids(filtered) == ["assignment-image"]
     end
 
+    test "a websocket turn requires streaming support whatever its stream flag" do
+      model = %Model{
+        metadata: %{
+          "source_assignment_models" => %{
+            "assignment-streaming" => %{
+              "capabilities" => %{"responses" => true, "streaming" => true}
+            },
+            "assignment-no-streaming" => %{
+              "capabilities" => %{"responses" => true, "streaming" => false}
+            }
+          }
+        }
+      }
+
+      payload = %{"model" => "gpt-4.1", "input" => []}
+      candidates = [candidate("assignment-streaming"), candidate("assignment-no-streaming")]
+      endpoint = "/backend-api/codex/responses"
+
+      http_options = RequestOptions.build(%{}, endpoint, payload)
+      websocket_options = RequestOptions.build(%{transport: "websocket"}, endpoint, payload)
+
+      assert {:ok, http_filtered} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, payload, http_options, candidates)
+               )
+
+      assert candidate_ids(http_filtered) == ["assignment-streaming", "assignment-no-streaming"]
+
+      for websocket_payload <- [payload, Map.put(payload, "stream", true)] do
+        assert {:ok, websocket_filtered} =
+                 CandidateEligibility.filter_runtime_compatible_candidates(
+                   filter_input(model, websocket_payload, websocket_options, candidates)
+                 )
+
+        assert candidate_ids(websocket_filtered) == ["assignment-streaming"]
+      end
+    end
+
     test "string type false wins over a conflicting atom input_image type" do
       model = model_with_image_support("assignment-text", false)
 
