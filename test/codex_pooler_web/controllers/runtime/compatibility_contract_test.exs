@@ -2107,10 +2107,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                      persistence: "hashed_alias_only"
                    },
                    native_frames: ["response.output_item.done", "response.completed"],
+                   collected_result: %{
+                     source: "collect_delivery_accumulator_not_diagnostic_retention",
+                     max_bytes: 8_388_608,
+                     diagnostic_retention_bytes: 65_536,
+                     overflow_reason: "compaction_result_too_large"
+                   },
                    errors: %{
                      malformed_trigger: "pre_dispatch_invalid_request",
                      compact_saturation: "server_is_overloaded",
                      invalid_result: "invalid_compaction_response",
+                     oversized_result: "invalid_compaction_response",
                      provider_terminal: "canonical_provider_terminal"
                    },
                    socket_reuse: "ordinary_follow_up_same_downstream_socket",

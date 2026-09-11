@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
   @moduletag :collect_compaction
 
   alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
+  alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
 
   test "websocket body accepts exactly one canonical or alias item and completed terminal" do
     for type <- ["compaction", "compaction_summary"] do
@@ -213,6 +214,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
     assert log =~ "param=input"
     assert log =~ "elapsed_ms="
     refute log =~ raw_message
+  end
+
+  test "an overflowed collected body is diagnosed distinctly from a missing terminal" do
+    body =
+      CollectedBody.empty()
+      |> CollectedBody.append(:binary.copy("x", CollectedBody.max_bytes() + 1))
+      |> CollectedBody.read()
+
+    log =
+      capture_log([level: :warning], fn ->
+        assert {:error, %{status: 502, code: "invalid_compaction_response"}} =
+                 CompactionResultCollector.collect_websocket_body(body)
+      end)
+
+    assert log =~ "source_stage=collector_invalid"
+    assert log =~ "reason_code=compaction_result_too_large"
+    refute log =~ "reason_code=missing_terminal"
   end
 
   defp event_count(log, message), do: length(String.split(log, message)) - 1

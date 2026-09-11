@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
+  alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -3945,6 +3946,92 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute String.contains?(body, response_id)
   end
 
+  @tag :collect_compaction
+  test "collects a compaction item that later frames push past the diagnostic retention bound" do
+    encrypted_content = "opaque-compaction-result"
+
+    item_frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => encrypted_content}
+      })
+
+    # The compact result is authoritative for the collect delivery modes, so it
+    # must survive however many frames follow it. 40 * 2 KiB clears the 64 KiB
+    # diagnostic retention bound that used to evict the item above.
+    filler_frames =
+      for index <- 1..40 do
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.output_text.delta",
+          "sequence_number" => index,
+          "delta" => String.duplicate("x", 2_048)
+        })
+      end
+
+    terminal_frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_collect_past_retention", "status" => "completed"}
+      })
+
+    assert {:ok, %{body: body, terminal: "response.completed"}} =
+             request_websocket_frames(
+               [item_frame] ++ filler_frames ++ [terminal_frame],
+               writer: nil,
+               websocket_delivery_mode: :collect_full_history,
+               effective_serving_mode: "full",
+               payload: full_history_compaction_payload()
+             )
+
+    assert {:ok, %{compaction_item: %{"encrypted_content" => ^encrypted_content}}} =
+             CompactionResultCollector.collect_websocket_body(body)
+
+    assert byte_size(body) > 65_536
+  end
+
+  test "attributes a truncated retained body to its transport and route class" do
+    attach_stream_buffer_telemetry()
+
+    frames = [
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => "opaque-compaction-result"}
+      }),
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => String.duplicate("x", 70_000)
+      }),
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+    ]
+
+    assert {:ok, _collected} =
+             request_websocket_frames(frames,
+               writer: nil,
+               websocket_delivery_mode: :collect_full_history,
+               effective_serving_mode: "full",
+               payload: full_history_compaction_payload()
+             )
+
+    assert_receive {[:codex_pooler, :gateway, :stream_buffer, :truncated], %{count: 1},
+                    %{
+                      buffer: "retained_body",
+                      transport: "websocket",
+                      route_class: "proxy_compact"
+                    }}
+
+    assert {:ok, _relayed} = request_websocket_frames(frames)
+
+    assert_receive {[:codex_pooler, :gateway, :stream_buffer, :truncated], %{count: 1},
+                    %{
+                      buffer: "retained_body",
+                      transport: "websocket",
+                      route_class: "proxy_websocket"
+                    }}
+  end
+
   test "captures nested identities from each allowlisted typed lifecycle or success frame" do
     Enum.each(
       [
@@ -4865,6 +4952,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       writer: fn _text -> :ok end,
       message_mapper: nil
     }
+  end
+
+  defp attach_stream_buffer_telemetry do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    parent = self()
+
+    :telemetry.attach(
+      handler_id,
+      [:codex_pooler, :gateway, :stream_buffer, :truncated],
+      fn event, measurements, metadata, _config ->
+        send(parent, {event, measurements, metadata})
+      end,
+      :ok
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  defp full_history_compaction_payload do
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.create",
+      "input" => [
+        %{"type" => "message", "role" => "user", "content" => "synthetic"},
+        %{"type" => "compaction_trigger"}
+      ]
+    })
   end
 
   defp generation_request(base_url) do

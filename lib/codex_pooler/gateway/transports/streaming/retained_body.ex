@@ -10,10 +10,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.RetainedBody do
   @spec empty() :: t()
   def empty, do: {[], 0}
 
-  @spec append(t(), iodata()) :: t()
-  def append(body, ""), do: body
+  @spec append(t(), iodata(), BufferTelemetry.event_opts()) :: t()
+  def append(body, data, opts \\ [])
 
-  def append({chunks, byte_count}, data) when is_list(chunks) and is_integer(byte_count) do
+  def append(body, "", _opts), do: body
+
+  def append({chunks, byte_count}, data, opts)
+      when is_list(chunks) and is_integer(byte_count) do
     data = IO.iodata_to_binary(data)
     retained_bytes = byte_count + byte_size(data)
 
@@ -21,7 +24,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.RetainedBody do
       BufferTelemetry.record_retained_body_truncated(
         "retained_body",
         retained_bytes,
-        @max_bytes
+        @max_bytes,
+        opts
       )
     end
 

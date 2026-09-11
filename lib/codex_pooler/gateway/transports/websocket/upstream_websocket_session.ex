@@ -7,8 +7,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
+  alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
+  alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -35,6 +37,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
+  alias CodexPooler.RouteClass
 
   @default_keepalive_interval_ms 25_000
   @dev_features_build_enabled Application.compile_env(
@@ -769,6 +772,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp collect_compaction?(%Request{}), do: false
 
+  # Only a collecting turn pays for the larger accumulator; a relayed turn keeps
+  # the bounded diagnostic retention alone.
+  defp new_collected_body(%Request{} = request) do
+    if collect_compaction?(request), do: CollectedBody.empty(), else: CollectedBody.disabled()
+  end
+
   defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
   defp reusable_connection?(_state, _key), do: false
 
@@ -791,6 +800,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         mode: request.websocket_delivery_mode,
         effective_serving_mode: request.effective_serving_mode
       },
+      collected_body: new_collected_body(request),
       request_caller_pid: request_caller_pid,
       request_caller_monitor: request_caller_monitor,
       native_client_retry_observation: request.native_client_retry_observation,
@@ -1598,7 +1608,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:terminal, state, receive_state, terminal} ->
         result =
           %{
-            body: receive_body(receive_state),
+            body: terminal_body(receive_state),
             terminal: terminal,
             response_usage: receive_state.response_usage,
             status: 200,
@@ -1777,9 +1787,46 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end)
   end
 
-  defp append_receive_body(%ReceiveState{body: body} = receive_state, text) do
-    %{receive_state | body: RetainedBody.append(body, ["data: ", text, "\n\n"])}
+  defp append_receive_body(
+         %ReceiveState{body: body, collected_body: collected_body} = receive_state,
+         text
+       ) do
+    data = ["data: ", text, "\n\n"]
+    telemetry_opts = buffer_telemetry_opts(receive_state)
+
+    %{
+      receive_state
+      | body: RetainedBody.append(body, data, telemetry_opts),
+        collected_body: append_collected_body(collected_body, data, telemetry_opts)
+    }
   end
+
+  defp append_collected_body(collected_body, data, telemetry_opts) do
+    appended = CollectedBody.append(collected_body, data)
+
+    if CollectedBody.overflow?(appended) and not CollectedBody.overflow?(collected_body) do
+      BufferTelemetry.record_oversized_incomplete(
+        "collected_body",
+        CollectedBody.bytes(appended),
+        CollectedBody.max_bytes(),
+        telemetry_opts
+      )
+    end
+
+    appended
+  end
+
+  # A truncated retained body can only be attributed once the metric says which
+  # transport and route class produced it. A collecting turn is admitted as
+  # `proxy_compact` inside the outer websocket route class.
+  defp buffer_telemetry_opts(%ReceiveState{delivery: %Delivery{mode: mode}}) do
+    [transport: "websocket", route_class: buffer_route_class(mode)]
+  end
+
+  defp buffer_route_class(mode) when mode in [:collect_compaction, :collect_full_history],
+    do: RouteClass.proxy_compact()
+
+  defp buffer_route_class(_mode), do: RouteClass.proxy_websocket()
 
   defp handle_text_frame(
          state,
@@ -2118,6 +2165,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp receive_body(%ReceiveState{body: body}), do: websocket_body(body)
+
+  # A collected turn's body is the authoritative compact result rather than
+  # error diagnostics, so a completed or provider-terminal collection reads the
+  # whole accumulated turn. Every other result keeps the bounded diagnostic
+  # suffix.
+  defp terminal_body(%ReceiveState{collected_body: :disabled} = receive_state),
+    do: receive_body(receive_state)
+
+  defp terminal_body(%ReceiveState{collected_body: collected_body}),
+    do: CollectedBody.read(collected_body)
 
   defp observe_native_client_retry(
          %ReceiveState{native_client_retry_observation: nil} = receive_state,

@@ -14,8 +14,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
 
+  # The collect delivery modes accumulate their authoritative compact result in
+  # `Transports.Streaming.CollectedBody`, which latches this internal marker
+  # instead of handing back a truncated stream. Recognizing it keeps an
+  # oversized compact result a distinct diagnosis rather than an
+  # indistinguishable `missing_terminal`.
+  #
+  # The literal is deliberate: reading it from `CollectedBody.overflow_event_type/0`
+  # would make this module compile-connected to a transport module, which the
+  # xref gate forbids. The collector's overflow test builds its body through
+  # `CollectedBody` and asserts this diagnosis, so producer and consumer cannot
+  # drift apart unnoticed.
+  @collected_body_overflow_type "codex_pooler.collected_body_overflow"
+
   @type collection_error ::
-          :duplicate_compaction
+          :compaction_result_too_large
+          | :duplicate_compaction
           | :invalid_compaction
           | :missing_compaction
           | :missing_terminal
@@ -392,6 +406,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp collect_summarized_event(%{data_type: type}, _event, _state)
        when type in ["response.completed", "response.done"],
        do: {:error, :missing_terminal}
+
+  defp collect_summarized_event(
+         _event_summary,
+         %{"type" => @collected_body_overflow_type},
+         _state
+       ),
+       do: {:error, :compaction_result_too_large}
 
   defp collect_summarized_event(%{event_type: type} = event_summary, event, _state)
        when type in ["error", "response.failed", "response.incomplete"] do

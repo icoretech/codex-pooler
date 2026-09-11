@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
   alias __MODULE__.Delivery
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
+  alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
 
   # The receive state mirrors the finite websocket protocol phases; adding the
@@ -54,6 +55,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     terminal_candidate_rejection: nil,
     text_frame_count: 0,
     body: {[], 0},
+    collected_body: :disabled,
     websocket_frame_headers: %{},
     peer_close_metadata: %{}
   ]
@@ -96,6 +98,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           websocket_frame_headers: %{optional(String.t()) => String.t()},
           peer_close_metadata:
             CodexPooler.Gateway.Transports.TransportFailureReason.transport_failure_metadata(),
-          body: RetainedBody.t()
+          body: RetainedBody.t(),
+          collected_body: CollectedBody.t()
         }
 end
