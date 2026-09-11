@@ -83,6 +83,20 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
     end
   end
 
+  defp begin_token_refresh(
+         %UpstreamIdentity{credential_provenance: "responses_api_key"} = identity,
+         _trigger_kind,
+         _receive_timeout_ms,
+         _stale_after_ms,
+         _expected_credential_epoch
+       ) do
+    {:ok,
+     token_refresh_result(:noop, identity,
+       retryable?: false,
+       reason: "API keys do not use OAuth refresh"
+     )}
+  end
+
   # Reason: token refresh state machine keeps row locks and terminal statuses local.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp begin_token_refresh(

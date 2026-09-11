@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @exhausted_status 503
   @exhausted_message "upstream authentication failed; retry the request"
@@ -32,7 +33,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
 
   @spec eligible?(PreparedContext.t(), Req.Response.t()) :: boolean()
   def eligible?(%PreparedContext{context: context}, %Req.Response{} = response) do
-    auth_failure?(response) and not AuthRefresh.retry_suppressed?(context)
+    not UpstreamIdentity.responses_api?(context.identity) and
+      auth_failure?(response) and not AuthRefresh.retry_suppressed?(context)
   end
 
   @spec auth_failure?(Req.Response.t()) :: boolean()

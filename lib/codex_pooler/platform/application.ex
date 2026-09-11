@@ -21,6 +21,7 @@ defmodule CodexPooler.Application do
       CodexPooler.Jobs.UpstreamEnqueue.GatewayReconciliationGate,
       CodexPooler.Access.APIKeys.TouchDebounce,
       CodexPooler.Upstreams.CloudflareCookies,
+      CodexPooler.Upstreams.ResponsesAPIHistory,
       CodexPooler.Gateway.Transports.Admission,
       {Registry,
        keys: :unique,

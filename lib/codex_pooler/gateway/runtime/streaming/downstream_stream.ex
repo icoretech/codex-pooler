@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
+  alias CodexPooler.Upstreams.ResponsesAPIHistory
+  alias CodexPooler.Upstreams.ResponsesAPITools
 
   @type state :: map()
   @type source :: :http | :websocket_bridge
@@ -56,6 +58,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @spec normalize_data(iodata(), String.t() | nil, RequestOptions.t(), state()) ::
           {iodata(), state()}
   def normalize_data(data, endpoint, %RequestOptions{} = opts, state) do
+    {data, state} = normalize_api_tools(data, opts.payload_context, state)
+
     cond do
       public_openai_chat_stream?(opts) ->
         normalize_public_openai_chat_stream_data(data, state)
@@ -70,6 +74,25 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         {normalize_endpoint_data(endpoint, data), state}
     end
   end
+
+  defp normalize_api_tools(
+         data,
+         %{responses_api_tools: bindings, responses_api_history: history},
+         state
+       )
+       when map_size(bindings) > 0 or not is_nil(history) do
+    {data, tool_state} =
+      ResponsesAPITools.stream(
+        IO.iodata_to_binary(data),
+        bindings,
+        Map.get(state, :responses_api_tools_state)
+      )
+
+    ResponsesAPIHistory.remember(history, tool_state.completed_response)
+    {data, Map.put(state, :responses_api_tools_state, %{tool_state | completed_response: nil})}
+  end
+
+  defp normalize_api_tools(data, _bindings, state), do: {data, state}
 
   @spec keepalive_allowed?(state()) :: boolean()
   def keepalive_allowed?(%{

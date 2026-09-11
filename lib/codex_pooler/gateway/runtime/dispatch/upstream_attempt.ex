@@ -15,6 +15,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
+  alias CodexPooler.Upstreams.ResponsesAPICompaction
+  alias CodexPooler.Upstreams.ResponsesAPIHistory
+  alias CodexPooler.Upstreams.ResponsesAPITools
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @type callbacks :: %{
           required(:register_continuity) => (term(), term(), term() -> term()),
@@ -24,6 +28,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
   @spec dispatch(PreparedContext.t(), callbacks()) :: dispatch_result()
   def dispatch(%PreparedContext{context: context} = prepared_context, callbacks) do
+    if UpstreamIdentity.responses_api?(context.identity) do
+      dispatch_http(prepared_context, callbacks)
+    else
+      dispatch_selected_transport(prepared_context, callbacks)
+    end
+  end
+
+  defp dispatch_selected_transport(
+         %PreparedContext{context: context} = prepared_context,
+         callbacks
+       ) do
     case transport_decision(context.request_options) do
       :websocket ->
         dispatch_websocket(prepared_context, callbacks)
@@ -123,18 +138,25 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   defp dispatch_http(%PreparedContext{context: context} = prepared_context, callbacks) do
     dispatch_request = dispatch_request(prepared_context)
 
-    case UpstreamDispatch.http_request(dispatch_request) do
-      {:ok, response} ->
-        if HttpAuthRefresh.eligible?(prepared_context, response) do
-          HttpAuthRefresh.handle(prepared_context, response, &dispatch_http(&1, callbacks))
-        else
-          Finalization.handle_http_response(
-            response,
-            context,
-            finalization_callbacks(callbacks)
-          )
-        end
+    with {:ok, response} <- UpstreamDispatch.http_request(dispatch_request),
+         response =
+           ResponsesAPITools.response(
+             response,
+             context.request_options.payload_context.responses_api_tools
+           ),
+         {:ok, response} <- ResponsesAPICompaction.finish(response, context) do
+      response =
+        ResponsesAPIHistory.remember_json(
+          response,
+          context.request_options.payload_context.responses_api_history
+        )
 
+      if HttpAuthRefresh.eligible?(prepared_context, response) do
+        HttpAuthRefresh.handle(prepared_context, response, &dispatch_http(&1, callbacks))
+      else
+        Finalization.handle_http_response(response, context, finalization_callbacks(callbacks))
+      end
+    else
       {:error, reason} ->
         Finalization.handle_dispatch_error(reason, context, elapsed_ms(context.started))
     end

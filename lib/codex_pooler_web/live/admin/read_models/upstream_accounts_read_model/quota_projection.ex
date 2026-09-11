@@ -75,6 +75,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
   @type saved_reset_confirmation :: SavedResetConfirmationProjection.t()
 
+  @spec api_billing_readiness() :: UpstreamQuotaReadiness.t()
+  def api_billing_readiness do
+    %{
+      state: "ready",
+      label: "API billing",
+      tone: :success,
+      routing_ready_now?: true,
+      reason_codes: ["api_key_billing"],
+      primary_window: nil,
+      primary_30d_window: nil,
+      weekly_window: nil
+    }
+  end
+
   @spec saved_reset_confirmation(
           map(),
           [Quota.AccountQuotaWindow.t()],

@@ -386,7 +386,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     snapshot_at = quota_snapshot.as_of
     raw_quota_windows = RoutingQuotaSnapshot.time_visible_raw_windows(quota_snapshot)
     quota_windows = RoutingQuotaSnapshot.effective_windows(quota_snapshot)
-    quota_readiness = QuotaProjection.readiness(quota_snapshot, snapshot_at)
+
+    quota_readiness =
+      if UpstreamIdentity.responses_api?(identity),
+        do: QuotaProjection.api_billing_readiness(),
+        else: QuotaProjection.readiness(quota_snapshot, snapshot_at)
+
     token_burn = Map.fetch!(token_burns, identity.id)
 
     identity_assignments =
