@@ -41,6 +41,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:websocket_close_without_terminal_barrier, non_neg_integer(), String.t(), pid(),
              reference()}
           | {:websocket_init_barrier, mode(), pid(), reference()}
+          | {:websocket_frame_barrier, [String.t()], pid(), reference()}
           | {:sequence, [mode()]}
           | {:strict_sequence, [mode()]}
           | {:repeat_last, [mode()]}
@@ -355,6 +356,113 @@ defmodule CodexPooler.FakeUpstream do
     {:websocket_text, Enum.map(messages, &IO.iodata_to_binary/1)}
   end
 
+  @doc """
+  Native websocket analogue of `barrier_sse_stream/2`: pushes `messages` as text
+  frames one at a time and holds before every push.
+
+  Before pushing frame `n + 1`, and once more after the last frame, the fake's
+  websocket handler sends `{:fake_upstream_frame_barrier, n, handler_pid,
+  release_ref}` to `notify`, where `n` is the number of frames already pushed
+  on this reply (`0` is the pre-visible barrier). It then waits until the test
+  calls `release_frame/2` (one barrier) or `release_remaining_frames/2` (this and
+  every later barrier of the reply, which still notify). The connection stays
+  open throughout; while a barrier is held the handler reads nothing else, so a
+  second request on the connection is consumed only after the trailing barrier.
+  Every barrier is a required acknowledgement for `verify!/1`: release through
+  the helpers, never by raw message, and wait for the last notification before
+  verifying an auto-released tail. An empty list yields the single barrier `0`,
+  which makes the consumption of a reply-less request (an ack) observable.
+  """
+  @spec barrier_websocket_frames([iodata()], keyword()) :: mode()
+  def barrier_websocket_frames(messages, opts) when is_list(messages) and is_list(opts) do
+    {:websocket_frame_barrier, Enum.map(messages, &IO.iodata_to_binary/1),
+     Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
+  end
+
+  @doc "Releases the frame barrier currently held for `release_ref` and records its acknowledgement."
+  @spec release_frame(t(), reference()) :: :ok | {:error, :no_frame_barrier_waiting}
+  def release_frame(%__MODULE__{pid: pid}, release_ref) when is_reference(release_ref) do
+    release_frame_barrier(pid, release_ref, false)
+  end
+
+  @doc "Releases the held frame barrier for `release_ref` and every later barrier of that reply."
+  @spec release_remaining_frames(t(), reference()) :: :ok | {:error, :no_frame_barrier_waiting}
+  def release_remaining_frames(%__MODULE__{pid: pid}, release_ref)
+      when is_reference(release_ref) do
+    release_frame_barrier(pid, release_ref, true)
+  end
+
+  defp release_frame_barrier(pid, release_ref, remaining?) do
+    taken =
+      Agent.get_and_update(pid, fn state ->
+        case Map.pop(state.frame_barriers_waiting, release_ref) do
+          {nil, _waiting} ->
+            {{:error, :no_frame_barrier_waiting}, state}
+
+          {{handler, ordinal}, waiting} ->
+            auto_release =
+              if remaining?,
+                do: MapSet.put(state.frame_barrier_auto_release, release_ref),
+                else: state.frame_barrier_auto_release
+
+            {{:ok, handler},
+             %{
+               state
+               | frame_barriers_waiting: waiting,
+                 frame_barrier_auto_release: auto_release,
+                 acknowledged:
+                   MapSet.put(state.acknowledged, {:frame_barrier, release_ref, ordinal})
+             }}
+        end
+      end)
+
+    case taken do
+      {:ok, handler} ->
+        send(handler, {:fake_upstream_release_frame, release_ref})
+        :ok
+
+      error ->
+        error
+    end
+  end
+
+  @doc false
+  @spec register_frame_barriers(pid(), reference(), non_neg_integer()) :: :ok
+  def register_frame_barriers(pid, release_ref, frame_count) do
+    Agent.update(pid, fn state ->
+      required =
+        Enum.reduce(0..frame_count//1, state.required_acknowledgements, fn ordinal, acc ->
+          MapSet.put(acc, {:frame_barrier, release_ref, ordinal})
+        end)
+
+      %{state | required_acknowledgements: required}
+    end)
+  end
+
+  # Called by the websocket handler when it reaches barrier `ordinal`. Returns
+  # whether the barrier is auto-released; otherwise it is recorded as waiting so
+  # `release_frame/2` can acknowledge it synchronously from the test process.
+  @doc false
+  @spec reach_frame_barrier(pid(), reference(), non_neg_integer(), pid()) :: boolean()
+  def reach_frame_barrier(pid, release_ref, ordinal, handler) do
+    Agent.get_and_update(pid, fn state ->
+      if MapSet.member?(state.frame_barrier_auto_release, release_ref) do
+        {true,
+         %{
+           state
+           | acknowledged: MapSet.put(state.acknowledged, {:frame_barrier, release_ref, ordinal})
+         }}
+      else
+        {false,
+         %{
+           state
+           | frame_barriers_waiting:
+               Map.put(state.frame_barriers_waiting, release_ref, {handler, ordinal})
+         }}
+      end
+    end)
+  end
+
   def quota_exhausted_429(opts \\ []) when is_list(opts) do
     quota_type = Keyword.get(opts, :quota_type, "workspace_owner_usage_limit_reached")
 
@@ -590,7 +698,9 @@ defmodule CodexPooler.FakeUpstream do
       strict_consumed: 0,
       scenario_failures: [],
       required_acknowledgements: MapSet.new(),
-      acknowledged: MapSet.new()
+      acknowledged: MapSet.new(),
+      frame_barriers_waiting: %{},
+      frame_barrier_auto_release: MapSet.new()
     }
   end
 
@@ -947,6 +1057,7 @@ defmodule CodexPooler.FakeUpstream do
   defp validate_mode!(_mode), do: :ok
 
   defp native_websocket_mode?({:websocket_text, _messages}), do: true
+  defp native_websocket_mode?({:websocket_frame_barrier, _, _, _}), do: true
   defp native_websocket_mode?({:websocket_sse_then_close, _chunks, _code, _reason}), do: true
   defp native_websocket_mode?({:websocket_terminal_then_close_barrier, _, _, _, _, _}), do: true
   defp native_websocket_mode?({:websocket_connection_limit_terminal_barrier, _, _, _}), do: true
@@ -1586,6 +1697,13 @@ defmodule CodexPooler.FakeUpstream do
       {:stop, :normal, {code, reason}, state}
     end
 
+    def handle_info(
+          {:fake_upstream_frame_barrier_continue, release_ref},
+          %{frame_barrier: %{release_ref: release_ref} = barrier} = state
+        ) do
+      continue_frame_barriers(barrier, state)
+    end
+
     def handle_info(_message, state), do: {:ok, state}
 
     @impl WebSock
@@ -1701,6 +1819,15 @@ defmodule CodexPooler.FakeUpstream do
       {:stop, :normal, {code, reason}, state}
     end
 
+    defp handle_websocket_message({:frame_barriers, frames, notify, release_ref}, state) do
+      CodexPooler.FakeUpstream.register_frame_barriers(state.pid, release_ref, length(frames))
+
+      continue_frame_barriers(
+        %{frames: frames, pushed: 0, notify: notify, release_ref: release_ref},
+        state
+      )
+    end
+
     defp handle_websocket_message({:delayed_push, messages, interval_ms}, state) do
       schedule_delayed_websocket_message(messages, interval_ms)
       {:ok, state}
@@ -1797,6 +1924,9 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp websocket_messages({:websocket_text, messages}, _request), do: messages
+
+    defp websocket_messages({:websocket_frame_barrier, frames, notify, release_ref}, _request),
+      do: {:frame_barriers, frames, notify, release_ref}
 
     defp websocket_messages({:websocket_sse_then_close, chunks, code, reason}, _request) do
       {:push_then_close, messages_from_sse_chunk(Enum.join(chunks)), code, reason}
@@ -1912,6 +2042,46 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp maybe_wait_for_sse_barrier(_index, _barrier_after, _notify, _release_ref), do: :ok
+
+    # Holds at barrier `pushed`, then pushes the next frame (if any) and
+    # re-enters through `handle_info` so the push is on the wire before the
+    # following barrier is announced.
+    defp continue_frame_barriers(%{frames: frames, pushed: pushed} = barrier, state) do
+      await_frame_barrier(state.pid, barrier)
+
+      case frames do
+        [] ->
+          {:ok, Map.delete(state, :frame_barrier)}
+
+        [frame | rest] ->
+          send(self(), {:fake_upstream_frame_barrier_continue, barrier.release_ref})
+
+          {:push, {:text, frame},
+           Map.put(state, :frame_barrier, %{barrier | frames: rest, pushed: pushed + 1})}
+      end
+    end
+
+    defp await_frame_barrier(pid, %{pushed: ordinal, notify: notify, release_ref: release_ref}) do
+      auto_released? =
+        CodexPooler.FakeUpstream.reach_frame_barrier(pid, release_ref, ordinal, self())
+
+      send(notify, {:fake_upstream_frame_barrier, ordinal, self(), release_ref})
+
+      unless auto_released? do
+        receive do
+          {:fake_upstream_release_frame, ^release_ref} ->
+            :ok
+
+          # The handler traps exits: leave promptly when the fake is stopped
+          # while the barrier is held instead of waiting out the supervisor's
+          # shutdown timeout.
+          {:EXIT, _from, reason} ->
+            exit(reason)
+        after
+          30_000 -> raise "timed out waiting for fake upstream websocket frame barrier release"
+        end
+      end
+    end
 
     defp await_websocket_barrier(stage, notify, release_ref) do
       send(notify, {:fake_upstream_websocket_barrier, stage, self(), release_ref})

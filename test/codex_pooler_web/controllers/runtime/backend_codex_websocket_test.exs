@@ -745,6 +745,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         start_upstream(
           # Strict finite scenario: exactly one native turn per serving mode;
           # a replayed or extra upstream send fails the fixture.
+          # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
@@ -838,6 +839,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         # Strict finite scenario: the connection-limit terminal is held behind
         # a native barrier so the Pool edit lands while the first attempt is in
         # flight; the retry must open a replacement connection and stay Lite.
+        # provenance: synthetic_adversarial (response.failed envelope variants; #116 saw a type error terminal)
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
@@ -5084,6 +5086,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -5384,6 +5387,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         # Strict finite scenario: the guarded continuation never reaches the
         # upstream, so only the anchor (connection 1) and the explicit full
         # retry (replacement connection 2, no previous response) are sent.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -6238,6 +6242,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         # Strict finite scenario: the anchor carries no previous response and
         # the Lite continuation keeps it behind the tools prefix on the same
         # physical connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -6429,6 +6434,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       start_upstream(
         # Strict finite scenario: the custom tool continuation must carry the
         # anchor response id on the same physical connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -6535,6 +6541,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       start_upstream(
         # Strict finite scenario: the anchor carries no previous response and
         # the continuation must keep it on the same physical connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -6693,6 +6700,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       start_upstream(
         # Strict finite scenario: the debug-logged continuation must still
         # preserve the anchor response id on the same physical connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -8044,6 +8052,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial (metadata field set mirrors the released 0.151.0 client; frames invented)
         FakeUpstream.strict_sequence([
           strict_native_response(previous_response_id, 1, 4, 3),
           strict_native_response("resp_native_tool_continuation_complete", 1, 5, 2)
@@ -8493,6 +8502,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         # Strict finite scenario: generation zero and the single replay each
         # get one send on their own connection; the third client attempt is
         # fenced as a duplicate turn and must never reach the upstream.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -9454,6 +9464,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # handshake succeeds and the turn lands on the first accepted connection.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "GET",
@@ -9652,6 +9663,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # without any provider refresh in between.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "GET",
@@ -9743,6 +9755,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         start_upstream(
           # Strict finite scenario: one terminal auth failure, exactly one
           # provider refresh, then one retry on a replacement connection.
+          # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_native_request(1, websocket_terminal_auth_failure(auth_code)),
             strict_oauth_refresh(
@@ -9835,6 +9848,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         # native barrier so the identity can be marked refreshing first; no
         # /oauth/token entry and no retry entry exist, so either request fails
         # the fixture as an unexpected extra request.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
@@ -9952,6 +9966,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           # Strict finite scenario: one terminal auth failure and one failed
           # provider refresh; there is no retry entry, so a redispatch fails
           # the fixture as an unexpected extra request.
+          # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_native_request(1, websocket_terminal_auth_failure("invalid_authentication")),
             strict_oauth_refresh(
@@ -10018,6 +10033,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       start_upstream(
         # Strict finite scenario: one terminal auth failure, one held provider
         # refresh, then exactly one retry drained after the client disconnect.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_request(1, websocket_terminal_auth_failure("invalid_api_key")),
           strict_oauth_refresh(
@@ -10254,6 +10270,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # fails the fixture as an unexpected extra request.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_request(1, FakeUpstream.websocket_sse_then_close([]))
         ])
@@ -10663,6 +10680,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # would be an unexpected extra request and fail the fixture.
     pinned_upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_response("resp_live_direct_anchor", 1, 2, 1),
           strict_native_request(
@@ -10778,6 +10796,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         # Strict finite scenario: the connection-limit terminal arrives on the
         # first physical connection and the retry must land on a replacement
         # connection; an extra send or a reused connection fails the fixture.
+        # provenance: observed findings #116 (type error websocket_connection_limit_reached terminal); rest synthetic
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
@@ -10932,6 +10951,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # connection; a third send fails the fixture as an unexpected extra request.
     upstream =
       start_upstream(
+        # provenance: observed findings #116 (type error websocket_connection_limit_reached terminal); rest synthetic
         FakeUpstream.strict_sequence([
           strict_native_request(1, connection_limit_failure),
           strict_native_request(2, connection_limit_failure)
@@ -11027,6 +11047,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # single retry lands on a replacement connection.
     upstream =
       start_upstream(
+        # provenance: observed findings #116 (type error websocket_connection_limit_reached terminal); rest synthetic
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
@@ -11377,6 +11398,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # dispatch, or warmup send fails the fixture.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
@@ -13009,6 +13031,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # fresh turn on the same connection. Any further send fails the fixture.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
@@ -13246,6 +13269,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # fixture.
     upstream =
       start_upstream(
+        # provenance: observed runbook terminal-failure resend (2026-09-09 23:43 UTC response.failed server_error)
         FakeUpstream.strict_sequence([
           strict_native_request_any_connection(provider_terminal_failure_frames("concurrent")),
           strict_native_request_any_connection(
@@ -13345,6 +13369,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # fenced; the fixture refuses any second send.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_request_any_connection(
             FakeUpstream.websocket_close_without_terminal_barrier(
@@ -13415,6 +13440,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   test "byte-identical resend after the client retry window keeps the duplicate turn fence" do
     upstream =
       start_upstream(
+        # provenance: observed runbook terminal-failure resend (2026-09-09 23:43 UTC response.failed server_error)
         FakeUpstream.strict_sequence([
           strict_native_request_any_connection(provider_terminal_failure_frames("expired"))
         ])
@@ -13488,6 +13514,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream =
       start_upstream(
+        # provenance: observed runbook terminal-failure resend (2026-09-09 23:43 UTC response.failed server_error)
         FakeUpstream.strict_sequence([
           strict_native_request(1, provider_terminal_failure_frames(label)),
           strict_native_request(1, completed_response_frames(completed_response_id, 3, 1))
@@ -15229,6 +15256,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     # the upstream, so any further send fails the fixture.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,

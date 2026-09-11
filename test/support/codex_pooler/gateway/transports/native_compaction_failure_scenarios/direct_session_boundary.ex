@@ -98,6 +98,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
 
     # Warm-up and the barrier-held compact turn both ride the lineage
     # connection; nothing may be resubmitted after the caller dies.
+    # provenance: synthetic_adversarial
     mode =
       FakeUpstream.strict_sequence([
         strict_turn(success_mode()),
@@ -238,6 +239,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
   end
 
   defp terminal_failure(context, _handle) do
+    # provenance: synthetic_adversarial
     mode =
       FakeUpstream.strict_sequence([
         strict_turn(success_mode()),
@@ -308,6 +310,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
     final_mode = if outcome == :success, do: success_mode(), else: terminal_failure_mode()
 
     # Warm-up, compact, and final turns all ride the lineage connection.
+    # provenance: synthetic_adversarial
     mode =
       FakeUpstream.strict_sequence([
         strict_turn(success_mode()),

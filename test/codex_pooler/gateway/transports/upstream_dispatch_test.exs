@@ -102,6 +102,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     for {case_name, request_options, expected_output} <- cases do
       {:ok, upstream} =
         FakeUpstream.start_link(
+          # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_websocket_turn(FakeUpstream.websocket_text_frames([completed]))
           ])
@@ -147,6 +148,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     # connection and carry its tool-output item first.
     {:ok, upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("collect-warmup"),
             websocket_connection_ordinal: 1
@@ -261,6 +263,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     # warmup connection with its function output first.
     {:ok, upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("lite-warmup"),
             websocket_connection_ordinal: 1
@@ -919,6 +922,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("egress-observation"),
             json: [valid: true, equals: %{"type" => "response.create"}]
@@ -1009,6 +1013,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   test "multi-agent round product observation emits bounded websocket stage metadata only" do
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(
             FakeUpstream.websocket_text_frames([
@@ -1102,6 +1107,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     {:ok, upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("routing-hint-response"),
             headers: routing_hint_headers,
@@ -1148,6 +1154,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("provider-routing-hint"),
             headers: [forbidden: ["x-codex-routing-hint"]],
@@ -1210,6 +1217,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("custom-routing-hint"),
             headers: [forbidden: ["x-codex-routing-hint"]],
@@ -1589,6 +1597,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     # connection, and the later request must open a replacement connection.
     {:ok, upstream} =
       FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("direct-initial"),
             websocket_connection_ordinal: 1
@@ -1658,6 +1667,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     # reconnect send; an extra request would fail the fixture.
     FakeUpstream.set_mode(
       upstream,
+      # provenance: synthetic_adversarial
       FakeUpstream.strict_sequence([
         strict_websocket_turn(FakeUpstream.websocket_sse_then_close([]),
           websocket_connection_ordinal: 2

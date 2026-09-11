@@ -110,6 +110,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence(
           [seed_expectation] ++ if(flip?, do: [], else: [compact_expectation])
         )
@@ -273,6 +274,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       start_upstream(
         # Strict finite scenario: the anchor and the compact are the only sends;
         # the final with a mismatching compaction item must never reach upstream.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -391,6 +393,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         # Strict finite scenario: the anchor, the compact, and the final that
         # opens with the compaction item are the only sends; the prewarm in
         # between must not reach upstream.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -539,6 +542,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       start_upstream(
         # Strict finite scenario: the lineage turn and the anchored incremental
         # compact are the only sends, both on the owner's single connection.
+        # provenance: observed test/fixtures/codex/rust-v0.153.3-* request contract; reply frames synthetic
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -772,6 +776,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       upstream =
         start_upstream(
+          # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_compaction_response(fixture.upstream_mode, transport, mode),
             FakeUpstream.expect_request(
@@ -1033,6 +1038,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
           # compact, and the full follow-up are the only sends on assignment A,
           # all on its single connection; the compact keeps the lineage anchor
           # and the follow-up drops it.
+          # provenance: observed test/fixtures/codex/rust-v0.153.3-* request contract; reply frames synthetic
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
@@ -1330,6 +1336,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         # Strict finite scenario: the lineage turn, the rejected pinned compact,
         # and the full follow-up are the only sends on assignment A, all on its
         # single connection; the rejection is never retried anywhere.
+        # provenance: observed rust-v0.153.3 fixture contract and findings #116 compact response.failed; codes synthetic
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -1494,6 +1501,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       start_upstream(
         # Strict finite scenario: the lineage turn and the rejected pinned
         # compact are the only sends; the rejection is never retried anywhere.
+        # provenance: observed rust-v0.153.3 fixture request contract; misalignment rejection frames synthetic
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -1623,6 +1631,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         start_upstream(
           # Strict finite scenario: the lineage turn and the rejected pinned
           # compact are the only sends; the rejection is never retried anywhere.
+          # provenance: observed rust-v0.153.3 fixture contract and findings #116 compact response.failed; codes synthetic
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
@@ -1762,35 +1771,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
     release_ref = make_ref()
 
-    # strict migration blocked: the lineage turn must deliver response.created,
-    # hold the connection open at a pre-terminal barrier while the pinned
-    # assignment is disabled, and then push response.completed on the same
-    # connection (delayed_terminal_sse_stream); the native websocket barrier
-    # modes either close after the barrier or send only the terminal.
+    lineage_frames =
+      Enum.map(
+        [
+          %{
+            "type" => "response.created",
+            "response" => %{"id" => fixture["provider_response_id"]}
+          },
+          %{
+            "type" => "response.completed",
+            "response" => %{
+              "id" => fixture["provider_response_id"],
+              "status" => "completed",
+              "output" => []
+            }
+          }
+        ],
+        &CodexPooler.JSON.encode!/1
+      )
+
+    # Strict finite scenario: the lineage turn is the only send on assignment A.
+    # It is held frame by frame so the pinned assignment can be disabled between
+    # response.created and response.completed on the same connection; the denied
+    # compact must never reach either assignment.
     assignment_a_upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.delayed_terminal_sse_stream(
-             [
-               %{
-                 "type" => "response.created",
-                 "response" => %{"id" => fixture["provider_response_id"]}
-               }
-             ],
-             %{
-               "type" => "response.completed",
-               "response" => %{
-                 "id" => fixture["provider_response_id"],
-                 "status" => "completed",
-                 "output" => []
-               }
-             },
-             notify: self(),
-             release_ref: release_ref
-           ),
-           ordinary_response(fixture["provider_response_id"])
-         ]}
+        # provenance: observed test/fixtures/codex/rust-v0.153.3-* request contract; reply frames synthetic
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.barrier_websocket_frames(lineage_frames,
+                notify: self(),
+                release_ref: release_ref
+              )
+          )
+        ])
       )
 
     assignment_b_upstream = start_upstream(ordinary_response("resp_full_request_on_assignment_b"))
@@ -1805,9 +1827,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     try do
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, lineage_payload)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
-                      ^release_ref},
-                     1_000
+      # Deliver response.created, then hold before response.completed.
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^release_ref},
+                     @detection_timeout_ms
+
+      assert :ok = FakeUpstream.release_frame(assignment_a_upstream, release_ref)
+
+      assert_receive {:fake_upstream_frame_barrier, 1, _handler, ^release_ref},
+                     @detection_timeout_ms
 
       {conn, websocket, lineage_frame} = public_websocket_receive_text!(conn, websocket, ref)
       assert %{"response" => %{"id" => response_id}} = CodexPooler.JSON.decode!(lineage_frame)
@@ -1835,7 +1862,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                :count
              ) == 0
 
-      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+      assert :ok = FakeUpstream.release_remaining_frames(assignment_a_upstream, release_ref)
+
+      # Consume the trailing barrier before the public receive helper, which
+      # drains and drops non-Mint messages from this mailbox while it waits.
+      assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^release_ref},
+                     @detection_timeout_ms
 
       {conn, websocket, lineage_terminal_frame} =
         public_websocket_receive_text!(conn, websocket, ref)
@@ -1878,14 +1910,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
              ) == 0
 
       assert FakeUpstream.requests(assignment_b_upstream) == []
+      assert :ok = FakeUpstream.verify!(assignment_a_upstream)
     after
-      receive do
-        {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref} ->
-          send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
-      after
-        0 -> :ok
-      end
-
+      # A failure before the release above would otherwise leave the lineage
+      # frames held; releasing an already-finished reply is a no-op.
+      _ = FakeUpstream.release_remaining_frames(assignment_a_upstream, release_ref)
       Mint.HTTP.close(conn)
     end
   end

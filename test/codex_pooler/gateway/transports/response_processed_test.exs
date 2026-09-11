@@ -37,7 +37,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
   end
 
   test "successful forwarding records metadata only and keeps session correlation", %{auth: auth} do
-    {session, upstream} = connected_session()
+    {session, upstream, ack_ref} = connected_session(1)
     codex_session = %CodexSession{id: Ecto.UUID.generate(), session_key: "session-processed"}
 
     opts =
@@ -69,13 +69,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
     refute Map.has_key?(request.request_metadata, "response_id")
     refute Map.has_key?(request.request_metadata, "websocket_owner_forwarding")
 
-    # Observe the server handling the ack; ack frames do not invoke the client's turn writer.
-    assert_receive {:fake_upstream_chunk_sent, 1}, 15_000
+    # Observe the fake consuming the ack; the fake replies nothing to it, so
+    # the client's turn writer is never invoked again.
+    assert_ack_forwarded(upstream, ack_ref)
     assert List.last(FakeUpstream.requests(upstream)).json == payload()
+    refute_received :processed_frame_observed
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "turn id takes precedence over client and server request ids", %{auth: auth} do
-    {session, _upstream} = connected_session()
+    {session, upstream, ack_ref} = connected_session(1)
     frame = Map.merge(payload(), %{"turn_id" => "turn-processed", "request_id" => "client"})
 
     assert {:ok, _} =
@@ -86,10 +89,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
              )
 
     assert Repo.one!(Request).correlation_id == "turn-processed"
+    assert_ack_forwarded(upstream, ack_ref)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "missing client correlation uses server id or generates an id", %{auth: auth} do
-    {session, _upstream} = connected_session()
+    {session, upstream, ack_ref} = connected_session(2)
 
     for request_id <- ["server-processed", nil] do
       assert {:ok, _} =
@@ -98,15 +103,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
                  payload(),
                  options(%{upstream_websocket_session: session, request_id: request_id})
                )
+
+      assert_ack_forwarded(upstream, ack_ref)
     end
 
     ids = Repo.all(from request in Request, select: request.correlation_id)
     assert "server-processed" in ids
     assert {:ok, _} = Ecto.UUID.cast(Enum.find(ids, &(&1 != "server-processed")))
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "accounting rejection after forwarding is surfaced without a success row" do
-    {session, _upstream} = connected_session()
+    {session, upstream, ack_ref} = connected_session(1)
 
     assert {:error, %{status: 500, code: "gateway_accounting_failed", accounting_error: reason}} =
              ResponseProcessed.handle_prepared(
@@ -117,27 +125,52 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
 
     assert is_binary(reason)
     assert Repo.aggregate(Request, :count) == 0
+    assert_ack_forwarded(upstream, ack_ref)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   defp options(attrs \\ %{}), do: RequestOptions.build(attrs, @endpoint, %{})
   defp payload, do: %{"type" => "response.processed", "response_id" => "resp_sample_processed"}
 
-  defp connected_session do
+  # Opens one native websocket turn and declares exactly `ack_count` processed
+  # acks on the same connection. The fake replies nothing to an ack, so each
+  # ack's consumption is observed through its barrier via `assert_ack_forwarded/2`.
+  defp connected_session(ack_count) when is_integer(ack_count) and ack_count > 0 do
     observer = self()
-    events = [%{"type" => "response.completed", "response" => %{"id" => "resp_sample_processed"}}]
+    ack_ref = make_ref()
 
-    processed_mode =
-      FakeUpstream.barrier_sse_stream(events,
-        notify: observer,
-        release_ref: make_ref(),
-        barrier_after: 99
-      )
+    completed_frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_sample_processed"}
+      })
 
-    # strict migration blocked: the shared processed-ack entry is an SSE chunk barrier whose
-    # `{:fake_upstream_chunk_sent, 1}` notification the callers observe, and one caller sends
-    # two acks against it; no native websocket mode emits per-frame send notifications.
+    ack_entries =
+      for _ <- 1..ack_count do
+        FakeUpstream.expect_request(
+          method: "WEBSOCKET",
+          path: @endpoint,
+          websocket_connection_ordinal: 1,
+          json: [valid: true, equals: %{"type" => "response.processed"}],
+          respond:
+            FakeUpstream.barrier_websocket_frames([], notify: observer, release_ref: ack_ref)
+        )
+      end
+
     {:ok, upstream} =
-      FakeUpstream.start_link({:sequence, [FakeUpstream.sse_stream(events), processed_mode]})
+      FakeUpstream.start_link(
+        # provenance: synthetic_adversarial (one-frame completed turn; the empty ack reply only observes consumption)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: @endpoint,
+            websocket_connection_ordinal: 1,
+            json: [valid: true],
+            respond: FakeUpstream.websocket_text_frames([completed_frame])
+          )
+          | ack_entries
+        ])
+      )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     session = start_supervised!(UpstreamWebsocketSession)
@@ -153,6 +186,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
              })
 
     assert_receive :processed_frame_observed, 15_000
-    {session, upstream}
+    {session, upstream, ack_ref}
+  end
+
+  defp assert_ack_forwarded(upstream, ack_ref) do
+    assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^ack_ref}, 15_000
+    assert :ok = FakeUpstream.release_frame(upstream, ack_ref)
   end
 end

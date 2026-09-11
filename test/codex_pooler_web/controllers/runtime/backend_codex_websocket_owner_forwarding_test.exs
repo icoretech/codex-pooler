@@ -406,70 +406,103 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       "encrypted_content" => "synthetic-owner-collect-encrypted"
     }
 
-    # strict migration blocked: the final turn depends on the pre-visible SSE
-    # chunk barrier (barrier_sse_stream barrier_after: 0), which has no native
-    # websocket equivalent yet.
+    frames = fn events -> Enum.map(events, &CodexPooler.JSON.encode!/1) end
+
+    # Strict finite scenario: the anchor, the anchored V2 collect compact, and
+    # the final that opens with the compaction item are the only sends, all on
+    # the owner's single connection; the final is held frame by frame so the
+    # session alias can be checked while it is still pre-visible.
     upstream =
       start_upstream(
-        {:sequence,
-         [
-           FakeUpstream.sse_stream([
-             {"response.created",
-              %{
-                "type" => "response.created",
-                "response" => %{
-                  "id" => "resp_owner_collect_anchor",
-                  "status" => "in_progress"
-                }
-              }},
-             {"response.completed",
-              %{
-                "type" => "response.completed",
-                "response" => %{
-                  "id" => "resp_owner_collect_anchor",
-                  "status" => "completed",
-                  "output" => []
-                }
-              }}
-           ]),
-           FakeUpstream.sse_stream([
-             {"response.output_item.done",
-              %{"type" => "response.output_item.done", "item" => compact_item}},
-             {"response.completed",
-              %{
-                "type" => "response.completed",
-                "response" => %{
-                  "id" => "resp_owner_collect_compact",
-                  "status" => "completed",
-                  "output" => [compact_item]
-                }
-              }}
-           ]),
-           FakeUpstream.barrier_sse_stream(
-             [
-               {"response.created",
-                %{
-                  "type" => "response.created",
-                  "response" => %{
-                    "id" => "resp_owner_collect_final",
-                    "status" => "in_progress"
+        # provenance: synthetic_adversarial (compaction v2-shaped created/completed/output_item.done frames, not captured)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "message"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames(
+                frames.([
+                  %{
+                    "type" => "response.created",
+                    "response" => %{
+                      "id" => "resp_owner_collect_anchor",
+                      "status" => "in_progress"
+                    }
+                  },
+                  %{
+                    "type" => "response.completed",
+                    "response" => %{
+                      "id" => "resp_owner_collect_anchor",
+                      "status" => "completed",
+                      "output" => []
+                    }
                   }
-                }},
-               {"response.completed",
-                %{
-                  "type" => "response.completed",
-                  "response" => %{
-                    "id" => "resp_owner_collect_final",
-                    "status" => "completed",
-                    "output" => []
+                ])
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "previous_response_id" => "resp_owner_collect_anchor",
+                "input.0.type" => "custom_tool_call_output"
+              }
+            ],
+            respond:
+              FakeUpstream.websocket_text_frames(
+                frames.([
+                  %{"type" => "response.output_item.done", "item" => compact_item},
+                  %{
+                    "type" => "response.completed",
+                    "response" => %{
+                      "id" => "resp_owner_collect_compact",
+                      "status" => "completed",
+                      "output" => [compact_item]
+                    }
                   }
-                }}
-             ],
-             notify: self(),
-             release_ref: final_release_ref,
-             barrier_after: 0
-           )
-         ]}
+                ])
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "input.0.type" => "compaction"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond:
+              FakeUpstream.barrier_websocket_frames(
+                frames.([
+                  %{
+                    "type" => "response.created",
+                    "response" => %{
+                      "id" => "resp_owner_collect_final",
+                      "status" => "in_progress"
+                    }
+                  },
+                  %{
+                    "type" => "response.completed",
+                    "response" => %{
+                      "id" => "resp_owner_collect_final",
+                      "status" => "completed",
+                      "output" => []
+                    }
+                  }
+                ]),
+                notify: self(),
+                release_ref: final_release_ref
+              )
+          )
+        ])
       )
 
     setup = gateway_setup(upstream, compact?: true)
@@ -626,12 +659,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:ok, state} =
                CodexResponsesSocket.handle_in({final_payload, [opcode: :text]}, state)
 
-      final_upstream_pid =
-        receive do
-          {:fake_upstream_chunk_barrier, 0, pid, ^final_release_ref} -> pid
-        after
-          15_000 -> flunk("final request did not reach the pre-visible upstream barrier")
-        end
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^final_release_ref},
+                     @handoff_detection_timeout_ms
 
       try do
         window_hash = :crypto.hash(:sha256, "owner-native-collect-final-window")
@@ -657,10 +686,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         assert reconnect_session.id == state.codex_session.id
       after
-        send(final_upstream_pid, {:fake_upstream_release_chunk, final_release_ref})
+        :ok = FakeUpstream.release_remaining_frames(upstream, final_release_ref)
       end
 
       assert {:ok, state} = receive_socket_done(state)
+
+      assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^final_release_ref},
+                     @handoff_detection_timeout_ms
 
       assert [_anchor_request, compact_request, final_request] = FakeUpstream.requests(upstream)
       assert final_request.method == "WEBSOCKET"
@@ -723,6 +755,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert FakeUpstream.http_request_count(upstream) == 0
 
       assert final_log.transport == "websocket"
+      assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -783,6 +816,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   test "owner-forwarded websocket turns reuse one upstream websocket connection" do
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           strict_owner_response("resp_owner_first", 1),
           strict_owner_response("resp_owner_second", 1)
@@ -942,6 +976,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -1558,6 +1593,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # share the first connection, the incremental stream closes without a
         # terminal, and the projected full-history retry must arrive without the
         # anchor on the replacement connection with nothing else sent.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -1807,6 +1843,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the terminal auth failure on the first
         # connection triggers exactly one token refresh over HTTP, and the retry
         # must carry the refreshed bearer on a replacement connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -1951,6 +1988,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # once on a replacement connection. The bridge ring does not fix which
         # assignment is tried first, so the bearer is asserted by the accounting
         # rows below rather than by the fixture.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -2241,6 +2279,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the first connection closes before any
         # terminal, the replay must be the only other send and must arrive on a
         # replacement connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -2459,6 +2498,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the real peer owner's first connection closes
         # before any terminal, the replay is the only other send on a
         # replacement connection, and the duplicate retry sends nothing.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -3296,6 +3336,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       start_upstream(
         # Strict finite scenario: the local and the remote owner each forward
         # exactly one native turn upstream and nothing else is sent.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -3744,6 +3785,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the remote owner forwards exactly one lite
         # turn and then exactly one full turn; the canonical request shapes are
         # asserted on the captured requests below.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -3977,6 +4019,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # owner is killed and the connection then closes without a terminal, the
         # replacement owner replays exactly one lite turn, and the next socket
         # sends exactly one full turn.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -4439,6 +4482,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       start_upstream(
         # Strict finite scenario: the pinned lane receives the anchor and the
         # model-miss turn only; the accepted miss is not retried anywhere.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -4555,6 +4599,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     # handshake succeeds through the same owner on the first accepted connection.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "GET",
@@ -4774,6 +4819,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the anchor and the retargeted continuation are
         # the only sends, both on the target owner's single connection, and the
         # continuation carries the anchor id.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -4906,6 +4952,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the anchor and the turn-state retargeted
         # continuation are the only sends, both on the target owner's single
         # connection, and the continuation still carries the target turn state.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -5029,6 +5076,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the anchor and the retargeted continuation are
         # the only sends, both on the target owner's single connection, and the
         # continuation carries the anchor id.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -5339,6 +5387,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the anchor and the alias-miss continuation are
         # the only sends, both on the reused first connection, and the unknown
         # previous_response_id is forwarded unchanged.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -5455,6 +5504,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the anchor is the only send on the first
         # connection, the guarded alias-miss continuation sends nothing, and the
         # explicit full retry is the only send on the replacement connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -5696,6 +5746,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: both turns must reach the owner's single
         # upstream connection, the continuation must carry the anchor, and no
         # third send may occur across the downstream reconnect.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -5908,6 +5959,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the first turn, the processed ack, and the
         # tool continuation are the only three sends, all on the owner's single
         # connection, and the continuation carries the first response id.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -6168,6 +6220,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # connections, the active turn runs through the blocking boundary and
         # never reaches this upstream, and each queued continuation is the only
         # other send on its own target's connection with its own anchor id.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -9464,6 +9517,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the first turn, the processed ack, and the
         # tool continuation are the only three sends, all on the owner's single
         # connection; the sentinel may appear only in the captured requests.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -9899,6 +9953,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the interrupted turn is held pre-visible until
         # the client has disconnected and then closes without a terminal; the
         # takeover owner sends exactly one recovered turn and nothing else.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -10224,6 +10279,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # Strict finite scenario: the historical turn and the fresh tool
         # continuation are the only two sends, both opening with the compaction
         # history item; the duplicate client retry sends nothing.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -10864,6 +10920,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     # the owner's single connection, each carrying its predecessor's response id.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence(
           response_ids
           |> Enum.with_index()
@@ -11060,6 +11117,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         # connection, the guarded continuation sends nothing after the
         # invalidation, and the explicit full retry is the only send on the
         # replacement connection.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -11202,6 +11260,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial (response.failed envelope variants; #116 saw a type error terminal)
         FakeUpstream.strict_sequence([
           strict_owner_response(anchor, 1),
           FakeUpstream.expect_request(

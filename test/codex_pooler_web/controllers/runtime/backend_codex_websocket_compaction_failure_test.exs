@@ -235,6 +235,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
     first_upstream =
       start_upstream(
+        # provenance: observed findings #116 (type error websocket_connection_limit_reached terminal); rest synthetic
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -346,6 +347,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     # unexpected extra request.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -465,6 +467,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     # extra request.
     upstream =
       start_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -559,6 +562,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
         # Strict finite scenario: the anchored compact fails on the first
         # connection, the client-authored full-history retry must arrive on a
         # replacement connection without the anchor, and nothing else is sent.
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",

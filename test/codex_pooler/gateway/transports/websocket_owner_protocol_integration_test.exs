@@ -406,6 +406,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     # physical connection, and the invalidated third turn must reconnect.
     upstream =
       start_fake_upstream(
+        # provenance: synthetic_adversarial
         FakeUpstream.strict_sequence(
           Enum.zip_with(terminals, [1, 1, 2], fn terminal, connection_ordinal ->
             FakeUpstream.expect_request(

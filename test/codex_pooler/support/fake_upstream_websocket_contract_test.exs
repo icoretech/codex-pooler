@@ -171,13 +171,22 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
     assert [first_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
 
+    # provenance: synthetic_adversarial
     FakeUpstream.set_mode(
       upstream,
-      {:sequence,
-       [
-         FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close"),
-         FakeUpstream.websocket_text_frames([completed_event("reconnected")])
-       ]}
+      FakeUpstream.strict_sequence([
+        FakeUpstream.expect_request(
+          method: "WEBSOCKET",
+          websocket_connection_ordinal: 1,
+          respond:
+            FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close")
+        ),
+        FakeUpstream.expect_request(
+          method: "WEBSOCKET",
+          websocket_connection_ordinal: 2,
+          respond: FakeUpstream.websocket_text_frames([completed_event("reconnected")])
+        )
+      ])
     )
 
     assert {:error, %{reason: :upstream_websocket_closed_before_terminal}} =
@@ -196,6 +205,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
     assert is_reference(second_connection_id)
     refute first_connection_id == second_connection_id
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "does not invent an ID when the next explicit reconnect fails its upgrade" do
@@ -209,15 +219,25 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
     assert [connection_id] = FakeUpstream.websocket_connection_ids(upstream)
 
+    # provenance: synthetic_adversarial
     FakeUpstream.set_mode(
       upstream,
-      {:sequence,
-       [
-         FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close"),
-         FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "upgrade_rejected"}},
-           status: 503
-         )
-       ]}
+      FakeUpstream.strict_sequence([
+        FakeUpstream.expect_request(
+          method: "WEBSOCKET",
+          websocket_connection_ordinal: 1,
+          respond:
+            FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close")
+        ),
+        FakeUpstream.expect_request(
+          method: "GET",
+          path: "/backend-api/codex/responses",
+          respond:
+            FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "upgrade_rejected"}},
+              status: 503
+            )
+        )
+      ])
     )
 
     assert {:error, %{reason: :upstream_websocket_closed_before_terminal}} =
@@ -228,16 +248,27 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
     assert FakeUpstream.websocket_connection_count(upstream) == 1
     assert [^connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "observes a new ID when a request key changes its headers" do
     {upstream, session} =
       start_resources(
-        {:sequence,
-         [
-           FakeUpstream.websocket_text_frames([completed_event("old-key")]),
-           FakeUpstream.websocket_text_frames([completed_event("new-key")])
-         ]}
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"x-test-key" => "old"}],
+            respond: FakeUpstream.websocket_text_frames([completed_event("old-key")])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 2,
+            headers: [required: %{"x-test-key" => "new"}],
+            respond: FakeUpstream.websocket_text_frames([completed_event("new-key")])
+          )
+        ])
       )
 
     old_request = websocket_request(upstream, [{"x-test-key", "old"}])
@@ -258,6 +289,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
     assert is_reference(second_connection_id)
     refute first_connection_id == second_connection_id
+    assert :ok = FakeUpstream.verify!(upstream)
   end
 
   test "records no ID for a rejected initial websocket upgrade" do

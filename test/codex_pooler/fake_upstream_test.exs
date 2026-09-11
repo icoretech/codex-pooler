@@ -9,6 +9,10 @@ defmodule CodexPooler.FakeUpstreamTest do
   # first regardless of load. Keep it short; the barrier waits stay separate.
   @client_receive_timeout_ms 250
 
+  # Detection budget for fake-side barrier notifications; the green path never
+  # waits on it.
+  @barrier_detection_timeout_ms 5_000
+
   describe "local fake upstream" do
     @tag :fake_upstream_pin
     test "legacy sequences remain permissive and repeat their final response" do
@@ -279,6 +283,261 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       :ok = FakeUpstream.acknowledge(upstream, {:barrier, barrier_ref})
       assert :ok = FakeUpstream.verify!(upstream)
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "native frame barriers push one frame per release and keep the connection open" do
+      turn_ref = make_ref()
+      ack_ref = make_ref()
+      created = websocket_event("response.created", "resp_frame_barrier")
+      completed = websocket_event("response.completed", "resp_frame_barrier")
+
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.barrier_websocket_frames([created, completed],
+                  notify: self(),
+                  release_ref: turn_ref
+                )
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.processed"}],
+              respond:
+                FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: ack_ref)
+            )
+          ])
+        )
+
+      client = websocket_connect(upstream)
+      client = websocket_send(client, ~s({"type":"response.create"}))
+
+      # Nothing is pushed before the first release, and the next barrier only
+      # appears once the previous one has been released.
+      assert_receive {:fake_upstream_frame_barrier, 0, handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert is_pid(handler)
+      assert {:timeout, client} = websocket_recv(client, 100)
+      refute_received {:fake_upstream_frame_barrier, 1, _, ^turn_ref}
+
+      assert :ok = FakeUpstream.release_frame(upstream, turn_ref)
+
+      assert_receive {:fake_upstream_frame_barrier, 1, ^handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert {:ok, client, [^created]} = websocket_recv(client, @barrier_detection_timeout_ms)
+      assert {:timeout, client} = websocket_recv(client, 100)
+
+      assert :ok = FakeUpstream.release_frame(upstream, turn_ref)
+
+      assert_receive {:fake_upstream_frame_barrier, 2, ^handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert {:ok, client, [^completed]} = websocket_recv(client, @barrier_detection_timeout_ms)
+
+      # The connection stays open after the last frame: a second request on the
+      # same connection is only consumed once the trailing barrier is released.
+      client = websocket_send(client, ~s({"type":"response.processed"}))
+      refute_receive {:fake_upstream_frame_barrier, 0, _, ^ack_ref}, 100
+      assert :ok = FakeUpstream.release_frame(upstream, turn_ref)
+
+      assert_receive {:fake_upstream_frame_barrier, 0, ^handler, ^ack_ref},
+                     @barrier_detection_timeout_ms
+
+      assert :ok = FakeUpstream.release_frame(upstream, ack_ref)
+      assert {:timeout, client} = websocket_recv(client, 100)
+      assert Mint.HTTP.open?(client.conn)
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+      assert [turn_request, ack_request] = FakeUpstream.requests(upstream)
+      assert turn_request.json == %{"type" => "response.create"}
+      assert ack_request.json == %{"type" => "response.processed"}
+      assert :ok = FakeUpstream.verify!(upstream)
+      assert {:error, :no_frame_barrier_waiting} = FakeUpstream.release_frame(upstream, turn_ref)
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "releasing the remaining frame barriers pushes the rest while still notifying" do
+      turn_ref = make_ref()
+      created = websocket_event("response.created", "resp_frame_release_all")
+      completed = websocket_event("response.completed", "resp_frame_release_all")
+
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              json: [valid: true],
+              respond:
+                FakeUpstream.barrier_websocket_frames([created, completed],
+                  notify: self(),
+                  release_ref: turn_ref
+                )
+            )
+          ])
+        )
+
+      client = websocket_connect(upstream)
+      client = websocket_send(client, "{}")
+
+      assert_receive {:fake_upstream_frame_barrier, 0, handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert :ok = FakeUpstream.release_remaining_frames(upstream, turn_ref)
+
+      assert_receive {:fake_upstream_frame_barrier, 1, ^handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert_receive {:fake_upstream_frame_barrier, 2, ^handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert {:ok, client, frames} =
+               websocket_recv_count(client, 2, @barrier_detection_timeout_ms)
+
+      assert frames == [created, completed]
+      assert Mint.HTTP.open?(client.conn)
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "final verification reports an unreleased frame barrier" do
+      turn_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.barrier_websocket_frames(
+              [websocket_event("response.completed", "resp_frame_unreleased")],
+              notify: self(),
+              release_ref: turn_ref
+            )
+          ])
+        )
+
+      client = websocket_connect(upstream)
+      _client = websocket_send(client, "{}")
+
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/missing_required_acknowledgement acknowledgement=\{:frame_barrier, #Reference<[^>]+>, 0\}\n.*frame_barrier, #Reference<[^>]+>, 1\}/s,
+                   fn -> FakeUpstream.verify!(upstream) end
+
+      assert :ok = FakeUpstream.release_remaining_frames(upstream, turn_ref)
+
+      assert_receive {:fake_upstream_frame_barrier, 1, _handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "stopping the fake while a frame barrier is held does not wait out the shutdown timeout" do
+      turn_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.barrier_websocket_frames(
+            [websocket_event("response.completed", "resp_frame_held_at_stop")],
+            notify: self(),
+            release_ref: turn_ref
+          )
+        )
+
+      client = websocket_connect(upstream)
+      _client = websocket_send(client, "{}")
+
+      assert_receive {:fake_upstream_frame_barrier, 0, handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      monitor = Process.monitor(handler)
+      started_at = System.monotonic_time(:millisecond)
+      assert :ok = FakeUpstream.stop(upstream)
+      assert_receive {:DOWN, ^monitor, :process, ^handler, _reason}, @barrier_detection_timeout_ms
+
+      # ThousandIsland brutal-kills a connection that ignores the shutdown exit
+      # only after 15 s; the held barrier must leave well before that.
+      assert System.monotonic_time(:millisecond) - started_at < @barrier_detection_timeout_ms
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "an exhausted scenario refuses the next handshake after a frame barrier reply" do
+      turn_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: turn_ref)
+            )
+          ])
+        )
+
+      client = websocket_connect(upstream)
+      _client = websocket_send(client, ~s({"type":"response.create"}))
+
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^turn_ref},
+                     @barrier_detection_timeout_ms
+
+      assert :ok = FakeUpstream.release_frame(upstream, turn_ref)
+      assert :ok = FakeUpstream.verify!(upstream)
+
+      assert %{status: 500, body: %{"error" => %{"code" => "fake_upstream_scenario_failure"}}} =
+               Req.get!(FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+                 headers: [{"upgrade", "websocket"}, {"connection", "upgrade"}],
+                 retry: false
+               )
+
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+      assert_raise ExUnit.AssertionError, ~r/unexpected_extra_request.*transport=http/s, fn ->
+        FakeUpstream.verify!(upstream)
+      end
+    end
+
+    @tag :fake_upstream_strict_contract
+    test "a frame barrier reply withholds every frame when its request expectation fails" do
+      turn_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.barrier_websocket_frames(
+                  [websocket_event("response.completed", "resp_frame_withheld")],
+                  notify: self(),
+                  release_ref: turn_ref
+                )
+            )
+          ])
+        )
+
+      client = websocket_connect(upstream)
+      client = websocket_send(client, ~s({"type":"response.cancel"}))
+
+      assert {:ok, _client, [{:close, 1011, "fake upstream scenario failure"}]} =
+               websocket_recv_raw(client, @barrier_detection_timeout_ms)
+
+      refute_received {:fake_upstream_frame_barrier, _, _, ^turn_ref}
+
+      assert_raise ExUnit.AssertionError,
+                   ~r/expectation_mismatch field=json.type expected="response.create" actual="response.cancel"/,
+                   fn -> FakeUpstream.verify!(upstream) end
     end
 
     test "keeps the existing low-level failure modes deterministic" do
@@ -611,6 +870,71 @@ defmodule CodexPooler.FakeUpstreamTest do
     {:ok, upstream} = FakeUpstream.start_link(mode)
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     upstream
+  end
+
+  defp websocket_event(type, response_id) do
+    CodexPooler.JSON.encode!(%{"type" => type, "response" => %{"id" => response_id}})
+  end
+
+  defp websocket_connect(upstream) do
+    uri = URI.parse(FakeUpstream.url(upstream))
+
+    {:ok, conn} =
+      Mint.HTTP.connect(:http, uri.host, uri.port, protocols: [:http1], mode: :passive)
+
+    on_exit(fn -> Mint.HTTP.close(conn) end)
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, "/backend-api/codex/responses", [])
+    {:ok, conn, responses} = Mint.HTTP.recv(conn, 0, @barrier_detection_timeout_ms)
+    assert {:status, ref, 101} in responses
+    {:headers, ^ref, headers} = Enum.find(responses, &match?({:headers, _, _}, &1))
+    {:ok, conn, websocket} = Mint.WebSocket.new(conn, ref, 101, headers, mode: :passive)
+    %{conn: conn, websocket: websocket, ref: ref}
+  end
+
+  defp websocket_send(%{conn: conn, websocket: websocket, ref: ref} = client, text) do
+    {:ok, websocket, data} = Mint.WebSocket.encode(websocket, {:text, text})
+    {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
+    %{client | conn: conn, websocket: websocket}
+  end
+
+  # One passive receive: the decoded text frames of the next batch, or a timeout
+  # when the fake pushed nothing within `timeout_ms`.
+  defp websocket_recv(client, timeout_ms) do
+    case websocket_recv_raw(client, timeout_ms) do
+      {:ok, client, frames} -> {:ok, client, Enum.map(frames, fn {:text, text} -> text end)}
+      {:timeout, client} -> {:timeout, client}
+    end
+  end
+
+  defp websocket_recv_raw(%{conn: conn, websocket: websocket, ref: ref} = client, timeout_ms) do
+    case Mint.WebSocket.recv(conn, 0, timeout_ms) do
+      {:ok, conn, responses} ->
+        {websocket, frames} =
+          Enum.reduce(responses, {websocket, []}, fn
+            {:data, ^ref, data}, {websocket, frames} ->
+              {:ok, websocket, decoded} = Mint.WebSocket.decode(websocket, data)
+              {websocket, frames ++ decoded}
+
+            _response, acc ->
+              acc
+          end)
+
+        {:ok, %{client | conn: conn, websocket: websocket}, frames}
+
+      {:error, conn, reason, []}
+      when reason in [:timeout, %Mint.TransportError{reason: :timeout}] ->
+        {:timeout, %{client | conn: conn}}
+    end
+  end
+
+  defp websocket_recv_count(client, count, timeout_ms, acc \\ [])
+
+  defp websocket_recv_count(client, count, _timeout_ms, acc) when length(acc) >= count,
+    do: {:ok, client, Enum.take(acc, count)}
+
+  defp websocket_recv_count(client, count, timeout_ms, acc) do
+    assert {:ok, client, frames} = websocket_recv(client, timeout_ms)
+    websocket_recv_count(client, count, timeout_ms, acc ++ frames)
   end
 
   defp receive_stream_chunks(response, count) do
