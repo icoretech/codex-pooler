@@ -525,7 +525,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    {:ok, state} = owner_socket(auth, "ws-owner-dispatch-takeover", "dispatch-takeover")
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-dispatch-takeover", "dispatch-takeover",
+        forwarded_headers: [
+          {"session-id", "owner-takeover-session"},
+          {"thread-id", "owner-takeover-thread"},
+          {"x-client-request-id", "owner-takeover-thread"}
+        ]
+      )
+
     session = state.codex_session
     old_lease = active_owner_lease(session.id)
 
@@ -555,6 +563,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
 
       assert Map.new(request.headers)["x-codex-routing-hint"] ==
                "model=#{setup.model.upstream_model_id}"
+
+      assert %{
+               "session-id" => "owner-takeover-session",
+               "thread-id" => "owner-takeover-thread",
+               "x-client-request-id" => "owner-takeover-thread"
+             } =
+               Map.take(Map.new(request.headers), [
+                 "session-id",
+                 "thread-id",
+                 "x-client-request-id"
+               ])
 
       assert [request_log] = request_logs(setup.pool.id)
       assert request_log.status == "succeeded"

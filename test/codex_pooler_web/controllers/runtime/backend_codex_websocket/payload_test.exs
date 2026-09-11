@@ -301,6 +301,63 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
       assert Map.new(captured.headers)["x-codex-routing-hint"] ==
                "model=#{setup.model.upstream_model_id};tier=priority"
 
+      refute Enum.any?(captured.headers, fn {name, _value} ->
+               name in ["session-id", "thread-id", "x-client-request-id"]
+             end)
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "backend websocket forwards the client's bounded provider session headers on the upstream handshake" do
+    provider_payload = %{
+      "id" => "resp_backend_ws_session_headers",
+      "object" => "response",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(provider_payload))
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "ws-session-headers-#{System.unique_integer([:positive])}"
+
+    # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (handshake session headers; values invented, thread-id made overlong)
+    {conn, websocket, ref, _response_headers} =
+      public_websocket_connect_with_request_headers!(
+        port,
+        setup,
+        turn_state,
+        "/backend-api/codex/responses",
+        [
+          {"session-id", "backend-ws-session-fixture"},
+          {"thread-id", String.duplicate("t", 129)},
+          {"x-client-request-id", "backend-ws-thread-fixture"}
+        ]
+      )
+
+    try do
+      payload =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert frame == CodexPooler.JSON.encode!(provider_payload)
+      assert [captured] = FakeUpstream.requests(upstream)
+      captured_headers = Map.new(captured.headers)
+
+      assert captured_headers["session-id"] == "backend-ws-session-fixture"
+      assert captured_headers["x-client-request-id"] == "backend-ws-thread-fixture"
+      refute Map.has_key?(captured_headers, "thread-id")
+
       conn
     after
       Mint.HTTP.close(conn)

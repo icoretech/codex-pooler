@@ -734,7 +734,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   # Like the Codex client, a connection keeps the routing hint of the handshake
   # that opened it: a later turn's tier or model hint never forces a reconnect.
-  # Every other header still scopes the connection.
+  # Every other header still scopes the connection, including the provider
+  # session headers (`session-id`, `thread-id`, `x-client-request-id`): a
+  # reusable owner can serve several downstream sockets and API keys of one
+  # Pool, so a turn whose values differ or are absent opens its own connection
+  # instead of riding one whose handshake carried another client's session.
   defp request_key(%Request{} = request),
     do: {request.url, Enum.reject(request.headers, &routing_hint_header?/1)}
 

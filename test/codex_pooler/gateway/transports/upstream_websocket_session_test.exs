@@ -1592,6 +1592,80 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "provider session header values scope connection reuse" do
+    session_a = %{
+      "session-id" => "session-a",
+      "thread-id" => "thread-a",
+      "x-client-request-id" => "thread-a"
+    }
+
+    session_b = %{
+      "session-id" => "session-b",
+      "thread-id" => "thread-b",
+      "x-client-request-id" => "thread-b"
+    }
+
+    upstream =
+      start_upstream(
+        # The same client session values ride one connection; other values or
+        # none open another, so a handshake never carries a different session.
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers and websocket_connection (session headers fixed per client connection; replies invented)
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_session_a_first",
+            websocket_connection_ordinal: 1,
+            headers: [required: session_a]
+          ),
+          strict_websocket_success("resp_ws_session_a_second",
+            websocket_connection_ordinal: 1,
+            headers: [required: session_a]
+          ),
+          strict_websocket_success("resp_ws_session_b",
+            websocket_connection_ordinal: 2,
+            headers: [required: session_b]
+          ),
+          strict_websocket_success("resp_ws_session_absent",
+            websocket_connection_ordinal: 3,
+            headers: [forbidden: Map.keys(session_a)]
+          )
+        ])
+      )
+
+    base_request = websocket_request(FakeUpstream.url(upstream))
+
+    request = fn session_headers ->
+      %{
+        base_request
+        | headers: [{"chatgpt-account-id", "account-a"} | Enum.sort(session_headers)]
+      }
+    end
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, first_result} = UpstreamWebsocketSession.request(session, request.(session_a))
+    first_lifecycle = lifecycle_state(session)
+    assert_connection_metadata(first_result, first_lifecycle, false, false)
+
+    assert {:ok, second_result} = UpstreamWebsocketSession.request(session, request.(session_a))
+    assert_connection_metadata(second_result, first_lifecycle, true, false)
+
+    assert {:ok, other_session_result} =
+             UpstreamWebsocketSession.request(session, request.(session_b))
+
+    refute other_session_result.upstream_websocket_connection.reused
+
+    assert {:ok, absent_result} = UpstreamWebsocketSession.request(session, request.(%{}))
+    refute absent_result.upstream_websocket_connection.reused
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 3
+
+    assert [first_id, first_id, other_id, absent_id] =
+             Enum.map(FakeUpstream.requests(upstream), & &1.websocket_connection_id)
+
+    assert length(Enum.uniq([first_id, other_id, absent_id])) == 3
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "ordinary successful and request-terminal work keep one connection reusable" do
     upstream =
       start_upstream(

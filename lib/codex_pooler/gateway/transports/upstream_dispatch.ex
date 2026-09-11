@@ -515,7 +515,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       websocket_headers(
         identity,
         token,
-        routing_hint_header(payload_body, routing_hint_authorized?, request_options)
+        routing_hint_header(payload_body, routing_hint_authorized?, request_options),
+        request_options
       )
 
     emit_egress_observation(:websocket, headers, request_options, payload_body)
@@ -1496,16 +1497,52 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp multi_agent_round_request_id(_request, %RequestOptions{} = request_options),
     do: request_options.request_metadata.request_id
 
-  defp websocket_headers(identity, token, routing_hint) do
+  defp websocket_headers(identity, token, routing_hint, %RequestOptions{} = request_options) do
     upstream_headers(
       identity,
       token,
       maybe_put_routing_hint_header(
-        [{"openai-beta", "responses_websockets=2026-02-06"}],
+        [
+          {"openai-beta", "responses_websockets=2026-02-06"}
+          | websocket_provider_session_headers(request_options)
+        ],
         routing_hint
       )
     )
   end
+
+  # The Codex client sends `session-id`, `thread-id` and `x-client-request-id`
+  # on its websocket handshake exactly as on HTTP (rust-v0.154.0
+  # core/src/client.rs `build_websocket_headers`). A native Codex-backend
+  # handshake forwards the values the authenticated downstream native upgrade
+  # carried, under the same bounds as the HTTP route and keeping the first valid
+  # value per name. They stay in the upstream websocket reuse key: a connection
+  # opened with one client's values never serves a turn carrying other values or
+  # none. `/v1` origins (translated, bridged, public websocket) send none.
+  defp websocket_provider_session_headers(%RequestOptions{
+         transport: %{upstream_endpoint: endpoint, forwarded_metadata_headers: headers},
+         openai_compatibility: %{
+           source_endpoint: nil,
+           openai_chat_payload: nil,
+           public_openai_responses_stream: false
+         }
+       })
+       when endpoint in @regular_runtime_metadata_endpoints and is_list(headers) do
+    names = TransportEnvelope.provider_session_header_names()
+
+    headers
+    |> Enum.flat_map(fn
+      {name, value} when is_binary(name) and is_binary(value) ->
+        name = String.downcase(name)
+        if name in names, do: forwarded_metadata_header(name, value), else: []
+
+      _other ->
+        []
+    end)
+    |> Enum.uniq_by(fn {name, _value} -> name end)
+  end
+
+  defp websocket_provider_session_headers(%RequestOptions{}), do: []
 
   defp normalize_upstream_transport_result(
          {:error, %Finch.TransportError{} = exception},

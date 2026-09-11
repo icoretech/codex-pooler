@@ -1247,6 +1247,141 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "native websocket dispatch forwards bounded provider session headers on the handshake" do
+    session_header_names = ["session-id", "thread-id", "x-client-request-id"]
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (session-id, thread-id and x-client-request-id on the handshake; replies invented)
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("session-headers-valid"),
+            headers: [
+              required: %{
+                "session-id" => "ws-session-fixture",
+                "thread-id" => "ws-thread-fixture",
+                "x-client-request-id" => "ws-thread-fixture"
+              }
+            ]
+          ),
+          strict_websocket_turn(websocket_success("session-headers-bounded"),
+            headers: [
+              required: %{"session-id" => "ws-session-fixture"},
+              forbidden: ["thread-id", "x-client-request-id"]
+            ]
+          ),
+          strict_websocket_turn(websocket_success("session-headers-absent"),
+            headers: [forbidden: session_header_names]
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    for forwarded_headers <- [
+          [
+            {"session-id", "ws-session-fixture"},
+            {"thread-id", "ws-thread-fixture"},
+            {"x-client-request-id", "ws-thread-fixture"},
+            {"x-session-id", "local-continuity-fixture"}
+          ],
+          [
+            {"session-id", "invalid session value"},
+            {"Session-Id", "ws-session-fixture"},
+            {"session-id", "ws-second-session-fixture"},
+            {"thread-id", String.duplicate("t", 129)},
+            {"x-client-request-id", ""}
+          ],
+          [{"x-session-affinity", "local-affinity-fixture"}]
+        ] do
+      request_options =
+        RequestOptions.for_websocket(
+          %{receive_timeout_ms: 1_000, forwarded_headers: forwarded_headers},
+          %{"model" => "example-model"}
+        )
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload:
+            CodexPooler.JSON.encode!(%{
+              "type" => "response.create",
+              "model" => "upstream-routing-model",
+              "input" => []
+            })
+      }
+
+      assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+    end
+
+    assert [valid, bounded, absent] = FakeUpstream.requests(upstream)
+
+    assert Enum.count(bounded.headers, fn {name, _value} -> name == "session-id" end) == 1
+
+    for captured <- [valid, bounded, absent] do
+      refute Enum.any?(captured.headers, fn {name, _value} ->
+               name in ["x-session-id", "x-session-affinity"]
+             end)
+    end
+
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "translated and public OpenAI origins never forward caller provider session headers on websocket dispatch" do
+    session_header_names = ["session-id", "thread-id", "x-client-request-id"]
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence(
+          for id <- [
+                "v1-responses-session-headers",
+                "v1-chat-session-headers",
+                "v1-public-stream-session-headers"
+              ] do
+            strict_websocket_turn(websocket_success(id),
+              headers: [forbidden: session_header_names]
+            )
+          end
+        )
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    caller_headers = [
+      {"session-id", "caller-session-fixture"},
+      {"thread-id", "caller-thread-fixture"},
+      {"x-client-request-id", "caller-thread-fixture"}
+    ]
+
+    chat_payload = %{"model" => "public-model", "messages" => []}
+
+    for opts <- [
+          %{openai_source_endpoint: "/v1/responses"},
+          %{openai_source_endpoint: "/v1/chat/completions", openai_chat_payload: chat_payload},
+          %{openai_source_endpoint: "/v1/responses", public_openai_responses_stream: true}
+        ] do
+      request_options =
+        opts
+        |> Map.merge(%{receive_timeout_ms: 1_000, forwarded_headers: caller_headers})
+        |> RequestOptions.for_websocket(%{"model" => "example-model"})
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload:
+            CodexPooler.JSON.encode!(%{
+              "type" => "response.create",
+              "model" => "upstream-routing-model",
+              "input" => []
+            })
+      }
+
+      assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+    end
+
+    assert [_responses, _chat, _public_stream] = FakeUpstream.requests(upstream)
+    refute inspect(FakeUpstream.requests(upstream)) =~ "caller-"
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "native-shaped provider-specific and API-key paths omit routing hints on HTTP and websocket dispatch" do
     {:ok, http_upstream} =
       FakeUpstream.start_link(

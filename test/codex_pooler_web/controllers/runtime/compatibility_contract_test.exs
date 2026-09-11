@@ -2346,6 +2346,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  value_contract: "ascii_identifier_max_128_bytes",
                  purpose: "provider_sticky_routing_for_prompt_cache",
                  local_only_headers: ["x-session-id", "x-session-affinity"],
+                 native_websocket_handshake: %{
+                   routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+                   source: "authenticated_downstream_native_websocket_upgrade_headers",
+                   value_contract: "ascii_identifier_max_128_bytes",
+                   duplicate_headers: "first_valid_value_per_name",
+                   upstream_connection_reuse_key:
+                     "included_differing_or_absent_values_open_a_new_connection",
+                   owner_forwarded_turns:
+                     "carried_in_owner_request_headers_built_on_the_proxy_node",
+                   public_v1_origins: "never_forwarded"
+                 },
                  public_v1: %{
                    client_headers: "local_only_never_forwarded",
                    synthesized_header: "session-id",

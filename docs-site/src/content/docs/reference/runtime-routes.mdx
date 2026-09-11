@@ -833,7 +833,7 @@ Continuity headers are also local routing inputs. Codex Pooler chooses them in t
 6. `session_id`
 7. `x-codex-conversation-id`
 
-`session-id`, `x-session-id`, and `x-session-affinity` are not forwarded upstream. On `/v1/responses` and `/v1/chat/completions`, a `prompt_cache_key` in the body produces a Codex Pooler-derived upstream `session-id` for provider sticky routing, scoped to the calling API key and its Pool so different API keys or Pools that send the same key never share one; see Routing strategies. If a pinned continuation points at an upstream account that now requires reauthentication, `/v1/responses` HTTP and websocket requests fail closed with a recovery hint to restart with full context and remove stale continuation anchors.
+`x-session-id` and `x-session-affinity` are never forwarded upstream. The Codex client's `session-id`, `thread-id`, and `x-client-request-id` are forwarded only on the native `/backend-api/codex/responses` and `/backend-api/codex/responses/compact` routes, on HTTP requests and on the websocket handshake, when each value is a short ASCII identifier; `/v1` routes never forward them. On `/v1/responses` and `/v1/chat/completions`, a `prompt_cache_key` in the body produces a Codex Pooler-derived upstream `session-id` for provider sticky routing, scoped to the calling API key and its Pool so different API keys or Pools that send the same key never share one; see Routing strategies. If a pinned continuation points at an upstream account that now requires reauthentication, `/v1/responses` HTTP and websocket requests fail closed with a recovery hint to restart with full context and remove stale continuation anchors.
 
 ## Related references
 

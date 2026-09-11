@@ -473,7 +473,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
             path: "/backend-api/codex/responses",
             websocket_connection_ordinal: 1,
             headers: [
-              required: %{"x-codex-routing-hint" => "model=#{upstream_model};tier=priority"}
+              required: %{"x-codex-routing-hint" => "model=#{upstream_model};tier=priority"},
+              forbidden: ["session-id", "thread-id", "x-client-request-id"]
             ],
             json: [
               valid: true,
@@ -502,6 +503,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       |> auth(setup)
       |> put_req_header("x-session-id", session)
       |> put_req_header("x-codex-routing-hint", "model=forged;tier=forged")
+      |> put_req_header("thread-id", "forged-thread-id")
+      |> put_req_header("x-client-request-id", "forged-client-request-id")
       |> post(
         "/v1/responses",
         setup |> stream_payload("routing hint turn") |> Map.put("service_tier", "fast")

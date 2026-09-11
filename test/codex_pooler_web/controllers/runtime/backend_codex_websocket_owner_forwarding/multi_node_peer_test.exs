@@ -288,7 +288,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     {:ok, state} =
       owner_socket(auth, "ws-native-proxy-predispatch", "native-proxy-predispatch",
         session_header: session_header,
-        session_header_source: "x-session-id"
+        session_header_source: "x-session-id",
+        forwarded_headers: [
+          {"session-id", "peer-owner-session"},
+          {"thread-id", "peer-owner-thread"},
+          {"x-client-request-id", "peer-owner-thread"}
+        ]
       )
 
     try do
@@ -328,6 +333,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
       assert {:ok, _state} = CodexResponsesSocket.handle_info(delivery_message, state)
       assert FakeUpstream.count(upstream) == 1
       assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
+
+      # The peer owner opened the upstream socket from the proxy-built request.
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      assert %{
+               "session-id" => "peer-owner-session",
+               "thread-id" => "peer-owner-thread",
+               "x-client-request-id" => "peer-owner-thread"
+             } =
+               Map.take(Map.new(captured.headers), [
+                 "session-id",
+                 "thread-id",
+                 "x-client-request-id"
+               ])
 
       assert_receive {:fake_upstream_websocket_barrier, :before_close, close_pid, ^release_ref}
       send(close_pid, {:fake_upstream_release_websocket, release_ref})
