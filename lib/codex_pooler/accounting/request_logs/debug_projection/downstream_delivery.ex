@@ -8,7 +8,9 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.DownstreamDelivery 
 
   alias CodexPooler.Gateway.Websocket.DeliveryReceipt
 
-  @metadata_key DeliveryReceipt.metadata_key()
+  # The receipt module is consulted at runtime only: a compile-time reference
+  # from accounting into the gateway is outside the xref contract.
+  @metadata_key "downstream_delivery"
 
   @type t :: %{
           outcome: String.t(),

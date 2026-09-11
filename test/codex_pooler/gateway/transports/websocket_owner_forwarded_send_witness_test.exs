@@ -96,7 +96,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwardedSendWi
   test "dead owner redemption returns a bounded rejection without exiting" do
     owner = spawn(fn -> :ok end)
     monitor = Process.monitor(owner)
-    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+    # The process may already be gone when the monitor attaches; either
+    # reason proves it is dead, which is all the redemption needs.
+    assert_receive {:DOWN, ^monitor, :process, ^owner, reason} when reason in [:normal, :noproc]
 
     handoff = ForwardedOwnerRequestHandoff.new(owner, witness())
 
