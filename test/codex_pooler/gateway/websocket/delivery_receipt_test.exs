@@ -137,6 +137,38 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptTest do
     assert logs =~ "websocket downstream terminal pushed request_id=#{request.id}"
   end
 
+  test "record renders the receipt transport as the log prefix" do
+    %{attempt: attempt, request: request} = fixture()
+
+    receipt =
+      DeliveryReceipt.build(%{
+        outcome: "delivered",
+        terminal_class: "response.failed",
+        pushed_at: @pushed_at,
+        frames_after_visible: 2,
+        transport: "http_sse"
+      })
+
+    assert receipt["transport"] == "http_sse"
+
+    context = %{attempt_id: attempt.id, request_id: request.id, codex_session_id: nil}
+
+    logs = with_info_log(fn -> assert :ok = DeliveryReceipt.record(context, receipt) end)
+
+    assert logs =~
+             "http_sse downstream terminal pushed request_id=#{request.id} " <>
+               "codex_session_id=none outcome=delivered " <>
+               "terminal_class=response.failed frames_after_visible=2"
+
+    refute logs =~ "websocket downstream terminal pushed"
+    assert Repo.get!(Attempt, attempt.id).response_metadata["downstream_delivery"] == receipt
+
+    missing = Map.put(context, :attempt_id, Ecto.UUID.generate())
+    logs = with_info_log(fn -> assert :ok = DeliveryReceipt.record(missing, receipt) end)
+    assert logs =~ "http_sse downstream delivery receipt not persisted"
+    assert logs =~ "reason=attempt_not_found"
+  end
+
   test "record survives a missing attempt row with one bounded warning" do
     receipt = DeliveryReceipt.build(%{outcome: "aborted"})
 

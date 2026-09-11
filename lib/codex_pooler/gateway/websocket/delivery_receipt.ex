@@ -1,11 +1,13 @@
 defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   @moduledoc false
 
-  # Bounded, metadata-only evidence that the socket pushed (or decided not to
-  # push) a turn's terminal frame to the downstream WebSock. The receipt is
-  # merged into `attempts.response_metadata["downstream_delivery"]` after the
-  # gateway finalized the attempt, so a completed request whose client never saw
-  # `response.completed` can be told apart from a push that never happened.
+  # Bounded, metadata-only evidence that a downstream transport pushed (or
+  # decided not to push) a turn's terminal to the client: the WebSock for
+  # native websocket turns, the HTTP SSE relay for streaming responses. The
+  # receipt is merged into `attempts.response_metadata["downstream_delivery"]`
+  # after the gateway finalized the attempt, so a completed request whose client
+  # never saw `response.completed` can be told apart from a push that never
+  # happened. The receipt's transport is the log-line prefix.
 
   import Ecto.Query, only: [from: 2]
 
@@ -95,9 +97,10 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   def record(context, receipt) when is_map(context) and is_map(receipt) do
     request_id = DiagnosticTaxonomy.safe_correlator(Map.get(context, :request_id))
     session_id = DiagnosticTaxonomy.safe_correlator(Map.get(context, :codex_session_id))
+    transport = vocabulary(receipt["transport"], @transports, @default_transport)
 
     Logger.info(
-      "websocket downstream terminal pushed " <>
+      "#{transport} downstream terminal pushed " <>
         "request_id=#{request_id} " <>
         "codex_session_id=#{session_id} " <>
         "outcome=#{receipt["outcome"]} " <>
@@ -109,7 +112,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
       attempt_id when is_binary(attempt_id) ->
         attempt_id
         |> persist(receipt)
-        |> log_persist_failure(request_id, session_id)
+        |> log_persist_failure(transport, request_id, session_id)
 
       _missing ->
         :ok
@@ -151,11 +154,11 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
     end
   end
 
-  defp log_persist_failure(:ok, _request_id, _session_id), do: :ok
+  defp log_persist_failure(:ok, _transport, _request_id, _session_id), do: :ok
 
-  defp log_persist_failure({:error, reason}, request_id, session_id) do
+  defp log_persist_failure({:error, reason}, transport, request_id, session_id) do
     Logger.warning(
-      "websocket downstream delivery receipt not persisted " <>
+      "#{transport} downstream delivery receipt not persisted " <>
         "request_id=#{request_id} " <>
         "codex_session_id=#{session_id} " <>
         "reason=#{failure_reason(reason)}"

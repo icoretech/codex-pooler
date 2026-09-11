@@ -31,6 +31,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   }
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Websocket.DeliveryReceipt
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -188,12 +189,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def assert_safe_stream_metadata!(request, attempts) do
+    response_metadata = Enum.map(attempts, &(&1.response_metadata || %{}))
+    Enum.each(response_metadata, &assert_bounded_downstream_delivery!/1)
+
     metadata_text =
-      inspect({request.request_metadata, Enum.map(attempts, & &1.response_metadata)})
+      inspect({
+        request.request_metadata,
+        Enum.map(response_metadata, &Map.delete(&1, DeliveryReceipt.metadata_key()))
+      })
 
     refute metadata_text =~ "data:"
     refute metadata_text =~ "visible"
     refute metadata_text =~ "call_fixture"
+  end
+
+  # The downstream delivery receipt is a fixed vocabulary whose key names
+  # contain the delta sentinel ("frames_after_visible"), so it is checked on
+  # its own bounded shape instead of being scanned for stream bytes.
+  defp assert_bounded_downstream_delivery!(metadata) do
+    case Map.fetch(metadata, DeliveryReceipt.metadata_key()) do
+      {:ok, receipt} ->
+        assert Enum.sort(Map.keys(receipt)) ==
+                 ~w(frames_after_visible outcome pushed_at terminal_class transport)
+
+        assert receipt["outcome"] in (DeliveryReceipt.outcomes() ++ ["unknown"])
+
+        assert receipt["terminal_class"] in ~w(response.completed response.failed response.incomplete error none unknown)
+
+        assert is_integer(receipt["frames_after_visible"]) and
+                 receipt["frames_after_visible"] >= 0
+
+        assert receipt["transport"] in ~w(websocket http_sse)
+
+        assert is_nil(receipt["pushed_at"]) or
+                 match?({:ok, _pushed_at, 0}, DateTime.from_iso8601(receipt["pushed_at"]))
+
+      :error ->
+        :ok
+    end
   end
 
   def stream_success_sse do

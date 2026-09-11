@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
+  alias CodexPooler.Gateway.Runtime.Streaming.DownstreamDeliveryEvidence
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
   alias CodexPooler.Gateway.Runtime.Streaming.StreamAttempt
@@ -115,6 +116,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> StreamLifecycle.lifecycle_handlers(callbacks,
       first_event_retry: http_first_event_retry(response_context, callbacks)
     )
+    |> with_http_delivery_receipt(response_context)
     |> Map.merge(%{
       write_chunk: http_stream_writer(response_context),
       write_keepalive: http_sse_keepalive_writer(response_context.response),
@@ -142,6 +144,69 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       write_keepalive: fn state -> {:ok, state} end,
       write_chunk: websocket_stream_writer(response_context, writer)
     })
+  end
+
+  # `Finalization.Streaming` replaces the attempt's response metadata
+  # wholesale, so the downstream delivery receipt is merged only after either
+  # finalizer returned. The relay hands both finalizers the state that carries
+  # the write evidence; a downstream write that failed inside the relay loop is
+  # only visible here through its `{:chunk, reason}` failure reason, because
+  # the relay keeps the pre-write state on that path.
+  defp with_http_delivery_receipt(
+         %{finalize_success: finalize_success, finalize_failure: finalize_failure} = handlers,
+         %ResponseContext{} = response_context
+       ) do
+    %{
+      handlers
+      | finalize_success: fn body, state ->
+          result = finalize_success.(body, state)
+          record_http_delivery_receipt(state, response_context)
+          result
+        end,
+        finalize_failure: fn body, reason, state ->
+          result = finalize_failure.(body, reason, state)
+
+          state
+          |> mark_http_write_failure(reason)
+          |> record_http_delivery_receipt(response_context)
+
+          result
+        end
+    }
+  end
+
+  defp record_http_delivery_receipt(state, %ResponseContext{context: context}) do
+    DownstreamDeliveryEvidence.record(state, %{
+      request_id: context.reserved.request.id,
+      attempt_id: attempt_id(context.attempt),
+      codex_session_id: codex_session_id(context.request_options)
+    })
+  end
+
+  defp attempt_id(%{id: id}) when is_binary(id), do: id
+  defp attempt_id(_attempt), do: nil
+
+  defp codex_session_id(%RequestOptions{continuity: %{codex_session: %{id: id}}}), do: id
+  defp codex_session_id(_request_options), do: nil
+
+  defp mark_http_write_failure(state, reason) do
+    if chunk_write_failure?(reason),
+      do: DownstreamDeliveryEvidence.record_write_failure(state),
+      else: state
+  end
+
+  defp chunk_write_failure?({:chunk, _reason}), do: true
+
+  defp chunk_write_failure?({:upstream_stream_interrupted, reason}),
+    do: chunk_write_failure?(reason)
+
+  defp chunk_write_failure?(_reason), do: false
+
+  defp write_downstream_chunk(state, data) do
+    case update_relay_target(state, &Plug.Conn.chunk(&1, data)) do
+      {:ok, state} -> {:ok, DownstreamDeliveryEvidence.record_write(state, data)}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp http_stream_result({:ok, %{target: _target} = state}), do: {:ok, relay_target(state)}
@@ -295,9 +360,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   # final separator is only recoverable from that buffer.
   defp http_stream_terminal_failure_writer(%ResponseContext{} = response_context) do
     fn state, reason ->
+      state = mark_http_write_failure(state, reason)
+
       case flush_buffered_first_event(response_context, state) do
-        {:ok, state} -> finalize_http_stream_failure(state, reason)
-        {:chunk_error, state, _chunk_reason} -> finalize_http_stream_failure(state, reason)
+        {:ok, state} ->
+          finalize_http_stream_failure(state, reason)
+
+        {:chunk_error, state, _chunk_reason} ->
+          state
+          |> DownstreamDeliveryEvidence.record_write_failure()
+          |> finalize_http_stream_failure(reason)
       end
     end
   end
@@ -335,8 +407,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp http_stream_terminal_success_hook(%ResponseContext{} = response_context) do
     fn state ->
       case flush_buffered_first_event(response_context, state) do
-        {:ok, state} -> finalize_http_stream_success(state)
-        {:chunk_error, state, reason} -> finalize_flushed_chunk_error(state, reason)
+        {:ok, state} ->
+          finalize_http_stream_success(state)
+
+        {:chunk_error, state, reason} ->
+          state
+          |> DownstreamDeliveryEvidence.record_write_failure()
+          |> finalize_flushed_chunk_error(reason)
       end
     end
   end
@@ -374,7 +451,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         # D6 hazard 2: Synthetic bytes must go straight to Plug.Conn.chunk/2,
         # never through normalize_block/2, because their own server_error frame
         # would canonicalize back to response.failed.
-        case update_relay_target(state, &Plug.Conn.chunk(&1, data)) do
+        case write_downstream_chunk(state, data) do
           {:ok, state} -> {:ok, state, data}
           {:error, _reason} = error -> error
         end
@@ -408,7 +485,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     if downstream_data == "" do
       {:ok, state}
     else
-      case update_relay_target(state, &Plug.Conn.chunk(&1, downstream_data)) do
+      case write_downstream_chunk(state, downstream_data) do
         {:ok, state} -> {:ok, state}
         {:error, reason} -> {:chunk_error, state, reason}
       end
@@ -509,7 +586,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     if downstream_data == "" do
       {:ok, conn}
     else
-      update_relay_target(conn, &Plug.Conn.chunk(&1, downstream_data))
+      write_downstream_chunk(conn, downstream_data)
     end
   end
 
@@ -532,10 +609,21 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end)
   end
 
+  # The last-candidate first-event failure finalizes the attempt before this
+  # write, so its receipt is recorded here rather than by the wrapped
+  # finalizers.
   defp write_final_first_event(response_context, conn, data) do
     case write_stream_data(response_context, conn, data) do
-      {:ok, conn} -> {:ok, conn}
-      {:error, _reason} = error -> error
+      {:ok, conn} ->
+        record_http_delivery_receipt(conn, response_context)
+        {:ok, conn}
+
+      {:error, _reason} = error ->
+        conn
+        |> DownstreamDeliveryEvidence.record_write_failure()
+        |> record_http_delivery_receipt(response_context)
+
+        error
     end
   end
 
