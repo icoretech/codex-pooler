@@ -12,10 +12,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
   alias CodexPooler.Gateway.Persistence.BridgeSessionAlias
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
 
   @websocket_frame_timeout 1_000
   # Detection budget for a server-side connection teardown the test only

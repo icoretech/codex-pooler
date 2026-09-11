@@ -12,9 +12,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalizationTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestReplay}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
-  alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
