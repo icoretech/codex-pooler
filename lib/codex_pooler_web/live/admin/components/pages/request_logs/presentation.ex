@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       format_model_details_title: 1,
       format_model_name: 1,
       format_model_reasoning: 1,
+      format_model_reasoning_slot: 1,
       format_model_service_tier: 1,
       format_record_id: 1,
       format_requested_tier_detail: 1,
@@ -27,6 +28,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       format_total: 1,
       format_transport_route: 1,
       format_upstream_account_label: 1,
+      model_default_reasoning?: 1,
       translated_origin: 1,
       protocol_badge_class: 1,
       protocol_label: 1,
@@ -424,6 +426,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         <span :if={reasoning = format_model_reasoning(@request_log)} data-role="model-reasoning">
           {reasoning}
         </span>
+        <%!-- A request that sent no effort still ran at one: the backend's
+        default for the model, which the gateway never sees. Saying so keeps the
+        tier after it from being read as the effort. --%>
+        <span
+          :if={model_default_reasoning?(@request_log)}
+          id={"#{@prefix}-#{@request_log.id}-reasoning-default"}
+          data-role="model-reasoning-default"
+          class="text-base-content/45"
+          title="No reasoning effort recorded; the backend used the model default"
+        >
+          model default
+        </span>
         <span
           :if={detail = format_requested_reasoning_detail(@request_log)}
           id={"#{@prefix}-#{@request_log.id}-requested-reasoning"}
@@ -435,8 +449,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           :if={tier = format_model_service_tier(@request_log)}
           data-role="model-service-tier"
           class="text-base-content/45"
+          title="Service tier"
         >
-          <span>/</span> {tier}
+          <span :if={format_model_reasoning_slot(@request_log)}>/</span> tier {tier}
         </span>
         <span
           :if={detail = format_requested_tier_detail(@request_log)}

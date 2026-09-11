@@ -9,7 +9,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       format_transport_route: 1,
       format_upstream_account_label: 1,
       format_usage_cost: 1,
+      model_default_reasoning?: 1,
       protocol_label: 1,
+      reasoning_endpoint?: 1,
       status_label: 1
     ]
 
@@ -18,6 +20,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
   @serving_mode_configured_key "model_serving_mode_configured"
   @serving_mode_effective_key "model_serving_mode"
   @serving_mode_source_key "model_serving_mode_source"
+  @reasoning_not_set "Not set"
+  @reasoning_not_sent "Not sent (backend model default)"
 
   @type detail_row :: %{
           required(:id) => String.t(),
@@ -37,23 +41,23 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       detail("request-log-detail-status", "Status", status_label(log.status || "unknown")),
       detail("request-log-detail-endpoint", "Endpoint", log.endpoint, mono: true),
       detail("request-log-detail-model", "Model", log.requested_model),
-      detail(
+      reasoning_detail(
         "request-log-detail-requested-reasoning",
         "Requested reasoning",
         log.reasoning_effort,
-        mono: true
+        reasoning_endpoint?(log) && @reasoning_not_set
       ),
-      detail(
+      reasoning_detail(
         "request-log-detail-applied-reasoning",
         "Applied reasoning",
         log.applied_reasoning_effort,
-        mono: true
+        model_default_reasoning?(log) && @reasoning_not_set
       ),
-      detail(
+      reasoning_detail(
         "request-log-detail-upstream-reasoning",
         "Upstream reasoning",
         log.effective_reasoning_effort,
-        mono: true
+        model_default_reasoning?(log) && @reasoning_not_sent
       ),
       detail("request-log-detail-transport", "Transport", protocol_label(log.transport)),
       detail("request-log-detail-response-status", "Response status", log.response_status_code),
@@ -325,6 +329,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
   end
 
   defp metadata_section(_log, _key), do: %{}
+
+  # The requested effort comes from the request row, so its absence is known on
+  # any reasoning endpoint. Applied and upstream come from the attempt snapshot,
+  # which a legacy or unfinished attempt may lack; those rows only claim "not
+  # set" and "not sent" when the list row claims the model default too.
+  defp reasoning_detail(id, label, effort, placeholder) do
+    if blank?(effort) do
+      detail(id, label, placeholder || nil)
+    else
+      detail(id, label, effort, mono: true)
+    end
+  end
 
   defp detail(id, label, value, opts \\ []) do
     %{

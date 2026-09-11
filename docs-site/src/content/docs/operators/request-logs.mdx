@@ -106,7 +106,7 @@ The table shows the latest matching rows, with a hard page size limit.
     </tr>
     <tr>
       <td>Model / API Key</td>
-      <td>Requested or enforced model, effective reasoning effort with requested-vs-upstream detail when it was normalized, service tier, plus the API key label or safe prefix.</td>
+      <td>Requested or enforced model, then the effective reasoning effort with requested-vs-upstream detail when it was normalized, and the service tier labelled as <code>tier</code> (for example <code>high / tier default</code>). A successful Responses request that sent no effort shows <code>model default</code>: the backend chose the model's own default effort, which the gateway does not observe. The request drawer marks that case as not set and not sent. Rows for endpoints without reasoning, such as transcription, show only the tier. The API key label or safe prefix appears alongside.</td>
     </tr>
     <tr>
       <td>Transport</td>

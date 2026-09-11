@@ -246,16 +246,58 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def format_model_name(_log), do: "—"
 
   def format_model_details_title(log) do
+    reasoning = format_model_reasoning_slot(log)
+
     [
       format_model_name(log),
-      format_model_reasoning(log),
+      reasoning,
       format_requested_reasoning_detail(log),
-      format_model_service_tier(log) && "/ #{format_model_service_tier(log)}",
+      service_tier_phrase(format_model_service_tier(log), reasoning),
       format_requested_tier_detail(log)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" ")
   end
+
+  @doc """
+  What the row prints in the effort slot: the recorded effort, the model-default
+  token when nothing was sent, or nothing when the request has no reasoning
+  concept or the outcome cannot say.
+  """
+  def format_model_reasoning_slot(log) do
+    cond do
+      reasoning = format_model_reasoning(log) -> reasoning
+      model_default_reasoning?(log) -> "model default"
+      true -> nil
+    end
+  end
+
+  @doc """
+  True when a Responses-family request reached an upstream, succeeded, and no
+  effort was recorded at any stage — the client sent none and no key policy
+  injected one — so the backend chose the model's own default.
+
+  Only a succeeded request qualifies: attempts gain their reasoning snapshot when
+  an upstream response is processed, so a failed or in-flight row without one
+  cannot tell "nothing sent" apart from "not recorded yet".
+  """
+  def model_default_reasoning?(log) when is_map(log) do
+    is_nil(format_model_reasoning(log)) and Map.get(log, :status) == "succeeded" and
+      reasoning_endpoint?(log) and dispatched_upstream?(log)
+  end
+
+  def model_default_reasoning?(_log), do: false
+
+  @reasoning_endpoint_suffixes ["/responses", "/responses/compact", "/chat/completions"]
+
+  @doc """
+  Endpoints whose payload carries a reasoning effort: Responses, its compact
+  variant, and chat completions, on both the backend and `/v1` surfaces.
+  """
+  def reasoning_endpoint?(%{endpoint: endpoint}) when is_binary(endpoint),
+    do: String.ends_with?(endpoint, @reasoning_endpoint_suffixes)
+
+  def reasoning_endpoint?(_log), do: false
 
   def format_model_reasoning(log) do
     [
@@ -456,6 +498,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp effective_service_tier(log) do
     log.actual_service_tier || log.service_tier || "default"
+  end
+
+  # "tier" keeps the value from reading as an effort; the slash only separates
+  # it from an effort token, so a row without one does not open on a dangle.
+  defp service_tier_phrase(nil, _reasoning), do: nil
+  defp service_tier_phrase(tier, nil), do: "tier #{tier}"
+  defp service_tier_phrase(tier, _reasoning), do: "/ tier #{tier}"
+
+  defp dispatched_upstream?(log) do
+    present_string(Map.get(log, :upstream_identity_id)) != nil or
+      present_string(Map.get(log, :pool_upstream_assignment_id)) != nil
   end
 
   defp endpoint_model?(model), do: String.starts_with?(String.trim(model), "/")

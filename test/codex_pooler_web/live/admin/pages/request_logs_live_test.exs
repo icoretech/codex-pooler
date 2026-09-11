@@ -1298,7 +1298,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#request-log-#{full_details_request.id}-model-details[title='gpt-5.1 high / default']"
+             "#request-log-#{full_details_request.id}-model-details[title='gpt-5.1 high / tier default']"
            )
 
     assert has_element?(
@@ -1315,7 +1315,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{tier_diff_request.id}-model-details",
-             "gpt-5.1 low / default"
+             "gpt-5.1 low / tier default"
            )
 
     assert has_element?(
@@ -1357,8 +1357,111 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{in_progress_request.id}-model-details",
-             "gpt-5.5 high / default"
+             "gpt-5.5 high / tier default"
            )
+  end
+
+  test "model line spells out a model-default effort and labels the service tier",
+       %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "model-default-effort", name: "Model Default"})
+
+    %{request: default_effort_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-default-effort",
+        requested_model: "gpt-5.4-mini",
+        endpoint: "/backend-api/codex/responses",
+        service_tier: "default",
+        status: "succeeded",
+        attempt_response_metadata: %{"reasoning" => %{"policy_mode" => "unrestricted"}}
+      })
+
+    %{request: explicit_effort_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-explicit-effort",
+        requested_model: "gpt-5.5",
+        endpoint: "/backend-api/codex/responses",
+        reasoning_effort: "xhigh",
+        service_tier: "default",
+        status: "succeeded"
+      })
+
+    %{request: transcription_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-no-reasoning-concept",
+        requested_model: "gpt-4o-transcribe",
+        endpoint: "/backend-api/transcribe",
+        transport: "http_multipart",
+        status: "succeeded"
+      })
+
+    %{request: rejected_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-rejected-no-effort",
+        requested_model: "gpt-5.4-mini",
+        endpoint: "/backend-api/codex/responses",
+        status: "rejected"
+      })
+
+    %{request: failed_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-failed-no-effort",
+        requested_model: "gpt-5.4-mini",
+        endpoint: "/backend-api/codex/responses",
+        status: "failed",
+        attempt_status: "failed",
+        last_error_code: "upstream_network_error"
+      })
+
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    default_cell = "#request-log-#{default_effort_request.id}-model-details"
+
+    assert has_element?(
+             view,
+             "#request-log-#{default_effort_request.id}-reasoning-default[data-role='model-reasoning-default']",
+             "model default"
+           )
+
+    refute has_element?(view, "#{default_cell} [data-role='model-reasoning']")
+    assert has_element?(view, "#{default_cell} [data-role='model-service-tier']", "tier default")
+
+    assert has_element?(
+             view,
+             "#{default_cell} [data-role='model-service-tier'][title='Service tier']"
+           )
+
+    assert has_element?(
+             view,
+             "#{default_cell}[title='gpt-5.4-mini model default / tier default']"
+           )
+
+    explicit_cell = "#request-log-#{explicit_effort_request.id}-model-details"
+
+    assert has_element?(view, "#{explicit_cell} [data-role='model-reasoning']", "xhigh")
+    refute has_element?(view, "#{explicit_cell} [data-role='model-reasoning-default']")
+    assert has_element?(view, "#{explicit_cell}", "xhigh / tier default")
+
+    transcription_cell = "#request-log-#{transcription_request.id}-model-details"
+
+    refute has_element?(view, "#{transcription_cell} [data-role='model-reasoning-default']")
+    refute has_element?(view, "#{transcription_cell} [data-role='model-reasoning']")
+    refute has_element?(view, "#{transcription_cell}", "/")
+
+    assert has_element?(
+             view,
+             "#{transcription_cell} [data-role='model-service-tier']",
+             "tier default"
+           )
+
+    assert has_element?(view, "#{transcription_cell}[title='gpt-4o-transcribe tier default']")
+
+    for request <- [rejected_request, failed_request] do
+      cell = "#request-log-#{request.id}-model-details"
+
+      refute has_element?(view, "#{cell} [data-role='model-reasoning-default']")
+      refute has_element?(view, cell, "model default")
+      assert has_element?(view, "#{cell} [data-role='model-service-tier']", "tier default")
+    end
   end
 
   test "plan badge helper uses upstream account plan fields and generated styles",
@@ -2186,7 +2289,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     # phrase lives in the title rather than in one run of text.
     assert has_element?(
              view,
-             "#{row_selector} [data-role='model-details'][title='gpt-5.1 max requested: high / default']"
+             "#{row_selector} [data-role='model-details'][title='gpt-5.1 max requested: high / tier default']"
            )
 
     assert has_element?(

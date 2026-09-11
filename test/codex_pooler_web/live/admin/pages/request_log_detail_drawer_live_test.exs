@@ -93,6 +93,76 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     refute has_element?(view, "#request-log-detail-request-id")
   end
 
+  test "reasoning rows say what was not set and when the backend chose the model default", %{
+    conn: conn,
+    scope: scope
+  } do
+    pool = create_pool!(scope, %{slug: "drawer-reasoning-default", name: "Drawer Reasoning"})
+
+    %{request: default_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-model-default",
+        requested_model: "gpt-5.4-mini",
+        attempt_response_metadata: %{"reasoning" => %{"policy_mode" => "unrestricted"}}
+      })
+
+    %{request: legacy_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-legacy-effort",
+        requested_model: "gpt-5.5",
+        reasoning_effort: "high"
+      })
+
+    %{request: failed_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-failed-no-effort",
+        requested_model: "gpt-5.4-mini",
+        status: "failed",
+        attempt_status: "failed",
+        last_error_code: "upstream_network_error"
+      })
+
+    %{request: transcription_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-transcription",
+        requested_model: "gpt-4o-transcribe",
+        endpoint: "/backend-api/transcribe",
+        transport: "http_multipart"
+      })
+
+    view = open_selected_request(conn, pool, default_request)
+
+    assert has_element?(view, "#request-log-detail-requested-reasoning", "Not set")
+    assert has_element?(view, "#request-log-detail-applied-reasoning", "Not set")
+
+    assert has_element?(
+             view,
+             "#request-log-detail-upstream-reasoning",
+             "Not sent (backend model default)"
+           )
+
+    # A request that carried an effort before the attempt snapshot existed must
+    # not be reported as having sent nothing upstream.
+    view = open_selected_request(conn, pool, legacy_request)
+
+    assert has_element?(view, "#request-log-detail-requested-reasoning", "high")
+    refute has_element?(view, "#request-log-detail-applied-reasoning")
+    refute has_element?(view, "#request-log-detail-upstream-reasoning")
+
+    view = open_selected_request(conn, pool, failed_request)
+
+    assert has_element?(view, "#request-log-detail-requested-reasoning", "Not set")
+    refute has_element?(view, "#request-log-detail-applied-reasoning")
+    refute has_element?(view, "#request-log-detail-upstream-reasoning")
+
+    view = open_selected_request(conn, pool, transcription_request)
+
+    assert has_element?(view, "#request-log-detail-request-id", transcription_request.id)
+    refute has_element?(view, "#request-log-detail-requested-reasoning")
+    refute has_element?(view, "#request-log-detail-applied-reasoning")
+    refute has_element?(view, "#request-log-detail-upstream-reasoning")
+  end
+
   test "selected request detail remains visible after refresh removes row from table", %{
     conn: conn,
     scope: scope
@@ -649,6 +719,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     })
 
     %{request: request, attempt: attempt, identity: identity, assignment: assignment}
+  end
+
+  defp open_selected_request(conn, pool, request) do
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&selected_request_id=#{request.id}")
+
+    _ = await_request_logs(view)
+    assert has_element?(view, "#request-log-detail-request-id", request.id)
+    view
   end
 
   defp await_request_logs(view, attempts \\ 200)
