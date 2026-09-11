@@ -15,8 +15,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   @websocket_frame_timeout 1_000
+
+  for shape <- native_turn_failure_shapes() do
+    @tag :single_turn_terminal
+    test "direct native turn failing as #{shape} pushes exactly one terminal frame" do
+      shape = unquote(shape)
+      upstream = start_upstream(strict_native_turn_failure(shape))
+      setup = gateway_setup(upstream)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+      {:ok, state} =
+        CodexResponsesSocket.init(%{
+          auth: auth,
+          opts: %{
+            request_id: "ws-direct-single-terminal-#{shape}",
+            accepted_turn_state: Ecto.UUID.generate(),
+            client_ip: "127.0.0.1"
+          }
+        })
+
+      try do
+        payload =
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("synthetic single terminal turn"),
+            "stream" => true,
+            "generate" => true
+          })
+
+        assert {:ok, turn_state} =
+                 CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+        {turn_state, frames} = collect_native_turn_frames!(turn_state)
+
+        terminal =
+          assert_single_native_turn_terminal!(frames, native_turn_failure_terminal_type(shape))
+
+        if terminal["type"] == "error", do: assert(terminal["status"] == 502)
+
+        assert :ok = FakeUpstream.verify!(upstream)
+        assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+        assert request.status == "failed"
+        assert :ok = CodexResponsesSocket.terminate(:closed, turn_state)
+      after
+        CodexResponsesSocket.terminate(:closed, state)
+      end
+    end
+  end
 
   @tag :websocket_failure
   @tag :replay_race

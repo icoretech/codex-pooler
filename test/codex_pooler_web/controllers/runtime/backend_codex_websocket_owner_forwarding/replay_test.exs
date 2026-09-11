@@ -383,22 +383,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert ["response.created", "response.in_progress"] = seen_types
     assert %{"type" => "error", "status" => 502} = error_frame
 
-    # The response task's completion may author its own failure frame after
-    # the owner-relayed one; either way the turn fails with the same code.
-    remote_state =
-      if MapSet.size(remote_state.tasks) > 0 do
-        case receive_socket_done(remote_state) do
-          {:ok, remote_state} ->
-            remote_state
-
-          {:push, {:text, done_frame}, remote_state} ->
-            assert %{"type" => "error", "status" => 502} = CodexPooler.JSON.decode!(done_frame)
-            remote_state
-        end
-      else
-        remote_state
-      end
-
+    # The owner-relayed error is the turn's only terminal on the wire: the
+    # finishing response task settles without authoring a second error frame.
+    assert {remote_state, []} = collect_native_turn_frames!(remote_state)
     assert MapSet.size(remote_state.tasks) == 0
 
     assert [failed] = request_logs(setup.pool.id)

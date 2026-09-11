@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -351,5 +352,182 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
     after
       timeout_ms -> flunk("expected websocket response chunk")
     end
+  end
+
+  @native_turn_failure_shapes [
+    :lifecycle_cut,
+    :provider_error_event,
+    :response_failed,
+    :pre_visible_close,
+    :upgrade_rejected
+  ]
+  @native_turn_terminal_types ~w(response.completed response.failed response.incomplete error)
+
+  def native_turn_failure_shapes, do: @native_turn_failure_shapes
+
+  # One native turn whose single upstream send fails in the named shape. Every
+  # shape is one strict entry, so a hidden retry or replay fails `verify!/1`.
+  def strict_native_turn_failure(:lifecycle_cut) do
+    # provenance: observed findings issue 124 (lifecycle frames then a transport close; ids synthetic)
+    FakeUpstream.strict_sequence([
+      strict_native_request(
+        1,
+        FakeUpstream.websocket_text_frames_then_abrupt_close([
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_single_terminal_cut", "status" => "in_progress"}
+          }),
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.in_progress",
+            "response" => %{"id" => "resp_single_terminal_cut", "status" => "in_progress"}
+          })
+        ])
+      )
+    ])
+  end
+
+  def strict_native_turn_failure(:provider_error_event) do
+    # provenance: synthetic_adversarial (lifecycle frame then a provider type:error event)
+    FakeUpstream.strict_sequence([
+      strict_native_request(
+        1,
+        FakeUpstream.websocket_text_frames([
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_single_terminal_error", "status" => "in_progress"}
+          }),
+          CodexPooler.JSON.encode!(%{
+            "type" => "error",
+            "status" => 500,
+            "error" => %{
+              "type" => "server_error",
+              "code" => "server_error",
+              "message" => "synthetic"
+            }
+          })
+        ])
+      )
+    ])
+  end
+
+  def strict_native_turn_failure(:response_failed) do
+    # provenance: synthetic_adversarial (invented response.failed terminal)
+    FakeUpstream.strict_sequence([
+      strict_native_request(1, FakeUpstream.websocket_terminal_failure("server_error"))
+    ])
+  end
+
+  def strict_native_turn_failure(:pre_visible_close) do
+    # provenance: synthetic_adversarial (peer close before any frame)
+    FakeUpstream.strict_sequence([
+      strict_native_request(1, FakeUpstream.websocket_close(code: 1011))
+    ])
+  end
+
+  def strict_native_turn_failure(:upgrade_rejected) do
+    # provenance: synthetic_adversarial (handshake rejected before any frame)
+    FakeUpstream.strict_sequence([
+      FakeUpstream.expect_request(
+        method: "GET",
+        path: "/backend-api/codex/responses",
+        respond:
+          FakeUpstream.websocket_upgrade_error(
+            %{"error" => %{"code" => "upgrade_rejected"}},
+            status: 403
+          )
+      )
+    ])
+  end
+
+  # A provider `type:error` event reaches the native client normalized as its
+  # single `response.failed` terminal, never as a relayed error frame.
+  def native_turn_failure_terminal_type(:provider_error_event), do: "response.failed"
+  def native_turn_failure_terminal_type(:response_failed), do: "response.failed"
+  def native_turn_failure_terminal_type(_shape), do: "error"
+
+  @doc """
+  Drives one native websocket turn through the socket callbacks and returns
+  every client-visible frame the socket pushed for it, decoded, in push order.
+
+  The turn is settled once the response task reported done, the socket tracks
+  no task, and, for an owner-forwarded socket, the owner's `:complete` arrived.
+  Every producer of a frame for the turn has fired by then (the owner relays
+  before it replies, the task reports after the reply), so the closing mailbox
+  check proves nothing else is pending without waiting on a timer.
+  """
+  def collect_native_turn_frames!(state, timeout_ms \\ @connection_shutdown_timeout_ms) do
+    seen = %{done?: false, complete?: not Adapter.owner?(state)}
+    collect_native_turn_frames(state, [], seen, timeout_ms)
+  end
+
+  defp collect_native_turn_frames(state, frames, seen, timeout_ms) do
+    if seen.done? and seen.complete? and MapSet.size(state.tasks) == 0 do
+      refute_received {:codex_response_chunk, _task_pid, _frame}
+      refute_received {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload}
+      refute_received {:websocket_owner_frame, _correlation_id, _epoch, _payload}
+      refute_received {:codex_response_done, _task_pid, _result}
+      {state, Enum.reverse(frames)}
+    else
+      message = receive_native_turn_message(timeout_ms)
+      seen = mark_native_turn_message(seen, message)
+
+      case CodexResponsesSocket.handle_info(message, state) do
+        {:push, {:text, frame}, state} ->
+          collect_native_turn_frames(
+            state,
+            [CodexPooler.JSON.decode!(frame) | frames],
+            seen,
+            timeout_ms
+          )
+
+        {:ok, state} ->
+          collect_native_turn_frames(state, frames, seen, timeout_ms)
+
+        {:stop, _reason, close_detail, _state} ->
+          flunk("native turn closed the socket with #{inspect(close_detail)}")
+      end
+    end
+  end
+
+  defp receive_native_turn_message(timeout_ms) do
+    receive do
+      {:codex_response_chunk, _task_pid, _frame} = message -> message
+      {:websocket_owner_frame, _, _, _, _} = message -> message
+      {:websocket_owner_frame, _, _, _} = message -> message
+      {:websocket_owner_output_commit_probe, _, _, _, _, _, _} = message -> message
+      {:websocket_owner_cleanup_witness, _, _, _, _} = message -> message
+      {:websocket_response_activity, _task_pid, _token} = message -> message
+      {:codex_response_done, _task_pid, _result} = message -> message
+      {:websocket_response_delivery_complete, _task_pid, _token} = message -> message
+    after
+      timeout_ms -> flunk("expected native websocket turn settlement")
+    end
+  end
+
+  defp mark_native_turn_message(seen, {:codex_response_done, _task_pid, _result}),
+    do: %{seen | done?: true}
+
+  defp mark_native_turn_message(seen, {:websocket_owner_frame, _, _, _, :complete}),
+    do: %{seen | complete?: true}
+
+  defp mark_native_turn_message(seen, {:websocket_owner_frame, _, _, :complete}),
+    do: %{seen | complete?: true}
+
+  defp mark_native_turn_message(seen, _message), do: seen
+
+  @doc """
+  Asserts the turn delivered exactly one client-visible terminal frame, of
+  `expected_type`, as its last frame. Failure messages carry only frame types,
+  statuses, and error codes.
+  """
+  def assert_single_native_turn_terminal!(frames, expected_type) do
+    summary = Enum.map(frames, &{&1["type"], &1["status"], get_in(&1, ["error", "code"])})
+    terminals = Enum.filter(frames, &(&1["type"] in @native_turn_terminal_types))
+
+    assert Enum.map(terminals, & &1["type"]) == [expected_type],
+           "expected exactly one #{expected_type} terminal for the turn, pushed: #{inspect(summary)}"
+
+    assert List.last(frames)["type"] == expected_type
+    List.last(frames)
   end
 end

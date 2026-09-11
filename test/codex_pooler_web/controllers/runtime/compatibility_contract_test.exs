@@ -2452,6 +2452,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns"
 
       assert feature.contract =~
+               "an owner-forwarded native turn instead delivers the owner's single relayed status-502 server_error frame and the socket authors no second error frame for that turn"
+
+      assert feature.contract =~
                "every frame authored through the shared websocket error envelope carries error type invalid_request_error, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed when its reason has no code and message"
 
       assert feature.contract =~

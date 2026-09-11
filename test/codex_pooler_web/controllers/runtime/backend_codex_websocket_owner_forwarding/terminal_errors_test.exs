@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TerminalEr
   import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   alias CodexPooler.Access
@@ -295,16 +296,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TerminalEr
 
     assert {:push, {:text, owner_error_frame}, state} = receive_owner_socket_push(state)
 
-    assert %{"type" => "error", "error" => %{"code" => "server_error"}} =
+    assert %{"type" => "error", "status" => 502, "error" => %{"code" => "server_error"}} =
              CodexPooler.JSON.decode!(owner_error_frame)
 
-    assert {:push, {:text, error_frame}, failed_state} = receive_socket_done(state)
-
-    assert_receive {:websocket_owner_frame, _, _, _, :complete} = owner_complete
-    assert {:ok, failed_state} = CodexResponsesSocket.handle_info(owner_complete, failed_state)
-
-    assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
-             CodexPooler.JSON.decode!(error_frame)
+    # The owner-relayed error is the turn's only terminal on the wire: the
+    # finishing response task settles without authoring a second error frame.
+    assert {failed_state, []} = collect_native_turn_frames!(state)
 
     assert failed_state.websocket_owner_active_turn_reconnect? == false
     assert FakeUpstream.count(upstream) == 1
@@ -365,6 +362,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TerminalEr
     refute metadata_text =~ "Bearer "
     refute metadata_text =~ "upstream-token"
     await_owner_cleanup!(failed_state.codex_session.id)
+  end
+
+  for topology <- [:local_owner, :remote_owner], shape <- native_turn_failure_shapes() do
+    @tag :single_turn_terminal
+    test "#{topology} native turn failing as #{shape} pushes exactly one terminal frame" do
+      topology = unquote(topology)
+      shape = unquote(shape)
+      upstream = start_upstream(strict_native_turn_failure(shape))
+      setup = gateway_setup(upstream)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      request_id = "ws-single-terminal-#{topology}-#{shape}"
+      {:ok, state} = owner_socket(auth, request_id, Ecto.UUID.generate())
+
+      try do
+        turn_state = single_terminal_topology!(state, topology)
+        payload = websocket_payload(setup, "synthetic single terminal turn")
+
+        assert {:ok, turn_state} =
+                 CodexResponsesSocket.handle_in({payload, [opcode: :text]}, turn_state)
+
+        {turn_state, frames} = collect_native_turn_frames!(turn_state)
+
+        terminal =
+          assert_single_native_turn_terminal!(frames, native_turn_failure_terminal_type(shape))
+
+        if terminal["type"] == "error", do: assert(terminal["status"] == 502)
+
+        assert :ok = FakeUpstream.verify!(upstream)
+        assert [request] = request_logs(setup.pool.id)
+        assert request.status == "failed"
+        assert :ok = CodexResponsesSocket.terminate(:closed, turn_state)
+      after
+        CodexResponsesSocket.terminate(:closed, state)
+      end
+    end
+  end
+
+  defp single_terminal_topology!(state, :local_owner), do: state
+
+  defp single_terminal_topology!(state, :remote_owner) do
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+    remote_node = :"codex_pooler@remote-single-terminal.example"
+    ReplayRemoteNodeClient.configure(remote_node, self())
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    session =
+      state.codex_session
+      |> Ecto.Changeset.change(owner_instance_id: Atom.to_string(remote_node), updated_at: now)
+      |> Repo.update!()
+
+    active_owner_lease(session.id)
+    |> Ecto.Changeset.change(owner_instance_id: Atom.to_string(remote_node), updated_at: now)
+    |> Repo.update!()
+
+    :sys.replace_state(owner_pid, fn owner_state ->
+      %{owner_state | owner_instance_id: Atom.to_string(remote_node)}
+    end)
+
+    state
+    |> remote_owner_state(remote_node, node_client: ReplayRemoteNodeClient)
+    |> Map.put(:codex_session, session)
   end
 
   test "owner-forwarded websocket overloads keep internal causes off the Codex wire" do

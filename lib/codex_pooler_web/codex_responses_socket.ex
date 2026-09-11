@@ -1026,8 +1026,23 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, state}
   end
 
+  # An owner error on a native turn is that turn's terminal: the owner relays it
+  # only when it settles the turn, right before `:complete`. At most one error
+  # frame per turn reaches the client, and the first wins, whether it is this
+  # relayed error or one the socket already authored.
   defp handle_non_public_owner_payload({:error, _reason, payload}, state) do
-    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, state}
+    case active_native_owner_turn_pid(state) do
+      pid when is_pid(pid) ->
+        if downstream_error_terminal_pushed?(state, pid) do
+          {:ok, state}
+        else
+          {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))},
+           record_downstream_terminal(state, pid, "error")}
+        end
+
+      nil ->
+        {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, state}
+    end
   end
 
   defp handle_non_public_owner_payload(:complete, state) do
@@ -1191,14 +1206,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_non_public_response_done(pid, {:response_task_failure, {:error, reason}}, state) do
-    state =
-      state
-      |> record_downstream_terminal(pid, "error")
-      |> remove_tracked_response_task(pid)
-      |> remove_native_turn_output(pid)
-      |> maybe_start_queued_response_task()
-
-    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(reason))}, state}
+    native_turn_error_result(state, pid, reason)
   end
 
   defp handle_non_public_response_done(
@@ -1207,28 +1215,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          state
        ) do
     log_failed_native_websocket_turn(state, pid, reason, visible_output?)
-
-    state =
-      state
-      |> record_downstream_terminal(pid, "error")
-      |> remove_tracked_response_task(pid)
-      |> remove_native_turn_output(pid)
-      |> maybe_start_queued_response_task()
-
-    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(reason))}, state}
+    native_turn_error_result(state, pid, reason)
   end
 
   defp handle_non_public_response_done(pid, {:error, reason}, state) do
     log_failed_native_websocket_turn(state, pid, reason, false)
-
-    state =
-      state
-      |> record_downstream_terminal(pid, "error")
-      |> remove_tracked_response_task(pid)
-      |> remove_native_turn_output(pid)
-      |> maybe_start_queued_response_task()
-
-    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(reason))}, state}
+    native_turn_error_result(state, pid, reason)
   end
 
   defp handle_non_public_response_done(pid, _result, state) do
@@ -1239,6 +1231,28 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> maybe_start_queued_response_task()
 
     {:ok, state}
+  end
+
+  # The socket authors its own error for a failed native turn unless an error
+  # frame for that turn already reached the client (an owner-relayed error or a
+  # relayed provider error): a second error would be read as the failure of
+  # whatever the client sends next. A provider success terminal followed by a
+  # settlement failure still gets its error frame, so the client resends.
+  defp native_turn_error_result(state, pid, reason) do
+    terminal_pushed? = downstream_error_terminal_pushed?(state, pid)
+
+    state =
+      state
+      |> record_downstream_terminal(pid, "error")
+      |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
+      |> maybe_start_queued_response_task()
+
+    if terminal_pushed? do
+      {:ok, state}
+    else
+      {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(reason))}, state}
+    end
   end
 
   defp maybe_finish_public_owner_turn(state) do
@@ -2890,6 +2904,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp clear_downstream_delivery_evidence(state, pid) do
     Map.update(state, :downstream_delivery_evidence, %{}, &Map.delete(&1, pid))
+  end
+
+  # An unskipped `error` terminal class is recorded only together with the push
+  # of an error frame for that turn.
+  defp downstream_error_terminal_pushed?(state, pid) when is_pid(pid) do
+    match?(%{terminal_class: "error", skipped?: false}, downstream_delivery_evidence(state, pid))
   end
 
   defp count_downstream_frame(state, pid, data) when is_pid(pid) and is_binary(data) do
