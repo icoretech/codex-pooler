@@ -76,7 +76,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         Map.get(attempt, :model_serving_mode)
       )
 
-    present_rows(rows ++ mode_rows ++ websocket_connection_rows(attempt))
+    present_rows(
+      rows ++ mode_rows ++ websocket_connection_rows(attempt) ++ downstream_delivery_rows(attempt)
+    )
   end
 
   @spec transport_failure_rows(map()) :: [detail_row()]
@@ -141,6 +143,46 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
       _invalid ->
         []
     end
+  end
+
+  # One compact line per attempt built only from the admin projection's fixed
+  # vocabulary (`DebugProjection.DownstreamDelivery`); absent receipts render
+  # nothing.
+  defp downstream_delivery_rows(%{attempt_number: attempt_number} = attempt) do
+    case Map.get(attempt, :downstream_delivery) do
+      %{
+        outcome: outcome,
+        terminal_class: terminal_class,
+        pushed_at: pushed_at,
+        frames_after_visible: frames,
+        transport: transport
+      }
+      when is_binary(outcome) and is_binary(terminal_class) and is_integer(frames) and
+             frames >= 0 and is_binary(transport) and (is_binary(pushed_at) or is_nil(pushed_at)) ->
+        [
+          detail(
+            "request-log-detail-attempt-#{attempt_number}-downstream-delivery",
+            "Downstream delivery",
+            downstream_delivery_line(outcome, terminal_class, frames, pushed_at, transport),
+            mono: true
+          )
+        ]
+
+      _invalid ->
+        []
+    end
+  end
+
+  defp downstream_delivery_line(outcome, terminal_class, frames, pushed_at, transport) do
+    [
+      outcome,
+      "terminal #{terminal_class}",
+      "#{frames} #{if frames == 1, do: "frame", else: "frames"} after visible",
+      pushed_at && "pushed #{pushed_at}",
+      transport
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" \u00b7 ")
   end
 
   defp detail(id, label, value, opts \\ []) do

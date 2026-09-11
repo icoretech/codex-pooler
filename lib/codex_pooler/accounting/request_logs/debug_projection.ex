@@ -5,6 +5,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   alias CodexPooler.Accounting.{Attempt, Request}
 
   alias CodexPooler.Accounting.RequestLogs.DebugProjection.{
+    DownstreamDelivery,
     TransportFailure,
     UpstreamWebsocketConnection
   }
@@ -243,6 +244,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     |> maybe_put_rejection_metadata(attempt)
     |> maybe_put_model_serving_mode(attempt, surface)
     |> maybe_put_upstream_websocket_connection(attempt, surface)
+    |> maybe_put_downstream_delivery(attempt, surface)
   end
 
   defp maybe_put_model_serving_mode(projection, %Attempt{} = attempt, :admin) do
@@ -275,6 +277,15 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   end
 
   defp maybe_put_upstream_websocket_connection(projection, _attempt, :default), do: projection
+
+  defp maybe_put_downstream_delivery(projection, %Attempt{} = attempt, :admin) do
+    case DownstreamDelivery.build(attempt.response_metadata) do
+      nil -> projection
+      receipt -> Map.put(projection, :downstream_delivery, receipt)
+    end
+  end
+
+  defp maybe_put_downstream_delivery(projection, _attempt, :default), do: projection
 
   defp maybe_put_transport_failure(projection, %Attempt{} = attempt) do
     case TransportFailure.build(attempt) do

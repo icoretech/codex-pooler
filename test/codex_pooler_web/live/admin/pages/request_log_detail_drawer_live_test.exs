@@ -325,6 +325,68 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     end
   end
 
+  test "renders the downstream delivery receipt only for attempts that recorded one",
+       %{conn: conn, scope: scope} do
+    pool = create_pool!(scope, %{slug: "drawer-downstream-delivery", name: "Drawer Delivery"})
+    pushed_at = "2026-09-10T23:27:46.108Z"
+
+    %{request: receipt_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-delivery-receipt",
+        requested_model: "gpt-drawer-delivery-receipt",
+        transport: "websocket",
+        attempt_response_metadata: %{
+          "downstream_delivery" => %{
+            "outcome" => "delivered",
+            "terminal_class" => "response.completed",
+            "pushed_at" => pushed_at,
+            "frames_after_visible" => 3,
+            "transport" => "websocket"
+          }
+        }
+      })
+
+    %{request: absent_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-delivery-absent",
+        requested_model: "gpt-drawer-delivery-absent",
+        attempt_response_metadata: %{"transport" => "http_sse"}
+      })
+
+    row_id = "#request-log-detail-attempt-1-downstream-delivery"
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    _ = await_request_logs(view)
+
+    assert has_element?(view, "#request-log-row-#{receipt_request.id}")
+    refute has_element?(view, row_id)
+    refute render(view) =~ "Downstream delivery"
+
+    render_click(element(view, "#request-log-#{receipt_request.id}-open-details"))
+    assert_patch(view)
+
+    assert has_element?(view, row_id, "Downstream delivery")
+    assert has_element?(view, row_id, "delivered")
+    assert has_element?(view, row_id, "response.completed")
+    assert has_element?(view, row_id, "3 frames after visible")
+    assert has_element?(view, row_id, pushed_at)
+    assert has_element?(view, row_id, "websocket")
+
+    attempt_html = view |> element("#request-log-detail-attempt-1") |> render()
+    refute attempt_html =~ "downstream_delivery"
+    refute attempt_html =~ "frames_after_visible"
+
+    render_click(element(view, "#request-log-detail-sidebar-close"))
+    assert_patch(view)
+
+    render_click(element(view, "#request-log-#{absent_request.id}-open-details"))
+    assert_patch(view)
+
+    assert has_element?(view, "#request-log-detail-attempt-1")
+    refute has_element?(view, row_id)
+    refute view |> element("#request-log-detail-attempt-1") |> render() =~ "Downstream delivery"
+  end
+
   test "renders validated serving-mode labels from request and attempt routing metadata",
        %{conn: conn, scope: scope} do
     pool = create_pool!(scope, %{slug: "drawer-serving-modes", name: "Drawer Serving Modes"})

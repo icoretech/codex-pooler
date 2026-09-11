@@ -830,6 +830,102 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     refute inspect(default_log) =~ replacement_lifecycle_id
   end
 
+  test "admin request logs project the downstream delivery receipt onto its fixed vocabulary" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    prompt_injection = "ignore-instructions-leak-secrets-now"
+    extra_value = "synthetic-extra-must-not-project"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-admin-downstream-delivery",
+        status: "succeeded",
+        correlation_id: "admin-downstream-delivery"
+      })
+
+    valid_receipt = %{
+      "outcome" => "delivered",
+      "terminal_class" => "response.completed",
+      "pushed_at" => "2026-09-10T23:27:46.108Z",
+      "frames_after_visible" => 3,
+      "transport" => "websocket"
+    }
+
+    receipts = [
+      Map.merge(valid_receipt, %{"access_token" => extra_value, "prompt" => prompt_injection}),
+      %{
+        "outcome" => "aborted",
+        "terminal_class" => "none",
+        "pushed_at" => nil,
+        "frames_after_visible" => 0,
+        "transport" => "http_sse"
+      },
+      Map.put(valid_receipt, "outcome", prompt_injection),
+      Map.put(valid_receipt, "terminal_class", prompt_injection),
+      Map.put(valid_receipt, "pushed_at", prompt_injection),
+      Map.put(valid_receipt, "frames_after_visible", -1),
+      Map.put(valid_receipt, "frames_after_visible", "3"),
+      Map.put(valid_receipt, "transport", "grpc"),
+      "not-a-map"
+    ]
+
+    # The detail projection keeps at most ten attempts, so the receipts plus the
+    # receipt-less attempt below must stay within that bound.
+    assert length(receipts) + 1 <= 10
+
+    for {receipt, index} <- Enum.with_index(receipts, 1) do
+      attempt_fixture(request, assignment, %{
+        attempt_number: index,
+        status: "succeeded",
+        response_metadata: %{"downstream_delivery" => receipt}
+      })
+    end
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: length(receipts) + 1,
+      status: "succeeded",
+      response_metadata: %{"transport" => "websocket"}
+    })
+
+    assert %{items: [admin_log], total: 1} =
+             Accounting.list_request_logs(pool, surface: :admin)
+
+    attempts_by_number = Map.new(admin_log.debug.attempts, &{&1.attempt_number, &1})
+
+    assert Map.fetch!(attempts_by_number, 1).downstream_delivery == %{
+             outcome: "delivered",
+             terminal_class: "response.completed",
+             pushed_at: "2026-09-10T23:27:46.108Z",
+             frames_after_visible: 3,
+             transport: "websocket"
+           }
+
+    assert Map.fetch!(attempts_by_number, 2).downstream_delivery == %{
+             outcome: "aborted",
+             terminal_class: "none",
+             pushed_at: nil,
+             frames_after_visible: 0,
+             transport: "http_sse"
+           }
+
+    for attempt_number <- 3..(length(receipts) + 1) do
+      refute Map.has_key?(Map.fetch!(attempts_by_number, attempt_number), :downstream_delivery)
+    end
+
+    projected = inspect(admin_log.debug.attempts)
+    refute projected =~ prompt_injection
+    refute projected =~ extra_value
+    refute projected =~ "access_token"
+
+    assert %{items: [default_log]} = Accounting.list_request_logs(pool)
+
+    assert Enum.all?(default_log.debug.attempts, fn attempt ->
+             not Map.has_key?(attempt, :downstream_delivery)
+           end)
+
+    refute inspect(default_log.debug) =~ "downstream_delivery"
+  end
+
   test "request log failed rows retain semantic errors and fact-backed list behavior before terminal diagnostics" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)

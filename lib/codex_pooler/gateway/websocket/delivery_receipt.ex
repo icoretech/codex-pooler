@@ -45,6 +45,16 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   def outcomes, do: @outcomes
 
   @doc """
+  Every value `build/1` can persist under `terminal_class`: the provider
+  terminal classes plus the `none`/`unknown` placeholders.
+  """
+  @spec terminal_class_values() :: [String.t()]
+  def terminal_class_values, do: @terminal_classes ++ [@none, @unknown]
+
+  @spec transports() :: [String.t()]
+  def transports, do: @transports
+
+  @doc """
   Builds the persisted receipt from socket-side evidence.
 
   Every value is coerced onto a fixed vocabulary; nothing from the wire is
