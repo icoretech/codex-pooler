@@ -141,7 +141,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     end
   end
 
-  defp rejection_body(response) do
+  @spec rejection_body(Req.Response.t()) :: binary()
+  def rejection_body(%Req.Response{} = response) do
     case RejectionBody.fetch(response) do
       body when is_binary(body) -> body
       _absent -> response_body(response)
@@ -200,6 +201,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
       {:ok, %{"error" => error}} when is_map(error) ->
         %{}
         |> maybe_put_rejection_value(:code, valid_rejection_token(error["code"]))
+        |> maybe_put_rejection_value(:type, valid_rejection_token(error["type"]))
         |> maybe_put_rejection_value(:param, valid_rejection_param(error["param"]))
 
       _other ->
@@ -249,11 +251,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
       configured_mode: "full",
       effective_mode: "full",
       source: "override"
-    } and ordinary_responses_endpoint?(request_options) and
-      not request_options.payload_context.compaction_trigger_bridge?
+    } and ordinary_responses_route?(request_options)
   end
 
   def explicit_full_ordinary_responses?(_request_options), do: false
+
+  @spec ordinary_responses_route?(RequestOptions.t() | term()) :: boolean()
+  def ordinary_responses_route?(%RequestOptions{} = request_options) do
+    ordinary_responses_endpoint?(request_options) and
+      not request_options.payload_context.compaction_trigger_bridge?
+  end
+
+  def ordinary_responses_route?(_request_options), do: false
 
   defp ordinary_responses_endpoint?(%RequestOptions{} = request_options) do
     upstream_endpoint = request_options.transport.upstream_endpoint

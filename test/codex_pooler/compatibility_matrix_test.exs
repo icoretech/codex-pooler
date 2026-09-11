@@ -2,6 +2,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.CompatibilityMatrix
+  alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Pools.RoutingSettings
 
   describe "catalog and Responses runtime contract" do
@@ -704,6 +705,36 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              )
       assert fixture.invalid_shapes == "omitted"
       assert fixture.raw_error_message_or_body == "never_projected"
+    end
+
+    test "pins the bounded upstream validation rejection relay" do
+      feature = CompatibilityMatrix.by_slug!(:upstream_validation_rejection_relay)
+      fixture = CompatibilityMatrix.fixture!(:upstream_validation_rejection_relay)
+
+      assert feature.current == :bounded_allowlisted_validation_rejection_relay
+      assert feature.fixture == :upstream_validation_rejection_relay
+
+      assert fixture.codes ==
+               ValidationRejection.relayable_codes()
+
+      assert fixture.upstream_status == 400
+      assert fixture.error_type == "invalid_request_error"
+      assert fixture.source == CompatibilityMatrix.fixture!(:rejection_metadata).source
+      assert fixture.relayed_fields == ~w(type code param message)
+      assert fixture.message == "pooler_authored_from_code_and_param"
+      assert fixture.supported_values.codes == ~w(unsupported_value invalid_value)
+      assert fixture.supported_values.max_values == 12
+      assert fixture.supported_values.rejected_or_earlier_quoted_values == "excluded"
+      assert fixture.chat_param == "client_field_for_adapter_renames_else_upstream_path"
+      assert fixture.provider_message_forwarded == false
+      assert fixture.native_streaming_body == "native_json_error_envelope"
+      assert fixture.native_materialized_body == "unchanged_passthrough"
+      assert fixture.public_v1_body == "openai_error_object"
+      assert :explicit_full_override in fixture.unchanged_scopes
+      assert :websocket_frames in fixture.unchanged_scopes
+      assert fixture.accounting_error_code == "upstream_status"
+      assert fixture.retry == false
+      assert fixture.routing_health == :unchanged
     end
   end
 

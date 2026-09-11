@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     SettlementAttrs,
     SideEffects,
     Streaming,
+    ValidationRejection,
     Websocket
   }
 
@@ -546,7 +547,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
             request_options,
             payload,
             error_code,
-            opts,
+            Keyword.put(
+              opts,
+              :validation_rejection,
+              ValidationRejection.fetch(response, request_options)
+            ),
             Metadata.rejection_error(response)
           )
 
@@ -609,6 +614,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
          opts,
          marker
        ) do
+    validation_rejection = Keyword.get(opts, :validation_rejection)
+
     case {Keyword.get(opts, :failure_projection, :mode_scoped),
           Metadata.explicit_full_ordinary_responses?(request_options)} do
       {{:misalignment_policy_violation, summary}, _explicit_full?} ->
@@ -633,6 +640,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           public_input_file_upstream_404?: marker
         }
 
+      {:mode_scoped, false} when is_map(validation_rejection) ->
+        validation_rejection_result(status, headers, body, validation_rejection)
+
       {_projection, _explicit_full?} ->
         %{
           status: status,
@@ -643,6 +653,34 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           public_input_file_upstream_404?: marker
         }
     end
+  end
+
+  # A streaming drain leaves no public body, so the relayed validation error
+  # becomes the native JSON error envelope. A materialized native body keeps
+  # its existing passthrough; public /v1 surfaces project the marker instead.
+  defp validation_rejection_result(status, headers, "", validation_rejection) do
+    %{
+      status: status,
+      headers: json_content_type(headers),
+      raw_body:
+        CodexPooler.JSON.encode!(%{"error" => ValidationRejection.error(validation_rejection)}),
+      public_validation_rejection: validation_rejection
+    }
+  end
+
+  defp validation_rejection_result(status, headers, body, validation_rejection) do
+    %{
+      status: status,
+      headers: headers,
+      raw_body: body,
+      public_validation_rejection: validation_rejection
+    }
+  end
+
+  defp json_content_type(headers) do
+    headers
+    |> Enum.reject(fn {name, _value} -> String.downcase(to_string(name)) == "content-type" end)
+    |> then(&[{"content-type", "application/json"} | &1])
   end
 
   defp canonical_failure_body(%RequestOptions{

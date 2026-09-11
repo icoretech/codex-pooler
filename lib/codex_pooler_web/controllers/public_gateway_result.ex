@@ -12,8 +12,13 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   @type gateway_call_result ::
           {:ok, Contracts.gateway_result()} | {:error, Contracts.gateway_error()}
 
-  @spec send(Plug.Conn.t(), gateway_call_result(), success_normalizer()) :: Plug.Conn.t()
-  def send(conn, {:ok, %{stream: _stream} = result}, _success_normalizer) do
+  @type send_opts :: [validation_param: (String.t() -> String.t())]
+
+  @spec send(Plug.Conn.t(), gateway_call_result(), success_normalizer(), send_opts()) ::
+          Plug.Conn.t()
+  def send(conn, result, success_normalizer, opts \\ [])
+
+  def send(conn, {:ok, %{stream: _stream} = result}, _success_normalizer, _opts) do
     GatewayHelpers.send_gateway_result(conn, %{
       result
       | headers: PublicResponse.stream_headers(GatewayHelpers.result_headers(result))
@@ -22,8 +27,24 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
 
   def send(
         conn,
+        {:ok, %{public_validation_rejection: %{} = validation_rejection, status: status}},
+        _success_normalizer,
+        opts
+      ) do
+    param_mapper = Keyword.get(opts, :validation_param, &Function.identity/1)
+
+    conn
+    |> put_status(status)
+    |> json(%{
+      "error" => PublicResponse.validation_rejection_error(validation_rejection, param_mapper)
+    })
+  end
+
+  def send(
+        conn,
         {:ok, %{raw_body: body, status: status} = result},
-        success_normalizer
+        success_normalizer,
+        _opts
       ) do
     case PublicResponse.normalize_raw_body(
            status,
@@ -45,7 +66,8 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   def send(
         conn,
         {:ok, %{body: _body, status: status, public_input_file_upstream_404?: true}},
-        _success_normalizer
+        _success_normalizer,
+        _opts
       ) do
     conn
     |> put_status(404)
@@ -55,10 +77,10 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
     })
   end
 
-  def send(conn, {:ok, %{body: _body} = result}, _success_normalizer),
+  def send(conn, {:ok, %{body: _body} = result}, _success_normalizer, _opts),
     do: GatewayHelpers.send_gateway_result(conn, result)
 
-  def send(conn, {:error, %{status: status} = reason}, _success_normalizer) do
+  def send(conn, {:error, %{status: status} = reason}, _success_normalizer, _opts) do
     if PublicResponse.redacted_gateway_error?(reason) do
       conn
       |> put_status(status)
@@ -68,7 +90,7 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
     end
   end
 
-  def send(conn, {:error, reason}, _success_normalizer),
+  def send(conn, {:error, reason}, _success_normalizer, _opts),
     do: GatewayHelpers.send_error(conn, reason)
 
   defp public_error_status(_status, %{public_input_file_upstream_404?: true}), do: 404

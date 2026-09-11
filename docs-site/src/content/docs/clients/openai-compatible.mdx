@@ -451,6 +451,24 @@ fixed safe fallback when it is blank. The error never includes a provider
 exact code, fixed accounting text, and bounded facts. Every other provider error
 continues to use the generic redaction above.
 
+A second narrow exception covers upstream parameter validation. When upstream
+rejects a `POST /v1/responses` or `POST /v1/chat/completions` request before
+any stream starts with HTTP `400`, type `invalid_request_error`, and one of the
+codes `unsupported_value`, `invalid_value`, `unsupported_parameter`,
+`missing_required_parameter`, `invalid_type`, or `string_above_max_length`,
+streaming and non-streaming clients receive a `400` JSON error with type
+`invalid_request_error`, that code, a bounded `param` field path or `null`, and
+a message written by Codex Pooler from the code and param, for example
+`upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high`.
+SDKs expose these as `BadRequestError` with `code` and `param`. The provider
+message is never forwarded; for `unsupported_value` and `invalid_value` the
+message may list up to 12 supported values when upstream reports them as simple
+identifiers, never the rejected value. Chat Completions requests receive the
+Chat field they sent where Codex Pooler renamed it, for example
+`reasoning_effort`, `max_tokens`, `verbosity`, or `response_format`; other
+paths name the upstream Responses field. Other statuses, types, and codes keep
+the generic redaction.
+
 Schema-strict clients that enforce the platform enum cannot accept every relayed Codex-backend code. In
 `openai-python`, leave `_strict_response_validation` at its default `false` when using this compatibility surface.
 

@@ -51,7 +51,12 @@ defmodule CodexPooler.Gateway.Contracts do
   @type raw_body_result :: %{
           required(:status) => pos_integer(),
           optional(:headers) => response_headers(),
-          required(:raw_body) => binary()
+          required(:raw_body) => binary(),
+          optional(:public_validation_rejection) => %{
+            required(:code) => String.t(),
+            required(:param) => String.t() | nil,
+            required(:supported_values) => [String.t()] | nil
+          }
         }
   @type stream_callback :: (Plug.Conn.t() -> {:ok, Plug.Conn.t()} | {:error, gateway_error()})
   @type stream_result :: %{

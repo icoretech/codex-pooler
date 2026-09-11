@@ -566,6 +566,48 @@ bounded field or numeric-index path. Invalid values and successful attempts
 omit the field, and raw upstream error messages or rejected values are never
 projected through it.
 
+### Upstream parameter validation rejections
+
+When upstream rejects an ordinary Responses or Chat Completions HTTP request
+with status `400`, an error object of type `invalid_request_error`, and one of
+the parameter-validation codes `unsupported_value`, `invalid_value`,
+`unsupported_parameter`, `missing_required_parameter`, `invalid_type`, or
+`string_above_max_length`, the client receives that rejection instead of an
+empty or generic error:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "unsupported_value",
+    "param": "reasoning.effort",
+    "message": "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+  }
+}
+```
+
+`param` is a bounded field path such as `reasoning.effort` or `input[0].content`,
+or `null` when upstream supplies no valid path. Chat Completions requests
+receive the Chat field they sent where Codex Pooler renamed it, such as
+`reasoning_effort`, `max_tokens` or `max_completion_tokens`, `verbosity`,
+`response_format`, and nested `tools[N].function` fields; other paths stay as
+upstream reported them. The message is written by Codex Pooler from the code
+and param; the provider message is never forwarded because validation messages
+can quote submitted or gateway-normalized values. For `unsupported_value` and
+`invalid_value`, the message may list up to 12 supported values when upstream
+reports them as a plain list of simple identifiers; the rejected value is never
+included, and the list is omitted when it cannot be read safely. A streaming
+`POST /backend-api/codex/responses` request receives this JSON body with
+`content-type: application/json` and no SSE stream; a non-streaming native
+request keeps its existing upstream body.
+
+Every other upstream failure keeps its existing behavior: other statuses
+(including `401`, `403`, `404`, `422`, `429`, and `5xx`), other error types or
+codes, `{"detail": ...}` bodies, the explicit Full serving-mode override,
+compact routes, and websocket turns. The request remains a non-retried failure
+recorded as `upstream_status`, and the rejection does not demote the upstream
+or affect its circuit.
+
 ### Unsupported `/v1` Responses request shapes
 
 These `POST /v1/responses` request shapes return OpenAI-shaped `invalid_request` before gateway dispatch, not `unsupported_endpoint`:

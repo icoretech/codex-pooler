@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
 
   @type success_normalizer :: (map() -> map())
@@ -50,6 +51,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   def normalize_raw_body(status, _body, _normalize_success, opts) do
     if status >= 400, do: {:ok, normalize_error_body(status, opts)}, else: :passthrough
   end
+
+  @doc """
+  Renders a relayed upstream parameter-validation rejection as the public
+  OpenAI error object, mapping the upstream param path to the client field.
+  """
+  @spec validation_rejection_error(
+          ValidationRejection.rejection(),
+          ValidationRejection.param_mapper()
+        ) :: map()
+  def validation_rejection_error(rejection, param_mapper \\ &Function.identity/1),
+    do: ValidationRejection.error(rejection, param_mapper)
 
   @spec normalize_error(term(), error_opts()) :: map()
   def normalize_error(error, opts \\ [])

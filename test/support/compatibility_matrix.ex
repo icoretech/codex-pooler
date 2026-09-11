@@ -276,6 +276,23 @@ defmodule CodexPooler.CompatibilityMatrix do
         "non-429 HTTP 4xx rejection metadata is extracted from a bounded private streaming drain or the bounded materialized body, projected only on failed-attempt detail, and publishes bounded code, type, param, message-presence, and message-byte facts without raw provider bodies or messages"
     },
     %{
+      slug: :upstream_validation_rejection_relay,
+      status: :supported,
+      current: :bounded_allowlisted_validation_rejection_relay,
+      categories: [:error, :streaming],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :post, path: "/backend-api/codex/v1/responses"},
+        %{method: :post, path: "/backend-api/codex/v1/chat/completions"},
+        %{method: :post, path: "/v1/responses"},
+        %{method: :post, path: "/v1/chat/completions"}
+      ],
+      future_routes: [],
+      fixture: :upstream_validation_rejection_relay,
+      contract:
+        "an ordinary Responses or Chat HTTP request whose upstream answers HTTP 400 with a direct error object of type invalid_request_error and an allowlisted parameter-validation code relays type, code, a bounded field-path param or null, and a Pooler-authored message built from code and param, never the provider message, which for unsupported_value and invalid_value may append at most 12 identifier-shaped supported values taken only from a strictly shaped trailing provider list with every earlier quoted value, including the rejected value, excluded; translated Chat Completions map the param back to the Chat field the client sent only for renames the adapter performs; a native streaming request receives that native JSON error envelope instead of an empty body while a materialized native body keeps its existing passthrough, and public /v1 Responses and Chat Completions receive the same OpenAI error object; every other status, type, code, detail body, the explicit Full override, compact routes, model-unavailability and misalignment projections, and websocket frames keep their existing behavior, while accounting codes, retries, routing health, and metrics are unchanged"
+    },
+    %{
       slug: :backend_fast_service_tier,
       status: :supported,
       current: :canonical_priority_routing_alias,
@@ -1018,6 +1035,49 @@ defmodule CodexPooler.CompatibilityMatrix do
       accepted_shape: "direct_string_key_error_map",
       invalid_shapes: "omitted",
       raw_error_message_or_body: "never_projected"
+    },
+    upstream_validation_rejection_relay: %{
+      upstream_status: 400,
+      error_type: "invalid_request_error",
+      codes: ~w(
+        unsupported_value
+        invalid_value
+        unsupported_parameter
+        missing_required_parameter
+        invalid_type
+        string_above_max_length
+      ),
+      source: "private_stream_drain_then_materialized_body",
+      relayed_fields: ~w(type code param message),
+      param: "bounded_field_path_or_null",
+      message: "pooler_authored_from_code_and_param",
+      supported_values: %{
+        codes: ~w(unsupported_value invalid_value),
+        source: "strict_trailing_provider_list",
+        token_pattern: "[A-Za-z0-9_.-]{1,32}",
+        max_values: 12,
+        rejected_or_earlier_quoted_values: "excluded",
+        unparseable: "omitted"
+      },
+      chat_param: "client_field_for_adapter_renames_else_upstream_path",
+      provider_message_forwarded: false,
+      native_streaming_body: "native_json_error_envelope",
+      native_materialized_body: "unchanged_passthrough",
+      public_v1_body: "openai_error_object",
+      unchanged_scopes: [
+        :non_400_status,
+        :non_allowlisted_code,
+        :non_invalid_request_error_type,
+        :detail_body,
+        :explicit_full_override,
+        :compact_routes,
+        :model_unavailable,
+        :misalignment_policy_violation,
+        :websocket_frames
+      ],
+      accounting_error_code: "upstream_status",
+      retry: false,
+      routing_health: :unchanged
     },
     responses_chat: %{
       routes: ["/v1/responses", "/v1/chat/completions"],

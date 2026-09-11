@@ -30,6 +30,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     upstream_error_param
     terminal_failure_diagnostics
     rejection_metadata
+    upstream_validation_rejection_relay
     backend_fast_service_tier
     responses_chat
     response_body_cap
