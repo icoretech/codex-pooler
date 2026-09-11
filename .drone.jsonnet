@@ -10,12 +10,6 @@ local helmVersion = 'v4.3.0';
     kind: 'pipeline',
     type: 'kubernetes',
     name: 'next',
-    // One build at a time on the shared runner: two overlapping suites
-    // (renovate + main) pushed the suite from ~250 s to 433 s and tripped
-    // its detection budgets (builds 1256, 1261).
-    concurrency: {
-      limit: 1,
-    },
     clone: {
       depth: 1,
     },
