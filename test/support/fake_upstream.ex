@@ -2078,6 +2078,7 @@ defmodule CodexPooler.FakeUpstream do
 
       receive do
         {:fake_upstream_release_chunk, ^release_ref} -> :ok
+        {:EXIT, _from, reason} -> exit(reason)
       after
         30_000 -> raise "timed out waiting for fake upstream websocket SSE barrier release"
       end
@@ -2125,11 +2126,17 @@ defmodule CodexPooler.FakeUpstream do
       end
     end
 
+    # The handler traps exits, so a plain receive would leave a barrier held at
+    # stop until ThousandIsland's 15 s `shutdown_timeout` brutal-kills it; leave
+    # on the shutdown exit instead. `:before_init` is the exception: lifecycle
+    # tests release it after the fake started stopping to prove the state
+    # Agent outlives a connection that is still initializing.
     defp await_websocket_barrier(stage, notify, release_ref) do
       send(notify, {:fake_upstream_websocket_barrier, stage, self(), release_ref})
 
       receive do
         {:fake_upstream_release_websocket, ^release_ref} -> :ok
+        {:EXIT, _from, reason} when stage != :before_init -> exit(reason)
       after
         30_000 -> raise "timed out waiting for fake upstream websocket barrier release"
       end

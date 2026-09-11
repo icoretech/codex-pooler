@@ -470,6 +470,38 @@ defmodule CodexPooler.FakeUpstreamTest do
     end
 
     @tag :fake_upstream_strict_contract
+    test "stopping the fake while a websocket close barrier is held does not wait out the shutdown timeout" do
+      release_ref = make_ref()
+      terminal = websocket_event("response.completed", "resp_close_held_at_stop")
+
+      upstream =
+        start_upstream(
+          FakeUpstream.websocket_terminal_then_close_barrier(terminal,
+            notify: self(),
+            release_ref: release_ref
+          )
+        )
+
+      client = websocket_connect(upstream)
+      client = websocket_send(client, "{}")
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, handler, ^release_ref},
+                     @barrier_detection_timeout_ms
+
+      send(handler, {:fake_upstream_release_websocket, release_ref})
+      assert {:ok, _client, [^terminal]} = websocket_recv(client, @barrier_detection_timeout_ms)
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, ^handler, ^release_ref},
+                     @barrier_detection_timeout_ms
+
+      monitor = Process.monitor(handler)
+      started_at = System.monotonic_time(:millisecond)
+      assert :ok = FakeUpstream.stop(upstream)
+      assert_receive {:DOWN, ^monitor, :process, ^handler, _reason}, @barrier_detection_timeout_ms
+      assert System.monotonic_time(:millisecond) - started_at < @barrier_detection_timeout_ms
+    end
+
+    @tag :fake_upstream_strict_contract
     test "an exhausted scenario refuses the next handshake after a frame barrier reply" do
       turn_ref = make_ref()
 
