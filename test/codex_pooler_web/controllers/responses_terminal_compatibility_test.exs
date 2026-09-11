@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  import Ecto.Query
   import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
@@ -396,9 +397,39 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
       {_conn, _websocket, terminal_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      # The terminal frame reaches the client before the response task commits
+      # its settlement; callers loop over shapes, so the next setup must not race
+      # that task for the shared sandbox connection.
+      await_settled_pool_requests!(setup.pool.id)
       terminal_frame
     after
       Mint.HTTP.close(conn)
+    end
+  end
+
+  defp await_settled_pool_requests!(pool_id, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 5_000
+
+    statuses =
+      CodexPooler.Repo.all(
+        from(request in CodexPooler.Accounting.Request,
+          where: request.pool_id == ^pool_id,
+          select: request.status
+        )
+      )
+
+    cond do
+      statuses != [] and "in_progress" not in statuses ->
+        :ok
+
+      System.monotonic_time(:millisecond) < deadline ->
+        receive do
+        after
+          5 -> await_settled_pool_requests!(pool_id, deadline)
+        end
+
+      true ->
+        flunk("expected settled websocket requests, got #{inspect(statuses)}")
     end
   end
 
