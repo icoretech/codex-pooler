@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.Gateway.Websocket.DeliveryReceipt
   alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Gateway.Websocket.DownstreamSession
   alias CodexPooler.Gateway.Websocket.ResponseTask
@@ -156,13 +157,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         state =
           state
           |> maybe_mark_native_turn_output_pushed(task_pid, data)
+          |> count_downstream_frame(task_pid, data)
           |> maybe_accept_response_task_terminal(task_pid, data)
           |> maybe_schedule_accepted_response_task_delivery(task_pid)
 
         {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
 
       true ->
-        {:ok, state}
+        {:ok, maybe_record_skipped_downstream_terminal(state, task_pid, data)}
     end
   end
 
@@ -254,10 +256,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> mark_response_task_result_ready(pid)
       |> put_response_task_cleanup_result(pid, result)
 
+    cleanup_receipt = unacknowledged_delivery_cleanup_receipt(state, pid)
+
     result =
       pid
       |> handle_response_done(result, state)
       |> maybe_schedule_response_delivery(pid)
+      |> maybe_record_unacknowledged_delivery(pid, cleanup_receipt)
 
     close_if_revoked_idle(result)
   end
@@ -524,6 +529,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:response_task_completed_terminals, MapSet.new())
     |> Map.put(:response_task_cleanup_results, %{})
     |> Map.put(:native_owner_terminal_delivered?, false)
+    |> Map.put(:downstream_delivery_evidence, %{})
     |> Map.put(:websocket_owner_pending_handoff, nil)
   end
 
@@ -834,6 +840,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state =
       state
+      |> record_public_downstream_terminal("error")
       |> Map.put(:websocket_owner_drain_observed?, true)
       |> abort_public_turn(:owner_drained)
       |> schedule_response_task_delivery(Map.get(state, :public_response_task_pid))
@@ -855,7 +862,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        ) do
       {:ok, state}
     else
-      {:push, {:text, encode_public_error(payload, state)}, state}
+      {:push, {:text, encode_public_error(payload, state)},
+       record_public_downstream_terminal(state, "error")}
     end
   end
 
@@ -882,6 +890,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         pid when is_pid(pid) ->
           state
           |> maybe_mark_active_native_owner_turn_output(data)
+          |> count_downstream_frame(pid, data)
           |> maybe_accept_response_task_terminal(pid, data)
           |> maybe_schedule_accepted_response_task_delivery(pid)
 
@@ -902,6 +911,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state =
       state
+      |> record_downstream_terminal(tracked_response_task_pid(state), "error")
       |> Map.put(:websocket_owner_drain_observed?, true)
       |> cancel_tracked_response_tasks(:owner_drained)
       |> reset_owner_turn_output()
@@ -950,6 +960,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           state
           |> put_public_turn_state(turn_state)
           |> maybe_mark_public_turn_output_committed(data)
+          |> count_public_downstream_frame(data)
+          |> record_public_downstream_terminal(DeliveryReceipt.terminal_class(data))
 
         {:push, {:text, normalized}, state}
 
@@ -961,6 +973,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           state
           |> put_public_turn_state(turn_state)
           |> Map.put(:public_turn_output_committed?, true)
+          |> record_public_downstream_terminal("error")
 
         {:push, {:text, encode_public_error(reason, state)}, state}
     end
@@ -987,21 +1000,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       match?({:response_task_failure, {:error, _reason}}, result) ->
         {:response_task_failure, {:error, reason}} = result
         payload = encode_public_error(reason, state)
-        state = finish_public_turn(state)
+        state = state |> record_downstream_terminal(pid, "error") |> finish_public_turn()
         {:push, {:text, payload}, state}
 
       match?({:response_task_result, {:error, _reason}, _visible_output?}, result) ->
         {:response_task_result, {:error, reason}, visible_output?} = result
         log_failed_native_websocket_turn(state, pid, reason, visible_output?)
         payload = encode_public_error(reason, state)
-        state = finish_public_turn(state)
+        state = state |> record_downstream_terminal(pid, "error") |> finish_public_turn()
         {:push, {:text, payload}, state}
 
       match?({:error, _reason}, result) ->
         {:error, reason} = result
         log_failed_native_websocket_turn(state, pid, reason, false)
         payload = encode_public_error(reason, state)
-        state = finish_public_turn(state)
+        state = state |> record_downstream_terminal(pid, "error") |> finish_public_turn()
         {:push, {:text, payload}, state}
 
       true ->
@@ -1074,6 +1087,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp handle_non_public_response_done(pid, {:response_task_failure, {:error, reason}}, state) do
     state =
       state
+      |> record_downstream_terminal(pid, "error")
       |> remove_tracked_response_task(pid)
       |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
@@ -1090,6 +1104,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state =
       state
+      |> record_downstream_terminal(pid, "error")
       |> remove_tracked_response_task(pid)
       |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
@@ -1102,6 +1117,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state =
       state
+      |> record_downstream_terminal(pid, "error")
       |> remove_tracked_response_task(pid)
       |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
@@ -2741,6 +2757,166 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp prefer_response_task_delivery_outcome(:aborted, _new), do: :aborted
   defp prefer_response_task_delivery_outcome(:delivered, new), do: new
 
+  # Downstream delivery evidence is bookkeeping per response task: how many
+  # client-visible frames the socket pushed for the turn and which terminal
+  # class, if any, it pushed. It becomes one persisted receipt when the task's
+  # delivery acknowledgement settles (naturally, on cancellation, or at socket
+  # termination), which is after the gateway finalized the attempt row.
+  defp new_downstream_delivery_evidence,
+    do: %{frames: 0, terminal_class: nil, pushed_at: nil, skipped?: false}
+
+  defp downstream_delivery_evidence(state, pid) do
+    state
+    |> Map.get(:downstream_delivery_evidence, %{})
+    |> Map.get(pid, new_downstream_delivery_evidence())
+  end
+
+  defp update_downstream_delivery_evidence(state, pid, fun) when is_pid(pid) do
+    evidence = fun.(downstream_delivery_evidence(state, pid))
+
+    Map.update(
+      state,
+      :downstream_delivery_evidence,
+      %{pid => evidence},
+      &Map.put(&1, pid, evidence)
+    )
+  end
+
+  defp clear_downstream_delivery_evidence(state, pid) do
+    Map.update(state, :downstream_delivery_evidence, %{}, &Map.delete(&1, pid))
+  end
+
+  defp count_downstream_frame(state, pid, data) when is_pid(pid) and is_binary(data) do
+    if response_task_delivery_candidate?(state, pid) and
+         not StreamProtocol.internal_control_event?(data) do
+      update_downstream_delivery_evidence(
+        state,
+        pid,
+        &Map.update!(&1, :frames, fn n -> n + 1 end)
+      )
+    else
+      state
+    end
+  end
+
+  defp count_downstream_frame(state, _pid, _data), do: state
+
+  defp count_public_downstream_frame(state, data),
+    do: count_downstream_frame(state, Map.get(state, :public_response_task_pid), data)
+
+  defp record_downstream_terminal(state, pid, class) when is_pid(pid) and is_binary(class) do
+    if response_task_delivery_candidate?(state, pid) do
+      update_downstream_delivery_evidence(state, pid, fn
+        %{terminal_class: nil} = evidence ->
+          %{evidence | terminal_class: class, pushed_at: DateTime.utc_now()}
+
+        evidence ->
+          evidence
+      end)
+    else
+      state
+    end
+  end
+
+  defp record_downstream_terminal(state, _pid, _class), do: state
+
+  defp record_public_downstream_terminal(state, class),
+    do: record_downstream_terminal(state, Map.get(state, :public_response_task_pid), class)
+
+  defp maybe_record_skipped_downstream_terminal(state, pid, data) when is_pid(pid) do
+    with true <- tracked_response_task?(state, pid),
+         class when is_binary(class) <- DeliveryReceipt.terminal_class(data) do
+      update_downstream_delivery_evidence(state, pid, fn
+        %{terminal_class: nil} = evidence ->
+          %{evidence | terminal_class: class, skipped?: true}
+
+        evidence ->
+          evidence
+      end)
+    else
+      _not_skipped -> state
+    end
+  end
+
+  defp record_downstream_delivery_receipt(state, pid, ack_outcome) do
+    state
+    |> Map.get(:direct_cleanup_receipts, %{})
+    |> Map.get(pid)
+    |> record_downstream_delivery_receipt(
+      downstream_delivery_evidence(state, pid),
+      state,
+      ack_outcome
+    )
+  end
+
+  defp record_downstream_delivery_receipt(
+         %{request_id: request_id} = cleanup,
+         evidence,
+         state,
+         ack
+       ) do
+    DeliveryReceipt.record(
+      %{
+        request_id: request_id,
+        attempt_id: Map.get(cleanup, :attempt_id),
+        codex_session_id: codex_session_id(state)
+      },
+      DeliveryReceipt.build(%{
+        outcome: downstream_delivery_outcome(ack, evidence),
+        terminal_class: evidence.terminal_class,
+        pushed_at: evidence.pushed_at,
+        frames_after_visible: evidence.frames
+      })
+    )
+  end
+
+  defp record_downstream_delivery_receipt(_cleanup, _evidence, _state, _ack), do: :ok
+
+  defp downstream_delivery_outcome(:aborted, _evidence), do: "aborted"
+  defp downstream_delivery_outcome(_ack, %{skipped?: true}), do: "skipped"
+
+  defp downstream_delivery_outcome(_ack, %{terminal_class: class}) when is_binary(class),
+    do: "delivered"
+
+  defp downstream_delivery_outcome(_ack, _evidence), do: "completed"
+
+  # A task that never registered an activity token (a local owner turn whose
+  # result is not owner-completion-pending) gets no delivery acknowledgement,
+  # so its receipt settles with the gateway result instead.
+  defp unacknowledged_delivery_cleanup_receipt(state, pid) do
+    if tracked_response_task?(state, pid) and not response_task_activity?(state, pid) do
+      Map.get(Map.get(state, :direct_cleanup_receipts, %{}), pid)
+    end
+  end
+
+  defp maybe_record_unacknowledged_delivery(result, _pid, nil), do: result
+
+  defp maybe_record_unacknowledged_delivery({:ok, state}, pid, cleanup),
+    do: {:ok, settle_unacknowledged_delivery(state, pid, cleanup, false)}
+
+  defp maybe_record_unacknowledged_delivery({:push, frame, state}, pid, cleanup),
+    do: {:push, frame, settle_unacknowledged_delivery(state, pid, cleanup, true)}
+
+  defp maybe_record_unacknowledged_delivery(result, _pid, _cleanup), do: result
+
+  # A frame pushed together with the gateway result is the socket's own error
+  # terminal for the turn.
+  defp settle_unacknowledged_delivery(state, pid, cleanup, pushed_error_frame?) do
+    if response_task_activity?(state, pid) do
+      state
+    else
+      evidence = downstream_delivery_evidence(state, pid)
+
+      evidence =
+        if pushed_error_frame? and is_nil(evidence.terminal_class),
+          do: %{evidence | terminal_class: "error", pushed_at: DateTime.utc_now()},
+          else: evidence
+
+      :ok = record_downstream_delivery_receipt(cleanup, evidence, state, :completed)
+      clear_downstream_delivery_evidence(state, pid)
+    end
+  end
+
   defp complete_response_task_delivery(state, pid, token) do
     case Map.get(Map.get(state, :response_task_activities, %{}), pid) do
       ^token ->
@@ -2748,6 +2924,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         outcome = Map.get(Map.get(state, :response_task_delivery_outcomes, %{}), pid, :delivered)
 
         :ok = acknowledge_response_task_delivery(ack_pid, token, outcome)
+        :ok = record_downstream_delivery_receipt(state, pid, outcome)
 
         _trace =
           NativeCompactionTrace.emit(:delivery_finished, %{
@@ -2770,6 +2947,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> Map.update(:response_task_terminals_accepted, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_completed_terminals, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_cleanup_results, %{}, &Map.delete(&1, pid))
+        |> clear_downstream_delivery_evidence(pid)
         |> do_remove_tracked_response_task(pid)
         |> remove_native_turn_output(pid)
         |> Map.put(:native_owner_terminal_delivered?, false)
@@ -2797,6 +2975,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:ok, token, ack_pid} ->
           outcome = response_task_cleanup_outcome(state, pid, token, ack_pid, registry)
           ResponseTask.acknowledge_delivery(ack_pid, token, outcome)
+          record_downstream_delivery_receipt(state, pid, outcome)
 
         :unknown ->
           :ok
@@ -2928,6 +3107,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state =
       state
+      |> record_downstream_terminal(pid, "error")
       |> Map.update(
         :response_task_delivery_recipients,
         %{pid => ack_pid},
@@ -2981,8 +3161,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp response_task_result_ready?(_state, _pid), do: false
 
   defp maybe_accept_response_task_terminal(state, pid, data) do
-    if response_task_delivery_candidate?(state, pid) and
-         match?({:ok, _outcome}, StreamProtocol.terminal_outcome(data)) do
+    with true <- response_task_delivery_candidate?(state, pid),
+         {:ok, outcome} <- StreamProtocol.terminal_outcome(data) do
       _trace =
         NativeCompactionTrace.emit(:owner_terminal, %{
           pid_role: :response_task,
@@ -2994,8 +3174,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state
       |> Map.update(:response_task_terminals_accepted, MapSet.new([pid]), &MapSet.put(&1, pid))
       |> maybe_mark_completed_response_task_terminal(pid, terminal_outcome(data))
+      |> record_downstream_terminal(pid, DeliveryReceipt.terminal_class_from_outcome(outcome))
     else
-      state
+      _not_terminal -> state
     end
   end
 

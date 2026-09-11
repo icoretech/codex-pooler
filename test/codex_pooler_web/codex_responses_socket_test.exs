@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Access
+  alias CodexPooler.Accounting.Attempt
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Accounts.User
   alias CodexPooler.Events
@@ -17,8 +18,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPooler.Pools.Membership
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPooler.Repo
 
-  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 0]
+  import CodexPooler.PoolerFixtures,
+    only: [
+      active_api_key_fixture: 0,
+      active_upstream_assignment_fixture: 1,
+      request_fixture: 2,
+      attempt_fixture: 3
+    ]
 
   @applied_message_tag Cache
   @cache_key {Cache, :current}
@@ -556,7 +564,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       assert Map.drop(next_state, [
                :native_turn_output_task_pids,
                :response_task_terminals_accepted,
-               :response_task_completed_terminals
+               :response_task_completed_terminals,
+               :downstream_delivery_evidence
              ]) ==
                Map.drop(state, [
                  :native_turn_output_task_pids,
@@ -2634,6 +2643,222 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       end)
 
     assert_native_turn_logs(logs, 1, "websocket_request_failed")
+  end
+
+  # Pins the `prefer_response_task_delivery_outcome/2` ordering named in the
+  # lost-terminal investigation: a delivery already scheduled as `:delivered`
+  # (for example by a drain after visible output) must still push the provider
+  # terminal frame and upgrade the acknowledgement to `:completed` once the
+  # gateway result is ready.
+  test "terminal push is not skipped when the delivery outcome already holds :delivered" do
+    task_pid = self()
+    activity_token = make_ref()
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      response_task_activities: %{task_pid => activity_token},
+      response_task_delivery_scheduled: MapSet.new([activity_token]),
+      response_task_delivery_outcomes: %{task_pid => :delivered},
+      response_task_results_ready: MapSet.new(),
+      response_task_terminals_accepted: MapSet.new(),
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    terminal = ~s({"type":"response.completed","response":{"id":"resp_delivered_first"}})
+
+    assert {:push, {:text, ^terminal}, terminal_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, terminal},
+               state
+             )
+
+    assert MapSet.member?(terminal_state.response_task_terminals_accepted, task_pid)
+    assert terminal_state.response_task_delivery_outcomes == %{task_pid => :delivered}
+
+    assert {:ok, done_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid, :ok},
+               terminal_state
+             )
+
+    assert done_state.response_task_delivery_outcomes == %{task_pid => :completed}
+    assert done_state.tasks == MapSet.new([task_pid])
+    refute_received {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
+
+    assert {:ok, final_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_response_delivery_complete, task_pid, activity_token},
+               done_state
+             )
+
+    assert_receive {:websocket_response_delivery_ack, ^activity_token, :completed}
+    assert final_state.tasks == MapSet.new()
+    assert final_state.response_task_delivery_outcomes == %{}
+  end
+
+  test "delivery completion records the downstream delivery receipt on the attempt row" do
+    task_pid = self()
+    activity_token = make_ref()
+    {request, attempt, session_id} = receipt_fixture()
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      codex_session: %{id: session_id},
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      response_task_activities: %{task_pid => activity_token},
+      response_task_results_ready: MapSet.new(),
+      response_task_terminals_accepted: MapSet.new(),
+      native_turn_output_task_pids: MapSet.new(),
+      direct_cleanup_receipts: %{
+        task_pid => %{
+          session_id: session_id,
+          request_id: request.id,
+          attempt_id: attempt.id,
+          correlation_id: request.correlation_id,
+          api_key_id: request.api_key_id
+        }
+      }
+    }
+
+    control = ~s({"type":"codex.response.metadata","headers":{"x-models-etag":"etag"}})
+    delta = ~s({"type":"response.output_text.delta","delta":"prompt-bearing delta"})
+    terminal = ~s({"type":"response.completed","response":{"id":"resp_receipt_unit"}})
+
+    {final_state, logs} =
+      with_native_turn_log(:info, fn ->
+        state =
+          Enum.reduce([control, delta, terminal], state, fn frame, current ->
+            assert {:push, {:text, ^frame}, next} =
+                     CodexResponsesSocket.handle_info(
+                       {:codex_response_chunk, task_pid, frame},
+                       current
+                     )
+
+            next
+          end)
+
+        assert {:ok, state} =
+                 CodexResponsesSocket.handle_info({:codex_response_done, task_pid, :ok}, state)
+
+        assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
+                         delivery
+
+        assert {:ok, state} = CodexResponsesSocket.handle_info(delivery, state)
+        assert_receive {:websocket_response_delivery_ack, ^activity_token, :completed}
+        state
+      end)
+
+    assert final_state.tasks == MapSet.new()
+
+    assert %{
+             "outcome" => "delivered",
+             "terminal_class" => "response.completed",
+             "pushed_at" => pushed_at,
+             "frames_after_visible" => 2,
+             "transport" => "websocket"
+           } = Repo.get!(Attempt, attempt.id).response_metadata["downstream_delivery"]
+
+    assert {:ok, _pushed_at, 0} = DateTime.from_iso8601(pushed_at)
+
+    assert logs =~
+             "websocket downstream terminal pushed request_id=#{request.id} " <>
+               "codex_session_id=#{session_id} outcome=delivered " <>
+               "terminal_class=response.completed frames_after_visible=2"
+
+    refute logs =~ "prompt-bearing delta"
+    refute inspect(Repo.get!(Attempt, attempt.id).response_metadata) =~ "prompt-bearing"
+  end
+
+  test "socket termination records an aborted receipt for a task still waiting on its terminal" do
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    parent = self()
+    {request, attempt, session_id} = receipt_fixture()
+
+    {:ok, task_pid} =
+      ResponseTask.start(
+        parent,
+        :direct,
+        fn _task_pid -> :ok end,
+        fn _task_pid, _reason -> :kill_worker end,
+        activity_registry: harness.activity_registry
+      )
+
+    task_monitor = Process.monitor(task_pid)
+    assert_receive {:websocket_response_activity, ^task_pid, activity_token}
+    assert_receive {:codex_response_done, ^task_pid, :ok}
+
+    state = %{
+      auth: nil,
+      opts: RequestOptions.for_websocket(%{}),
+      codex_session: nil,
+      upstream_websocket_session: nil,
+      request_response_work_started?: true,
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{task_pid => task_monitor},
+      response_task_activities: %{task_pid => activity_token},
+      response_task_activity_registry: harness.activity_registry,
+      downstream_delivery_evidence: %{
+        task_pid => %{frames: 1, terminal_class: nil, pushed_at: nil, skipped?: false}
+      },
+      direct_cleanup_receipts: %{
+        task_pid => %{
+          session_id: session_id,
+          request_id: request.id,
+          attempt_id: attempt.id,
+          correlation_id: request.correlation_id,
+          api_key_id: request.api_key_id
+        }
+      }
+    }
+
+    assert {_epoch, [%{token: ^activity_token, pid: ^task_pid}]} =
+             ActivityRegistry.begin_drain(name: harness.activity_registry)
+
+    {:ok, logs} =
+      with_native_turn_log(:info, fn -> CodexResponsesSocket.terminate(:normal, state) end)
+
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :normal}
+
+    assert {:finished, :aborted} =
+             ActivityRegistry.status(activity_token, name: harness.activity_registry)
+
+    assert %{
+             "outcome" => "aborted",
+             "terminal_class" => "none",
+             "pushed_at" => nil,
+             "frames_after_visible" => 1,
+             "transport" => "websocket"
+           } = Repo.get!(Attempt, attempt.id).response_metadata["downstream_delivery"]
+
+    assert logs =~
+             "websocket downstream terminal pushed request_id=#{request.id} " <>
+               "codex_session_id=none outcome=aborted " <>
+               "terminal_class=none frames_after_visible=1"
+  end
+
+  defp receipt_fixture do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = active_upstream_assignment_fixture(pool)
+    session_id = Ecto.UUID.generate()
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        transport: "websocket",
+        request_metadata: %{"codex_session_id" => session_id}
+      })
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        transport: "websocket",
+        response_metadata: %{"upstream_websocket_connection" => %{"generation" => 1}}
+      })
+
+    {request, attempt, session_id}
   end
 
   defp api_key_socket_state(api_key_id, pool_id, captured_epoch, overrides \\ %{}) do

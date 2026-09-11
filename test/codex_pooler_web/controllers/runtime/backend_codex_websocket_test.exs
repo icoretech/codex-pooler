@@ -45,6 +45,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
@@ -52,6 +53,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     as: UpstreamWebsocketRequest
 
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
@@ -115,6 +117,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     init-idempotency-secret
     init-prompt-sentinel
   )
+
+  defmodule DeliveryReceiptLogRelay do
+    @moduledoc false
+
+    # Runs in the process that emits the log line; used to react to a
+    # socket-side receipt while the test process is still inside terminate.
+    def log(%{msg: {:string, chardata}}, %{config: %{needle: needle, on_match: on_match}}) do
+      if IO.chardata_to_string(chardata) =~ needle, do: on_match.()
+      :ok
+    end
+
+    def log(_event, _config), do: :ok
+  end
 
   defmodule TinyTimeoutPlug do
     @moduledoc false
@@ -5047,6 +5062,189 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
+  end
+
+  test "completed native websocket turn records a delivered downstream receipt on the attempt" do
+    delta_frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => "receipt-prompt-sentinel"
+      })
+
+    terminal_frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_ws_delivery_receipt",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        }
+      })
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, equals: %{"type" => "response.create"}],
+            respond: FakeUpstream.websocket_text_frames([delta_frame, terminal_frame])
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-delivery-receipt",
+          accepted_turn_state: "stable-ws-delivery-receipt",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    try do
+      payload =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("delivery receipt"),
+          "stream" => true,
+          "generate" => true
+        })
+
+      {state, logs} =
+        with_info_log(fn ->
+          assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+          assert {:push, {:text, ^delta_frame}, state} = receive_socket_push(state)
+          assert {:push, {:text, ^terminal_frame}, state} = receive_socket_push(state)
+          settle_direct_socket_turn(state)
+        end)
+
+      assert MapSet.size(state.tasks) == 0
+      assert :ok = FakeUpstream.verify!(upstream)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+
+      assert %{
+               "outcome" => "delivered",
+               "terminal_class" => "response.completed",
+               "pushed_at" => pushed_at,
+               "frames_after_visible" => 2,
+               "transport" => "websocket"
+             } = attempt.response_metadata["downstream_delivery"]
+
+      assert {:ok, pushed_at, 0} = DateTime.from_iso8601(pushed_at)
+      assert DateTime.compare(pushed_at, attempt.started_at) in [:gt, :eq]
+
+      assert logs =~
+               "websocket downstream terminal pushed request_id=#{request.id} " <>
+                 "codex_session_id=#{state.codex_session.id} outcome=delivered " <>
+                 "terminal_class=response.completed frames_after_visible=2"
+
+      metadata_text = inspect({request.request_metadata, attempt.response_metadata, logs})
+      refute metadata_text =~ "receipt-prompt-sentinel"
+      refute metadata_text =~ "resp_ws_delivery_receipt"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  test "client disconnect before the terminal records an aborted downstream receipt" do
+    release_ref = make_ref()
+
+    created_frame =
+      "data: " <>
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.created",
+          "response" => %{"id" => "resp_ws_receipt_abort", "status" => "in_progress"}
+        }) <> "\n\n"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.timeout_mid_stream(created_frame,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-delivery-receipt-abort",
+          accepted_turn_state: "stable-ws-delivery-receipt-abort",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    payload =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("abort before terminal"),
+        "stream" => true,
+        "generate" => true
+      })
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+    assert_receive {:fake_upstream_timeout_barrier, :mid_stream, _upstream_pid, ^release_ref},
+                   @connection_shutdown_timeout_ms
+
+    assert {:push, {:text, created}, state} = receive_socket_push(state)
+    assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created)
+
+    {state, attempt_id} = await_direct_attempt_receipt(state)
+    assert is_binary(attempt_id)
+
+    # Terminate interrupts the request, acknowledges the task through the
+    # activity registry, records the receipt, and only then gives the
+    # in-flight upstream caller its grace period. That caller is still
+    # blocked on the upstream and its registry acknowledgement recipient is
+    # the cancellation watcher, so once the receipt line has been logged the
+    # test closes the fake upstream connection and hands the task the same
+    # acknowledgement directly; the grace period is not the property under
+    # test.
+    [task_pid] = MapSet.to_list(state.tasks)
+    release_task_after_receipt_log!(upstream, task_pid)
+
+    {:ok, logs} =
+      with_info_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, state) end)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "client_disconnected"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.id == attempt_id
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "client_disconnected"
+
+    assert attempt.response_metadata["downstream_delivery"] == %{
+             "outcome" => "aborted",
+             "terminal_class" => "none",
+             "pushed_at" => nil,
+             "frames_after_visible" => 1,
+             "transport" => "websocket"
+           }
+
+    assert logs =~
+             "websocket downstream terminal pushed request_id=#{request.id} " <>
+               "codex_session_id=#{state.codex_session.id} outcome=aborted " <>
+               "terminal_class=none frames_after_visible=1"
+
+    refute inspect({attempt.response_metadata, logs}) =~ "abort before terminal"
   end
 
   @tag :websocket_persistent_upstream_session
@@ -13551,6 +13749,79 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         received_frame_types(label, [CodexPooler.JSON.decode!(frame)["type"] | acc])
     after
       0 -> Enum.reverse(acc)
+    end
+  end
+
+  # Drives the socket-side bookkeeping a live WebSock process would receive
+  # after the provider frames: activity token, cleanup receipts, gateway
+  # result, and the post-push delivery acknowledgement, until no task remains.
+  defp settle_direct_socket_turn(%{tasks: tasks} = state) do
+    if MapSet.size(tasks) == 0 do
+      state
+    else
+      receive do
+        {:websocket_response_activity, _pid, _token} = message ->
+          {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+          settle_direct_socket_turn(state)
+
+        {:direct_request_cleanup, _pid, _ref, _receipt} = message ->
+          {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+          settle_direct_socket_turn(state)
+
+        {:codex_response_done, _pid, _result} = message ->
+          {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+          settle_direct_socket_turn(state)
+
+        {:websocket_response_delivery_complete, _pid, _token} = message ->
+          {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+          settle_direct_socket_turn(state)
+      after
+        @connection_shutdown_timeout_ms -> flunk("expected the websocket turn to settle")
+      end
+    end
+  end
+
+  defp release_task_after_receipt_log!(upstream, task_pid) do
+    handler_id = :"receipt-abort-release-#{System.unique_integer([:positive])}"
+
+    on_match = fn ->
+      case ActivityRegistry.delivery_target(task_pid) do
+        {:ok, token, _ack_pid, _status} ->
+          :ok = FakeUpstream.close_websocket_connections(upstream)
+          :ok = ResponseTask.acknowledge_delivery(task_pid, token, :aborted)
+
+        :unknown ->
+          :ok
+      end
+    end
+
+    :ok =
+      :logger.add_handler(handler_id, DeliveryReceiptLogRelay, %{
+        level: :info,
+        config: %{needle: "websocket downstream terminal pushed", on_match: on_match}
+      })
+
+    on_exit(fn -> :logger.remove_handler(handler_id) end)
+    :ok
+  end
+
+  # Feeds the socket its direct-cleanup receipts until the one carrying the
+  # attempt id has been accepted, so a later terminate can attribute the turn.
+  defp await_direct_attempt_receipt(state) do
+    receive do
+      {:websocket_response_activity, _pid, _token} = message ->
+        {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+        await_direct_attempt_receipt(state)
+
+      {:direct_request_cleanup, _pid, _ref, receipt} = message ->
+        {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+
+        case Map.get(receipt, :attempt_id) do
+          nil -> await_direct_attempt_receipt(state)
+          attempt_id -> {state, attempt_id}
+        end
+    after
+      @connection_shutdown_timeout_ms -> flunk("expected the direct cleanup attempt receipt")
     end
   end
 
