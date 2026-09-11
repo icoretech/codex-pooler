@@ -648,6 +648,158 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
     end
   end
 
+  describe "provider terminal predecessor" do
+    test "the latest original turn of the user turn admits one successor after a provider terminal failure" do
+      setup = accounting_setup()
+      %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+      digest = :crypto.strong_rand_bytes(32)
+      semantic_digest = :crypto.strong_rand_bytes(32)
+      session = insert_session!(setup, now)
+
+      # An earlier tool-continuation request of the same user turn shares the
+      # semantic digest and already succeeded; it must not be the predecessor.
+      older = claim_request!(setup, nil)
+      succeed_turn!(setup, session, older, 1, semantic_digest, now)
+
+      witness = ClientRetry.original_witness!(digest, setup.api_key.runtime_revocation_epoch)
+      failed = claim_request!(setup, witness)
+
+      provider_terminal_turn!(setup, session, failed, 2, semantic_digest, now, "server_error")
+
+      payload = %{"model" => setup.model.exposed_model_id, "input" => []}
+      opts = successor_opts(setup, session, digest, semantic_digest, now)
+      failed_id = failed.id
+
+      assert {:ok, %{replay_generation: 0, client_retry_predecessor_request_id: ^failed_id}} =
+               Accounting.client_retry_preflight_snapshot(
+                 session,
+                 setup.api_key,
+                 setup.model,
+                 opts
+               )
+
+      assert {:ok, claim} =
+               Accounting.claim_client_retry_successor(setup.auth, setup.model, payload, opts)
+
+      assert claim.predecessor_request_id == failed.id
+      assert claim.link.predecessor_request_id == failed.id
+      assert claim.codex_turn.turn_sequence == 3
+      assert claim.codex_turn.semantic_turn_digest == semantic_digest
+      assert ClientRetry.reserved_successor_claim?(claim.correlation_id)
+
+      assert {:error, :successor_claimed} =
+               Accounting.claim_client_retry_successor(setup.auth, setup.model, payload, opts)
+
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 1
+      assert Repo.aggregate(Request, :count) == 3
+      assert Repo.aggregate(CodexTurn, :count) == 3
+      assert Repo.get!(Request, older.id).status == "succeeded"
+    end
+
+    test "a provider terminal outside the resend vocabulary or a replayed attempt keeps the fence" do
+      setup = accounting_setup()
+      %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+      payload = %{"model" => setup.model.exposed_model_id, "input" => []}
+
+      for {code, replay_generation, expected} <- [
+            {"invalid_prompt", 0, :terminal_predecessor},
+            {"server_error", 1, :terminal_predecessor}
+          ] do
+        digest = :crypto.strong_rand_bytes(32)
+        semantic_digest = :crypto.strong_rand_bytes(32)
+        session = insert_session!(setup, now)
+        witness = ClientRetry.original_witness!(digest, setup.api_key.runtime_revocation_epoch)
+        failed = claim_request!(setup, witness)
+
+        provider_terminal_turn!(setup, session, failed, 1, semantic_digest, now, code,
+          replay_generation: replay_generation
+        )
+
+        opts = successor_opts(setup, session, digest, semantic_digest, now)
+
+        assert {:error, ^expected} =
+                 Accounting.claim_client_retry_successor(setup.auth, setup.model, payload, opts)
+
+        assert {:error, ^expected} =
+                 Accounting.client_retry_preflight_snapshot(
+                   session,
+                   setup.api_key,
+                   setup.model,
+                   opts
+                 )
+      end
+
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 0
+    end
+  end
+
+  defp succeed_turn!(setup, session, request, sequence, semantic_digest, now) do
+    attempt =
+      CodexPooler.PoolerFixtures.attempt_fixture(request, setup.assignment, %{
+        status: "succeeded",
+        completed_at: now,
+        transport: "websocket",
+        replay_generation: 0
+      })
+
+    request
+    |> Ecto.Changeset.change(status: "succeeded", usage_status: "usage_known", completed_at: now)
+    |> Repo.update!()
+
+    insert_turn!(session, request, sequence, now)
+    |> Ecto.Changeset.change(
+      semantic_turn_digest: semantic_digest,
+      status: "succeeded",
+      first_visible_output_at: now,
+      final_attempt_id: attempt.id,
+      completed_at: now
+    )
+    |> Repo.update!()
+  end
+
+  defp provider_terminal_turn!(
+         setup,
+         session,
+         request,
+         sequence,
+         semantic_digest,
+         now,
+         code,
+         opts \\ []
+       ) do
+    attempt =
+      CodexPooler.PoolerFixtures.attempt_fixture(request, setup.assignment, %{
+        status: "failed",
+        completed_at: now,
+        network_error_code: code,
+        usage_status: "usage_unknown",
+        transport: "websocket",
+        response_metadata: %{"error_kind" => code}
+      })
+      |> Ecto.Changeset.change(replay_generation: Keyword.get(opts, :replay_generation, 0))
+      |> Repo.update!()
+
+    request
+    |> Ecto.Changeset.change(
+      status: "failed",
+      usage_status: "usage_unknown",
+      response_status_code: 200,
+      completed_at: now,
+      last_error_code: code
+    )
+    |> Repo.update!()
+
+    insert_turn!(session, request, sequence, now)
+    |> Ecto.Changeset.change(
+      semantic_turn_digest: semantic_digest,
+      status: "failed",
+      error_code: code,
+      final_attempt_id: attempt.id,
+      completed_at: now
+    )
+    |> Repo.update!()
+  end
+
   defp claim_request!(setup, witness) do
     attrs = %{
       endpoint: "/backend-api/codex/responses",

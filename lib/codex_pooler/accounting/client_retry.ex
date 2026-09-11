@@ -22,6 +22,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @digest_bytes 32
   @max_done_count 65_535
   @successor_prefix "client-retry-v1:"
+  @failed_predecessor_prefix "codex-request-retry:"
   @retry_window_seconds 30
   @task_exception_code "owner_task_exception"
   @compaction_retry_window_seconds 330
@@ -189,6 +190,45 @@ defmodule CodexPooler.Accounting.ClientRetry do
     do: String.starts_with?(value, @successor_prefix)
 
   def reserved_successor_claim?(_value), do: false
+
+  @spec retry_window_seconds() :: pos_integer()
+  def retry_window_seconds, do: @retry_window_seconds
+
+  @spec failed_predecessor_claim?(term()) :: boolean()
+  def failed_predecessor_claim?(value) when is_binary(value),
+    do: String.starts_with?(value, @failed_predecessor_prefix)
+
+  def failed_predecessor_claim?(_value), do: false
+
+  # A byte-identical websocket resend after a terminally failed predecessor is
+  # recorded under a claim derived from the original request claim and the
+  # predecessor request id, so concurrent duplicates of the same resend still
+  # collapse on the request claim constraint and a later resend after the
+  # retry itself fails chains from the retry request. The prefix is distinct
+  # from `client-retry-v1:`, which keeps its own dispatch-authority contract.
+  @spec deterministic_failed_predecessor_claim(String.t(), Ecto.UUID.t()) ::
+          {:ok, String.t()} | {:error, atom()}
+  def deterministic_failed_predecessor_claim(original_claim, predecessor_request_id)
+      when is_binary(original_claim) and original_claim != "" and
+             is_binary(predecessor_request_id) do
+    if uuid?(predecessor_request_id) do
+      with {:ok, mac} <-
+             AppSecretCrypto.hmac_digest(
+               :erlang.term_to_binary(
+                 {"codex_pooler.failed_predecessor_resend", 1, original_claim,
+                  predecessor_request_id},
+                 [:deterministic]
+               )
+             ) do
+        {:ok, @failed_predecessor_prefix <> Base.url_encode64(mac, padding: false)}
+      end
+    else
+      {:error, :invalid_predecessor}
+    end
+  end
+
+  def deterministic_failed_predecessor_claim(_original_claim, _predecessor_request_id),
+    do: {:error, :invalid_predecessor}
 
   @spec dispatch_authority(Request.t(), Request.t(), RequestClientRetryLink.t()) ::
           DispatchAuthority.t()
@@ -738,7 +778,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
           limit: 1,
           lock: "FOR UPDATE"
 
-      case Repo.one(predecessor_turn_query(query, input)) do
+      case lock_predecessor_turn_row(query, input) do
         %CodexTurn{} = turn -> {:ok, resolve_predecessor_turn(turn, input)}
         nil -> {:error, :terminal_predecessor}
       end
@@ -747,11 +787,27 @@ defmodule CodexPooler.Accounting.ClientRetry do
     end
   end
 
-  defp predecessor_turn_query(query, %{retry_policy: :native_compaction}),
-    do: from(turn in query, order_by: [desc: turn.turn_sequence])
+  defp lock_predecessor_turn_row(query, %{retry_policy: :native_compaction}),
+    do: Repo.one(from(turn in query, order_by: [desc: turn.turn_sequence]))
 
-  defp predecessor_turn_query(query, _input),
-    do: from(turn in query, order_by: [asc: turn.turn_sequence])
+  # Every tool continuation of one user turn shares the semantic digest, so the
+  # client retry policy judges the newest original request of that turn rather
+  # than its long-settled first request. A claimed successor is consulted only
+  # when no original turn exists, so lineage and reserved-claim rejections keep
+  # their vocabulary and a successor never becomes its own predecessor.
+  defp lock_predecessor_turn_row(query, _input) do
+    successor_pattern = @successor_prefix <> "%"
+
+    original_query =
+      from turn in query,
+        join: request in Request,
+        on: request.id == turn.request_id,
+        where: not like(request.correlation_id, ^successor_pattern),
+        order_by: [desc: turn.turn_sequence]
+
+    Repo.one(original_query) ||
+      Repo.one(from(turn in query, order_by: [desc: turn.turn_sequence]))
+  end
 
   defp resolve_predecessor_turn(turn, %{retry_policy: :native_compaction}) do
     # A claimed successor may be reclaimed, but a newer unrelated turn must
@@ -892,13 +948,18 @@ defmodule CodexPooler.Accounting.ClientRetry do
     do: {:error, :terminal_predecessor}
 
   defp validate_retry_lifecycle(turn, request, %Attempt{} = attempt) do
-    if verified_task_exception?(turn, request, attempt) do
-      :ok
-    else
-      with :ok <- validate_terminal_lifecycle(turn, request, attempt),
-           :ok <- validate_observation(attempt.response_metadata) do
-        validate_close_evidence(attempt.response_metadata)
-      end
+    cond do
+      verified_task_exception?(turn, request, attempt) ->
+        :ok
+
+      verified_provider_terminal_failure?(turn, request, attempt) ->
+        :ok
+
+      true ->
+        with :ok <- validate_terminal_lifecycle(turn, request, attempt),
+             :ok <- validate_observation(attempt.response_metadata) do
+          validate_close_evidence(attempt.response_metadata)
+        end
     end
   end
 
@@ -956,6 +1017,40 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: true
 
   defp verified_task_exception?(_turn, _request, _attempt), do: false
+
+  # Only the provider's own terminal failure finalization writes this shape:
+  # turn, request, and attempt failed together with the same provider code on
+  # the generation-zero websocket attempt. The provider already ended the
+  # response, so the client's byte-identical resend is admitted as one
+  # successor instead of meeting `duplicate_turn` for the whole user turn. The
+  # vocabulary is the retryable first-event set (server errors and overload),
+  # never policy, quota, or auth codes that a resend would only repeat.
+  defp verified_provider_terminal_failure?(
+         %CodexTurn{
+           status: "failed",
+           error_code: code,
+           final_attempt_id: attempt_id,
+           transport_kind: "websocket",
+           completed_at: %DateTime{}
+         },
+         %Request{
+           status: "failed",
+           last_error_code: code,
+           completed_at: %DateTime{}
+         },
+         %Attempt{
+           id: attempt_id,
+           status: "failed",
+           network_error_code: code,
+           transport: "websocket",
+           replay_generation: 0,
+           completed_at: %DateTime{}
+         }
+       )
+       when is_binary(attempt_id) and is_binary(code),
+       do: ErrorCodes.retryable_first_event_code?(code)
+
+  defp verified_provider_terminal_failure?(_turn, _request, _attempt), do: false
 
   defp verified_claim_only_drain?(%Request{
          status: "failed",

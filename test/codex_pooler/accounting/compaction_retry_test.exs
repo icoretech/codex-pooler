@@ -70,7 +70,10 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
         updated_at: completed_at
       })
 
-      assert {:error, :successor_claimed} =
+      # The client retry policy judges the newest original turn of the digest,
+      # a client disconnect outside its admissible vocabulary, rather than the
+      # older linked failure it used to lock first; either way it stays fenced.
+      assert {:error, :terminal_predecessor} =
                Accounting.claim_client_retry_successor(setup.auth, setup.model, %{}, opts)
 
       assert {:ok, newer_claim} =

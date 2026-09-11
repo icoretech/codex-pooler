@@ -65,6 +65,13 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     end
   end
 
+  @doc "True for a request claim derived from a tool-continuation frame."
+  @spec request_claim?(term()) :: boolean()
+  def request_claim?(value) when is_binary(value),
+    do: String.starts_with?(value, @request_claim_prefix)
+
+  def request_claim?(_value), do: false
+
   @spec request_claim_key(<<_::256>>, map()) :: String.t()
   def request_claim_key(semantic_turn_key, payload)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do

@@ -425,7 +425,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
               authorized_correlation_id: authorized_correlation_id
             })
 
-          {:error, %{code: :duplicate_request}} ->
+          {:error, %{code: :duplicate_request} = reason} ->
+            log_duplicate_turn(prepared.request_options, :reservation_duplicate,
+              stage: "websocket_turn_claim",
+              extra: [resend_disposition: Map.get(reason, :resend_disposition)]
+            )
+
             {:error, duplicate_turn_error()}
 
           {:error, reason} ->
@@ -484,7 +489,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         identity
       )
     else
-      _failure -> {:error, duplicate_turn_error()}
+      _failure ->
+        log_duplicate_turn(request_options, :replay_lifecycle_mismatch,
+          stage: "native_replay_dispatch",
+          endpoint: endpoint
+        )
+
+        {:error, duplicate_turn_error()}
     end
   end
 
@@ -789,8 +800,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  defp replay_preflight_context(_auth, %PreparedWebsocketFrame{}),
-    do: {:error, duplicate_turn_error()}
+  defp replay_preflight_context(_auth, %PreparedWebsocketFrame{request_options: request_options}) do
+    log_duplicate_turn(request_options, :invalid_replay_context,
+      stage: "runtime_replay_preflight"
+    )
+
+    {:error, duplicate_turn_error()}
+  end
 
   defp prepare_replay_intent_transaction(context) do
     Repo.transaction(fn ->
@@ -807,7 +823,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            {:ok, model} <- authorize_replay_model(authorization.api_key, pool, context) do
         classify_replay_intent(locked_session, authorization, model, context)
       else
-        {:error, reason} -> Repo.rollback(reason)
+        {:error, {:duplicate_turn, reason}} ->
+          reject_replay_intent(context, context.session, reason)
+
+        {:error, reason} ->
+          Repo.rollback(reason)
       end
     end)
     |> case do
@@ -1012,11 +1032,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          %CodexSession{pool_id: pool_id, api_key_id: api_key_id} = session,
          %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}
        ) do
-    if CodexSession.reconnectable?(session), do: :ok, else: {:error, duplicate_turn_error()}
+    if CodexSession.reconnectable?(session),
+      do: :ok,
+      else: {:error, {:duplicate_turn, :session_not_reconnectable}}
   end
 
   defp validate_replay_session_binding(%CodexSession{}, _auth),
-    do: {:error, duplicate_turn_error()}
+    do: {:error, {:duplicate_turn, :session_binding_mismatch}}
 
   defp validate_replay_api_key_pool(
          %{pool_id: pool_id},
@@ -1025,13 +1047,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        do: :ok
 
   defp validate_replay_api_key_pool(_api_key, %CodexSession{}),
-    do: {:error, duplicate_turn_error()}
+    do: {:error, {:duplicate_turn, :session_pool_mismatch}}
 
   defp load_active_replay_pool(pool_id) do
     case Repo.get(Pool, pool_id) do
       %Pool{status: "active"} = pool -> {:ok, pool}
-      %Pool{} -> {:error, duplicate_turn_error()}
-      nil -> {:error, duplicate_turn_error()}
+      %Pool{} -> {:error, {:duplicate_turn, :pool_inactive}}
+      nil -> {:error, {:duplicate_turn, :pool_missing}}
     end
   end
 
@@ -1597,7 +1619,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
 
     case Accounting.claim_websocket_turn(auth, model, attrs) do
-      {:ok, %{request: request}} ->
+      {:ok, %{request: request} = claim} ->
+        maybe_log_client_resend_admitted(request_options, endpoint, claim)
         {:ok, request, nil}
 
       {:error, %{code: :duplicate_request} = reason} ->
@@ -1733,8 +1756,16 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         )
 
       case Accounting.claim_client_retry_successor(auth, model, payload, retry_attrs) do
-        {:ok, claim} -> {:ok, Map.from_struct(claim)}
-        {:error, _reason} -> {:error, duplicate_turn_error()}
+        {:ok, claim} ->
+          {:ok, Map.from_struct(claim)}
+
+        {:error, reason} ->
+          log_duplicate_turn(request_options, reason,
+            stage: "client_retry_claim",
+            endpoint: endpoint
+          )
+
+          {:error, duplicate_turn_error()}
       end
     end
   end
@@ -1782,7 +1813,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:ok, claim} ->
         {:ok, Map.from_struct(claim)}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        log_duplicate_turn(request_options, reason, stage: "compaction_retry_claim")
         {:error, duplicate_turn_error()}
     end
   end
@@ -2066,19 +2098,78 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp log_replay_rejection(%RequestOptions{} = request_options, session, reason, endpoint) do
+    emit_replay_rejection(
+      request_options,
+      session,
+      reason,
+      endpoint,
+      "runtime_replay_preflight",
+      []
+    )
+  end
+
+  # Every silent `duplicate_turn` producer outside the replay preflight logs
+  # through here with the same bounded, metadata-only vocabulary, so operators
+  # can tell a claim-stage duplicate from a rejected retry or replay binding.
+  defp log_duplicate_turn(%RequestOptions{} = request_options, reason, opts) do
+    endpoint =
+      Keyword.get(opts, :endpoint) ||
+        Map.get(request_options.transport, :upstream_endpoint, "unknown")
+
+    emit_replay_rejection(
+      request_options,
+      Map.get(request_options.continuity, :codex_session),
+      reason,
+      endpoint,
+      Keyword.fetch!(opts, :stage),
+      Keyword.get(opts, :extra, [])
+    )
+  end
+
+  defp emit_replay_rejection(request_options, session, reason, endpoint, stage, extra) do
     reason_code = replay_rejection_reason_code(reason)
     request_id = request_options.request_metadata.request_id
     session_id = if is_struct(session, CodexSession), do: session.id
 
+    extra_fields =
+      extra
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Enum.map_join(fn {key, value} ->
+        " #{key}=#{DiagnosticTaxonomy.reason_code(value) || "unknown"}"
+      end)
+
     Logger.info(fn ->
       "websocket replay rejection " <>
-        "stage=runtime_replay_preflight " <>
+        "stage=#{stage} " <>
         "reason_code=#{reason_code} " <>
         "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
+        "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>
+        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=websocket" <>
+        extra_fields
+    end)
+  end
+
+  defp maybe_log_client_resend_admitted(
+         %RequestOptions{} = request_options,
+         endpoint,
+         %{client_resend: %{predecessor_request_id: predecessor_request_id}}
+       ) do
+    request_id = request_options.request_metadata.request_id
+    session = Map.get(request_options.continuity, :codex_session)
+    session_id = if is_struct(session, CodexSession), do: session.id
+
+    Logger.info(fn ->
+      "websocket client resend admitted " <>
+        "stage=websocket_turn_claim " <>
+        "reason_code=failed_predecessor_retry " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
+        "predecessor_request_id=#{DiagnosticTaxonomy.safe_correlator(predecessor_request_id)} " <>
         "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>
         "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=websocket"
     end)
   end
+
+  defp maybe_log_client_resend_admitted(_request_options, _endpoint, _claim), do: :ok
 
   defp replay_rejection_reason_code(:replay_claim_mismatch), do: "payload_mismatch"
 

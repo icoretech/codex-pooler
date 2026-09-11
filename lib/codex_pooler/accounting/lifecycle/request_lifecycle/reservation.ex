@@ -17,7 +17,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     ReservationPolicy
   }
 
-  alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
+  alias CodexPooler.Accounting.RequestLifecycle.{FailedPredecessorResend, LedgerEntries}
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
   alias CodexPooler.Repo
@@ -32,13 +32,37 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         ) :: {:ok, map()} | {:error, Metadata.accounting_error()}
   def claim_websocket_turn(%{pool: pool, api_key: api_key}, %Model{} = model, opts) do
     if ClientRetry.reserved_successor_claim?(attr(opts, :correlation_id)) do
-      {:error, Metadata.accounting_error(:duplicate_request, "request was already recorded")}
+      {:error, duplicate_request_error(nil)}
     else
-      do_claim_websocket_turn(pool, api_key, model, opts)
+      case do_claim_websocket_turn(pool, api_key, model, opts, nil) do
+        {:error, %{code: :duplicate_request}} ->
+          claim_failed_predecessor_resend(pool, api_key, model, opts)
+
+        result ->
+          result
+      end
     end
   end
 
-  defp do_claim_websocket_turn(pool, api_key, model, opts) do
+  # The first insert already met `requests_correlation_id_uq`. Only a claim
+  # scoped by a codex session can be resolved against a terminally failed
+  # predecessor: the second transaction holds the session lock while it
+  # derives the resend claim, so concurrent resends of one frame serialize.
+  defp claim_failed_predecessor_resend(pool, api_key, model, opts) do
+    case attr(opts, :codex_session) do
+      %CodexSession{pool_id: pool_id, api_key_id: api_key_id} = session
+      when pool_id == pool.id and api_key_id == api_key.id ->
+        do_claim_websocket_turn(pool, api_key, model, opts, session)
+
+      %CodexSession{} ->
+        {:error, duplicate_request_error(:authorization_changed)}
+
+      _missing ->
+        {:error, duplicate_request_error(:missing_session)}
+    end
+  end
+
+  defp do_claim_websocket_turn(pool, api_key, model, opts, resend_session) do
     timestamp = now(opts)
     captured_epoch = runtime_revocation_epoch(api_key, opts)
     maybe_test_runtime_authorization_barrier(:claim, :before)
@@ -46,6 +70,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     Repo.transaction(fn ->
       api_key = authorize_runtime_turn!(api_key, captured_epoch)
       maybe_test_runtime_authorization_barrier(:claim, :after)
+      {correlation_id, client_resend} = resend_claim!(resend_session, pool, api_key, model, opts)
 
       request =
         %Request{
@@ -57,11 +82,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           transport: "websocket",
           status: "accepted",
           usage_status: @usage_pending,
-          correlation_id: attr(opts, :correlation_id),
+          correlation_id: correlation_id,
           idempotency_key: nil,
           client_ip: blank_to_nil(attr(opts, :client_ip)),
           user_agent: blank_to_nil(attr(opts, :user_agent)),
-          request_metadata: Metadata.sanitize_metadata(attr(opts, :request_metadata) || %{}),
+          request_metadata: claim_request_metadata(opts, client_resend),
           admitted_at: timestamp,
           retry_count: 0
         }
@@ -72,17 +97,61 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
       RequestLogFacts.record_request_created!(request)
       :ok = bind_direct_cleanup(opts, request)
-      %{request: request}
+
+      case client_resend do
+        nil -> %{request: request}
+        %{} -> %{request: request, client_resend: client_resend}
+      end
     end)
     |> unwrap_transaction()
   rescue
     error in Ecto.ConstraintError ->
       if error.constraint == "requests_correlation_id_uq" do
-        {:error, Metadata.accounting_error(:duplicate_request, "request was already recorded")}
+        {:error, duplicate_request_error(if(resend_session, do: :successor_claimed))}
       else
         reraise(error, __STACKTRACE__)
       end
   end
+
+  defp resend_claim!(nil, _pool, _api_key, _model, opts), do: {attr(opts, :correlation_id), nil}
+
+  defp resend_claim!(%CodexSession{} = session, pool, api_key, model, opts) do
+    _locked = SessionContinuity.lock_codex_session_for_turn(session)
+
+    scope = %{
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      model_id: model.id,
+      endpoint: attr(opts, :endpoint),
+      anchor_present?: attr(opts, :anchor_present?) == true
+    }
+
+    case FailedPredecessorResend.resolve(attr(opts, :correlation_id), scope) do
+      {:ok, %{claim: claim, predecessor: predecessor}} ->
+        {claim, %{predecessor_request_id: predecessor.id, reason: :failed_predecessor}}
+
+      {:error, disposition} ->
+        Repo.rollback(duplicate_request_error(disposition))
+    end
+  end
+
+  defp claim_request_metadata(opts, nil),
+    do: Metadata.sanitize_metadata(attr(opts, :request_metadata) || %{})
+
+  defp claim_request_metadata(opts, %{predecessor_request_id: predecessor_request_id}) do
+    opts
+    |> claim_request_metadata(nil)
+    |> Map.put("client_resend", %{
+      "predecessor_request_id" => predecessor_request_id,
+      "reason" => "failed_predecessor"
+    })
+  end
+
+  defp duplicate_request_error(nil),
+    do: Metadata.accounting_error(:duplicate_request, "request was already recorded")
+
+  defp duplicate_request_error(disposition) when is_atom(disposition),
+    do: Map.put(duplicate_request_error(nil), :resend_disposition, disposition)
 
   @spec claim_client_retry_successor(CodexPooler.Access.auth_context(), Model.t(), map(), map()) ::
           {:ok, ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
@@ -355,7 +424,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     captured_epoch = runtime_revocation_epoch(api_key, opts)
 
     if ClientRetry.reserved_successor_claim?(correlation_id) do
-      {:error, Metadata.accounting_error(:duplicate_request, "request was already recorded")}
+      {:error, duplicate_request_error(nil)}
     else
       do_reserve_for_model(
         auth,
@@ -533,8 +602,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       )
 
     if request.status == "accepted" do
+      # The claimed row already owns its durable claim and resend attribution:
+      # a resend admitted under a derived claim keeps both rather than meeting
+      # the predecessor's claim again at reservation.
       request
-      |> Ecto.Changeset.change(Map.delete(attrs, :admitted_at))
+      |> Ecto.Changeset.change(
+        attrs
+        |> Map.drop([:admitted_at, :correlation_id])
+        |> preserve_client_resend_metadata(request)
+      )
       |> Repo.update!()
     else
       Repo.rollback(
@@ -542,6 +618,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       )
     end
   end
+
+  defp preserve_client_resend_metadata(
+         %{request_metadata: metadata} = attrs,
+         %Request{request_metadata: %{"client_resend" => client_resend}}
+       )
+       when is_map(metadata) and is_map(client_resend),
+       do: %{attrs | request_metadata: Map.put(metadata, "client_resend", client_resend)}
+
+  defp preserve_client_resend_metadata(attrs, _request), do: attrs
 
   defp insert_reserved_request!(context) do
     request_metadata =

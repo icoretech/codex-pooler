@@ -169,6 +169,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       runtime_revocation_epoch: request_options.runtime.api_key_runtime_epoch,
       native_client_retry_witness: request_options.native_client_retry_witness,
       api_key_policy: request_options.routing.api_key_policy,
+      codex_session: Map.get(request_options.continuity, :codex_session),
+      anchor_present?: not is_nil(Map.get(request_options.continuity, :previous_response_id)),
       request_metadata:
         request_metadata_attrs(auth, payload, accounting_endpoint, request_options, route_state)
     }
