@@ -7805,6 +7805,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "local owner crash interrupts active turn without waiting for lease expiry" do
+    # The owner is killed with `:kill` while it may hold a database query. On
+    # the shared sandbox connection that kill takes the test's own connection
+    # down with it (seen on a loaded CI runner as `DBConnection.OwnershipError`
+    # at terminate), so this test gives every process its own connection, like
+    # the peer-owner crash tests above.
+    assert :ok = Sandbox.mode(Repo, :auto)
+    on_exit(fn -> assert :ok = Sandbox.mode(Repo, :manual) end)
+
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_crash"}))
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
