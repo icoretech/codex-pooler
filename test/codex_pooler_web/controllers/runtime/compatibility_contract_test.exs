@@ -1203,7 +1203,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              }
 
       assert fixture.implemented_runtime_outcomes.routing_hint ==
-               "trusted_native_effective_model_and_service_tier_only"
+               "trusted_effective_model_and_service_tier_native_and_v1_translated"
 
       assert fixture.implemented_runtime_outcomes.schema_bound_function_output_compression ==
                "byte_exact_json_preserved"

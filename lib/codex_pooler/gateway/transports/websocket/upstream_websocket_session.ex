@@ -732,7 +732,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     ConnectionUpgrade.connect_state(state, key, url, headers, timeouts, request_caller)
   end
 
-  defp request_key(%Request{} = request), do: {request.url, request.headers}
+  # Like the Codex client, a connection keeps the routing hint of the handshake
+  # that opened it: a later turn's tier or model hint never forces a reconnect.
+  # Every other header still scopes the connection.
+  defp request_key(%Request{} = request),
+    do: {request.url, Enum.reject(request.headers, &routing_hint_header?/1)}
+
+  defp routing_hint_header?({name, _value}) when is_binary(name),
+    do: String.downcase(name) == "x-codex-routing-hint"
+
+  defp routing_hint_header?(_header), do: false
 
   defp request_on_connection(state, key, %Request{} = request, request_caller) do
     reused_connection? = reusable_connection?(state, key)

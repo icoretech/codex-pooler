@@ -2535,7 +2535,7 @@ defmodule CodexPooler.CompatibilityMatrix do
           encrypted_function_args: "validated_and_round_tripped"
         },
         native_encrypted_function_args: "pass_through",
-        routing_hint: "trusted_native_effective_model_and_service_tier_only",
+        routing_hint: "trusted_effective_model_and_service_tier_native_and_v1_translated",
         schema_bound_function_output_compression: "byte_exact_json_preserved",
         encrypted_continuity: "evidence_selected_without_node_local_state",
         responses_lite_full: %{

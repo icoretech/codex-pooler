@@ -7024,13 +7024,100 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-subagent")
     refute Map.has_key?(captured_headers, "x-codex-extra")
     refute Map.has_key?(captured_headers, "x-openai-extra")
-    refute Map.has_key?(captured_headers, "x-codex-routing-hint")
+    assert captured_headers["x-codex-routing-hint"] == "model=#{setup.model.upstream_model_id}"
     refute Map.has_key?(captured_headers, "cookie")
     refute Map.has_key?(captured_headers, "idempotency-key")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.endpoint == "/backend-api/codex/responses"
+  end
+
+  test "POST /v1/responses derives the Codex routing hint from the effective model and tier",
+       %{conn: conn} do
+    upstream_model = "provider-v1-routing-hint-model"
+
+    upstream =
+      start_upstream(
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_routing_hint_header (header format; replies invented)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            headers: [
+              required: %{"x-codex-routing-hint" => "model=#{upstream_model};tier=priority"}
+            ],
+            json: [
+              valid: true,
+              equals: %{"model" => upstream_model, "service_tier" => "priority"}
+            ],
+            respond: routing_hint_completed_response("resp_v1_routing_hint_priority")
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            headers: [required: %{"x-codex-routing-hint" => "model=#{upstream_model}"}],
+            json: [valid: true, forbidden: ["service_tier"]],
+            respond: routing_hint_completed_response("resp_v1_routing_hint_default")
+          )
+        ])
+      )
+
+    setup =
+      gateway_setup(upstream,
+        upstream_model_id: upstream_model,
+        model_metadata: priority_tier_metadata()
+      )
+
+    priority =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-routing-hint", "model=forged;tier=forged")
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic v1 priority routing hint request",
+        "service_tier" => "fast"
+      })
+
+    assert %{"id" => "resp_v1_routing_hint_priority"} = json_response(priority, 200)
+
+    default =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("x-codex-routing-hint", "model=forged;tier=priority")
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic v1 default routing hint request"
+      })
+
+    assert %{"id" => "resp_v1_routing_hint_default"} = json_response(default, 200)
+    assert :ok = FakeUpstream.verify!(upstream)
+    refute inspect(FakeUpstream.requests(upstream)) =~ "forged"
+  end
+
+  defp priority_tier_metadata do
+    %{"upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}}
+  end
+
+  defp routing_hint_completed_response(id) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => id,
+           "status" => "completed",
+           "output" => [
+             %{
+               "type" => "message",
+               "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]
+             }
+           ],
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+         }
+       }}
+    ])
   end
 
   @tag :invalid_request_error

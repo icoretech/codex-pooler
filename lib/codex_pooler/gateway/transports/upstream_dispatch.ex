@@ -1690,13 +1690,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
+  # The Codex client (0.148+) sends `model=<slug>[;tier=<tier>]` on every
+  # Codex-backend Responses and compact request, HTTP and websocket handshake
+  # alike. Native and `/v1`-translated turns derive it the same way: only from
+  # the final upstream body (effective model after aliasing, effective tier
+  # after policy and `fast` canonicalization). A caller-supplied header is never
+  # the source.
   defp routing_hint_header(
          body,
          true,
-         %RequestOptions{
-           transport: %{upstream_endpoint: endpoint},
-           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
-         }
+         %RequestOptions{transport: %{upstream_endpoint: endpoint}}
        )
        when endpoint in @regular_runtime_metadata_endpoints and is_binary(body) do
     with {:ok, %{} = payload} <- CodexPooler.JSON.decode(body),

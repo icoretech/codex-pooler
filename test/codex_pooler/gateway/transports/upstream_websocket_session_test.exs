@@ -1509,6 +1509,89 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "routing hint changes reuse the connection while an account header change opens another" do
+    first_hint = "model=provider-routing-model;tier=priority"
+    other_model_hint = "model=provider-other-model"
+
+    upstream =
+      start_upstream(
+        # Tier and model hint changes ride the first physical connection, whose
+        # handshake keeps the first hint; an account header change reconnects.
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs websocket_connection (reconnect only on endpoint change or close; replies invented)
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_hint_priority",
+            websocket_connection_ordinal: 1,
+            headers: [
+              required: %{
+                "x-codex-routing-hint" => first_hint,
+                "chatgpt-account-id" => "account-a"
+              }
+            ]
+          ),
+          strict_websocket_success("resp_ws_hint_default_tier",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"x-codex-routing-hint" => first_hint}]
+          ),
+          strict_websocket_success("resp_ws_hint_model_switch",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"x-codex-routing-hint" => first_hint}]
+          ),
+          strict_websocket_success("resp_ws_hint_account_switch",
+            websocket_connection_ordinal: 2,
+            headers: [
+              required: %{
+                "x-codex-routing-hint" => other_model_hint,
+                "chatgpt-account-id" => "account-b"
+              }
+            ]
+          )
+        ])
+      )
+
+    base_request = websocket_request(FakeUpstream.url(upstream))
+
+    request = fn account, hint ->
+      %{
+        base_request
+        | headers: [{"chatgpt-account-id", account}, {"x-codex-routing-hint", hint}]
+      }
+    end
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, first_result} =
+             UpstreamWebsocketSession.request(session, request.("account-a", first_hint))
+
+    first_lifecycle = lifecycle_state(session)
+    assert_connection_metadata(first_result, first_lifecycle, false, false)
+
+    assert {:ok, default_tier_result} =
+             UpstreamWebsocketSession.request(
+               session,
+               request.("account-a", "model=provider-routing-model")
+             )
+
+    assert_connection_metadata(default_tier_result, first_lifecycle, true, false)
+
+    assert {:ok, model_switch_result} =
+             UpstreamWebsocketSession.request(session, request.("account-a", other_model_hint))
+
+    assert_connection_metadata(model_switch_result, first_lifecycle, true, false)
+
+    assert {:ok, account_switch_result} =
+             UpstreamWebsocketSession.request(session, request.("account-b", other_model_hint))
+
+    refute account_switch_result.upstream_websocket_connection.reused
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+
+    assert [first_id, first_id, first_id, account_id] =
+             Enum.map(FakeUpstream.requests(upstream), & &1.websocket_connection_id)
+
+    refute account_id == first_id
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "ordinary successful and request-terminal work keep one connection reusable" do
     upstream =
       start_upstream(

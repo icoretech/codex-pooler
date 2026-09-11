@@ -1371,7 +1371,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert :ok = FakeUpstream.verify!(websocket_upstream)
   end
 
-  test "public and translated Responses dispatch never forwards caller routing hints" do
+  test "translated Responses dispatch derives routing hints and public OpenAI dispatch sends none" do
     {:ok, upstream} =
       FakeUpstream.start_link(
         {:path_json,
@@ -1383,12 +1383,20 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
 
-    upstream_payload = %{"model" => "upstream-routing-model", "input" => []}
+    upstream_payload = %{
+      "model" => "upstream-routing-model",
+      "service_tier" => "priority",
+      "input" => []
+    }
+
+    chat_payload = %{"model" => "public-model", "messages" => []}
 
     for {endpoint, path, opts} <- [
           {"/v1/responses", "/v1/responses", %{}},
           {"/backend-api/codex/responses", "/backend-api/codex/responses",
-           %{openai_source_endpoint: "/v1/responses"}}
+           %{openai_source_endpoint: "/v1/responses"}},
+          {"/backend-api/codex/responses", "/backend-api/codex/responses",
+           %{openai_source_endpoint: "/v1/chat/completions", openai_chat_payload: chat_payload}}
         ] do
       request_options =
         RequestOptions.build(
@@ -1410,9 +1418,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
     end
 
-    for captured <- FakeUpstream.requests(upstream) do
-      refute Map.has_key?(Map.new(captured.headers), "x-codex-routing-hint")
-    end
+    captured = FakeUpstream.requests(upstream)
+
+    assert [nil] =
+             for(
+               request <- captured,
+               request.path == "/v1/responses",
+               do: Map.new(request.headers)["x-codex-routing-hint"]
+             )
+
+    assert [
+             "model=upstream-routing-model;tier=priority",
+             "model=upstream-routing-model;tier=priority"
+           ] =
+             for(
+               request <- captured,
+               request.path == "/backend-api/codex/responses",
+               do: Map.new(request.headers)["x-codex-routing-hint"]
+             )
   end
 
   test "streaming non-429 4xx drains the complete rejection body into response private" do

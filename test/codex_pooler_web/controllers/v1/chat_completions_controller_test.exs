@@ -222,6 +222,86 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
            ) =~ "compute_units"
   end
 
+  test "POST /v1/chat/completions derives the Codex routing hint from the effective model and tier",
+       %{conn: conn} do
+    upstream_model = "provider-chat-routing-hint-model"
+
+    upstream =
+      start_upstream(
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_routing_hint_header (header format; replies invented)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            headers: [
+              required: %{"x-codex-routing-hint" => "model=#{upstream_model};tier=priority"}
+            ],
+            json: [
+              valid: true,
+              equals: %{"model" => upstream_model, "service_tier" => "priority"}
+            ],
+            respond: chat_routing_hint_completed_response("resp_chat_routing_hint_priority")
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            headers: [required: %{"x-codex-routing-hint" => "model=#{upstream_model}"}],
+            json: [valid: true, forbidden: ["service_tier"]],
+            respond: chat_routing_hint_completed_response("resp_chat_routing_hint_default")
+          )
+        ])
+      )
+
+    setup =
+      gateway_setup(upstream,
+        upstream_model_id: upstream_model,
+        model_metadata: chat_priority_tier_metadata()
+      )
+
+    priority =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-routing-hint", "model=forged;tier=forged")
+      |> post("/v1/chat/completions", Map.put(chat_payload(setup), "service_tier", "priority"))
+
+    assert %{"id" => "resp_chat_routing_hint_priority"} = json_response(priority, 200)
+
+    default =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("x-codex-routing-hint", "model=forged;tier=priority")
+      |> post("/v1/chat/completions", chat_payload(setup))
+
+    assert %{"id" => "resp_chat_routing_hint_default"} = json_response(default, 200)
+    assert :ok = FakeUpstream.verify!(upstream)
+    refute inspect(FakeUpstream.requests(upstream)) =~ "forged"
+  end
+
+  defp chat_priority_tier_metadata do
+    %{"upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}}
+  end
+
+  defp chat_routing_hint_completed_response(id) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => id,
+           "status" => "completed",
+           "output" => [
+             %{
+               "type" => "message",
+               "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]
+             }
+           ],
+           "usage" => %{"input_tokens" => 4, "output_tokens" => 6, "total_tokens" => 10}
+         }
+       }}
+    ])
+  end
+
   @tag :external_issues_229_231
   @tag :issue_231
   test "POST /v1/chat/completions uses a divergent healthy canonical alternate", %{conn: conn} do
