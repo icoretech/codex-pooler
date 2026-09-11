@@ -120,8 +120,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       |> apply_prompt_cache_locality(prompt_cache_locality)
       |> apply_affinity(affinity)
       |> apply_codex_session_preference(request_options)
-      |> apply_demotions(demotions)
-      |> apply_windowless_tier(model, route_state)
+      |> apply_quota_tier_and_demotions(demotions, model, route_state)
 
     ring_size = max(settings.bridge_ring_size || @default_ring_size, 1)
     candidates = Enum.take(ordered, ring_size)
@@ -573,25 +572,21 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     |> Map.new(&{&1.pool_upstream_assignment_id, &1})
   end
 
-  defp apply_demotions(candidates, demotions) when map_size(demotions) == 0, do: candidates
-
-  defp apply_demotions(candidates, demotions) do
-    {active, demoted} =
-      Enum.split_with(candidates, fn {assignment, _identity} ->
-        not Map.has_key?(demotions, assignment.id)
-      end)
-
-    active ++ demoted
+  # The windowless provider-availability tier is a quota tier and demotion is an
+  # ordering-only penalty inside each tier: ordinary_active ++ ordinary_demoted
+  # ++ windowless_active ++ windowless_demoted. One stable sort on both keys keeps
+  # the strategy, locality, affinity, and session order inside each group, so the
+  # precedence cannot flip with the position of separate pipeline steps.
+  defp apply_quota_tier_and_demotions(candidates, demotions, %Model{} = model, route_state) do
+    Enum.sort_by(candidates, fn {assignment, _identity} = candidate ->
+      {windowless_tier?(model, candidate, route_state), Map.has_key?(demotions, assignment.id)}
+    end)
   end
 
-  defp apply_windowless_tier(candidates, %Model{} = model, %RouteState{} = route_state) do
-    {windowless, ordinary} =
-      Enum.split_with(candidates, &QuotaEligibility.windowless_candidate?(model, &1, route_state))
+  defp windowless_tier?(%Model{}, _candidate, nil), do: false
 
-    ordinary ++ windowless
-  end
-
-  defp apply_windowless_tier(candidates, %Model{}, nil), do: candidates
+  defp windowless_tier?(%Model{} = model, candidate, %RouteState{} = route_state),
+    do: QuotaEligibility.windowless_candidate?(model, candidate, route_state)
 
   defp upsert_affinity!(plan, assignment, identity, now) do
     metadata = %{"source" => "gateway_success"}

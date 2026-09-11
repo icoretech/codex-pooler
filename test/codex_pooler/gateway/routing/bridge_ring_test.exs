@@ -1233,6 +1233,84 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
+  # The windowless provider-availability tier is a quota tier, and demotion is
+  # an ordering penalty inside it: ordinary_active ++ ordinary_demoted ++
+  # windowless_active ++ windowless_demoted, each group in strategy order.
+  describe "plan_route/1 windowless tier and demotion precedence" do
+    test "a demoted ordinary candidate stays ahead of an active windowless candidate" do
+      %{setup: setup, candidates: [windowless, ordinary], route_state: route_state} =
+        tiered_setup([:windowless, :ordinary])
+
+      demote!(setup, ordinary)
+
+      plan = tiered_plan(setup, [windowless, ordinary], route_state)
+
+      assert Map.keys(plan.demotions) == candidate_ids([ordinary])
+      assert candidate_ids(plan.candidates) == candidate_ids([ordinary, windowless])
+      assert plan.selected_assignment_id == candidate_id(ordinary)
+    end
+
+    test "a demoted windowless candidate falls behind an active windowless candidate" do
+      %{setup: setup, candidates: [demoted, active, ordinary], route_state: route_state} =
+        tiered_setup([:windowless, :windowless, :ordinary])
+
+      demote!(setup, demoted)
+
+      plan = tiered_plan(setup, [demoted, active, ordinary], route_state)
+
+      assert candidate_ids(plan.candidates) == candidate_ids([ordinary, active, demoted])
+      assert plan.selected_assignment_id == candidate_id(ordinary)
+    end
+
+    test "when every candidate is demoted the tier and strategy order still decide" do
+      %{setup: setup, candidates: candidates, route_state: route_state} =
+        tiered_setup([:windowless, :ordinary, :windowless, :ordinary])
+
+      [windowless_a, ordinary_a, windowless_b, ordinary_b] = candidates
+      Enum.each(candidates, &demote!(setup, &1))
+
+      plan = tiered_plan(setup, candidates, route_state)
+
+      assert map_size(plan.demotions) == 4
+
+      assert candidate_ids(plan.candidates) ==
+               candidate_ids([ordinary_a, ordinary_b, windowless_a, windowless_b])
+
+      assert plan.selected_assignment_id == candidate_id(ordinary_a)
+    end
+
+    test "ring truncation keeps tiers and demotion order, so healthy windowless or demoted candidates can fall outside the ring" do
+      %{setup: setup, candidates: candidates, route_state: route_state} =
+        tiered_setup([:windowless, :ordinary, :ordinary, :windowless])
+
+      [windowless_active, ordinary_demoted, ordinary_active, windowless_demoted] = candidates
+      demote!(setup, ordinary_demoted)
+      demote!(setup, windowless_demoted)
+
+      full_order = [ordinary_active, ordinary_demoted, windowless_active, windowless_demoted]
+
+      three_plan = tiered_plan(setup, candidates, route_state, ring_size: 3)
+
+      assert three_plan.bridge_ring_size == 3
+      assert candidate_ids(three_plan.candidates) == candidate_ids(Enum.take(full_order, 3))
+      refute candidate_id(windowless_demoted) in candidate_ids(three_plan.candidates)
+
+      # The ring is truncated after ordering: a demoted ordinary candidate keeps
+      # its ring slot while the healthy windowless candidate is dropped.
+      two_plan = tiered_plan(setup, candidates, route_state, ring_size: 2)
+
+      assert candidate_ids(two_plan.candidates) ==
+               candidate_ids([ordinary_active, ordinary_demoted])
+
+      refute candidate_id(windowless_active) in candidate_ids(two_plan.candidates)
+      assert two_plan.selected_assignment_id == candidate_id(ordinary_active)
+
+      # Demotion lookup still covers the whole eligible set, not only the ring.
+      assert Enum.sort(Map.keys(two_plan.demotions)) ==
+               Enum.sort(candidate_ids([ordinary_demoted, windowless_demoted]))
+    end
+  end
+
   describe "record_success/3 concurrency" do
     test "concurrent first successes for the same affinity key leave one active affinity" do
       setup = routing_setup(2)
@@ -1967,6 +2045,62 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     :crypto.hash(:sha256, [to_string(seed), ?:, assignment_id])
     |> :binary.decode_unsigned()
   end
+
+  # Builds candidates in the given tier order: `:windowless` identities carry a
+  # fresh provider-attested availability observation and no account windows,
+  # `:ordinary` identities carry a fresh reset-bearing account window.
+  defp tiered_setup(tiers) do
+    setup = routing_setup(length(tiers))
+    snapshot_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    candidates =
+      setup.candidates
+      |> Enum.zip(tiers)
+      |> Enum.map(fn
+        {{assignment, identity}, :windowless} ->
+          availability = AccountAvailabilityStore.encode!(:available, snapshot_at, 1)
+
+          metadata =
+            Map.put(identity.metadata, AccountAvailabilityStore.metadata_key(), availability)
+
+          {assignment, %{identity | metadata: metadata}}
+
+        {candidate, :ordinary} ->
+          candidate
+      end)
+
+    windows_by_identity_id =
+      candidates
+      |> Enum.zip(tiers)
+      |> Map.new(fn
+        {{_assignment, identity}, :windowless} ->
+          {identity.id, []}
+
+        {{_assignment, identity}, :ordinary} ->
+          {identity.id, [account_window_at(Decimal.new("20"), snapshot_at)]}
+      end)
+
+    route_state =
+      RouteState.new(%{visible_model: setup.model, candidates: candidates})
+      |> put_test_quota_snapshots(windows_by_identity_id, snapshot_at)
+
+    %{setup: setup, candidates: candidates, route_state: route_state}
+  end
+
+  # deterministic_rotation at rotation index 0 keeps the input order, so the
+  # expected order is readable from the candidate list itself.
+  defp tiered_plan(setup, candidates, route_state, opts \\ []) do
+    plan_for(setup, "deterministic_rotation", seed_rotating_to_index(0, length(candidates)),
+      candidates: candidates,
+      ring_size: Keyword.get(opts, :ring_size, length(candidates)),
+      route_state: route_state
+    )
+  end
+
+  defp demote!(setup, {assignment, identity}),
+    do: insert_demotion!(setup, assignment, identity, "upstream_5xx")
+
+  defp candidate_id({assignment, _identity}), do: assignment.id
 
   defp put_test_quota_snapshots(route_state, windows_by_identity_id, as_of) do
     identities =

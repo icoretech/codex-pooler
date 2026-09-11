@@ -120,7 +120,9 @@ After eligibility, Codex Pooler orders the remaining accounts. The Pool's strate
 
 The ring size controls how many ordered eligible accounts are tried for a request. A ring size of `3` means Codex Pooler prepares up to three eligible upstream accounts in order. If the first account fails in a retryable way, it can try the next one. The ring doesn't include accounts that failed eligibility.
 
-Temporary demotion also affects order. When an upstream attempt fails with a retryable backend or network reason, Codex Pooler can demote that assignment briefly so another eligible account is tried first. A later success clears that demotion.
+Temporary demotion also affects order. When an upstream attempt fails with a retryable backend or network reason, Codex Pooler can demote that assignment briefly so other eligible accounts in the same quota tier are tried first. A later success clears that demotion.
+
+Demotion doesn't change the quota tier. Accounts that route through provider-attested availability without windows stay behind every account with fresh reset-bearing quota evidence, even when that account is demoted. Among the provider-attested accounts, a demoted one moves behind the others. The ring size applies after this ordering, so a small ring can leave out demoted accounts or provider-attested accounts entirely.
 
 ## Session Continuity Versus Stateless Routing
 
