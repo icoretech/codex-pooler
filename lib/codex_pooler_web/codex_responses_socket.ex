@@ -3155,26 +3155,42 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     tasks = Map.get(state, :tasks, MapSet.new())
     monitors = Map.new(tasks, &{&1, Process.monitor(&1)})
     deadline = response_task_deadline(@pre_cleanup_response_task_drain_ms)
-    await_response_task_cleanup_results(state, tasks, monitors, deadline)
+    await_response_task_cleanup_results(state, tasks, monitors, %{}, deadline)
   end
 
-  defp await_response_task_cleanup_results(state, tasks, monitors, deadline) do
-    if MapSet.size(tasks) == 0 do
+  # A task that has reported both its activity token and its result is parked
+  # on the delivery acknowledgement this termination sends after the drain,
+  # so the drain ends once every remaining task is parked or gone. A turn that
+  # completed while its messages were still unprocessed leaves the token in
+  # the mailbox; the activity registry never tracks a local owner task, so the
+  # token is learned here, and only together with that task's own result.
+  defp await_response_task_cleanup_results(state, tasks, monitors, activities, deadline) do
+    if Enum.all?(tasks, &response_task_awaiting_delivery_ack?(state, &1)) do
+      demonitor_response_tasks(monitors)
       {tasks, state}
     else
       receive do
+        {:websocket_response_activity, pid, token}
+        when is_map_key(monitors, pid) and is_reference(token) ->
+          activities = Map.put(activities, pid, token)
+          await_response_task_cleanup_results(state, tasks, monitors, activities, deadline)
+
         {:codex_response_done, pid, result} when is_map_key(monitors, pid) ->
-          state = put_response_task_cleanup_result(state, pid, result)
-          await_response_task_cleanup_results(state, tasks, monitors, deadline)
+          state =
+            state
+            |> put_response_task_cleanup_result(pid, result)
+            |> put_drained_response_task_activity(pid, Map.get(activities, pid))
+
+          await_response_task_cleanup_results(state, tasks, monitors, activities, deadline)
 
         {:direct_request_cleanup, pid, ref, receipt} when is_map_key(monitors, pid) ->
           state = accept_direct_cleanup(state, pid, ref, receipt)
-          await_response_task_cleanup_results(state, tasks, monitors, deadline)
+          await_response_task_cleanup_results(state, tasks, monitors, activities, deadline)
 
         {:DOWN, ref, :process, pid, _reason}
         when is_map_key(monitors, pid) and :erlang.map_get(monitors, pid) == ref ->
           tasks = remove_response_task(tasks, monitors, pid)
-          await_response_task_cleanup_results(state, tasks, monitors, deadline)
+          await_response_task_cleanup_results(state, tasks, monitors, activities, deadline)
       after
         response_task_wait_timeout(deadline) ->
           demonitor_response_tasks(monitors)
@@ -3182,6 +3198,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       end
     end
   end
+
+  defp response_task_awaiting_delivery_ack?(state, pid) do
+    response_task_activity?(state, pid) and
+      Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid)
+  end
+
+  defp put_drained_response_task_activity(state, pid, token) when is_reference(token) do
+    if tracked_response_task?(state, pid) and not response_task_activity?(state, pid),
+      do: put_response_task_activity(state, pid, token),
+      else: state
+  end
+
+  defp put_drained_response_task_activity(state, _pid, _token), do: state
 
   defp authoritative_response_task_activity?(state, pid) do
     match?(

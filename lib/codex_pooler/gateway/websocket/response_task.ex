@@ -249,15 +249,23 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
          {:socket_response_result, :owner_completion_pending, :ok} = result
        ) do
     token = make_ref()
+    # No registry entry tracks this task, so a socket that dies without
+    # acknowledging would otherwise leave it parked forever.
+    parent_monitor = Process.monitor(parent)
     send(parent, {:websocket_response_activity, self(), token})
     send(parent, {:codex_response_done, self(), result})
 
     receive do
       {:websocket_response_delivery_ack, ^token, outcome}
       when outcome in [:completed, :aborted] ->
+        Process.demonitor(parent_monitor, [:flush])
         :ok
 
       {:websocket_response_delivery_ack, ^token} ->
+        Process.demonitor(parent_monitor, [:flush])
+        :ok
+
+      {:DOWN, ^parent_monitor, :process, ^parent, _reason} ->
         :ok
     end
   end

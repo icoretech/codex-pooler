@@ -296,6 +296,41 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
   end
 
+  test "untracked local-owner submitted work exits when its socket dies without acknowledging", %{
+    registry: registry
+  } do
+    test_pid = self()
+
+    socket =
+      spawn(fn ->
+        receive do
+          {:websocket_response_activity, task_pid, token} ->
+            send(test_pid, {:socket_saw_activity, task_pid, token})
+        end
+
+        receive do
+          :never_acknowledge -> :ok
+        end
+      end)
+
+    {:ok, pid} =
+      ResponseTask.start(
+        socket,
+        :local_owner,
+        fn _task_pid -> {:socket_response_result, :owner_completion_pending, :ok} end,
+        fn _task_pid, _reason -> :ok end,
+        activity_registry: registry
+      )
+
+    monitor = Process.monitor(pid)
+    assert_receive {:socket_saw_activity, ^pid, _token}
+    assert Process.alive?(pid)
+
+    Process.exit(socket, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+    assert {_epoch, []} = ActivityRegistry.begin_drain(name: registry)
+  end
+
   test "untracked local-owner local completion exits without delivery acknowledgement", %{
     registry: registry
   } do
