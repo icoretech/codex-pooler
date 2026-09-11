@@ -25,34 +25,30 @@ defmodule CodexPooler.Release do
     load_app()
 
     for repo <- repos() do
-      name_repo_connections(repo, :migrate)
-
-      {:ok, _apps, _fun_result} =
-        Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
+      with_task_repo_config(repo, :migrate, fn ->
+        {:ok, _apps, _fun_result} =
+          Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
+      end)
     end
   end
 
   def rollback(repo, version) do
     load_app()
-    name_repo_connections(repo, :rollback)
 
-    {:ok, _apps, _fun_result} =
-      Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
+    with_task_repo_config(repo, :rollback, fn ->
+      {:ok, _apps, _fun_result} =
+        Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
+    end)
   end
 
   def import_openai_pricing_from_priv do
     load_app()
 
     for repo <- repos() do
-      name_repo_connections(repo, :import_openai_pricing)
-
-      {:ok, result, _started} =
-        Ecto.Migrator.with_repo(repo, fn _repo ->
-          {:ok, import_result} = Catalog.import_openai_pricing_from_priv()
-          import_result
-        end)
-
-      result
+      with_task_repo_config(repo, :import_openai_pricing, fn ->
+        {:ok, result, _started} = Ecto.Migrator.with_repo(repo, &import_pricing/1)
+        result
+      end)
     end
   end
 
@@ -68,12 +64,31 @@ defmodule CodexPooler.Release do
     Keyword.put(repo_config, :parameters, parameters)
   end
 
-  defp name_repo_connections(repo, task) do
+  # The task's connection name applies only while the task runs: a release
+  # task VM exits afterwards, but callers in a running node (tests, remote
+  # consoles) keep using the Repo config and must get the original back.
+  defp with_task_repo_config(repo, task, fun) do
+    previous = Application.fetch_env(@app, repo)
+
     Application.put_env(
       @app,
       repo,
       repo_config_for_task(Application.get_env(@app, repo, []), task)
     )
+
+    try do
+      fun.()
+    after
+      case previous do
+        {:ok, config} -> Application.put_env(@app, repo, config)
+        :error -> Application.delete_env(@app, repo)
+      end
+    end
+  end
+
+  defp import_pricing(_repo) do
+    {:ok, import_result} = Catalog.import_openai_pricing_from_priv()
+    import_result
   end
 
   defp repos do
