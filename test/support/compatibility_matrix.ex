@@ -1697,6 +1697,8 @@ defmodule CodexPooler.CompatibilityMatrix do
             routes: ["/v1/responses", "/v1/chat/completions"],
             transports: ["http_json", "http_sse"],
             websocket_surfaces: "unaffected_prompt_cache_bound_to_reused_upstream_connection",
+            local_session: "none_bridge_eligibility_stays_fail_closed",
+            client_key_contract: "conversation_scoped_key_expected_shared_key_shares_one_provider_session_id",
             privacy: "derived_value_not_persisted_or_logged"
           }
         },
@@ -3172,6 +3174,8 @@ defmodule CodexPooler.CompatibilityMatrix do
           %{method: :post, path: "/v1/chat/completions"}
         ],
         client_session_id_header: "local_only_never_forwarded",
+        local_session: "none_bridge_eligibility_stays_fail_closed",
+        client_key_contract: "conversation_scoped_key_expected_shared_key_shares_one_provider_session_id",
         privacy: "derived_value_not_persisted_or_logged"
       },
       pinned_continuation_reauth: %{
