@@ -106,11 +106,11 @@ The table shows the latest matching rows, with a hard page size limit.
     </tr>
     <tr>
       <td>Model / API Key</td>
-      <td>Requested or enforced model, then the effective reasoning effort with requested-vs-upstream detail when it was normalized, and the service tier labelled as <code>tier</code> (for example <code>high / tier default</code>). A successful Responses request that sent no effort shows <code>model default</code>: the backend chose the model's own default effort, which the gateway does not observe. The request drawer marks that case as not set and not sent. Rows for endpoints without reasoning, such as transcription, show only the tier. The API key label or safe prefix appears alongside.</td>
+      <td>Requested or enforced model, then the effective reasoning effort with requested-vs-upstream detail when it was normalized, and the service tier the upstream reported, labelled as <code>tier</code> (for example <code>high / tier default</code>). When the request asked for a different tier, a muted token names it (for example <code>tier default priority requested</code>). A successful Responses request that sent no effort shows <code>model default</code>: the backend chose the model's own default effort, which the gateway does not observe. The request drawer marks that case as not set and not sent. Rows for endpoints without reasoning, such as transcription, show only the tier. The API key label or safe prefix appears alongside.</td>
     </tr>
     <tr>
       <td>Transport</td>
-      <td>Request transport and protocol family, such as HTTP JSON or HTTP SSE.</td>
+      <td>Request transport and protocol family, such as HTTP JSON or HTTP SSE. A bolt icon marks a request priced at the priority tier; a request that only asked for priority does not get it.</td>
     </tr>
     <tr>
       <td>Route</td>
@@ -251,6 +251,37 @@ For downstream idle closes on backend Codex websockets and narrow public `/v1/re
 Usage lines summarize request accounting, including request count context, token totals, cached input tokens, and estimated cost when pricing is available. Treat these as operational attribution and capacity evidence. They are not a replacement for provider billing records or the key-local Observatory projection.
 
 If usage is blank, check the request status first. A request can be admitted without final usage if it failed before settlement, if pricing was not matched, or if accounting metadata was not available for that route. A delivered incomplete response with missing upstream usage remains `usage_unknown` and does not get an invented settled cost from the reservation estimate.
+
+### Service tiers
+
+The request drawer keeps three tier facts apart:
+
+<table>
+  <thead>
+    <tr>
+      <th>Row</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Requested tier</td>
+      <td>The tier the client sent or an API key policy enforced. <code>fast</code> is shown as <code>priority</code>. <code>Not set</code> means the request sent no tier.</td>
+    </tr>
+    <tr>
+      <td>Upstream reported</td>
+      <td>The <code>service_tier</code> value on the upstream's final response event. Omitted when the upstream reported none.</td>
+    </tr>
+    <tr>
+      <td>Priced as</td>
+      <td>The pricing tier used for the request's estimated cost. Shown only for priced requests.</td>
+    </tr>
+  </tbody>
+</table>
+
+The ChatGPT Codex backend reports <code>service_tier</code> as <code>auto</code> while a response is in progress and <code>default</code> when it completes, including for requests sent with <code>priority</code>. The public OpenAI API reports <code>priority</code> for the same request. Codex Pooler forwards the requested tier and prices the tier the upstream reported, so a <code>priority</code> request reported as <code>default</code> shows <code>tier default priority requested</code> in the list and <code>standard</code> under Billed as. When the upstream reports no tier, or reports <code>auto</code>, the request is priced at its requested tier.
+
+A <code>default</code> report on a <code>priority</code> request is not evidence that priority processing was skipped. To judge whether it was applied, compare latency across requests for the same account, model, and transport.
 
 ## Operational Checklist
 

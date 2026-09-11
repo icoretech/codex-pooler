@@ -394,7 +394,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(view, "#request-log-row-#{fast_request.id}", "gpt-5.3-codex-spark")
     refute has_element?(view, "#request-log-#{fast_request.id}-fast-mode")
-    refute has_element?(view, "#request-log-#{fast_request.id}-requested-tier")
+
+    assert has_element?(
+             view,
+             "#request-log-#{fast_request.id}-requested-tier",
+             "priority requested"
+           )
 
     assert has_element?(view, "#request-log-row-#{model_default_request.id}", "gpt-5.4")
     assert has_element?(view, "#request-log-row-#{model_default_request.id}", "default")
@@ -409,9 +414,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "#request-log-#{fast_request.id}-protocol [data-role='fast-mode-indicator']"
            )
 
+    # Requested fast mode that the upstream reported as default is priced as
+    # default, so the bolt stays off and the row names the requested tier.
+    refute has_element?(
+             view,
+             "#request-log-#{requested_fast_request.id}-protocol [data-role='fast-mode-indicator']"
+           )
+
     assert has_element?(
              view,
-             "#request-log-#{requested_fast_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+             "#request-log-#{requested_fast_request.id}-requested-tier",
+             "priority requested"
            )
 
     assert has_element?(
@@ -1330,11 +1343,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{tier_diff_request.id}-requested-tier",
-             "requested: flex"
+             "flex requested"
            )
 
     refute has_element?(view, "#request-log-#{full_details_request.id}-requested-tier")
-    refute has_element?(view, "#request-log-#{fast_tier_diff_request.id}-requested-tier")
+
+    assert has_element?(
+             view,
+             "#request-log-#{fast_tier_diff_request.id}-requested-tier",
+             "priority requested"
+           )
 
     assert has_element?(
              view,
@@ -1344,7 +1362,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{actual_fast_tier_diff_request.id}-requested-tier",
-             "requested: flex"
+             "flex requested"
            )
 
     assert has_element?(

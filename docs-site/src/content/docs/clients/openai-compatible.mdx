@@ -41,7 +41,9 @@ configuration. On `/v1`, Codex Pooler translates supported OpenAI request and
 response shapes while preserving any projected provider `service_tier` value in
 its literal provider vocabulary. Codex backend relay routes under
 `/backend-api/codex` preserve provider bytes, frames, and service-tier
-vocabulary unchanged.
+vocabulary unchanged. The ChatGPT Codex backend reports
+`service_tier: "default"` on completed responses even when the request asked
+for `priority`, and Codex Pooler relays that value as reported.
 
 `ultrafast` is a separate tier, not an alias for `fast` or `priority`. Use
 `service_tier: "ultrafast"` only with direct `/v1/responses` requests when the

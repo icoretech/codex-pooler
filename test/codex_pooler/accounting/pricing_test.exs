@@ -1325,6 +1325,24 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert result.settlement.details["actual_service_tier"] == "default"
       assert result.settlement.details["service_tier"] == "standard"
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(40))
+
+      # The ChatGPT Codex backend reports `default` for priority requests. The
+      # request row and the request log keep all three tiers apart, so the
+      # requested-versus-reported mismatch is derivable without extra metadata.
+      request = Repo.get!(CodexPooler.Accounting.Request, reserved.request.id)
+      assert request.requested_service_tier == "priority"
+      assert request.actual_service_tier == "default"
+      assert request.service_tier == "standard"
+
+      assert %{items: [log], total: 1} =
+               Accounting.list_request_logs(setup.pool,
+                 filters: [request_id: "corr-priority-downgraded-to-default"]
+               )
+
+      assert log.requested_service_tier == "priority"
+      assert log.actual_service_tier == "default"
+      assert log.service_tier == "standard"
+      assert log.cost.pricing_availability == "priced"
     end
 
     test "auto service tier settles from normalized upstream usage tier" do

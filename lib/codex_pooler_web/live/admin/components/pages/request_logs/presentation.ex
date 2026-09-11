@@ -456,7 +456,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         <span
           :if={detail = format_requested_tier_detail(@request_log)}
           id={"#{@prefix}-#{@request_log.id}-requested-tier"}
+          data-role="requested-service-tier"
           class="text-base-content/45"
+          title="Service tier the request asked for; the upstream reported the tier shown before it"
         >
           {detail}
         </span>

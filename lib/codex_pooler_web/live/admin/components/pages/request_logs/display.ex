@@ -44,25 +44,30 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   def format_upstream_account_label(_log), do: "—"
 
-  def fast_mode?(log), do: speed_tier_mode(log) == :fast
-
-  def speed_tier_mode(log) when is_map(log) do
-    metadata = Map.get(log, :metadata)
-
-    tiers = [
-      Map.get(log, :requested_service_tier),
-      Map.get(log, :actual_service_tier),
-      Map.get(log, :service_tier)
-    ]
-
-    if fast_metadata?(metadata) or Enum.any?(tiers, &fast_service_tier?/1) do
-      :fast
-    end
+  @doc """
+  `:fast` when the request was priced at the priority tier, so the bolt never
+  claims priority for a request that only asked for it. Rows that recorded no
+  tier at all fall back to the legacy fast-mode request metadata.
+  """
+  def speed_tier_mode(%{cost: %{pricing_availability: "priced"}, service_tier: tier})
+      when is_binary(tier) do
+    if fast_service_tier?(tier), do: :fast
   end
+
+  def speed_tier_mode(log) when is_map(log), do: speed_tier_mode_unpriced(log)
 
   def speed_tier_mode(_log), do: nil
 
-  def speed_tier_label(:fast), do: "Fast mode"
+  # Rows without a priced settlement have no billed tier yet, so the bolt
+  # mirrors the pricing rule instead.
+  defp speed_tier_mode_unpriced(log) do
+    case pricing_basis_tier(log) do
+      nil -> if fast_metadata?(Map.get(log, :metadata)), do: :fast
+      tier -> if fast_service_tier?(tier), do: :fast
+    end
+  end
+
+  def speed_tier_label(:fast), do: "Priced at priority tier"
 
   def protocol_label("websocket"), do: "WebSocket"
   def protocol_label("http_sse"), do: "HTTP SSE"
@@ -326,14 +331,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  @doc """
+  The requested tier, when it differs from the tier the row prints. The ChatGPT
+  Codex backend reports `default` for `priority` requests, so this is what keeps
+  "tier default" from hiding that priority was asked for.
+  """
   def format_requested_tier_detail(log) do
-    requested = log.requested_service_tier
-    effective = effective_service_tier(log)
+    requested = ServiceTier.canonicalize(Map.get(log, :requested_service_tier))
 
-    if requested_tier_detail?(log, requested, effective) do
-      "requested: #{requested}"
-    else
-      nil
+    if requested && !same_service_tier?(requested, format_model_service_tier(log)) do
+      "#{requested} requested"
     end
   end
 
@@ -449,14 +456,30 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp fast_service_tier?(tier), do: ServiceTier.fast_mode?(tier)
 
-  defp requested_tier_detail?(log, requested, effective) when is_binary(requested) do
-    requested = String.trim(requested)
+  # Mirrors how accounting picks the tier it prices: the upstream-reported tier
+  # unless it is absent or `auto`, then the requested tier, then the effective
+  # column for rows that recorded neither.
+  defp pricing_basis_tier(log) do
+    reported = ServiceTier.canonicalize(Map.get(log, :actual_service_tier))
+    requested = ServiceTier.canonicalize(Map.get(log, :requested_service_tier))
 
-    requested != "" and requested != effective and !fast_service_tier?(requested) and
-      (!fast_mode?(log) or fast_service_tier?(effective))
+    cond do
+      reported not in [nil, "auto"] -> reported
+      requested -> requested
+      reported -> reported
+      true -> ServiceTier.canonicalize(Map.get(log, :service_tier))
+    end
   end
 
-  defp requested_tier_detail?(_log, _requested, _effective), do: false
+  # `default` is the provider's name for the tier that pricing calls `standard`.
+  defp same_service_tier?(left, right), do: comparable_tier(left) == comparable_tier(right)
+
+  defp comparable_tier(tier) do
+    case ServiceTier.canonicalize(tier) do
+      "standard" -> "default"
+      canonical -> canonical
+    end
+  end
 
   defp fast_metadata?(%{} = metadata) do
     truthy?(Map.get(metadata, "fast_mode")) or Map.get(metadata, "codex_mode") == "fast" or

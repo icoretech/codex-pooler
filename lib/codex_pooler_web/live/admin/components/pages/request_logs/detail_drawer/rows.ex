@@ -17,11 +17,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
 
   import CodexPoolerWeb.Admin.RequestLogDetailDrawer.Format, only: [safe_text: 1]
 
+  alias CodexPooler.ServiceTier
+
   @serving_mode_configured_key "model_serving_mode_configured"
   @serving_mode_effective_key "model_serving_mode"
   @serving_mode_source_key "model_serving_mode_source"
   @reasoning_not_set "Not set"
   @reasoning_not_sent "Not sent (backend model default)"
+  @tier_not_set "Not set"
 
   @type detail_row :: %{
           required(:id) => String.t(),
@@ -59,6 +62,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
         log.effective_reasoning_effort,
         model_default_reasoning?(log) && @reasoning_not_sent
       ),
+      service_tier_rows(log),
       detail("request-log-detail-transport", "Transport", protocol_label(log.transport)),
       detail("request-log-detail-response-status", "Response status", log.response_status_code),
       detail("request-log-detail-error-code", "Error code", log.denial_reason, mono: true),
@@ -76,8 +80,40 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
         mono: true
       )
     ]
+    |> List.flatten()
     |> present_rows()
   end
+
+  # The ChatGPT Codex backend reports `default` for `priority` requests and
+  # accounting prices the reported tier, so the three facts stay on separate
+  # rows. "Priced as" only appears once a priced settlement names the tier.
+  defp service_tier_rows(log) do
+    requested = ServiceTier.canonicalize(Map.get(log, :requested_service_tier))
+    reported = ServiceTier.canonicalize(Map.get(log, :actual_service_tier))
+    priced = priced_service_tier(log)
+
+    if Enum.all?([requested, reported, priced], &is_nil/1) do
+      []
+    else
+      [
+        detail(
+          "request-log-detail-requested-tier",
+          "Requested tier",
+          requested || @tier_not_set,
+          mono: !is_nil(requested)
+        ),
+        detail("request-log-detail-upstream-reported-tier", "Upstream reported", reported,
+          mono: true
+        ),
+        detail("request-log-detail-priced-tier", "Priced as", priced, mono: true)
+      ]
+    end
+  end
+
+  defp priced_service_tier(%{cost: %{pricing_availability: "priced"}} = log),
+    do: ServiceTier.canonicalize(Map.get(log, :service_tier))
+
+  defp priced_service_tier(_log), do: nil
 
   @spec routing_rows(map()) :: [detail_row()]
   def routing_rows(log) do
