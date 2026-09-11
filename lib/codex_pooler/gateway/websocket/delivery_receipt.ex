@@ -122,30 +122,33 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   """
   @spec persist(Ecto.UUID.t(), receipt()) :: :ok | {:error, :attempt_not_found | term()}
   def persist(attempt_id, receipt) when is_binary(attempt_id) and is_map(receipt) do
-    with {:ok, _uuid} <- Ecto.UUID.cast(attempt_id) do
-      patch = %{@metadata_key => receipt}
-
-      query =
-        from a in Attempt,
-          where: a.id == ^attempt_id,
-          update: [
-            set: [
-              response_metadata:
-                fragment("COALESCE(?, '{}'::jsonb) || ?", a.response_metadata, type(^patch, :map))
-            ]
-          ]
-
-      case Repo.update_all(query, [], timeout: @persist_timeout_ms) do
-        {1, _returned} -> :ok
-        {0, _returned} -> {:error, :attempt_not_found}
-      end
-    else
+    case Ecto.UUID.cast(attempt_id) do
+      {:ok, _uuid} -> persist_receipt(attempt_id, receipt)
       :error -> {:error, :attempt_not_found}
     end
   rescue
     exception -> {:error, exception}
   catch
     :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  defp persist_receipt(attempt_id, receipt) do
+    patch = %{@metadata_key => receipt}
+
+    query =
+      from a in Attempt,
+        where: a.id == ^attempt_id,
+        update: [
+          set: [
+            response_metadata:
+              fragment("COALESCE(?, '{}'::jsonb) || ?", a.response_metadata, type(^patch, :map))
+          ]
+        ]
+
+    case Repo.update_all(query, [], timeout: @persist_timeout_ms) do
+      {1, _returned} -> :ok
+      {0, _returned} -> {:error, :attempt_not_found}
+    end
   end
 
   defp log_persist_failure(:ok, _request_id, _session_id), do: :ok

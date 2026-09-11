@@ -17,8 +17,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.Websocket.{Adapter, ResponseTask}
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPooler.Pools.Membership
-  alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   import CodexPooler.PoolerFixtures,
     only: [

@@ -71,26 +71,30 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
         {:ok, finalized}
 
       {:ok, _recorded_failure} ->
-        case AuthRefresh.refresh(context, :http) do
-          {:ok, refresh_metadata, refreshed_identity} ->
-            with {:ok, refreshed_context} <- record_metadata(context, refresh_metadata),
-                 {:ok, retry_context} <-
-                   same_identity_retry_context(%{
-                     refreshed_context
-                     | identity: refreshed_identity,
-                       auth_refresh_retry_attempted?: true
-                   }) do
-              redispatch_with_refreshed_token(prepared_context, retry_context, redispatch)
-            end
-
-          {:refresh_not_retryable, refresh_metadata} ->
-            with {:ok, refreshed_context} <- record_metadata(context, refresh_metadata) do
-              finalize_exhausted(refreshed_context, response, recorded?: true)
-            end
-        end
+        refresh_then_retry_or_exhaust(prepared_context, context, response, redispatch)
 
       {:error, _reason} = error ->
         error
+    end
+  end
+
+  defp refresh_then_retry_or_exhaust(prepared_context, context, response, redispatch) do
+    case AuthRefresh.refresh(context, :http) do
+      {:ok, refresh_metadata, refreshed_identity} ->
+        with {:ok, refreshed_context} <- record_metadata(context, refresh_metadata),
+             {:ok, retry_context} <-
+               same_identity_retry_context(%{
+                 refreshed_context
+                 | identity: refreshed_identity,
+                   auth_refresh_retry_attempted?: true
+               }) do
+          redispatch_with_refreshed_token(prepared_context, retry_context, redispatch)
+        end
+
+      {:refresh_not_retryable, refresh_metadata} ->
+        with {:ok, refreshed_context} <- record_metadata(context, refresh_metadata) do
+          finalize_exhausted(refreshed_context, response, recorded?: true)
+        end
     end
   end
 
