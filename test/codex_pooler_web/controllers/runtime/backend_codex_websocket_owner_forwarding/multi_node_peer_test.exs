@@ -753,8 +753,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
 
     activity_registry = :"predispatch-activity-#{System.unique_integer([:positive])}"
     drain_name = :"predispatch-drain-#{System.unique_integer([:positive])}"
+    stream_registry = :"predispatch-streams-#{System.unique_integer([:positive])}"
     start_supervised!({ActivityRegistry, name: activity_registry})
-    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry})
+
+    # Draining marks a registry drained for good, so this keeps the
+    # deferred-stream registry local instead of flipping the global one for
+    # every later HTTP SSE stream in this VM.
+    start_supervised!(
+      {CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry, name: stream_registry}
+    )
+
+    start_supervised!(
+      {RolloutDrain,
+       name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry}
+    )
+
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
     Application.delete_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus)
 

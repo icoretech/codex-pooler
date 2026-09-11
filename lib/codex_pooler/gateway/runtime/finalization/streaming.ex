@@ -431,6 +431,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def error_code({:chunk, :closed}), do: "client_disconnected"
   def error_code({:chunk, _reason}), do: "downstream_stream_error"
   def error_code({:upstream_idle_timeout, _reason}), do: "stream_idle_timeout"
+  # A rollout drain is our own lifecycle event, not an upstream failure. Keep
+  # the drain vocabulary owner-side finalization already writes so request logs
+  # read the same whether the drained work was a websocket turn or a deferred
+  # HTTP SSE stream. The public wire frame is unchanged: the synthetic terminal
+  # is written from the missing-terminal path before this code is chosen.
+  def error_code(:owner_drained), do: "owner_drained"
+  def error_code({:upstream_stream_interrupted, :owner_drained}), do: "owner_drained"
   def error_code({:upstream_stream_interrupted, _reason}), do: "upstream_stream_error"
 
   def error_code({:collected_response_invalid, _status, code}),
@@ -476,6 +483,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   @spec health_neutral_terminal_failure?(term(), term()) :: boolean()
   def health_neutral_terminal_failure?(code, headers),
     do: do_health_neutral_terminal_failure?(code, headers)
+
+  # Draining for a rollout must not demote the upstream or open its circuit.
+  defp record_stream_failure_health(:owner_drained, _code, nil, _headers, context),
+    do: DispatchLifecycle.neutral_completion(context)
+
+  defp record_stream_failure_health(
+         {:upstream_stream_interrupted, :owner_drained},
+         _code,
+         nil,
+         _headers,
+         context
+       ),
+       do: DispatchLifecycle.neutral_completion(context)
 
   defp record_stream_failure_health(
          :upstream_stream_interrupted,
@@ -597,6 +617,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp failure_response_status({:collected_response_invalid, status, _code}, _upstream_status),
     do: status
+
+  # The client's stream was cut by us, so the request row carries the same 499
+  # owner-side drain finalization records rather than the upstream's 200.
+  defp failure_response_status(:owner_drained, _upstream_status), do: 499
+
+  defp failure_response_status({:upstream_stream_interrupted, :owner_drained}, _upstream_status),
+    do: 499
 
   defp failure_response_status(_reason, upstream_status), do: upstream_status
 

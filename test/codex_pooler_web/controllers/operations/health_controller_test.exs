@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.OperationalStatus
+  alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Repo
 
@@ -142,11 +143,19 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
        %{conn: conn} do
     activity_registry = :"health-rollout-activity-#{System.unique_integer([:positive])}"
     drain_name = :"health-rollout-drain-#{System.unique_integer([:positive])}"
+    stream_registry = :"health-rollout-streams-#{System.unique_integer([:positive])}"
     deadline = observed_drain_deadline(self())
     start_supervised!({ActivityRegistry, name: activity_registry})
+    # Draining marks a registry drained for good, so keep the deferred-stream
+    # registry local rather than flipping the global one for later tests.
+    start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
     start_supervised!(
-      {RolloutDrain, name: drain_name, activity_registry: activity_registry, deadline: deadline}
+      {RolloutDrain,
+       name: drain_name,
+       activity_registry: activity_registry,
+       stream_registry: stream_registry,
+       deadline: deadline}
     )
 
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)

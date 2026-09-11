@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
+  alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
@@ -77,18 +78,37 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
+  # The deferred closure runs in the connection process after the request is
+  # already reserved and the attempt dispatched. Register it so a rollout drain
+  # can reach this exact stream; the registration is refcounted, so a
+  # first-event retry's nested stream keeps the one token the relay selects on.
   defp stream_result(response, %SelectedCandidateContext{} = context, callbacks) do
     fn conn ->
       response_context = %ResponseContext{context: context, response: response}
 
-      StreamRelay.run(
-        stream_relay_state(conn, context.request_options, response),
-        response,
-        stream_relay_handlers(response_context, response, :http_conn, callbacks)
-      )
-      |> http_stream_result()
+      drain_token =
+        DeferredStreamRegistry.register(%{
+          request_id: context.reserved.request.id,
+          attempt_id: attempt_id(context.attempt)
+        })
+
+      try do
+        StreamRelay.run(
+          stream_relay_state(conn, context.request_options, response),
+          response,
+          response_context
+          |> stream_relay_handlers(response, :http_conn, callbacks)
+          |> put_drain_token(drain_token)
+        )
+        |> http_stream_result()
+      after
+        DeferredStreamRegistry.finish(drain_token, :completed)
+      end
     end
   end
+
+  defp put_drain_token(handlers, nil), do: handlers
+  defp put_drain_token(handlers, drain_token), do: Map.put(handlers, :drain_token, drain_token)
 
   defp websocket_stream_result(response, writer, %SelectedCandidateContext{} = context, callbacks) do
     fn ->

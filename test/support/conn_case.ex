@@ -75,6 +75,7 @@ defmodule CodexPoolerWeb.ConnCase do
           activity_registry: atom(),
           deadline: pid(),
           name: atom(),
+          stream_registry: atom(),
           worker_tracker: pid()
         }
   def start_rollout_drain_harness(opts \\ []) do

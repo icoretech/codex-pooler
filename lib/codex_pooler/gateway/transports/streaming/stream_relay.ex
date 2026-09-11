@@ -42,7 +42,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
                                                    before_finalize_failure_result()),
           optional(:before_finalize_success) => (relay_state() ->
                                                    before_finalize_success_result()),
-          optional(:keepalive_interval_ms) => non_neg_integer()
+          optional(:keepalive_interval_ms) => non_neg_integer(),
+          optional(:drain_token) => reference() | nil
         }
 
   @spec run(relay_state(), Req.Response.t(), handler_map()) :: stream_relay_result()
@@ -59,14 +60,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
     raise ArgumentError, "StreamRelay requires a :first_event_retry handler"
   end
 
+  # A deferred HTTP SSE stream registers with the drain registry and carries its
+  # token here, so a rollout drain can interrupt the relay between upstream
+  # parts. The token is pinned: a stale drain message left over from an earlier
+  # request on a reused keep-alive connection process cannot match a later
+  # token, and a relay without a token (the websocket writer path) selects on
+  # nothing new.
   defp stream_upstream(state, response, chunks, handlers) do
     ref = response.body.ref
+    drain_token = Map.get(handlers, :drain_token)
 
     case Map.get(handlers, :keepalive_interval_ms, 0) do
       interval_ms when is_integer(interval_ms) and interval_ms > 0 ->
         receive do
           {^ref, _part} = message ->
             handle_stream_message(message, state, response, chunks, handlers)
+
+          {:gateway_stream_drain, ^drain_token, reason} ->
+            handle_stream_drain(reason, state, response, chunks, handlers)
         after
           interval_ms -> handle_stream_keepalive(state, response, chunks, handlers)
         end
@@ -75,8 +86,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
         receive do
           {^ref, _part} = message ->
             handle_stream_message(message, state, response, chunks, handlers)
+
+          {:gateway_stream_drain, ^drain_token, reason} ->
+            handle_stream_drain(reason, state, response, chunks, handlers)
         end
     end
+  end
+
+  # The drained stream follows the ordinary interrupted-stream path: cancel the
+  # upstream, let `before_finalize_failure` write whatever terminal the surface
+  # already emits for an interruption, then finalize this attempt once.
+  defp handle_stream_drain(reason, state, response, chunks, handlers) do
+    source_cancel(response)
+    finish_stream_parts({:error, state, chunks, reason}, response, handlers)
   end
 
   defp handle_stream_keepalive(state, response, chunks, handlers) do

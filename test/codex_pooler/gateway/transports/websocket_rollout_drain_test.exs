@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   import CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
 
+  alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -32,8 +33,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     previous_timeout = System.get_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS")
     drain_name = :"rollout-drain-#{System.unique_integer([:positive])}"
     activity_registry = :"rollout-drain-activity-#{System.unique_integer([:positive])}"
+    stream_registry = :"rollout-drain-streams-#{System.unique_integer([:positive])}"
     start_supervised!({ActivityRegistry, name: activity_registry})
-    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry})
+    # A drain marks its registries drained for good. Keep the deferred-stream
+    # registry local to this test so draining here cannot signal another test's
+    # HTTP SSE stream through the global registry.
+    start_supervised!({DeferredStreamRegistry, name: stream_registry})
+
+    start_supervised!(
+      {RolloutDrain,
+       name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry}
+    )
 
     on_exit(fn ->
       if previous_config do
@@ -45,7 +55,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
       restore_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS", previous_timeout)
     end)
 
-    {:ok, activity_registry: activity_registry, drain_name: drain_name}
+    {:ok,
+     activity_registry: activity_registry,
+     drain_name: drain_name,
+     stream_registry: stream_registry}
   end
 
   test "flips the app drain flag and drains local owner sessions with a compact summary",
@@ -910,9 +923,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   defp start_isolated_rollout_drain!(drain_name, opts) do
     activity_registry = :"#{drain_name}-activity"
+    stream_registry = :"#{drain_name}-streams"
     start_supervised!({ActivityRegistry, name: activity_registry})
+    start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
-    {RolloutDrain, [name: drain_name, activity_registry: activity_registry] ++ opts}
+    {RolloutDrain,
+     [name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry] ++
+       opts}
     |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
     |> start_supervised!()
   end

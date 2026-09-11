@@ -2719,7 +2719,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~
                "emitted wire frame is byte-identical to the ordinary synthetic terminal"
 
-      assert feature.contract =~ "only when a committed websocket-bridge turn is aborted"
+      assert feature.contract =~ "when a committed websocket-bridge turn is aborted"
+
+      assert feature.contract =~
+               "when a rollout drain interrupts an in-flight deferred HTTP SSE stream"
 
       assert feature.contract =~
                "fail precommit drains without hidden HTTP resubmission"
@@ -2771,6 +2774,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    "proxy_turns_completed",
                    "proxy_turns_aborted",
                    "proxy_turns_failed"
+                 ]
+               },
+               deferred_http_sse_drain: %{
+                 applies_to: "in-flight deferred HTTP SSE stream drained by rollout drain",
+                 accounting_error_code: "owner_drained",
+                 response_status_code: 499,
+                 turn_status: "interrupted",
+                 reservation: "released",
+                 registry: "node_local_deferred_stream_registry",
+                 admission: "register_before_relay_and_signal_after_cutoff",
+                 deadline: "shared_absolute_existing_budget",
+                 settlement: "stream_process_finalizes_once",
+                 upstream_health: "neutral",
+                 unsettled_stream: "aborted_and_left_to_stale_reservation_sweep",
+                 summary_counters: [
+                   "http_streams_seen",
+                   "http_streams_completed",
+                   "http_streams_aborted",
+                   "http_streams_failed"
                  ]
                },
                precommit_drain: "fail_closed_without_resubmission",

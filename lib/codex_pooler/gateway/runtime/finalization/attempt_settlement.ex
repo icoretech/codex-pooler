@@ -169,5 +169,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
 
   defp partial_stream_turn_status("client_disconnected"), do: CodexTurn.interrupted_status()
   defp partial_stream_turn_status(:client_disconnected), do: CodexTurn.interrupted_status()
+  # A rollout drain ends the turn the same way owner-side drain finalization
+  # does (`Finalization.Interruption.terminal_turn_status/1`): interrupted, not
+  # failed. The upstream did nothing wrong.
+  defp partial_stream_turn_status("owner_drained"), do: CodexTurn.interrupted_status()
+  defp partial_stream_turn_status(:owner_drained), do: CodexTurn.interrupted_status()
   defp partial_stream_turn_status(_error_code), do: CodexTurn.failed_status()
 end

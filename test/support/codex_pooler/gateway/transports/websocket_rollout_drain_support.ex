@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
@@ -470,18 +471,28 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
           activity_registry: atom(),
           deadline: pid(),
           name: atom(),
+          stream_registry: atom(),
           worker_tracker: pid()
         }
   def start_rollout_drain_harness(parent, opts \\ []) when is_pid(parent) do
     deadline = start_virtual_deadline(parent, opts)
     drain_name = :"rollout-drain-harness-#{System.unique_integer([:positive])}"
     activity_registry = :"rollout-drain-activity-#{System.unique_integer([:positive])}"
+    stream_registry = :"rollout-drain-streams-#{System.unique_integer([:positive])}"
     worker_tracker = start_worker_tracker()
     ExUnit.Callbacks.start_supervised!({ActivityRegistry, name: activity_registry})
+    # A drain flips its registries into draining for good, exactly as a real
+    # shutdown does. Give the harness its own deferred-stream registry so a
+    # drain here can never signal a later test's HTTP SSE stream through the
+    # global one.
+    ExUnit.Callbacks.start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
     start_opts =
-      [name: drain_name, activity_registry: activity_registry] ++
-        tracked_deadline_options(deadline, worker_tracker)
+      [
+        name: drain_name,
+        activity_registry: activity_registry,
+        stream_registry: stream_registry
+      ] ++ tracked_deadline_options(deadline, worker_tracker)
 
     {RolloutDrain, start_opts}
     |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
@@ -498,6 +509,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
       activity_registry: activity_registry,
       deadline: deadline,
       name: drain_name,
+      stream_registry: stream_registry,
       worker_tracker: worker_tracker
     }
   end

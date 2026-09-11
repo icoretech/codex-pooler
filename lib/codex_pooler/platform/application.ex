@@ -20,6 +20,7 @@ defmodule CodexPooler.Application do
       {Task.Supervisor,
        name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
       ActivityRegistry,
+      CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry,
       CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
       {Task.Supervisor, name: CodexPooler.RateLimitEventSupervisor},
       {Phoenix.PubSub, name: CodexPooler.PubSub},

@@ -309,6 +309,80 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
     assert String.ends_with?(full_body, retained_body)
   end
 
+  test "a drain signal for this stream interrupts the relay and finalizes it once" do
+    parent = self()
+    ref = make_ref()
+    drain_token = make_ref()
+    response = async_response(ref)
+
+    pid =
+      spawn(fn ->
+        send(self(), {ref, {:data, "visible"}})
+        send(self(), {:gateway_stream_drain, drain_token, :owner_drained})
+
+        result =
+          StreamRelay.run(
+            :stream_state,
+            response,
+            Map.merge(handlers(), %{
+              drain_token: drain_token,
+              before_finalize_failure: fn _state, :owner_drained ->
+                send(parent, :before_finalize_failure)
+                {:ok, :terminal_written, ["synthetic-terminal"]}
+              end,
+              finalize_failure: fn body, reason ->
+                send(parent, {:finalize_failure, body, reason})
+                {:error, reason}
+              end
+            })
+          )
+
+        send(parent, {:stream_relay_result, result})
+      end)
+
+    monitor = Process.monitor(pid)
+
+    assert_receive :before_finalize_failure, @relay_timeout
+
+    assert_receive {:finalize_failure, "visiblesynthetic-terminal", :owner_drained},
+                   @relay_timeout
+
+    assert_receive {:stream_relay_result, {:error, :owner_drained}}, @relay_timeout
+    assert_process_down(monitor, pid)
+  end
+
+  test "a drain signal carrying another stream's token is left alone" do
+    parent = self()
+    ref = make_ref()
+    drain_token = make_ref()
+    stale = {:gateway_stream_drain, make_ref(), :owner_drained}
+    response = async_response(ref)
+
+    pid =
+      spawn(fn ->
+        send(self(), stale)
+        send(self(), {ref, {:data, "visible"}})
+        send(self(), {ref, :done})
+
+        result =
+          StreamRelay.run(:stream_state, response, Map.put(handlers(), :drain_token, drain_token))
+
+        preserved =
+          receive do
+            ^stale -> stale
+          after
+            0 -> :missing
+          end
+
+        send(parent, {:stream_relay_result, result, preserved})
+      end)
+
+    monitor = Process.monitor(pid)
+
+    assert_receive {:stream_relay_result, {:ok, :stream_state}, ^stale}, @relay_timeout
+    assert_process_down(monitor, pid)
+  end
+
   defp assert_process_down(monitor, pid) do
     assert_receive {:DOWN, ^monitor, :process, ^pid, reason}, @relay_timeout
     assert reason in [:normal, :noproc]
