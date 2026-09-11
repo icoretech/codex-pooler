@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
 
+  @task_receipt_key {__MODULE__, :task_receipt}
   @enforce_keys [:registry, :task, :ref, :parent, :session_id]
   defstruct @enforce_keys ++ [:before_ready, :owner_binding, :owner_pid]
 
@@ -90,7 +91,9 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
   def bind(nil, _request), do: :ok
 
   def bind(%__MODULE__{} = context, %Request{} = request) do
-    ActivityRegistry.bind_direct_cleanup(context, receipt(context, request))
+    receipt = receipt(context, request)
+    remember_task_receipt(context, receipt)
+    ActivityRegistry.bind_direct_cleanup(context, receipt)
   end
 
   @spec attempt_callback(t() | nil, Request.t()) :: (map() -> :ok) | nil
@@ -104,7 +107,24 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
           replay_generation: attempt.replay_generation
         })
 
+      remember_task_receipt(context, receipt)
       ActivityRegistry.bind_direct_cleanup(context, receipt)
+    end
+  end
+
+  # The response task keeps its own copy of the receipt it bound. Once the
+  # owner accepts the submission, the registry hands the receipt off to the
+  # owner witness, and that witness cannot close a turn whose task died while
+  # the owner stayed current.
+  defp remember_task_receipt(%__MODULE__{task: task}, receipt) do
+    if self() == task, do: Process.put(@task_receipt_key, receipt)
+    :ok
+  end
+
+  defp task_receipt(%__MODULE__{task: task, session_id: session_id}) do
+    case Process.get(@task_receipt_key) do
+      %{session_id: ^session_id} = receipt when self() == task -> {:ok, receipt}
+      _absent_or_foreign -> nil
     end
   end
 
@@ -160,4 +180,21 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
 
   @spec interrupt(receipt(), String.t()) :: :ok | {:error, term()}
   defdelegate interrupt(receipt, reason), to: Interruption, as: :interrupt_direct_request
+
+  # Called by the response task itself after it rescued an exception. The
+  # task settles its own pending admission first (idempotent) so the receipt
+  # lookup cannot wait on a readiness call only this process could make, then
+  # fails the request, attempt, and turn it bound.
+  @spec fail_task_exception(t(), String.t()) :: :ok | :none | {:error, term()}
+  def fail_task_exception(%__MODULE__{} = context, reason) do
+    case task_receipt(context) || registry_receipt(context) do
+      {:ok, receipt} -> Interruption.finalize_task_exception_request(receipt, reason)
+      :none -> :none
+    end
+  end
+
+  defp registry_receipt(context) do
+    _readiness = ActivityRegistry.ready_direct_cleanup(context)
+    ActivityRegistry.await_direct_cleanup(context)
+  end
 end

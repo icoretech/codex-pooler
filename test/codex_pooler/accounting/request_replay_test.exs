@@ -92,34 +92,89 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     end
   end
 
-  test "preflight rejects stale request and attempt lifecycle behind an in-progress turn" do
+  test "preflight closes an orphaned generation-zero lifecycle behind an in-progress turn" do
+    # A terminal request whose turn was never completed: the turn is closed
+    # from the request outcome and the resend proceeds as a fresh turn.
     terminal_request = replay_fixture()
+    completed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     terminal_request.request
     |> Ecto.Changeset.change(%{
       status: "failed",
       usage_status: "usage_unknown",
-      completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
-      response_status_code: 499
+      completed_at: completed_at,
+      response_status_code: 499,
+      last_error_code: "client_disconnected"
     })
     |> Repo.update!()
 
-    assert {:error, :lifecycle_conflict} =
-             RequestReplay.preflight_snapshot(terminal_request.preflight)
+    assert :none = RequestReplay.preflight_snapshot(terminal_request.preflight)
 
+    assert %CodexTurn{
+             status: "failed",
+             error_code: "orphaned_turn_closed",
+             final_attempt_id: final_attempt_id,
+             completed_at: %DateTime{}
+           } = Repo.get!(CodexTurn, terminal_request.turn.id)
+
+    assert final_attempt_id == terminal_request.attempt.id
+
+    assert %{
+             status: "failed",
+             last_error_code: "client_disconnected",
+             completed_at: ^completed_at
+           } =
+             Repo.reload!(terminal_request.request)
+
+    assert :none = RequestReplay.preflight_snapshot(terminal_request.preflight)
+
+    # A succeeded request keeps a succeeded turn.
+    succeeded_request = replay_fixture()
+
+    succeeded_request.request
+    |> Ecto.Changeset.change(%{
+      status: "succeeded",
+      usage_status: "usage_known",
+      completed_at: completed_at,
+      response_status_code: 200
+    })
+    |> Repo.update!()
+
+    assert :none = RequestReplay.preflight_snapshot(succeeded_request.preflight)
+
+    assert %CodexTurn{status: "succeeded", error_code: nil} =
+             Repo.get!(CodexTurn, succeeded_request.turn.id)
+
+    # A finished non-retryable attempt behind an open request has no live
+    # work either: request and turn close together.
     terminal_attempt = replay_fixture()
 
     terminal_attempt.attempt
     |> Ecto.Changeset.change(%{
       status: "failed",
-      completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+      completed_at: completed_at,
       usage_status: "usage_unknown"
     })
     |> Repo.update!()
 
-    assert {:error, :lifecycle_conflict} =
-             RequestReplay.preflight_snapshot(terminal_attempt.preflight)
+    assert :none = RequestReplay.preflight_snapshot(terminal_attempt.preflight)
 
+    assert %{
+             status: "failed",
+             usage_status: "usage_unknown",
+             response_status_code: 500,
+             last_error_code: "orphaned_turn_closed",
+             completed_at: %DateTime{}
+           } = Repo.reload!(terminal_attempt.request)
+
+    assert %CodexTurn{status: "failed", error_code: "orphaned_turn_closed"} =
+             Repo.get!(CodexTurn, terminal_attempt.turn.id)
+
+    assert Repo.reload!(terminal_attempt.attempt).status == "failed"
+  end
+
+  test "preflight keeps live, retryable, pre-attempt, and visible lifecycles as conflicts" do
+    # An in-progress attempt with stale usage is still live work.
     stale_usage = replay_fixture()
 
     stale_usage.attempt
@@ -128,6 +183,50 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
 
     assert {:error, :lifecycle_conflict} =
              RequestReplay.preflight_snapshot(stale_usage.preflight)
+
+    assert_untouched(stale_usage)
+
+    # A retryable failure is a retry gap, not an orphan.
+    retryable = replay_fixture()
+
+    retryable.attempt
+    |> Ecto.Changeset.change(%{
+      status: "retryable_failed",
+      retryable: true,
+      completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+      usage_status: "usage_unknown"
+    })
+    |> Repo.update!()
+
+    assert {:error, :lifecycle_conflict} = RequestReplay.preflight_snapshot(retryable.preflight)
+    assert_untouched(retryable)
+
+    # No attempt yet: the reservation is between admission and dispatch.
+    pre_attempt = replay_fixture()
+    Repo.delete!(pre_attempt.attempt)
+
+    assert {:error, :lifecycle_conflict} =
+             RequestReplay.preflight_snapshot(pre_attempt.preflight)
+
+    assert Repo.get!(CodexTurn, pre_attempt.turn.id).status == "in_progress"
+    assert Repo.reload!(pre_attempt.request).status == "in_progress"
+
+    # Visible output with a live attempt is a concurrent duplicate.
+    visible = replay_fixture()
+
+    visible.turn
+    |> Ecto.Changeset.change(%{
+      first_visible_output_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+
+    assert {:error, :lifecycle_conflict} = RequestReplay.preflight_snapshot(visible.preflight)
+    assert_untouched(visible)
+  end
+
+  defp assert_untouched(fixture) do
+    assert Repo.get!(CodexTurn, fixture.turn.id).status == "in_progress"
+    assert Repo.reload!(fixture.request).status == "in_progress"
   end
 
   test "active preflight rejects generation zero when a globally newer generation-one attempt exists" do

@@ -12788,6 +12788,221 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
   end
 
+  @tag :owner_task_exception
+  test "response task exception after visible output fails the turn and admits the byte-identical resend" do
+    previous_owner_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      stop_registered_websocket_owner_sessions()
+      Application.delete_env(:codex_pooler, :settlement_pricing_test_fault)
+
+      case previous_owner_forwarding do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+
+    # Strict finite scenario: the first turn streams visible output and its
+    # terminal on the single physical connection, then the response task dies
+    # by exception inside settlement; the client's byte-identical resend is a
+    # fresh turn on the same connection. Any further send fails the fixture.
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.created",
+                "response" => %{"id" => "resp_task_exception_visible", "status" => "in_progress"}
+              }),
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.output_text.delta",
+                "delta" => "visible before task exception"
+              }),
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_task_exception_visible",
+                  "status" => "completed",
+                  "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+                }
+              })
+            ])
+          ),
+          strict_native_request(
+            1,
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_after_task_exception",
+                  "status" => "completed",
+                  "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
+                }
+              })
+            ])
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    turn_state = Ecto.UUID.generate()
+    thread_id = Ecto.UUID.generate()
+
+    payload =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            CodexPooler.JSON.encode!(%{
+              "session_id" => thread_id,
+              "thread_id" => thread_id,
+              "turn_id" => "task-exception-turn",
+              "request_kind" => "turn"
+            })
+        },
+        "input" => native_text_input("task exception prompt sentinel"),
+        "stream" => true,
+        "generate" => true
+      })
+
+    {_server, port} = start_public_endpoint_with_server!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+    Application.put_env(
+      :codex_pooler,
+      :settlement_pricing_test_fault,
+      {setup.pool.id, %DBConnection.ConnectionError{message: "synthetic pool exhaustion"}}
+    )
+
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+
+    {conn, _websocket, seen_types, failure_frame} =
+      receive_public_websocket_until_error(conn, websocket, ref, [])
+
+    assert "response.output_text.delta" in seen_types
+
+    assert %{
+             "type" => "error",
+             "status" => 500,
+             "error" => %{"code" => "websocket_response_task_failed"}
+           } = failure_frame
+
+    Application.delete_env(:codex_pooler, :settlement_pricing_test_fault)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
+    refute is_nil(turn.first_visible_output_at)
+
+    # The client disconnects; the old socket's cleanup completes before the
+    # byte-identical resend, as in the incident's reconnect sequence.
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+    assert %{downstream: %{pid: downstream_pid}} = :sys.get_state(owner_pid)
+    downstream_monitor = Process.monitor(downstream_pid)
+
+    {resend_outcome, log} =
+      with_log(fn ->
+        Mint.HTTP.close(conn)
+
+        assert_receive {:DOWN, ^downstream_monitor, :process, ^downstream_pid, _reason},
+                       @connection_shutdown_timeout_ms
+
+        {retry_conn, retry_websocket, retry_ref} =
+          public_websocket_connect!(port, setup, turn_state)
+
+        {retry_conn, retry_websocket} =
+          public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, payload)
+
+        {retry_conn, _retry_websocket, retry_frame} =
+          public_websocket_receive_text!(retry_conn, retry_websocket, retry_ref)
+
+        Mint.HTTP.close(retry_conn)
+
+        case CodexPooler.JSON.decode!(retry_frame) do
+          %{"type" => "response.completed", "response" => %{"id" => id}} ->
+            {:completed, id}
+
+          %{"type" => "error", "status" => status, "error" => %{"code" => code}} ->
+            {:error, status, code}
+        end
+      end)
+
+    refute log =~ "stale_owner_cleanup"
+    refute log =~ "websocket replay rejection"
+    refute log =~ "task exception prompt sentinel"
+
+    assert %{
+             request_status: request.status,
+             request_error: request.last_error_code,
+             request_usage: request.usage_status,
+             attempt_status: attempt.status,
+             turn_status: turn.status,
+             turn_error: turn.error_code,
+             turn_final_attempt: turn.final_attempt_id,
+             resend: resend_outcome
+           } == %{
+             request_status: "failed",
+             request_error: "owner_task_exception",
+             request_usage: "usage_unknown",
+             attempt_status: "failed",
+             turn_status: "failed",
+             turn_error: "owner_task_exception",
+             turn_final_attempt: attempt.id,
+             resend: {:completed, "resp_after_task_exception"}
+           }
+
+    assert [_failed, resend] =
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^setup.pool.id,
+                 order_by: [asc: r.admitted_at]
+               )
+             )
+
+    assert resend.id != request.id
+    resend_id = resend.id
+
+    # The completed frame reaches the client before the successor settles.
+    assert_receive {Events,
+                    %{
+                      reason: "request_finalized",
+                      payload: %{"request_id" => ^resend_id, "status" => "succeeded"}
+                    }},
+                   @websocket_frame_timeout
+
+    assert Repo.get!(Request, resend.id).status == "succeeded"
+
+    assert Repo.aggregate(
+             from(t in CodexTurn, where: t.codex_session_id == ^turn.codex_session_id),
+             :count
+           ) == 2
+
+    # Health neutral: a task exception is not backend evidence.
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert FakeUpstream.count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  defp receive_public_websocket_until_error(conn, websocket, ref, seen_types) do
+    {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+    case CodexPooler.JSON.decode!(frame) do
+      %{"type" => "error"} = error ->
+        {conn, websocket, Enum.reverse(seen_types), error}
+
+      %{"type" => type} ->
+        receive_public_websocket_until_error(conn, websocket, ref, [type | seen_types])
+    end
+  end
+
   test "direct native websocket output state resets before the next turn" do
     upstream =
       start_upstream(

@@ -37,6 +37,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   require Logger
 
+  @response_task_exception_reason "owner_task_exception"
+
   @pre_cleanup_response_task_drain_ms 250
   @post_cleanup_owner_response_task_drain_ms 15_000
   @post_cleanup_response_task_drain_ms 5_000
@@ -3330,6 +3332,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           opts
         )
 
+        finalize_response_task_exception(opts, state)
         {:response_task_failure, response_task_failure()}
     catch
       kind, reason ->
@@ -3345,9 +3348,42 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
             opts
           )
 
+          finalize_response_task_exception(opts, state)
           {:response_task_failure, response_task_failure()}
         end
     end
+  end
+
+  # The task closes its own request, attempt, and turn before the failure
+  # reaches the socket, so a byte-identical resend admitted right after the
+  # error frame meets a finalized turn rather than an orphaned `in_progress`
+  # one. The reason is health-neutral and the owner lease is untouched.
+  defp finalize_response_task_exception(
+         %RequestOptions{runtime: %{direct_cleanup: %DirectCleanup{} = context}} = opts,
+         state
+       ) do
+    case DirectCleanup.fail_task_exception(context, @response_task_exception_reason) do
+      result when result in [:ok, :none] -> :ok
+      {:error, reason} -> log_response_task_exception_finalization_failure(reason, state, opts)
+    end
+  rescue
+    exception -> log_response_task_exception_finalization_failure(exception, state, opts)
+  catch
+    _kind, reason -> log_response_task_exception_finalization_failure(reason, state, opts)
+  end
+
+  defp finalize_response_task_exception(_opts, _state), do: :ok
+
+  defp log_response_task_exception_finalization_failure(reason, state, opts) do
+    Logger.warning(
+      "websocket response task exception finalization failed " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(Adapter.request_id(opts))} " <>
+        "codex_session_id=#{codex_session_id(state)} " <>
+        "reason_code=#{@response_task_exception_reason} " <>
+        "failure_reason=#{failure_reason(reason)}"
+    )
+
+    :ok
   end
 
   defp put_prepared_runtime_options(

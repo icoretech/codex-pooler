@@ -23,6 +23,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @max_done_count 65_535
   @successor_prefix "client-retry-v1:"
   @retry_window_seconds 30
+  @task_exception_code "owner_task_exception"
   @compaction_retry_window_seconds 330
 
   defmodule SuccessorClaim do
@@ -891,9 +892,13 @@ defmodule CodexPooler.Accounting.ClientRetry do
     do: {:error, :terminal_predecessor}
 
   defp validate_retry_lifecycle(turn, request, %Attempt{} = attempt) do
-    with :ok <- validate_terminal_lifecycle(turn, request, attempt),
-         :ok <- validate_observation(attempt.response_metadata) do
-      validate_close_evidence(attempt.response_metadata)
+    if verified_task_exception?(turn, request, attempt) do
+      :ok
+    else
+      with :ok <- validate_terminal_lifecycle(turn, request, attempt),
+           :ok <- validate_observation(attempt.response_metadata) do
+        validate_close_evidence(attempt.response_metadata)
+      end
     end
   end
 
@@ -917,6 +922,40 @@ defmodule CodexPooler.Accounting.ClientRetry do
       {:error, :terminal_predecessor}
     end
   end
+
+  # Only the response task's own exception finalization writes this exact
+  # shape (turn, request, and attempt failed together with the health-neutral
+  # reason and a 500). The upstream never reported a terminal for it, so the
+  # client's byte-identical resend is admitted as one successor instead of
+  # meeting `duplicate_turn` until the turn is abandoned.
+  defp verified_task_exception?(
+         %CodexTurn{
+           status: "failed",
+           error_code: @task_exception_code,
+           final_attempt_id: attempt_id,
+           transport_kind: "websocket",
+           completed_at: %DateTime{}
+         },
+         %Request{
+           status: "failed",
+           response_status_code: 500,
+           last_error_code: @task_exception_code,
+           usage_status: "usage_unknown",
+           completed_at: %DateTime{}
+         },
+         %Attempt{
+           id: attempt_id,
+           status: "failed",
+           network_error_code: @task_exception_code,
+           transport: "websocket",
+           replay_generation: 0,
+           completed_at: %DateTime{}
+         }
+       )
+       when is_binary(attempt_id),
+       do: true
+
+  defp verified_task_exception?(_turn, _request, _attempt), do: false
 
   defp verified_claim_only_drain?(%Request{
          status: "failed",

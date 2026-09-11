@@ -14,6 +14,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomyTest do
       Enum.each(ErrorCodes.known_error_codes(), fn code ->
         assert DiagnosticTaxonomy.identifier(code) == code
       end)
+
+      Enum.each(DiagnosticTaxonomy.internal_lifecycle_reason_codes(), fn code ->
+        assert DiagnosticTaxonomy.identifier(code) == code
+        assert DiagnosticTaxonomy.reason_code(String.to_atom(code)) == code
+      end)
+    end
+
+    test "keeps replay and task-exception lifecycle reasons in the fixed vocabulary" do
+      for code <- ["lifecycle_conflict", "owner_task_exception", "orphaned_turn_closed"] do
+        assert code in DiagnosticTaxonomy.internal_lifecycle_reason_codes()
+      end
     end
 
     test "includes the native fallback codes in the static stream vocabulary" do

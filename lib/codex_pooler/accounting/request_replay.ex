@@ -3,6 +3,8 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodexPooler.Access
   alias CodexPooler.Access.{APIKey, APIKeyPolicyBinding}
 
@@ -1153,7 +1155,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   defp classify_preflight(nil, _input), do: :none
 
   defp classify_preflight(
-         %{turn: turn, request: request, api_key: api_key, entitlement: nil},
+         %{turn: turn, request: request, api_key: api_key, entitlement: nil} = lifecycle,
          input
        ) do
     with :ok <- compare_active_authorization(turn, request, api_key, input),
@@ -1164,7 +1166,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
       {:active_generation_zero, active_snapshot(turn, request, attempt)}
     else
       {:error, _reason} = error -> error
-      _closed_or_absent -> {:error, :lifecycle_conflict}
+      _closed_or_absent -> close_orphaned_lifecycle_or_conflict(lifecycle)
     end
   end
 
@@ -1185,6 +1187,102 @@ defmodule CodexPooler.Accounting.RequestReplay do
       {:error, _reason} = error -> error
       _other -> {:error, :lifecycle_conflict}
     end
+  end
+
+  @orphaned_turn_closed_code "orphaned_turn_closed"
+
+  # Defense in depth for a generation-zero finalization gap: an `in_progress`
+  # turn whose request is already terminal, or whose latest attempt finished
+  # without a retry path, has no live work behind it. Closing it here lets
+  # the byte-identical resend proceed instead of meeting a permanent
+  # `lifecycle_conflict`. A turn with a live, queued, or retryable attempt,
+  # or no attempt yet, stays a conflict: nothing durable distinguishes it
+  # from a turn that is genuinely in flight. Armed replay entitlements keep
+  # their own close and cleanup lifecycle and are not repaired here.
+  defp close_orphaned_lifecycle_or_conflict(%{turn: turn, request: request}) do
+    attempt = latest_attempt(request.id)
+
+    if orphaned_lifecycle?(request, attempt) do
+      close_orphaned_lifecycle!(turn, request, attempt)
+      :none
+    else
+      {:error, :lifecycle_conflict}
+    end
+  end
+
+  defp orphaned_lifecycle?(%Request{status: status}, _attempt)
+       when status not in ["accepted", "in_progress"],
+       do: true
+
+  defp orphaned_lifecycle?(%Request{}, %Attempt{status: status, completed_at: %DateTime{}})
+       when status in ["succeeded", "failed", "cancelled"],
+       do: true
+
+  defp orphaned_lifecycle?(_request, _attempt), do: false
+
+  defp close_orphaned_lifecycle!(turn, request, attempt) do
+    if Repo.in_transaction?() do
+      close_orphaned_lifecycle_locked!(turn, request, attempt)
+    else
+      {:ok, :closed} =
+        Repo.transaction(fn ->
+          _session = lock_session!(turn.codex_session_id)
+          close_orphaned_lifecycle_locked!(turn, request, attempt)
+        end)
+    end
+
+    :ok
+  end
+
+  # The caller holds the session lock; then api key, turn, request, attempt.
+  defp close_orphaned_lifecycle_locked!(turn, request, attempt) do
+    _api_key = lock_api_key!(request.api_key_id)
+    turn = lock_turn!(turn.id)
+    request = lock_request!(request.id)
+    attempt = if attempt, do: lock_latest_attempt!(request.id)
+    now = max_db_time(DateTime.utc_now() |> DateTime.truncate(:microsecond))
+
+    request =
+      if request.status in ["accepted", "in_progress"] do
+        request
+        |> Ecto.Changeset.change(%{
+          status: "failed",
+          usage_status: "usage_unknown",
+          completed_at: now,
+          response_status_code: 500,
+          last_error_code: @orphaned_turn_closed_code
+        })
+        |> Repo.update!()
+      else
+        request
+      end
+
+    if turn.status == "in_progress" and is_nil(turn.completed_at) do
+      {status, error_code} =
+        if request.status == "succeeded",
+          do: {"succeeded", nil},
+          else: {"failed", @orphaned_turn_closed_code}
+
+      turn
+      |> Ecto.Changeset.change(%{
+        status: status,
+        error_code: error_code,
+        final_attempt_id: attempt && attempt.id,
+        completed_at: now,
+        updated_at: now
+      })
+      |> Repo.update!()
+    end
+
+    Logger.info(fn ->
+      "websocket replay preflight closed orphaned turn " <>
+        "reason_code=#{@orphaned_turn_closed_code} " <>
+        "request_id=#{request.id} codex_session_id=#{turn.codex_session_id} " <>
+        "request_status=#{request.status} " <>
+        "attempt_status=#{if attempt, do: attempt.status, else: "none"}"
+    end)
+
+    :closed
   end
 
   defp latest_attempt(request_id) do

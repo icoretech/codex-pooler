@@ -11,6 +11,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   # clients/openai-compatible.mdx); anything else keeps the fingerprint.
   @unknown_code_allowlist ~r/\A[A-Za-z0-9_.-]+\z/
   @max_unknown_code_bytes 80
+  # Internal lifecycle reasons that are not owner or provider codes but must
+  # render in cleartext: replay preflight rejections and the health-neutral
+  # finalizations that keep a byte-identical resend admissible.
+  @internal_lifecycle_reason_codes ~w(
+                                      lifecycle_conflict
+                                      owner_task_exception
+                                      orphaned_turn_closed
+                                    )
   @reconnect_dispositions ~w(
                              same_turn_replay
                              replacement_handoff
@@ -86,9 +94,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
 
   def safe_correlator(_value), do: "none"
 
+  @spec internal_lifecycle_reason_codes() :: [String.t()]
+  def internal_lifecycle_reason_codes, do: @internal_lifecycle_reason_codes
+
   defp known_error_code?(value),
     do:
-      value in OwnerErrorVocabulary.owner_error_codes() or value in ErrorCodes.known_error_codes()
+      value in @internal_lifecycle_reason_codes or
+        value in OwnerErrorVocabulary.owner_error_codes() or
+        value in ErrorCodes.known_error_codes()
 
   defp fixed_vocabulary(value, vocabulary) when is_atom(value) do
     value

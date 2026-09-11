@@ -79,6 +79,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
         attrs,
         timestamp
       ) do
+    maybe_test_settlement_fault(request)
     model = request.model_id && Repo.get(Model, request.model_id)
 
     if model do
@@ -991,4 +992,24 @@ defmodule CodexPooler.Accounting.PricingResolution do
     do: Map.put(serialized, "alias", alias_metadata)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+  if Mix.env() == :test do
+    # Test-only fault seam: raises the armed exception once, from inside a
+    # response task's settlement transaction, reproducing a database failure
+    # at the pricing lookup (the production frame under pool exhaustion).
+    # Armed per pool and one-shot, so the task's own recovery finalization
+    # and the client's resend run against a healthy database.
+    defp maybe_test_settlement_fault(%Request{pool_id: pool_id}) do
+      case Application.get_env(:codex_pooler, :settlement_pricing_test_fault) do
+        {^pool_id, exception} when is_exception(exception) ->
+          Application.delete_env(:codex_pooler, :settlement_pricing_test_fault)
+          raise exception
+
+        _no_fault ->
+          :ok
+      end
+    end
+  else
+    defp maybe_test_settlement_fault(_request), do: :ok
+  end
 end

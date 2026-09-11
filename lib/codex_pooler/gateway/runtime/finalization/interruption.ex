@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   require Logger
 
   @default_reconnect_window_seconds 300
+  @task_exception_status_code 500
 
   @type opts :: RequestOptions.t()
   @type session_ref :: CodexSession.t() | Ecto.UUID.t()
@@ -181,6 +182,96 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         end
     end
   end
+
+  # A response task that dies by exception (not an owner crash, drain, or
+  # client disconnect) finalizes its own request, attempt, and turn as failed
+  # with a health-neutral reason: no circuit, demotion, or session/lease
+  # write. It trusts the direct-cleanup receipt the task bound itself instead
+  # of the owner witness, because in that shape the owner is still current
+  # while the task is gone; the witness-based interrupt cannot close it and
+  # can only roll back as `stale_owner_cleanup`, leaving an `in_progress`
+  # turn that turns every byte-identical resend into `duplicate_turn`.
+  @spec finalize_task_exception_request(
+          CodexPooler.Gateway.Websocket.DirectCleanup.receipt(),
+          String.t()
+        ) :: :ok | {:error, term()}
+  def finalize_task_exception_request(receipt, reason) when is_binary(reason) do
+    Repo.transaction(fn ->
+      session = codex_session_for_update(receipt.session_id)
+      _key = Repo.one(from k in APIKey, where: k.id == ^receipt.api_key_id, lock: "FOR UPDATE")
+
+      turn =
+        Repo.one(
+          from t in CodexTurn,
+            where:
+              t.codex_session_id == ^receipt.session_id and t.request_id == ^receipt.request_id,
+            lock: "FOR UPDATE"
+        )
+
+      request = request_for_update(receipt.request_id)
+      attempt = latest_attempt_for_update(receipt.request_id)
+
+      if direct_receipt_matches?(session, request, receipt) and
+           request.status in ["accepted", "in_progress"] do
+        fail_task_exception_locked(turn, request, attempt, reason)
+      else
+        :noop
+      end
+    end)
+    |> case do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp fail_task_exception_locked(turn, request, attempt, reason) do
+    now = now()
+
+    cond do
+      active_attempt?(attempt) ->
+        Accounting.finalize_request_with_disposition(request, attempt, %{
+          request_status: "failed",
+          attempt_status: "failed",
+          response_status_code: @task_exception_status_code,
+          last_error_code: reason,
+          error_message: "websocket response task failed before settlement",
+          usage: %{status: "usage_unknown", source: reason}
+        })
+        |> complete_task_exception_turn!(turn, attempt, reason, now)
+
+      is_nil(attempt) ->
+        Accounting.finalize_reservation_failure(request, %{
+          last_error_code: reason,
+          response_status_code: @task_exception_status_code,
+          usage_status: "usage_unknown"
+        })
+        |> complete_task_exception_turn!(turn, nil, reason, now)
+
+      true ->
+        request
+        |> Ecto.Changeset.change(%{
+          status: "failed",
+          usage_status: "usage_unknown",
+          completed_at: now,
+          response_status_code: @task_exception_status_code,
+          last_error_code: reason
+        })
+        |> Repo.update!()
+
+        complete_task_exception_turn!({:ok, request}, turn, attempt, reason, now)
+    end
+  end
+
+  defp complete_task_exception_turn!({:ok, _result}, turn, attempt, reason, now) do
+    if match?(%CodexTurn{status: @turn_in_progress}, turn) do
+      complete_interrupted_turn!(turn, attempt, @turn_failed, reason, now)
+    end
+
+    :finalized
+  end
+
+  defp complete_task_exception_turn!({:error, error}, _turn, _attempt, _reason, _now),
+    do: Repo.rollback({:task_exception_accounting_failed, error})
 
   @spec interrupt_codex_session(session_ref(), opts()) :: {:ok, term()} | {:error, term()}
   def interrupt_codex_session(%CodexSession{id: id}, opts), do: interrupt_codex_session(id, opts)
