@@ -365,7 +365,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
           | {:error,
              :stale_owner
              | :owner_unavailable
-             | {:lock_timeout, SessionContinuity.LockWaitDiagnostics.t()}}
+             | {:lock_timeout, __MODULE__.LockWaitDiagnostics.t()}}
   defdelegate renew_owner_token(session_ref, owner_lease_token, opts, renewal_opts),
     to: OwnerLease
 
