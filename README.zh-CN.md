@@ -649,6 +649,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -689,6 +691,8 @@ provider account 可能暂时报告不同目录上限，请把这个 per-model e
 压缩使用自己的辅助请求超时。保持 `auxiliary.compression.timeout: 900`，这样较大的
 保留上下文可以完成，而不会反复触发旧的 120 秒压缩预算。这与可选 MCP server
 `timeout` 和应用输出上限无关。
+
+Hermes 会用单独的辅助调用生成会话标题，该调用不发送 reasoning effort，因此使用模型的默认 effort。设置 `auxiliary.title_generation.reasoning_effort: low`，让这些短调用固定使用较低成本的 effort。
 
 远程 HTTP MCP servers 需要 Hermes 的 `mcp` extra。如果
 `hermes mcp test codex_pooler` 报告 `mcp.client.streamable_http is not available`，
@@ -731,6 +735,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:

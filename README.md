@@ -698,6 +698,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -753,6 +755,11 @@ uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout:
 120-second compression budget. This is independent from the optional MCP server
 `timeout` and from an application output cap.
 
+Hermes generates session titles with a separate auxiliary call that sends no
+reasoning effort, so the model's default effort applies. Set
+`auxiliary.title_generation.reasoning_effort: low` to keep those short calls
+on a fixed, cheap effort.
+
 Remote HTTP MCP servers require Hermes' `mcp` extra. If
 `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not
 available`, install MCP support into the Hermes environment, following the
@@ -796,6 +803,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:

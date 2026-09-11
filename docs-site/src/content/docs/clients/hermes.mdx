@@ -50,6 +50,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 ```
 
 For local setup, use `http://localhost:4000/v1` in both the environment and model configuration.
@@ -59,6 +61,8 @@ For local setup, use `http://localhost:4000/v1` in both the environment and mode
 Set `model.default` to a model available to your Pool.
 
 Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/models`, flattened from the selected native raw context window and its effective percentage. Treat that per-model endpoint value as authoritative because provider accounts can temporarily report different catalog ceilings. The `828400` value in this example is a long-profile fallback for a Pool whose selected model source reports 872000 raw tokens; a short 272000-token profile reports `258400` instead. Match an explicit fallback to the Pool's `/v1/models` result rather than configuring the raw ceiling. With the long-profile example, `compression.threshold: 0.95` starts Hermes compression at 786980 tokens. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout` and from an application output cap.
+
+Hermes generates session titles with a separate auxiliary call that sends no reasoning effort, so the model's default effort applies. Set `auxiliary.title_generation.reasoning_effort: low` to keep those short calls on a fixed, cheap effort.
 
 ## Verify the connection
 
@@ -153,6 +157,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 ```
 
 Add a credential-pool entry for Codex Pooler in the Hermes `auth.json` file. This example shows only placeholders. Don't paste a real key into public docs or shared files.
