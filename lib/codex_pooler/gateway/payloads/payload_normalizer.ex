@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
+  alias CodexPooler.Gateway.Routing.ModelMetadata
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
   @backend_turn_state_param "client_metadata.x-codex-turn-state"
@@ -25,6 +26,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   @prompt_cache_breakpoint_types ~w(input_text input_image input_file)
   @schema_definition_keys ~w(properties $defs definitions)
   @schema_list_keys ~w(anyOf oneOf allOf)
+
+  @ultra_rewrite_targets ~w(max xhigh high medium low)
 
   @unsupported_upstream_fields ~w(
     max_output_tokens
@@ -240,11 +243,13 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     payload = normalize_client_reasoning_effort(payload)
 
+    catalog_reasoning_levels = ModelMetadata.catalog_reasoning_levels(model)
+
     upstream_payload =
       payload
       |> maybe_strip_unsupported_upstream_fields(endpoint)
       |> remove_client_supplied_responses_lite_metadata()
-      |> strip_backend_codex_fields(endpoint, request_options)
+      |> strip_backend_codex_fields(endpoint, request_options, catalog_reasoning_levels)
 
     {upstream_payload, prompt_cache_controls_downgraded} =
       adapt_prompt_cache_controls(upstream_payload, request_options)
@@ -415,14 +420,15 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp strip_backend_codex_fields(
          payload,
          _endpoint,
-         %RequestOptions{transport: %{transport: "websocket"}} = request_options
+         %RequestOptions{transport: %{transport: "websocket"}} = request_options,
+         catalog_reasoning_levels
        ) do
     payload
     |> Map.drop(["request_id"])
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_websocket_input(request_options)
-    |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_reasoning_effort(catalog_reasoning_levels)
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(request_options)
@@ -439,17 +445,19 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
            transport: %{
              upstream_endpoint: "/backend-api/codex/responses/compact"
            }
-         } = request_options
+         } = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_compact_payload(payload, request_options)
+    normalize_backend_codex_compact_payload(payload, request_options, catalog_reasoning_levels)
   end
 
   defp strip_backend_codex_fields(
          payload,
          "/backend-api/codex/responses/compact",
-         %RequestOptions{} = request_options
+         %RequestOptions{} = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_compact_payload(payload, request_options)
+    normalize_backend_codex_compact_payload(payload, request_options, catalog_reasoning_levels)
   end
 
   defp strip_backend_codex_fields(
@@ -459,28 +467,31 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
            transport: %{
              upstream_endpoint: "/backend-api/codex/responses"
            }
-         } = request_options
+         } = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_http_payload(payload, request_options)
+    normalize_backend_codex_http_payload(payload, request_options, catalog_reasoning_levels)
   end
 
   defp strip_backend_codex_fields(
          payload,
          "/backend-api/codex/responses",
-         %RequestOptions{} = request_options
+         %RequestOptions{} = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_http_payload(payload, request_options)
+    normalize_backend_codex_http_payload(payload, request_options, catalog_reasoning_levels)
   end
 
-  defp strip_backend_codex_fields(payload, _endpoint, _opts), do: payload
+  defp strip_backend_codex_fields(payload, _endpoint, _opts, _catalog_reasoning_levels),
+    do: payload
 
-  defp normalize_backend_codex_http_payload(payload, opts) do
+  defp normalize_backend_codex_http_payload(payload, opts, catalog_reasoning_levels) do
     payload
     |> Map.drop(["type", "generate"])
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input(opts)
-    |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_reasoning_effort(catalog_reasoning_levels)
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
@@ -489,9 +500,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> sanitize_backend_codex_response_item_ids(opts)
   end
 
-  defp normalize_backend_codex_compact_payload(payload, opts) do
+  defp normalize_backend_codex_compact_payload(payload, opts, catalog_reasoning_levels) do
     payload
-    |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_reasoning_effort(catalog_reasoning_levels)
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
@@ -1041,14 +1052,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
-  defp normalize_backend_codex_reasoning_effort(payload) do
+  defp normalize_backend_codex_reasoning_effort(payload, catalog_reasoning_levels) do
     case payload do
       %{"reasoning" => %{"effort" => effort} = reasoning} when is_binary(effort) ->
-        Map.put(
-          payload,
-          "reasoning",
-          Map.put(reasoning, "effort", ReasoningEffort.rewrite_backend_upstream(effort))
-        )
+        effort = ReasoningEffort.rewrite_backend_upstream(effort, catalog_reasoning_levels)
+        Map.put(payload, "reasoning", Map.put(reasoning, "effort", effort))
 
       _payload ->
         payload
@@ -1121,7 +1129,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     case {normalize_effort_for_compare(applied_effort),
           normalize_effort_for_compare(effective_effort)} do
       {"minimal", "low"} -> "minimal_to_low"
-      {"ultra", "max"} -> "ultra_to_max"
+      {"ultra", target} when target in @ultra_rewrite_targets -> "ultra_to_" <> target
       _efforts -> nil
     end
   end

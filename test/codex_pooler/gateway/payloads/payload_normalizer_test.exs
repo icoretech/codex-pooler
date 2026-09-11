@@ -1790,6 +1790,106 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "maps client-facing ultra to the highest catalog level when the selected model lacks max" do
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "reasoning" => %{"effort" => "ultra"}
+      }
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      compact_options = RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      cases = [
+        {%{"supported_reasoning_levels" => ~w(low medium high xhigh)}, "xhigh"},
+        {%{
+           "upstream_model" => %{
+             "supported_reasoning_levels" => [%{"effort" => "low"}, %{"effort" => "high"}]
+           }
+         }, "high"},
+        {%{"supported_reasoning_levels" => ~w(low medium high xhigh max ultra)}, "max"},
+        {%{}, "max"}
+      ]
+
+      for {metadata, expected} <- cases,
+          request_options <- [http_options, compact_options, websocket_options] do
+        model = %Model{upstream_model_id: "provider-model", metadata: metadata}
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   request_options.transport.upstream_endpoint,
+                   request_options
+                 )
+
+        assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => expected}
+      end
+    end
+
+    test "labels catalog-gated ultra rewrites and keeps explicit efforts outside the catalog" do
+      model = %Model{
+        upstream_model_id: "provider-model",
+        metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+      }
+
+      cases = [
+        {%{"reasoning" => %{"effort" => "ultra"}}, %{},
+         %{
+           "requested_effort" => "ultra",
+           "applied_effort" => "ultra",
+           "effective_effort" => "xhigh",
+           "source" => "client",
+           "rewrite" => "ultra_to_xhigh"
+         }},
+        {%{"reasoning" => %{"effort" => "low"}},
+         %{api_key_policy: %{enforced_reasoning_effort: "ultra"}},
+         %{
+           "requested_effort" => "low",
+           "applied_effort" => "ultra",
+           "effective_effort" => "xhigh",
+           "source" => "api_key_policy",
+           "rewrite" => "ultra_to_xhigh"
+         }},
+        {%{"reasoning" => %{"effort" => "max"}}, %{},
+         %{
+           "requested_effort" => "max",
+           "applied_effort" => "max",
+           "effective_effort" => "max",
+           "source" => "client"
+         }},
+        {%{"reasoning" => %{"effort" => "none"}}, %{},
+         %{
+           "requested_effort" => "none",
+           "applied_effort" => "none",
+           "effective_effort" => "none",
+           "source" => "client"
+         }}
+      ]
+
+      for {reasoning, opts, expected_snapshot} <- cases do
+        payload =
+          Map.merge(%{"model" => "gpt-4.1", "input" => native_text_input("hello")}, reasoning)
+
+        request_options = RequestOptions.build(opts, "/backend-api/codex/responses", payload)
+
+        assert {:ok, encoded, updated_options} =
+                 PayloadNormalizer.prepare_upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{
+                 "effort" => expected_snapshot["effective_effort"]
+               }
+
+        assert updated_options.runtime.reasoning_effort_snapshot == expected_snapshot
+      end
+    end
+
     test "adds required Responses Lite controls for HTTP, compact, and websocket JSON" do
       payload = %{
         "model" => "gpt-5.6-terra",

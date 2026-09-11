@@ -138,4 +138,41 @@ defmodule CodexPooler.Gateway.Payloads.ReasoningEffortTest do
     assert ReasoningEffort.rewrite_backend_upstream("minimal") == "minimal"
     assert ReasoningEffort.rewrite_backend_upstream("Custom-Effort") == "Custom-Effort"
   end
+
+  describe "rewrite_backend_upstream/2" do
+    test "keeps max as the ultra alias when catalog levels are unknown or include max" do
+      for levels <- [
+            nil,
+            [],
+            ["custom-level"],
+            ~w(low medium high xhigh max ultra),
+            [" MAX ", "low"]
+          ] do
+        assert ReasoningEffort.rewrite_backend_upstream("ultra", levels) == "max"
+      end
+    end
+
+    test "rewrites ultra to the highest listed level when the catalog excludes max" do
+      cases = [
+        {~w(low medium high xhigh), "xhigh"},
+        {~w(xhigh low high), "xhigh"},
+        {~w(low medium high ultra), "high"},
+        {[" Medium ", "LOW", "custom-level"], "medium"}
+      ]
+
+      for {levels, expected} <- cases do
+        assert ReasoningEffort.rewrite_backend_upstream(" Ultra ", levels) == expected
+      end
+    end
+
+    test "never targets none or minimal and leaves every other value unchanged" do
+      assert ReasoningEffort.rewrite_backend_upstream("ultra", ~w(none minimal)) == "max"
+      assert ReasoningEffort.rewrite_backend_upstream("ultra", ~w(none minimal low)) == "low"
+
+      for effort <- ["none", "minimal", "max", "xhigh", "custom-effort", 42, nil] do
+        assert ReasoningEffort.rewrite_backend_upstream(effort, ~w(low medium high xhigh)) ==
+                 effort
+      end
+    end
+  end
 end

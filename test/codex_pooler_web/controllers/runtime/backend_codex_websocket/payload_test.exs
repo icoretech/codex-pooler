@@ -639,6 +639,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
     end
   end
 
+  test "websocket response.create rewrites ultra to the highest catalog level when the model lacks max" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_ultra_catalog",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-ultra-catalog"})
+
+    result =
+      execute_websocket_response(
+        auth,
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+          "store" => false,
+          "stream" => true,
+          "reasoning" => %{"effort" => "ultra"}
+        }),
+        %{request_id: "ws-ultra-catalog", codex_session: session},
+        fn frame -> send(self(), {:websocket_frame, frame}) end
+      )
+
+    assert result == :ok
+    assert_receive {:websocket_frame, _completed_frame}, @websocket_frame_timeout
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.json["reasoning"]["effort"] == "xhigh"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert get_in(attempt.response_metadata, ["reasoning", "rewrite"]) == "ultra_to_xhigh"
+  end
+
   @tag :websocket_response_create_envelope
   test "websocket response.create envelopes are unwrapped and SSE events are pushed as websocket messages" do
     upstream =

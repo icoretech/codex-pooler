@@ -198,7 +198,7 @@ The reasoning policy offers three modes:
 
 Allow up to rejects rather than changes a disallowed request. An effort above the ceiling, an unknown or custom effort, or an omission with no permitted level returns `400 reasoning_effort_not_allowed` before upstream work. Backend Responses and public Responses identify `reasoning.effort`; Chat Completions identifies `reasoning_effort`.
 
-`none` is an explicit configured value. Leaving the policy Unrestricted is different because it leaves client control intact. `minimal` and `ultra` are evaluated as their own client-facing values, then backend dispatch rewrites them to `low` and `max` respectively when required by the upstream target. Safe policy and reasoning summaries can distinguish the requested, applied, and effective values.
+`none` is an explicit configured value. Leaving the policy Unrestricted is different because it leaves client control intact. `minimal` and `ultra` are evaluated as their own client-facing values, then backend dispatch rewrites `minimal` to `low` and `ultra` to `max`, or to the model's highest listed level when its catalog omits `max`. `none` is never a rewrite target and is forwarded unchanged. Safe policy and reasoning summaries can distinguish the requested, applied, and effective values.
 
 ## Limits
 

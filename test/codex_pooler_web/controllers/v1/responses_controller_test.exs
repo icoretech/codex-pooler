@@ -283,6 +283,47 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end
   end
 
+  test "POST /v1/responses rewrites ultra to the highest catalog level and forwards none unchanged",
+       %{conn: conn} do
+    cases = [
+      {"ultra", "xhigh", "ultra_to_xhigh"},
+      {"none", "none", nil}
+    ]
+
+    for {requested_effort, expected_effort, expected_rewrite} <- cases do
+      upstream = start_upstream(reasoning_policy_responses_upstream())
+
+      setup =
+        gateway_setup(upstream,
+          model_metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+        )
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic",
+          "reasoning" => %{"effort" => requested_effort}
+        })
+
+      assert %{"id" => "resp_reasoning_policy_v1"} = json_response(response, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["reasoning"]["effort"] == expected_effort
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      assert get_in(attempt.response_metadata, ["reasoning", "requested_effort"]) ==
+               requested_effort
+
+      assert get_in(attempt.response_metadata, ["reasoning", "effective_effort"]) ==
+               expected_effort
+
+      assert get_in(attempt.response_metadata, ["reasoning", "rewrite"]) == expected_rewrite
+    end
+  end
+
   @tag :model_serving_modes
   test "public Responses keeps one model id while switching only the outgoing Pool mode", %{
     conn: conn

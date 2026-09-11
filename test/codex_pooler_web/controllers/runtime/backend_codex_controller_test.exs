@@ -11032,6 +11032,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert ["release", "reservation", "settlement"] == ledger_entry_kinds(request)
   end
 
+  test "POST /backend-api/codex/responses/compact rewrites ultra to the highest catalog level when the model lacks max",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+        })
+      )
+
+    setup =
+      gateway_setup(upstream,
+        compact?: true,
+        model_metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+      )
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("compact"),
+        "reasoning" => %{"effort" => "ultra"}
+      })
+
+    assert %{"object" => "response.compaction"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.json["reasoning"] == %{"effort" => "xhigh"}
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert get_in(attempt.response_metadata, ["reasoning", "rewrite"]) == "ultra_to_xhigh"
+  end
+
   @tag :prompt_cache_adaptation
   test "POST /backend-api/codex/responses/compact projects compact fields at egress",
        %{

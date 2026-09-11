@@ -3845,6 +3845,66 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
+    test "supported reasoning ultra contract rewrites ultra to the highest catalog level when the model lacks max",
+         %{conn: conn} do
+      upstream =
+        start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_ultra_catalog"}))
+
+      setup =
+        upstream
+        |> gateway_setup()
+        |> put_catalog_reasoning_levels!(~w(low medium high xhigh))
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post(~p"/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic reasoning request"),
+          "reasoning" => %{"effort" => "ultra"}
+        })
+
+      assert %{"id" => "resp_reasoning_ultra_catalog"} = json_response(conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["reasoning"] == %{"effort" => "xhigh"}
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      assert attempt.response_metadata["reasoning"] == %{
+               "requested_effort" => "ultra",
+               "applied_effort" => "ultra",
+               "effective_effort" => "xhigh",
+               "policy_mode" => "unrestricted",
+               "source" => "client",
+               "rewrite" => "ultra_to_xhigh"
+             }
+    end
+
+    test "supported reasoning none contract forwards none unchanged when the catalog omits none",
+         %{conn: conn} do
+      upstream =
+        start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_none_catalog"}))
+
+      setup =
+        upstream
+        |> gateway_setup()
+        |> put_catalog_reasoning_levels!(~w(low medium high xhigh max ultra))
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post(~p"/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic reasoning request"),
+          "reasoning" => %{"effort" => "none"}
+        })
+
+      assert %{"id" => "resp_reasoning_none_catalog"} = json_response(conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["reasoning"] == %{"effort" => "none"}
+    end
+
           "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "medium"}
         })
@@ -3864,6 +3924,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     if Keyword.get(opts, :quota?, true) do
       prime_routing_quota!(upstream.identity)
     end
+  defp put_catalog_reasoning_levels!(setup, levels) do
+    metadata = Map.put(setup.model.metadata, "supported_reasoning_levels", levels)
+    model = setup.model |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
+    Map.put(setup, :model, model)
+  end
+
 
     model =
       model_fixture(pool, %{

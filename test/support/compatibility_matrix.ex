@@ -388,7 +388,8 @@ defmodule CodexPooler.CompatibilityMatrix do
       routes: [%{method: :post, path: "/backend-api/codex/responses"}],
       future_routes: [],
       fixture: :reasoning_none,
-      contract: "none reasoning is accepted and forwarded unchanged before upstream dispatch"
+      contract:
+        "none reasoning is accepted and forwarded unchanged before upstream dispatch; it stays unchanged even when the selected model catalog does not list none, because the upstream accepts none on some models whose catalogs omit it and no catalog field identifies the models that reject it"
     },
     %{
       slug: :reasoning_ultra,
@@ -402,7 +403,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :reasoning_ultra,
       contract:
-        "client-facing ultra reasoning is accepted and rewritten to backend-compatible max before backend Codex regular and compact upstream dispatch"
+        "client-facing ultra reasoning is accepted and rewritten to backend-compatible max before backend Codex regular and compact upstream dispatch; when the selected model catalog lists known reasoning levels without max, ultra is instead rewritten to the highest listed level other than none and minimal on backend HTTP, compact, and websocket dispatch, unknown levels keep max, and the safe reasoning snapshot names the rewrite ultra_to_<level> from the fixed targets max, xhigh, high, medium, and low"
     },
     %{
       slug: :api_key_reasoning_availability,

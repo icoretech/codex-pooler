@@ -258,6 +258,13 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
 
   def supported_reasoning_levels(%Model{}, _metadata), do: []
 
+  @spec catalog_reasoning_levels(Model.t()) :: [String.t()]
+  def catalog_reasoning_levels(%Model{} = model) do
+    model
+    |> metadata()
+    |> reasoning_level_values()
+  end
+
   @spec reasoning_levels_and_default(Model.t()) :: {[String.t()], String.t() | nil}
   def reasoning_levels_and_default(%Model{} = model) do
     metadata = metadata(model)

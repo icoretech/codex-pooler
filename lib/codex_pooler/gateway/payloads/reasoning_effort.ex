@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Payloads.ReasoningEffort do
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   @known_efforts ~w(none minimal low medium high xhigh max ultra)
+  @non_ultra_targets ~w(none minimal ultra)
 
   @spec extract(map(), RequestOptions.t()) :: String.t() | nil
   def extract(payload, %RequestOptions{} = request_options) when is_map(payload) do
@@ -57,12 +58,19 @@ defmodule CodexPooler.Gateway.Payloads.ReasoningEffort do
 
   def rewrite_client_upstream(value), do: value
 
-  @spec rewrite_backend_upstream(term()) :: term()
-  def rewrite_backend_upstream(value) when is_binary(value) do
-    if normalize_for_compare(value) == "ultra", do: "max", else: value
+  # The backend rejects the literal `ultra`, and it rejects `max` on models whose
+  # catalog omits it. The alias lands on `max`, or on the highest listed level when
+  # known catalog levels exclude `max`; it never targets `none` or `minimal`.
+  @spec rewrite_backend_upstream(term(), [term()] | nil) :: term()
+  def rewrite_backend_upstream(value, catalog_levels \\ nil)
+
+  def rewrite_backend_upstream(value, catalog_levels) when is_binary(value) do
+    if normalize_for_compare(value) == "ultra",
+      do: backend_ultra_target(catalog_levels),
+      else: value
   end
 
-  def rewrite_backend_upstream(value), do: value
+  def rewrite_backend_upstream(value, _catalog_levels), do: value
 
   defp extract_compatible(payload, request_options, source_endpoint) do
     if String.ends_with?(source_endpoint, "/chat/completions") do
@@ -179,4 +187,21 @@ defmodule CodexPooler.Gateway.Payloads.ReasoningEffort do
   defp clean_string(_value, _mapper), do: nil
 
   defp normalize_for_compare(value), do: value |> String.trim() |> String.downcase()
+
+  defp backend_ultra_target(catalog_levels) when is_list(catalog_levels) do
+    targets =
+      catalog_levels
+      |> Enum.map(&normalize_known/1)
+      |> Enum.reject(&(is_nil(&1) or &1 in @non_ultra_targets))
+
+    cond do
+      targets == [] -> "max"
+      "max" in targets -> "max"
+      true -> Enum.max_by(targets, &effort_rank/1)
+    end
+  end
+
+  defp backend_ultra_target(_catalog_levels), do: "max"
+
+  defp effort_rank(effort), do: Enum.find_index(@known_efforts, &(&1 == effort))
 end

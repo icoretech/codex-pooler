@@ -447,9 +447,14 @@ is model-effective, otherwise it returns no levels and no default. Models stay
 visible, and public `/v1/models` remains unchanged.
 
 `minimal` and `ultra` remain distinct for policy evaluation. Backend Codex
-compatibility rewrites them to `low` and `max` respectively before upstream
-dispatch. Safe reasoning summaries retain requested, applied, and effective
-values.
+compatibility rewrites `minimal` to `low` and `ultra` to `max` before upstream
+dispatch. When the selected model's catalog lists reasoning levels without
+`max`, `ultra` becomes the highest listed level instead, and it never becomes
+`none` or `minimal`. `none` and every other explicit effort are forwarded
+unchanged, even when the model catalog does not list them, so the upstream
+decides whether that model accepts the value. Safe reasoning summaries retain
+requested, applied, and effective values and name the rewrite as
+`minimal_to_low` or `ultra_to_<level>`.
 
 Non-strict function tool schemas are lowered before local validation and
 upstream dispatch for backend Responses HTTP, backend Responses websocket

@@ -121,6 +121,46 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     end
   end
 
+  test "POST /v1/chat/completions rewrites ultra to the highest catalog level and forwards none unchanged",
+       %{conn: conn} do
+    cases = [
+      {"ultra", "xhigh", "ultra_to_xhigh"},
+      {"none", "none", nil}
+    ]
+
+    for {requested_effort, expected_effort, expected_rewrite} <- cases do
+      upstream = start_upstream(completed_chat_upstream())
+
+      setup =
+        gateway_setup(upstream,
+          model_metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+        )
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/v1/chat/completions",
+          Map.put(chat_payload(setup), "reasoning_effort", requested_effort)
+        )
+
+      assert %{"id" => "resp_reasoning_policy_chat"} = json_response(response, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["reasoning"]["effort"] == expected_effort
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      assert get_in(attempt.response_metadata, ["reasoning", "requested_effort"]) ==
+               requested_effort
+
+      assert get_in(attempt.response_metadata, ["reasoning", "effective_effort"]) ==
+               expected_effort
+
+      assert get_in(attempt.response_metadata, ["reasoning", "rewrite"]) == expected_rewrite
+    end
+  end
+
   test "POST /v1/chat/completions non-streaming returns OpenAI chat shape", %{conn: conn} do
     upstream =
       start_upstream(
