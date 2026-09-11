@@ -40,10 +40,6 @@ config :codex_pooler,
        :websocket_owner_forwarding_enabled,
        CodexPooler.Gateway.OperationalSettings.parse_websocket_owner_forwarding_env!()
 
-config :codex_pooler,
-       :upstream_conn_max_idle_time_ms,
-       CodexPooler.Gateway.OperationalSettings.parse_upstream_conn_max_idle_time_env!()
-
 config :codex_pooler, CodexPooler.Gateway.OperationalStatus,
   drain_marker_path: System.get_env("CODEX_POOLER_DRAIN_MARKER_PATH")
 

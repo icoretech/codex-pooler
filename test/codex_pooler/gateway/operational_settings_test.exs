@@ -88,6 +88,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_connect_timeout_ms == 15_000
     assert settings.upstream_pool_timeout_ms == 15_000
     assert settings.upstream_receive_timeout_ms == 300_000
+    assert settings.upstream_conn_max_idle_time_ms == 45_000
     assert settings.websocket_idle_timeout_ms == 1_800_000
     assert Map.get(settings, :websocket_owner_idle_timeout_ms) == 1_800_000
     assert settings.model_context_window_overrides == %{}
@@ -141,6 +142,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
                  "upstream_connect_timeout_ms" => 111,
                  "upstream_pool_timeout_ms" => 222,
                  "upstream_receive_timeout_ms" => 333,
+                 "upstream_conn_max_idle_time_ms" => 30_000,
                  "websocket_idle_timeout_ms" => 444_000,
                  "websocket_owner_idle_timeout_ms" => 333_000,
                  "expired_alias_ttl_seconds" => 120,
@@ -190,6 +192,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_connect_timeout_ms == 111
     assert settings.upstream_pool_timeout_ms == 222
     assert settings.upstream_receive_timeout_ms == 333
+    assert settings.upstream_conn_max_idle_time_ms == 30_000
     assert settings.websocket_idle_timeout_ms == 444_000
     assert Map.get(settings, :websocket_owner_idle_timeout_ms) == 333_000
     assert settings.model_context_window_overrides == %{"gpt-test-model" => 131_072}
@@ -205,6 +208,41 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
 
     assert OperationalSettings.current().websocket_idle_timeout_ms == 1_800_000
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 1_800_000
+  end
+
+  test "current/0 defaults a missing upstream connection idle bound" do
+    defaults = Settings.default()
+
+    stale_settings = %{
+      defaults
+      | gateway: Map.delete(defaults.gateway, :upstream_conn_max_idle_time_ms)
+    }
+
+    :ok = Cache.put_for_test(stale_settings)
+
+    assert OperationalSettings.current().upstream_conn_max_idle_time_ms == 45_000
+    assert Map.get(InstanceSettings.current().gateway, :upstream_conn_max_idle_time_ms) == 45_000
+  end
+
+  test "current/0 clamps malformed and out-of-range upstream connection idle bounds" do
+    defaults = Settings.default()
+
+    for {value, expected} <- [
+          {0, 1_000},
+          {-1, 1_000},
+          {3_600_001, 3_600_000},
+          {:infinity, 45_000},
+          {"30000", 45_000},
+          {nil, 45_000}
+        ] do
+      stale_settings = %{
+        defaults
+        | gateway: %{defaults.gateway | upstream_conn_max_idle_time_ms: value}
+      }
+
+      assert OperationalSettings.from_instance_settings(stale_settings).upstream_conn_max_idle_time_ms ==
+               expected
+    end
   end
 
   test "current/0 clamps legacy cached websocket idle timeout values above the safe maximum" do
@@ -359,69 +397,6 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.max_decompressed_body_bytes == 64 * 1024 * 1024
     assert settings.decompression_timeout_ms == 10_000
     assert settings.bulkheads["proxy_control"].max_concurrency == 8
-  end
-
-  describe "upstream connection idle bound config" do
-    test "defaults to 45 seconds when the release env is absent or blank" do
-      previous = System.get_env("CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS")
-      System.delete_env("CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS")
-
-      try do
-        assert OperationalSettings.parse_upstream_conn_max_idle_time_env!() == 45_000
-      after
-        if previous,
-          do: System.put_env("CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS", previous)
-      end
-
-      assert OperationalSettings.parse_upstream_conn_max_idle_time!(" ") == 45_000
-    end
-
-    test "parses positive milliseconds and infinity" do
-      assert OperationalSettings.parse_upstream_conn_max_idle_time!("45000") == 45_000
-      assert OperationalSettings.parse_upstream_conn_max_idle_time!(" 1 ") == 1
-      assert OperationalSettings.parse_upstream_conn_max_idle_time!("Infinity") == :infinity
-    end
-
-    test "rejects invalid release env values without echoing them" do
-      for value <- ["0", "-1", "30s", "1.5", "99999999999", "SECRET_SENTINEL_DO_NOT_STORE_123"] do
-        error =
-          assert_raise ArgumentError, fn ->
-            OperationalSettings.parse_upstream_conn_max_idle_time!(value)
-          end
-
-        message = Exception.message(error)
-        assert message =~ "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS"
-        refute message =~ "SECRET_SENTINEL_DO_NOT_STORE_123"
-      end
-    end
-
-    test "reads the app env and falls back on values Finch would reject" do
-      previous = Application.fetch_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
-
-      try do
-        for {value, expected} <- [
-              {5_000, 5_000},
-              {0, 0},
-              {:infinity, :infinity},
-              {-1, 45_000},
-              {"5000", 45_000}
-            ] do
-          Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
-          assert OperationalSettings.upstream_conn_max_idle_time_ms() == expected
-        end
-
-        Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
-        assert OperationalSettings.upstream_conn_max_idle_time_ms() == 45_000
-      after
-        case previous do
-          {:ok, value} ->
-            Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
-
-          :error ->
-            Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
-        end
-      end
-    end
   end
 
   describe "websocket owner forwarding topology config" do

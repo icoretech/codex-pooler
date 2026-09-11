@@ -12,26 +12,31 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   @websocket_owner_forwarding_allowed_values "true,false,1,0,yes,no,on,off"
   @websocket_owner_forwarding_truthy ~w(true 1 yes on)
   @websocket_owner_forwarding_falsey ~w(false 0 no off)
-  @upstream_conn_max_idle_time_env "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS"
-  # Longest idle time before a pooled upstream HTTP/1 connection is closed at
-  # its next checkout instead of being reused. Finch checks the bound only at
-  # checkout, so it never interrupts an in-flight or streaming request, and
-  # NimblePool hands idle connections out oldest first, so with no bound the
-  # stalest connection is the first one reused. A NAT, load balancer, or proxy
-  # that has already forgotten that flow resets the next write, and the request
-  # then fails `closed` after its bytes may have left the host, which is not
-  # safe to retry. A longer bound means fewer reconnects but more exposure to
-  # silently dropped connections. 45 s sits below the shortest idle timeouts
-  # common on egress paths, taken as common defaults rather than measurements:
-  # HAProxy `timeout client`/`timeout server` 50 s in the packaged Debian and
-  # Ubuntu config, AWS Application Load Balancer 60 s, nginx
-  # `keepalive_timeout` 75 s, Squid `client_idle_pconn_timeout` 2 min, Azure
-  # load balancer and NAT gateway 4 min, AWS NAT gateway and Network Load
-  # Balancer 350 s, and GCP Cloud NAT established TCP 20 min. Linux conntrack
-  # and common firewall session timeouts are hours or days and do not
-  # constrain it. Operators whose egress drops idle flows sooner set
-  # `CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS` lower.
+  # `upstream_conn_max_idle_time_ms` is the longest idle time before a pooled
+  # upstream HTTP/1 connection is closed at its next checkout instead of being
+  # reused. Finch checks the bound only at checkout, so it never interrupts an
+  # in-flight or streaming request, and NimblePool hands idle connections out
+  # oldest first, so with no bound the stalest connection is the first one
+  # reused. A NAT, load balancer, or proxy that has already forgotten that flow
+  # resets the next write, and the request then fails `closed` after its bytes
+  # may have left the host, which is not safe to retry. A longer bound means
+  # fewer reconnects but more exposure to silently dropped connections. The
+  # 45 s default sits below the shortest idle timeouts common on egress paths,
+  # taken as common defaults rather than measurements: HAProxy `timeout
+  # client`/`timeout server` 50 s in the packaged Debian and Ubuntu config, AWS
+  # Application Load Balancer 60 s, nginx `keepalive_timeout` 75 s, Squid
+  # `client_idle_pconn_timeout` 2 min, Azure load balancer and NAT gateway
+  # 4 min, AWS NAT gateway and Network Load Balancer 350 s, and GCP Cloud NAT
+  # established TCP 20 min. Linux conntrack and common firewall session
+  # timeouts are hours or days and do not constrain it. An installation whose
+  # egress drops idle flows sooner lowers the setting; the 1 h maximum stands in
+  # for "no bound", because a connection idle that long costs one reconnect.
+  # Values outside the bounds, which only a stale cache or a hand-edited row can
+  # carry, are clamped so a bad value cannot make Finch reject every upstream
+  # request.
   @upstream_conn_max_idle_time_default_ms 45_000
+  @upstream_conn_max_idle_time_min_ms 1_000
+  @upstream_conn_max_idle_time_max_ms 3_600_000
   @websocket_idle_timeout_default_ms 1_800_000
   @websocket_idle_timeout_min_ms 60_000
   @websocket_idle_timeout_max_ms 3_600_000
@@ -71,6 +76,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
     upstream_connect_timeout_ms: :timer.seconds(15),
     upstream_pool_timeout_ms: :timer.seconds(15),
     upstream_receive_timeout_ms: :timer.minutes(5),
+    upstream_conn_max_idle_time_ms: @upstream_conn_max_idle_time_default_ms,
     websocket_idle_timeout_ms: @websocket_idle_timeout_default_ms,
     websocket_owner_idle_timeout_ms: @websocket_owner_idle_timeout_default_ms,
     model_context_window_overrides: %{}
@@ -114,6 +120,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
           upstream_connect_timeout_ms: pos_integer(),
           upstream_pool_timeout_ms: pos_integer(),
           upstream_receive_timeout_ms: pos_integer(),
+          upstream_conn_max_idle_time_ms: pos_integer(),
           websocket_idle_timeout_ms: pos_integer(),
           websocket_owner_idle_timeout_ms: pos_integer(),
           model_context_window_overrides: %{String.t() => pos_integer()}
@@ -184,6 +191,10 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       upstream_connect_timeout_ms: settings.gateway.upstream_connect_timeout_ms,
       upstream_pool_timeout_ms: settings.gateway.upstream_pool_timeout_ms,
       upstream_receive_timeout_ms: settings.gateway.upstream_receive_timeout_ms,
+      upstream_conn_max_idle_time_ms:
+        clamp_upstream_conn_max_idle_time(
+          Map.get(settings.gateway, :upstream_conn_max_idle_time_ms)
+        ),
       websocket_idle_timeout_ms:
         clamp_websocket_idle_timeout(settings.gateway.websocket_idle_timeout_ms),
       websocket_owner_idle_timeout_ms:
@@ -233,56 +244,6 @@ defmodule CodexPooler.Gateway.OperationalSettings do
     end
   end
 
-  @spec upstream_conn_max_idle_time_env_name() :: String.t()
-  def upstream_conn_max_idle_time_env_name, do: @upstream_conn_max_idle_time_env
-
-  @doc """
-  The Finch `conn_max_idle_time` for upstream provider HTTP pools, in
-  milliseconds or `:infinity`. Values Finch would reject fall back to the
-  default so a bad app env cannot fail every upstream request.
-  """
-  @spec upstream_conn_max_idle_time_ms() :: non_neg_integer() | :infinity
-  def upstream_conn_max_idle_time_ms do
-    case Application.get_env(
-           :codex_pooler,
-           :upstream_conn_max_idle_time_ms,
-           @upstream_conn_max_idle_time_default_ms
-         ) do
-      :infinity -> :infinity
-      value when is_integer(value) and value >= 0 -> value
-      _invalid -> @upstream_conn_max_idle_time_default_ms
-    end
-  end
-
-  @spec parse_upstream_conn_max_idle_time_env!() :: pos_integer() | :infinity
-  def parse_upstream_conn_max_idle_time_env! do
-    @upstream_conn_max_idle_time_env
-    |> System.get_env()
-    |> parse_upstream_conn_max_idle_time!()
-  end
-
-  @spec parse_upstream_conn_max_idle_time!(String.t() | nil) :: pos_integer() | :infinity
-  def parse_upstream_conn_max_idle_time!(nil), do: @upstream_conn_max_idle_time_default_ms
-
-  def parse_upstream_conn_max_idle_time!(value) when is_binary(value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    cond do
-      normalized == "" ->
-        @upstream_conn_max_idle_time_default_ms
-
-      normalized == "infinity" ->
-        :infinity
-
-      Regex.match?(~r/\A[0-9]{1,10}\z/, normalized) and String.to_integer(normalized) > 0 ->
-        String.to_integer(normalized)
-
-      true ->
-        raise ArgumentError,
-              "#{@upstream_conn_max_idle_time_env} must be a positive integer number of milliseconds or infinity"
-    end
-  end
-
   defp normalize_bulkheads(bulkheads) when is_map(bulkheads) do
     configured =
       Map.new(bulkheads, fn {route_class, config} ->
@@ -322,4 +283,12 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   end
 
   defp clamp_websocket_owner_idle_timeout(_value), do: @websocket_owner_idle_timeout_default_ms
+
+  defp clamp_upstream_conn_max_idle_time(value) when is_integer(value) do
+    value
+    |> max(@upstream_conn_max_idle_time_min_ms)
+    |> min(@upstream_conn_max_idle_time_max_ms)
+  end
+
+  defp clamp_upstream_conn_max_idle_time(_value), do: @upstream_conn_max_idle_time_default_ms
 end

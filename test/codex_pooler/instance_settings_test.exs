@@ -201,6 +201,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert settings.gateway.circuit_success_threshold == 1
     assert settings.gateway.websocket_idle_timeout_ms == 1_800_000
     assert Map.get(settings.gateway, :websocket_owner_idle_timeout_ms) == 1_800_000
+    assert Map.get(settings.gateway, :upstream_conn_max_idle_time_ms) == 45_000
     assert settings.files.max_size_bytes == 25 * 1024 * 1024
     assert settings.transcription.max_upload_bytes == 26_214_400
 
@@ -383,6 +384,40 @@ defmodule CodexPooler.InstanceSettingsTest do
 
       assert Map.get(errors_on(changeset).gateway, :websocket_owner_idle_timeout_ms) != []
     end
+  end
+
+  test "changeset accepts inclusive upstream connection idle bound limits" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert {:ok, minimum} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"upstream_conn_max_idle_time_ms" => 1_000}
+             })
+
+    assert Map.get(minimum.gateway, :upstream_conn_max_idle_time_ms) == 1_000
+
+    assert {:ok, maximum} =
+             InstanceSettings.update_system_settings(InstanceSettings.get!(), %{
+               "gateway" => %{"upstream_conn_max_idle_time_ms" => 3_600_000}
+             })
+
+    assert Map.get(maximum.gateway, :upstream_conn_max_idle_time_ms) == 3_600_000
+    assert maximum.gateway.upstream_connect_timeout_ms == 15_000
+  end
+
+  test "changeset rejects upstream connection idle bound values outside the bounded range" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    for invalid <- [0, 999, 3_600_001, "infinity", "not-a-number", nil] do
+      assert {:error, changeset} =
+               InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"upstream_conn_max_idle_time_ms" => invalid}
+               })
+
+      assert Map.get(errors_on(changeset).gateway, :upstream_conn_max_idle_time_ms) != []
+    end
+
+    assert InstanceSettings.get!().lock_version == settings.lock_version
   end
 
   test "development helper setting is boolean-only and rejects stored script URLs" do
@@ -576,6 +611,26 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert updated.files.upload_ttl_seconds == 600
     assert Map.get(updated.gateway, :websocket_owner_idle_timeout_ms) == 1_800_000
     assert updated.gateway.websocket_idle_timeout_ms == 1_800_000
+  end
+
+  test "legacy singleton settings rows backfill the upstream connection idle bound without losing updates" do
+    legacy = InstanceSettings.ensure_singleton!()
+
+    Repo.query!(
+      "UPDATE instance_settings SET gateway = gateway - 'upstream_conn_max_idle_time_ms'"
+    )
+
+    InstanceSettings.reset_cache_for_test()
+
+    assert Map.get(InstanceSettings.current().gateway, :upstream_conn_max_idle_time_ms) == 45_000
+
+    assert {:ok, updated} =
+             InstanceSettings.update_system_settings(Repo.reload!(legacy), %{
+               "files" => %{"upload_ttl_seconds" => 600}
+             })
+
+    assert updated.files.upload_ttl_seconds == 600
+    assert Map.get(updated.gateway, :upstream_conn_max_idle_time_ms) == 45_000
   end
 
   test "legacy singleton settings rows backfill development helper flags without losing updates" do

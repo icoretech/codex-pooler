@@ -308,6 +308,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
       settings
       |> SystemSettingsForm.params_from_settings()
       |> put_in(["gateway", "upstream_pool_timeout_ms"], 99_999)
+      |> put_in(["gateway", "upstream_conn_max_idle_time_ms"], 5_000)
       |> put_in(["gateway", "gateway_debug"], true)
       |> put_in(["files", "upload_ttl_seconds"], 123)
       |> put_in(["transcription", "max_upload_bytes"], 456)
@@ -318,6 +319,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
     assert get_in(restored, ["gateway", "upstream_connect_timeout_ms"]) == 15_000
     assert get_in(restored, ["gateway", "upstream_pool_timeout_ms"]) == 15_000
     assert get_in(restored, ["gateway", "upstream_receive_timeout_ms"]) == 300_000
+    assert get_in(restored, ["gateway", "upstream_conn_max_idle_time_ms"]) == 45_000
     assert get_in(restored, ["gateway", "gateway_debug"]) == true
 
     assert {:ok, restored_files} =

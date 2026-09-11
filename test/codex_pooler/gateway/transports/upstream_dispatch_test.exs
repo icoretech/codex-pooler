@@ -26,6 +26,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.InstanceSettings
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.CodexClientIdentity
@@ -844,7 +845,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
           {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
         )
 
-      previous = Application.fetch_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
       handler_id = {__MODULE__, :finch_pool_event, make_ref()}
 
       :ok =
@@ -858,14 +858,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       on_exit(fn ->
         :telemetry.detach(handler_id)
         FakeUpstream.stop(upstream)
-
-        case previous do
-          {:ok, value} ->
-            Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
-
-          :error ->
-            Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
-        end
       end)
 
       {:ok, upstream: upstream}
@@ -876,9 +868,17 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     } do
       # A zero bound makes every checked-in connection stale at its next
       # checkout, so the second dispatch must open a new connection instead of
-      # reusing the first one. Both events are emitted before the request
-      # returns, so no wait is needed.
-      Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, 0)
+      # reusing the first one. The instance setting refuses values below one
+      # second and waiting that out is not a property of this test, so the
+      # zero bound goes in through the operational settings snapshot the
+      # dispatch reads, which the module setup restores. Both events are
+      # emitted before the request returns, so no wait is needed.
+      settings = OperationalSettings.current()
+
+      Application.put_env(:codex_pooler, OperationalSettings,
+        settings: %{settings | upstream_conn_max_idle_time_ms: 0}
+      )
+
       request = idle_bound_dispatch_request(upstream)
 
       assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
@@ -889,10 +889,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assert FakeUpstream.count(upstream) == 2
     end
 
-    test "http dispatch reuses a pooled connection inside the bound from a dedicated pool", %{
-      upstream: upstream
-    } do
-      Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, :timer.minutes(10))
+    test "http dispatch reuses a pooled connection inside the saved instance-settings bound from a dedicated pool",
+         %{upstream: upstream} do
+      Application.put_env(:codex_pooler, OperationalSettings, use_instance_settings?: true)
+
+      assert {:ok, _settings} =
+               InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+                 "gateway" => %{"upstream_conn_max_idle_time_ms" => :timer.minutes(10)}
+               })
+
+      assert OperationalSettings.current().upstream_conn_max_idle_time_ms == :timer.minutes(10)
       request = idle_bound_dispatch_request(upstream)
 
       assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)

@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   @detection_timeout_ms 15_000
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
@@ -41,7 +42,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         receive_timeout_ms: 30
       }
 
-      with_upstream_conn_max_idle_time_app_env(:unset, fn ->
+      with_operational_settings(%OperationalSettings{}, fn ->
         assert TransportEnvelope.req_timeout_options(timeouts) == [
                  receive_timeout: 30,
                  finch: [
@@ -53,22 +54,24 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       end)
     end
 
-    test "carries the configured upstream connection idle bound as a Finch pool option" do
+    test "carries the instance-settings upstream connection idle bound as a Finch pool option" do
       timeouts = %TimeoutConfig{
         connect_timeout_ms: 10,
         pool_timeout_ms: 20,
         receive_timeout_ms: 30
       }
 
-      for {app_env, expected} <- [
-            {{:set, 1_234}, 1_234},
-            {{:set, :infinity}, :infinity},
-            {{:set, -1}, 45_000},
-            {{:set, "30000"}, 45_000}
-          ] do
-        with_upstream_conn_max_idle_time_app_env(app_env, fn ->
-          assert TransportEnvelope.req_timeout_options(timeouts)[:finch][:conn_max_idle_time] ==
-                   expected
+      for idle_ms <- [1_000, 1_234, 3_600_000] do
+        settings = %OperationalSettings{
+          upstream_connect_timeout_ms: 99,
+          upstream_conn_max_idle_time_ms: idle_ms
+        }
+
+        with_operational_settings(settings, fn ->
+          options = TransportEnvelope.req_timeout_options(timeouts)
+
+          assert options[:finch][:conn_max_idle_time] == idle_ms
+          assert options[:finch][:conn_opts] == [transport_opts: [timeout: 10]]
         end)
       end
     end
@@ -841,20 +844,16 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     %UpstreamIdentity{chatgpt_account_id: "acct_test"}
   end
 
-  defp with_upstream_conn_max_idle_time_app_env(app_env, fun) do
-    previous = Application.fetch_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
-
-    case app_env do
-      :unset -> Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
-      {:set, value} -> Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
-    end
+  defp with_operational_settings(%OperationalSettings{} = settings, fun) do
+    previous = Application.fetch_env(:codex_pooler, OperationalSettings)
+    Application.put_env(:codex_pooler, OperationalSettings, settings: settings)
 
     try do
       fun.()
     after
       case previous do
-        {:ok, value} -> Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
-        :error -> Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+        {:ok, value} -> Application.put_env(:codex_pooler, OperationalSettings, value)
+        :error -> Application.delete_env(:codex_pooler, OperationalSettings)
       end
     end
   end

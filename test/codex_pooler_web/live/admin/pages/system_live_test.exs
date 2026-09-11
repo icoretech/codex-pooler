@@ -500,6 +500,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(view, "#instance-settings-upstream-connect-timeout-ms[value='15000']")
     assert has_element?(view, "#instance-settings-upstream-pool-timeout-ms[value='15000']")
     assert has_element?(view, "#instance-settings-upstream-receive-timeout-ms[value='300000']")
+    assert has_element?(view, "#instance-settings-upstream-conn-max-idle-time-ms[value='45000']")
     assert has_element?(view, "#instance-settings-gateway-status", "Unsaved changes")
     assert InstanceSettings.get!().gateway.upstream_pool_timeout_ms == 99_999
     assert InstanceSettings.get!().gateway.upstream_connect_timeout_ms == 88_888
@@ -1834,6 +1835,108 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     persisted = InstanceSettings.get!()
     assert persisted.gateway.websocket_owner_idle_timeout_ms == 900_000
     assert persisted.gateway.websocket_idle_timeout_ms == 444_000
+  end
+
+  test "renders the upstream connection idle bound in the upstream timing group", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "tbody[data-runtime-limit-group='upstream'] #instance-settings-upstream-conn-max-idle-time-ms[name='instance_settings[gateway][upstream_conn_max_idle_time_ms]'][value='45000'][min='1000'][max='3600000']"
+           )
+
+    assert has_element?(
+             view,
+             "label[for='instance-settings-upstream-conn-max-idle-time-ms']",
+             "Connection idle bound (ms)"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-hint-upstream-conn-max-idle-time-ms",
+             "never interrupts an in-flight or streaming request"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-unit-upstream-conn-max-idle-time-ms",
+             "ms"
+           )
+  end
+
+  test "validates, saves, audits, and reloads the upstream connection idle bound", %{
+    conn: conn,
+    user: user
+  } do
+    settings = InstanceSettings.ensure_singleton!()
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    view
+    |> element("#instance-settings-gateway-form")
+    |> render_change(%{
+      "_target" => ["instance_settings", "gateway", "upstream_conn_max_idle_time_ms"],
+      "instance_settings" => %{
+        "_group" => "gateway",
+        "lock_version" => Integer.to_string(settings.lock_version),
+        "gateway" => %{"upstream_conn_max_idle_time_ms" => "30000"}
+      }
+    })
+
+    assert has_element?(view, "#instance-settings-upstream-conn-max-idle-time-ms[value='30000']")
+    assert has_element?(view, "#instance-settings-gateway-status", "Unsaved changes")
+    assert InstanceSettings.get!().gateway.upstream_conn_max_idle_time_ms == 45_000
+
+    saved_html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "gateway" => %{"upstream_conn_max_idle_time_ms" => "30000"}
+        }
+      })
+
+    assert saved_html =~ "Gateway controls saved"
+    assert InstanceSettings.get!().gateway.upstream_conn_max_idle_time_ms == 30_000
+
+    event = Repo.get_by!(AuditEvent, action: "instance_settings.update", actor_user_id: user.id)
+    assert get_in(event.details, ["changed_keys"]) == ["gateway.upstream_conn_max_idle_time_ms"]
+
+    {:ok, reloaded_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             reloaded_view,
+             "#instance-settings-upstream-conn-max-idle-time-ms[value='30000']"
+           )
+  end
+
+  test "renders an inline upstream connection idle bound error without persisting it", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "gateway" => %{"upstream_conn_max_idle_time_ms" => "999"}
+        }
+      })
+
+    assert html =~ "Gateway controls could not be saved"
+
+    assert has_element?(
+             view,
+             "#instance-settings-upstream-conn-max-idle-time-ms[aria-invalid='true']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-label-line-upstream-conn-max-idle-time-ms #instance-settings-upstream-conn-max-idle-time-ms-error",
+             "must be greater than or equal to 1000"
+           )
+
+    assert InstanceSettings.get!().gateway.upstream_conn_max_idle_time_ms == 45_000
   end
 
   test "renders constrained compressed JSON encoding controls and help copy", %{conn: conn} do

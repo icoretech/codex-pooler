@@ -63,6 +63,7 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
     "CODEX_POOLER_UPSTREAM_CONNECT_TIMEOUT_MS",
     "CODEX_POOLER_UPSTREAM_POOL_TIMEOUT_MS",
     "CODEX_POOLER_UPSTREAM_RECEIVE_TIMEOUT_MS",
+    "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS",
     "CODEX_POOLER_MODEL_CONTEXT_WINDOW_OVERRIDES",
     "CODEX_POOLER_DECOMPRESSION_ALGORITHMS",
     "CODEX_POOLER_MAX_COMPRESSED_BODY_BYTES",
@@ -221,7 +222,7 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
       Classification.settings()
       |> Enum.flat_map(& &1.env_names)
 
-    assert length(@former_database_env_names) == 38
+    assert length(@former_database_env_names) == 39
 
     for env_name <- @former_database_env_names do
       refute env_name in advertised_env_names

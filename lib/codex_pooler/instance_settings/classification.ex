@@ -309,7 +309,8 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :live,
-      notes: "Timeout options are attached to each new upstream request."
+      notes:
+        "Timeout and pooled-connection idle bound options are attached to each new upstream request."
     },
     %{
       key: :model_context_window_overrides,

@@ -18,7 +18,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsGroupContract do
        ~w(sse_keepalive_interval_ms websocket_idle_timeout_ms websocket_owner_idle_timeout_ms)},
     "upstream" =>
       {"gateway",
-       ~w(upstream_connect_timeout_ms upstream_pool_timeout_ms upstream_receive_timeout_ms)},
+       ~w(upstream_connect_timeout_ms upstream_pool_timeout_ms upstream_receive_timeout_ms upstream_conn_max_idle_time_ms)},
     "continuity" =>
       {"gateway",
        ~w(expired_alias_ttl_seconds bridge_owner_lease_ttl_seconds bridge_owner_lease_renewal_seconds)},

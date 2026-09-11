@@ -26,6 +26,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
     :upstream_connect_timeout_ms,
     :upstream_pool_timeout_ms,
     :upstream_receive_timeout_ms,
+    :upstream_conn_max_idle_time_ms,
     :expired_alias_ttl_seconds,
     :bridge_owner_lease_ttl_seconds,
     :bridge_owner_lease_renewal_seconds,
@@ -48,6 +49,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :upstream_connect_timeout_ms, :integer
       field :upstream_pool_timeout_ms, :integer
       field :upstream_receive_timeout_ms, :integer
+      field :upstream_conn_max_idle_time_ms, :integer
       field :expired_alias_ttl_seconds, :integer
       field :bridge_owner_lease_ttl_seconds, :integer
       field :bridge_owner_lease_renewal_seconds, :integer
@@ -233,6 +235,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
+      :upstream_conn_max_idle_time_ms,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -251,6 +254,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
+      :upstream_conn_max_idle_time_ms,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -273,6 +277,10 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> validate_positive_integer(:upstream_connect_timeout_ms)
     |> validate_positive_integer(:upstream_pool_timeout_ms)
     |> validate_positive_integer(:upstream_receive_timeout_ms)
+    |> validate_number(:upstream_conn_max_idle_time_ms,
+      greater_than_or_equal_to: 1_000,
+      less_than_or_equal_to: 3_600_000
+    )
     |> validate_positive_integer(:expired_alias_ttl_seconds)
     |> validate_positive_integer(:bridge_owner_lease_ttl_seconds)
     |> validate_positive_integer(:bridge_owner_lease_renewal_seconds)

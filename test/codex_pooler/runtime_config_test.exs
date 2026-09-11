@@ -100,23 +100,13 @@ defmodule CodexPooler.RuntimeConfigTest do
     end
   end
 
-  test "upstream connection idle bound follows its release env" do
-    for {value, expected} <- [{"45000", 45_000}, {"infinity", :infinity}] do
-      env = Map.put(@required_env, "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS", value)
-
-      with_env(env, fn ->
-        config = Config.Reader.read!("config/runtime.exs", env: :prod)
-
-        assert config[:codex_pooler][:upstream_conn_max_idle_time_ms] == expected
-      end)
-    end
-
+  test "the upstream connection idle bound is an instance setting, not release env" do
     env = Map.put(@required_env, "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS", "30s")
 
     with_env(env, fn ->
-      assert_raise ArgumentError, ~r/CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS/, fn ->
-        Config.Reader.read!("config/runtime.exs", env: :prod)
-      end
+      config = Config.Reader.read!("config/runtime.exs", env: :prod)
+
+      refute Keyword.has_key?(config[:codex_pooler], :upstream_conn_max_idle_time_ms)
     end)
   end
 

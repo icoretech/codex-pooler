@@ -84,10 +84,6 @@ Set release environment variables for values the app needs before it can read da
       <td>DNS clustering query when clustering is enabled</td>
     </tr>
     <tr>
-      <td><code>CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS</code></td>
-      <td>Longest idle time, in milliseconds, before a pooled upstream HTTP connection is replaced instead of reused, default <code>45000</code>. The bound is checked only when a connection is taken for a new request, so it never interrupts an in-flight or streaming request. Keep it below the idle timeout of any NAT gateway, load balancer, or proxy on the egress path; a longer bound means fewer reconnects but more exposure to silently dropped connections. <code>infinity</code> removes the bound</td>
-    </tr>
-    <tr>
       <td><code>CODEX_POOLER_TOTP_ENCRYPTION_KEY</code></td>
       <td>TOTP encryption root key</td>
     </tr>
@@ -112,7 +108,7 @@ Official release images include the OS IANA timezone database used for operator 
 
 ## Admin-Managed Settings
 
-After the app boots, manage operational settings from the admin UI instead of editing code. Instance settings cover areas such as file limits, ingress trust, gateway diagnostics, route-class admission, circuit thresholds, metrics auth, operator email, model metadata, upstream timeouts, pricing catalog settings, and SMTP delivery.
+After the app boots, manage operational settings from the admin UI instead of editing code. Instance settings cover areas such as file limits, ingress trust, gateway diagnostics, route-class admission, circuit thresholds, metrics auth, operator email, model metadata, upstream timeouts and connection reuse, pricing catalog settings, and SMTP delivery.
 
 Secret settings stay write-only in the UI. For example, metrics bearer material is stored as a keyed digest and SMTP credentials are stored encrypted for mail delivery and credential checks.
 
@@ -203,6 +199,14 @@ A longer owner-retention window can improve the chance of reusing an upstream co
 To roll back an ingress policy change, restore the previous allowlist and
 trusted-proxy settings in the admin UI. New requests use the restored snapshot;
 a websocket already revoked by the prior policy must reconnect.
+
+### Upstream connection idle bound
+
+Upstream HTTP requests reuse pooled keep-alive connections to each provider origin. `upstream_conn_max_idle_time_ms` is the longest time a pooled connection may sit idle before it is replaced instead of reused. Change it on the System page, Gateway tab, in the Upstream timing group, next to the connect, pool, and receive timeouts. The default is `45000` ms and the accepted range is `1000..3600000` ms. New upstream requests use a saved value without a restart; the first requests after a change open new connections.
+
+The bound is checked only when a connection is taken for a new request, so it never interrupts an in-flight or streaming request, however long that request runs.
+
+A NAT gateway, load balancer, or proxy on the egress path can silently drop a connection that has been idle longer than its own timeout. Reusing such a connection fails the request within milliseconds as an upstream network error with a `closed` transport failure in the request phase, and the gateway does not retry it on the same account, because the request may already have reached the provider. If those failures appear, lower the bound below the shortest idle timeout on your egress path. A longer bound means fewer reconnects but more exposure to dropped connections; a shorter bound means more connection setup but fewer stale reuses.
 
 ## Runtime URLs
 

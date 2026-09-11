@@ -210,6 +210,16 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
             hint: "Maximum idle receive window while waiting for upstream response data.",
             minimum: 1,
             unit: "ms"
+          }),
+          gateway_setting(%{
+            id: "instance-settings-upstream-conn-max-idle-time-ms",
+            field: :upstream_conn_max_idle_time_ms,
+            label: "Connection idle bound (ms)",
+            hint:
+              "Pooled upstream connections idle longer than this are replaced on their next use. Checked only when a connection is taken, so it never interrupts an in-flight or streaming request. Keep it below the idle timeout of any NAT, load balancer, or proxy on the egress path.",
+            minimum: 1_000,
+            maximum: 3_600_000,
+            unit: "ms"
           })
         ]
       },
