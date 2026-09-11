@@ -4387,19 +4387,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end
 
     @tag :separate_backend_scheduled_expiry_lock_time
-    test "production default resolves scheduled decision time after both row locks" do
+    test "scheduled decision time is read only after both row locks" do
       {:ok, fake} = codex_reset_fake(0)
       on_exit(fn -> FakeUpstream.stop(fake) end)
 
       fixture = committed_scheduled_expiry_race_fixture!(fake)
       on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(fixture) end)
 
-      # The reset must still be expiring when the redemption task starts (so a
-      # pre-lock decision time would have consumed it) and must be a whole
-      # second past expiry when the lock is released, because `expires_soon?`
-      # compares truncated seconds. One second of pre-expiry margin covers the
-      # identity update, the holder lock, and the task start.
-      decision_before = DateTime.utc_now() |> DateTime.add(1, :second)
+      # The reset is still expiring at the pre-lock time (so a pre-lock
+      # decision would have consumed it) while the injected post-lock clock
+      # answers a whole second past expiry, because `expires_soon?` compares
+      # truncated seconds. The clock reports when it is read, so the ordering
+      # is proven by the lock release instead of by waiting for the reset to
+      # expire on the wall clock.
+      decision_before = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       expires_at = DateTime.add(decision_before, 1, :second)
       assignment_id = List.first(fixture.assignment_ids)
 
@@ -4452,7 +4453,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           Task.async(fn ->
             Sandbox.unboxed_run(Repo, fn ->
               send(parent, {barrier, :redemption_backend, backend_pid!()})
-              SavedResetRedemption.redeem_scheduled_expiry(assignment_id, fixture.identity_id)
+
+              SavedResetRedemption.redeem_scheduled_expiry(assignment_id, fixture.identity_id,
+                clock: fn ->
+                  send(parent, {barrier, :clock_read})
+                  DateTime.add(expires_at, 1, :second)
+                end
+              )
             end)
           end)
 
@@ -4462,10 +4469,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         assert holder_backend_pid in observation.blocking_pids
         assert observation.wait_event_type == "Lock"
 
-        await_after!(DateTime.add(expires_at, 1, :second))
+        refute_received {^barrier, :clock_read}
         send(assignment_holder.pid, {barrier, :release_assignment})
 
         assert {:ok, :released} = Task.await(assignment_holder, 5_000)
+        assert_receive {^barrier, :clock_read}, 5_000
 
         assert {:ok, %{status: :noop, code: "scheduled_expiry_not_expiring"}} =
                  Task.await(redemption_task, 5_000)
@@ -10179,15 +10187,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp backend_pid! do
     %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
     backend_pid
-  end
-
-  defp await_after!(%DateTime{} = timestamp) do
-    wait_ms = max(DateTime.diff(timestamp, DateTime.utc_now(), :millisecond) + 50, 0)
-
-    receive do
-    after
-      wait_ms -> :ok
-    end
   end
 
   defp probe_identity_lock_query?(metadata) do

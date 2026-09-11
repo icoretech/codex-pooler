@@ -154,18 +154,21 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
   def touch_liveness(_reference), do: {:error, :binding_mismatch}
 
-  @spec cleanup_due() :: {:ok, map()} | {:error, term()}
-  def cleanup_due do
+  # `:batch_size` is a test-facing knob for the bounded candidate batch; the
+  # minute worker always runs the 100-row production default.
+  @spec cleanup_due(keyword()) :: {:ok, map()} | {:error, term()}
+  def cleanup_due(opts \\ []) do
+    batch_size = Keyword.get(opts, :batch_size, @cleanup_batch_size)
     started_at = System.monotonic_time(:millisecond)
     now = db_now()
-    candidates = due_candidates(now)
+    candidates = due_candidates(now, batch_size)
 
     summary = %{
       replay_entitlements_selected: length(candidates),
       replay_entitlements_closed: 0,
       replay_entitlements_noop: 0,
       replay_entitlements_deferred: 0,
-      replay_cleanup_batch_full: length(candidates) == @cleanup_batch_size
+      replay_cleanup_batch_full: length(candidates) == batch_size
     }
 
     Enum.reduce_while(candidates, {:ok, summary}, &cleanup_next(&1, &2, started_at))
@@ -954,7 +957,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
     end
   end
 
-  defp due_candidates(now) do
+  defp due_candidates(now, batch_size) do
     Repo.all(
       from entitlement in RequestReplayEntitlement,
         join: api_key in APIKey,
@@ -972,7 +975,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
           asc: entitlement.abandon_at,
           asc: entitlement.id
         ],
-        limit: @cleanup_batch_size,
+        limit: ^batch_size,
         select:
           {entitlement.request_id,
            fragment(

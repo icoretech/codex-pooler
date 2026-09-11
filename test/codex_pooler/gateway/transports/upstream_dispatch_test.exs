@@ -1478,19 +1478,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert_receive {:rejection_cancelled, ^error_ref}
   end
 
+  # Real time is the property: the drain gives up on a stalled prefix at one
+  # absolute deadline that a later chunk must not re-arm, so the test runs the
+  # deadline down with a short `timeout_ms` instead of the 2 s production value.
   @tag timeout: 5_000
   test "rejection drain uses one absolute deadline and discards a stalled partial prefix" do
     {response, ref} = async_response(self())
     send(self(), {ref, {:data, "partial"}})
+    Process.send_after(self(), {ref, {:data, "late"}}, 200)
     started_at = System.monotonic_time(:millisecond)
 
-    drained_body = RejectionDrain.drain(response)
+    drained_body = RejectionDrain.drain(response, timeout_ms: 400)
 
     assert drained_body == ""
     assert_policy_not_classified(drained_body)
     elapsed_ms = System.monotonic_time(:millisecond) - started_at
 
-    assert elapsed_ms in 1_900..2_500
+    # A deadline re-armed by the late chunk would end at 600 ms or later.
+    assert elapsed_ms in 350..599
     assert_receive {:rejection_cancelled, ^ref}
   end
 

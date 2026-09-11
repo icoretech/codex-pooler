@@ -1349,6 +1349,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
 
     started_at_override = Keyword.get(opts, :started_at)
+    # `:clock` is a test-facing knob for the decision time read after both row
+    # locks when no `:started_at` override is given; production reads `now/0`.
+    clock = Keyword.get(opts, :clock, &now/0)
 
     opts =
       opts
@@ -1360,7 +1363,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     |> claim_scheduled_attempt(
       expected_identity_id,
       receive_timeout,
-      started_at_override
+      started_at_override,
+      clock
     )
     |> redeem_claim(opts)
   end
@@ -1548,7 +1552,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          assignment_id,
          expected_identity_id,
          receive_timeout,
-         started_at_override
+         started_at_override,
+         clock
        ) do
     Repo.transaction(fn ->
       case lock_scheduled_identity(expected_identity_id) do
@@ -1558,7 +1563,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
             assignment_id,
             expected_identity_id,
             receive_timeout,
-            started_at_override
+            started_at_override,
+            clock
           )
 
         nil ->
@@ -1577,11 +1583,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          assignment_id,
          expected_identity_id,
          receive_timeout,
-         started_at_override
+         started_at_override,
+         clock
        ) do
     case lock_scheduled_assignment(assignment_id) do
       %PoolUpstreamAssignment{} = locked_assignment ->
-        decision_at = started_at_override || now()
+        decision_at = started_at_override || clock.()
 
         case AutoEligibility.validate_locked_scheduled_expiry(
                locked_identity,

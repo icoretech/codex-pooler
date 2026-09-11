@@ -11,8 +11,11 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
   test "more than a batch of earlier noops cannot starve later expired replay" do
     due_at = DateTime.add(DateTime.utc_now(), -60, :second)
+    # The claim is "noops exceeding one batch", so the batch is shrunk to two
+    # rather than filling the 100-row production batch.
+    batch_size = 2
 
-    for _ <- 1..101 do
+    for _ <- 1..(batch_size + 1) do
       fixture = replay_fixture(reservation?: true)
 
       insert_entitlement!(fixture, %{
@@ -32,14 +35,14 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
     assert {:ok,
             %{
-              replay_entitlements_selected: 100,
-              replay_entitlements_noop: 100,
+              replay_entitlements_selected: ^batch_size,
+              replay_entitlements_noop: ^batch_size,
               replay_entitlements_closed: 0,
               replay_cleanup_batch_full: true
-            }} = measured_cleanup("populated-noop-batch")
+            }} = measured_cleanup("populated-noop-batch", batch_size: batch_size)
 
-    assert {:ok, %{replay_entitlements_selected: 100, replay_entitlements_closed: 1}} =
-             measured_cleanup("populated-progress-batch")
+    assert {:ok, %{replay_entitlements_selected: ^batch_size, replay_entitlements_closed: 1}} =
+             measured_cleanup("populated-progress-batch", batch_size: batch_size)
 
     assert Repo.reload!(last.request).last_error_code == "websocket_replay_expired"
     assert terminal_ledger_count(last.request.id, "settlement") == 1
@@ -49,7 +52,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
                where: not is_nil(row.cleanup_checked_at)
              ),
              :count
-           ) == 101
+           ) == batch_size + 1
   end
 
   test "minute worker persists measured bounded summary and generic worker keeps fifteen minutes" do
@@ -145,7 +148,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
     assert Repo.reload!(consumed.entitlement).closed_at
   end
 
-  defp measured_cleanup(label) do
+  defp measured_cleanup(label, opts \\ []) do
     ref = make_ref()
     handler = {__MODULE__, ref}
 
@@ -160,7 +163,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
     started_at = System.monotonic_time(:microsecond)
 
     try do
-      result = RequestReplay.cleanup_due()
+      result = RequestReplay.cleanup_due(opts)
       duration_us = System.monotonic_time(:microsecond) - started_at
       queries = drain_query_count(ref, 0)
 

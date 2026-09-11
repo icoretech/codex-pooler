@@ -161,9 +161,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     @max_bytes 65_536
     @timeout_ms 2_000
 
-    @spec drain(Req.Response.t()) :: binary()
-    def drain(%Req.Response{body: %Req.Response.Async{ref: ref}} = response) do
-      deadline = System.monotonic_time(:millisecond) + @timeout_ms
+    # `:timeout_ms` is a test-facing knob for the single absolute drain
+    # deadline; production callers use the 2 s default.
+    @spec drain(Req.Response.t(), keyword()) :: binary()
+    def drain(%Req.Response{body: %Req.Response.Async{ref: ref}} = response, opts \\ []) do
+      timeout_ms = Keyword.get(opts, :timeout_ms, @timeout_ms)
+      deadline = System.monotonic_time(:millisecond) + timeout_ms
       drain(response, ref, deadline, [], 0)
     end
 
