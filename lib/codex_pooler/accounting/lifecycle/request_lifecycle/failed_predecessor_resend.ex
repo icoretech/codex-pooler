@@ -13,8 +13,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # Every check fails closed: a live request, turn, or attempt, a succeeded or
   # otherwise non-failed predecessor, a failure outside the provider-terminal
   # and task-exception vocabulary (an owner drain or a client disconnect is not
-  # a provider verdict), an anchored resend (a `previous_response_id` is bound
-  # to the connection that produced it; the released client drops the anchor
+  # a provider verdict), a stream error whose final attempt does not carry the
+  # verified lifecycle-only or partial-reasoning cut evidence the client retry
+  # policy requires, an anchored resend (a `previous_response_id` is bound to
+  # the connection that produced it; the released client drops the anchor
   # before it retries), a replay entitlement, a scope mismatch, or an expired
   # retry window keeps the public `duplicate_turn` fence.
 
@@ -28,6 +30,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   @max_chain_depth 16
   @task_exception_code "owner_task_exception"
+  @stream_error_code "upstream_stream_error"
   @live_request_statuses ["accepted", "in_progress"]
   @live_attempt_statuses ["queued", "in_progress"]
 
@@ -51,7 +54,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           | :invalid_predecessor
           | :anchor_unavailable
 
-  @type resolution :: %{claim: String.t(), predecessor: Request.t()}
+  @type predecessor_shape ::
+          :provider_terminal | :task_exception | :lifecycle_cut | :partial_reasoning_cut
+
+  @type resolution :: %{
+          claim: String.t(),
+          predecessor: Request.t(),
+          predecessor_shape: predecessor_shape()
+        }
 
   @doc false
   @spec resolve(term(), scope()) :: {:ok, resolution()} | {:error, disposition()}
@@ -65,28 +75,29 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
         {:error, :anchor_unavailable}
 
       true ->
-        resolve_chain(claim, nil, scope, db_now(), 0)
+        resolve_chain(claim, nil, nil, scope, db_now(), 0)
     end
   end
 
   def resolve(_claim, _scope), do: {:error, :unsupported_claim}
 
-  defp resolve_chain(_claim, _predecessor, _scope, _now, depth) when depth > @max_chain_depth,
-    do: {:error, :chain_exhausted}
+  defp resolve_chain(_claim, _predecessor, _shape, _scope, _now, depth)
+       when depth > @max_chain_depth,
+       do: {:error, :chain_exhausted}
 
-  defp resolve_chain(claim, predecessor, scope, now, depth) do
+  defp resolve_chain(claim, predecessor, shape, scope, now, depth) do
     case lock_request_by_claim(claim) do
       nil when is_nil(predecessor) ->
         {:error, :missing_predecessor}
 
       nil ->
-        {:ok, %{claim: claim, predecessor: predecessor}}
+        {:ok, %{claim: claim, predecessor: predecessor, predecessor_shape: shape}}
 
       %Request{} = request ->
-        with :ok <- validate_predecessor(request, scope, now),
+        with {:ok, request_shape} <- validate_predecessor(request, scope, now),
              {:ok, derived} <-
                ClientRetry.deterministic_failed_predecessor_claim(claim, request.id) do
-          resolve_chain(derived, request, scope, now, depth + 1)
+          resolve_chain(derived, request, request_shape, scope, now, depth + 1)
         end
     end
   end
@@ -102,6 +113,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # The explicit conjunction keeps every terminal requirement visible.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp validate_predecessor(%Request{} = request, scope, now) do
+    family = failure_family(request.last_error_code)
+
     cond do
       not scoped?(request, scope) ->
         {:error, :authorization_changed}
@@ -109,7 +122,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       request.status in @live_request_statuses or is_nil(request.completed_at) ->
         {:error, :active_predecessor}
 
-      request.status != "failed" or not admissible_failure?(request.last_error_code) ->
+      request.status != "failed" or is_nil(family) ->
         {:error, :terminal_predecessor}
 
       live_turn?(request.id) or live_attempt?(request.id) ->
@@ -119,17 +132,78 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
         {:error, :entitlement_present}
 
       true ->
-        validate_retry_window(request.completed_at, now)
+        admit_predecessor(request, family, now)
     end
   end
 
-  # The provider ended the response (retryable first-event vocabulary) or the
-  # Pooler's own response task died before settlement; nothing else is a verdict
-  # the client may retry byte-identically through this path.
-  defp admissible_failure?(code) when is_binary(code),
-    do: code == @task_exception_code or ErrorCodes.retryable_first_event_code?(code)
+  defp admit_predecessor(request, family, now) do
+    with {:ok, shape} <- predecessor_shape(request, family),
+         :ok <- validate_retry_window(request.completed_at, now),
+         do: {:ok, shape}
+  end
 
-  defp admissible_failure?(_code), do: false
+  # The provider ended the response (retryable first-event vocabulary), the
+  # Pooler's own response task died before settlement, or the stream was cut
+  # under the receive loop; nothing else is a verdict the client may retry
+  # byte-identically through this path.
+  defp failure_family(@task_exception_code), do: :task_exception
+  defp failure_family(@stream_error_code), do: :stream_cut
+
+  defp failure_family(code) when is_binary(code) do
+    if ErrorCodes.retryable_first_event_code?(code), do: :provider_terminal
+  end
+
+  defp failure_family(_code), do: nil
+
+  defp predecessor_shape(_request, family) when family in [:provider_terminal, :task_exception],
+    do: {:ok, family}
+
+  # A stream cut may have delivered completed output items, so it is admitted
+  # only with the evidence the client retry policy verifies for the same
+  # failure on the turn's final attempt: a lifecycle-only cut or a
+  # partial-reasoning cut. Both rows are read under the session lock this claim
+  # already holds.
+  defp predecessor_shape(%Request{} = request, :stream_cut) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+
+    cond do
+      ClientRetry.verified_lifecycle_cut?(turn, request, attempt) ->
+        {:ok, :lifecycle_cut}
+
+      ClientRetry.verified_partial_reasoning_cut?(turn, request, attempt) ->
+        {:ok, :partial_reasoning_cut}
+
+      true ->
+        {:error, :terminal_predecessor}
+    end
+  end
+
+  defp lock_turn(request_id) do
+    Repo.one(
+      from turn in CodexTurn,
+        where: turn.request_id == ^request_id,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  # The turn's final attempt must also be the request's latest attempt; any
+  # other pairing is not the cut the resend repeats.
+  defp lock_final_attempt(%CodexTurn{final_attempt_id: attempt_id}, request_id)
+       when is_binary(attempt_id) do
+    case Repo.one(
+           from attempt in Attempt,
+             where: attempt.request_id == ^request_id,
+             order_by: [desc: attempt.attempt_number],
+             limit: 1,
+             lock: "FOR UPDATE"
+         ) do
+      %Attempt{id: ^attempt_id} = attempt -> attempt
+      _other -> nil
+    end
+  end
+
+  defp lock_final_attempt(_turn, _request_id), do: nil
 
   defp scoped?(%Request{} = request, scope) do
     request.pool_id == scope.pool_id and request.api_key_id == scope.api_key_id and

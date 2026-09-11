@@ -25,6 +25,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
                              identity_rejected
                              owner_busy
                            )
+  # The predecessor shape a byte-identical websocket resend was admitted after.
+  @resend_predecessor_shapes ~w(
+                               provider_terminal
+                               task_exception
+                               lifecycle_cut
+                               partial_reasoning_cut
+                             )
   @handoff_outcomes ~w(
                         ready
                         timeout
@@ -71,6 +78,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
 
   @spec handoff_outcome(term()) :: String.t() | nil
   def handoff_outcome(value), do: fixed_vocabulary(value, @handoff_outcomes)
+
+  @spec resend_predecessor_shape(term()) :: String.t() | nil
+  def resend_predecessor_shape(value), do: fixed_vocabulary(value, @resend_predecessor_shapes)
 
   @spec safe_correlator(term()) :: String.t()
   def safe_correlator(value) when is_binary(value) do

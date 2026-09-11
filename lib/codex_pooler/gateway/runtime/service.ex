@@ -2152,16 +2152,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp maybe_log_client_resend_admitted(
          %RequestOptions{} = request_options,
          endpoint,
-         %{client_resend: %{predecessor_request_id: predecessor_request_id}}
+         %{client_resend: %{predecessor_request_id: predecessor_request_id} = client_resend}
        ) do
     request_id = request_options.request_metadata.request_id
     session = Map.get(request_options.continuity, :codex_session)
     session_id = if is_struct(session, CodexSession), do: session.id
 
+    predecessor_shape =
+      DiagnosticTaxonomy.resend_predecessor_shape(Map.get(client_resend, :predecessor_shape)) ||
+        "unknown"
+
     Logger.info(fn ->
       "websocket client resend admitted " <>
         "stage=websocket_turn_claim " <>
         "reason_code=failed_predecessor_retry " <>
+        "predecessor_shape=#{predecessor_shape} " <>
         "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
         "predecessor_request_id=#{DiagnosticTaxonomy.safe_correlator(predecessor_request_id)} " <>
         "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>

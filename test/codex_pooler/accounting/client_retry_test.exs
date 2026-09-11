@@ -130,6 +130,151 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
       assert :ineligible = ClientRetry.final_observation_metadata(observation)
       refute inspect(observation) =~ "private-call-id"
     end
+
+    test "a lifecycle-only authority-complete observation persists with a null first_visible_at" do
+      observation =
+        ClientRetry.new_observation()
+        |> ClientRetry.observe_frame(
+          %{"type" => "response.created", "response" => %{"id" => "resp_lifecycle_only"}},
+          ~U[2026-09-11 09:00:00Z]
+        )
+        |> ClientRetry.observe_frame(
+          %{"type" => "response.in_progress", "response" => %{"id" => "resp_lifecycle_only"}},
+          ~U[2026-09-11 09:00:01Z]
+        )
+
+      assert observation.first_visible_at == nil
+      assert :ineligible = ClientRetry.final_observation_metadata(observation)
+
+      assert {:ok, metadata} =
+               observation
+               |> ClientRetry.complete_without_terminal()
+               |> ClientRetry.final_observation_metadata()
+
+      assert metadata == lifecycle_only_observation()
+      refute inspect(metadata) =~ "resp_lifecycle_only"
+
+      poisoned =
+        observation
+        |> ClientRetry.observe_frame(%{"unexpected" => "frame"}, ~U[2026-09-11 09:00:02Z])
+        |> ClientRetry.complete_without_terminal()
+
+      assert poisoned.first_visible_at == nil
+      assert :ineligible = ClientRetry.final_observation_metadata(poisoned)
+    end
+  end
+
+  describe "stream cut predecessor predicates" do
+    test "the lifecycle-only cut accepts its exact shape and rejects every single-field mutation" do
+      {turn, request, attempt} = lifecycle_cut_rows()
+
+      assert ClientRetry.verified_lifecycle_cut?(turn, request, attempt)
+
+      for {key, value} <- [
+            {"output_item_done_count", 1},
+            {"output_item_done_count_saturated", true},
+            {"terminal_seen", true},
+            {"terminal_candidate_seen", true},
+            {"partial_reasoning_seen", true},
+            {"first_visible_at", "2026-09-11T09:00:00.000000Z"},
+            {"authority_complete", false},
+            {"version", 2}
+          ] do
+        mutated = update_observation(attempt, &Map.put(&1, key, value))
+
+        refute ClientRetry.verified_lifecycle_cut?(turn, request, mutated),
+               "expected #{key}=#{inspect(value)} to be rejected"
+      end
+
+      refute ClientRetry.verified_lifecycle_cut?(
+               turn,
+               request,
+               update_observation(attempt, &Map.delete(&1, "first_visible_at"))
+             )
+
+      for {row, mutated} <- [
+            turn_error: {%{turn | error_code: "server_error"}, request, attempt},
+            turn_status: {%{turn | status: "interrupted"}, request, attempt},
+            turn_open: {%{turn | completed_at: nil}, request, attempt},
+            request_error: {turn, %{request | last_error_code: "server_error"}, attempt},
+            request_open: {turn, %{request | completed_at: nil}, attempt},
+            attempt_error: {turn, request, %{attempt | network_error_code: "server_error"}},
+            attempt_generation: {turn, request, %{attempt | replay_generation: 1}},
+            attempt_transport: {turn, request, %{attempt | transport: "http"}},
+            attempt_open: {turn, request, %{attempt | completed_at: nil}},
+            missing_observation:
+              {turn, request,
+               %{
+                 attempt
+                 | response_metadata:
+                     Map.delete(attempt.response_metadata, "native_client_retry_observation")
+               }},
+            missing_transport_failure:
+              {turn, request,
+               %{
+                 attempt
+                 | response_metadata: Map.delete(attempt.response_metadata, "transport_failure")
+               }},
+            non_closed_transport_failure:
+              {turn, request,
+               update_transport_failure(attempt, &Map.put(&1, "reason", "timeout"))},
+            receive_timeout:
+              {turn, request,
+               update_transport_failure(attempt, fn _failure ->
+                 %{"phase" => "receive", "termination_source" => "pooler_receive_timeout"}
+               end)},
+            missing_turn: {nil, request, attempt},
+            missing_attempt: {turn, request, nil}
+          ] do
+        {mutated_turn, mutated_request, mutated_attempt} = mutated
+
+        refute ClientRetry.verified_lifecycle_cut?(
+                 mutated_turn,
+                 mutated_request,
+                 mutated_attempt
+               ),
+               "expected #{row} to be rejected"
+      end
+
+      for source <- ["peer_close_frame", "mint_stream_done"] do
+        closed =
+          update_transport_failure(attempt, fn _failure ->
+            %{"phase" => "receive", "termination_source" => source}
+          end)
+
+        assert ClientRetry.verified_lifecycle_cut?(turn, request, closed)
+      end
+    end
+
+    test "the partial-reasoning cut keeps the R evidence and never overlaps the lifecycle-only cut" do
+      {turn, request, attempt} = lifecycle_cut_rows()
+      refute ClientRetry.verified_partial_reasoning_cut?(turn, request, attempt)
+
+      reasoning =
+        update_observation(attempt, fn observation ->
+          observation
+          |> Map.put("partial_reasoning_seen", true)
+          |> Map.put("first_visible_at", "2026-09-11T09:00:00.000000Z")
+        end)
+
+      assert ClientRetry.verified_partial_reasoning_cut?(turn, request, reasoning)
+      refute ClientRetry.verified_lifecycle_cut?(turn, request, reasoning)
+
+      refute ClientRetry.verified_partial_reasoning_cut?(
+               %{turn | first_visible_output_at: nil},
+               request,
+               reasoning
+             )
+
+      refute ClientRetry.verified_partial_reasoning_cut?(
+               turn,
+               request,
+               update_observation(reasoning, &Map.put(&1, "output_item_done_count", 1))
+             )
+
+      refute ClientRetry.verified_partial_reasoning_cut?(nil, request, reasoning)
+      refute ClientRetry.verified_partial_reasoning_cut?(turn, request, nil)
+    end
   end
 
   describe "lineage persistence" do
@@ -731,6 +876,175 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
 
       assert Repo.aggregate(RequestClientRetryLink, :count) == 0
     end
+  end
+
+  describe "lifecycle-only stream cut predecessor" do
+    test "admits one successor after a lifecycle-only stream cut" do
+      setup = accounting_setup(%{price_version: unique_price_version("lifecycle-cut")})
+      %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+      digest = :crypto.strong_rand_bytes(32)
+      semantic_digest = :crypto.strong_rand_bytes(32)
+
+      {session, predecessor, attempt} =
+        eligible_predecessor!(setup, digest, semantic_digest, now)
+
+      Repo.update!(Ecto.Changeset.change(attempt, response_metadata: lifecycle_cut_metadata()))
+
+      payload = %{"model" => setup.model.exposed_model_id, "input" => []}
+      opts = successor_opts(setup, session, digest, semantic_digest, now)
+      predecessor_id = predecessor.id
+
+      assert {:ok, %{replay_generation: 0, client_retry_predecessor_request_id: ^predecessor_id}} =
+               Accounting.client_retry_preflight_snapshot(
+                 session,
+                 setup.api_key,
+                 setup.model,
+                 opts
+               )
+
+      assert {:ok, %ClientRetry.SuccessorClaim{} = claim} =
+               Accounting.claim_client_retry_successor(setup.auth, setup.model, payload, opts)
+
+      assert claim.predecessor_request_id == predecessor_id
+      assert claim.link.predecessor_request_id == predecessor_id
+      assert ClientRetry.reserved_successor_claim?(claim.correlation_id)
+
+      assert {:error, :successor_claimed} =
+               Accounting.claim_client_retry_successor(setup.auth, setup.model, payload, opts)
+
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 1
+    end
+
+    test "keeps the partial-reasoning contract and fences near misses of the lifecycle-only cut" do
+      for {label, update, expected} <- [
+            {"reasoning-kept", &Function.identity/1, :ok},
+            {"visible-without-reasoning",
+             &put_in(&1, ["native_client_retry_observation", "partial_reasoning_seen"], false),
+             :terminal_predecessor},
+            {"lifecycle-with-item",
+             fn _metadata ->
+               put_in(
+                 lifecycle_cut_metadata(),
+                 ["native_client_retry_observation", "output_item_done_count"],
+                 1
+               )
+             end, :unsafe_completed_output},
+            {"lifecycle-with-candidate",
+             fn _metadata ->
+               put_in(
+                 lifecycle_cut_metadata(),
+                 ["native_client_retry_observation", "terminal_candidate_seen"],
+                 true
+               )
+             end, :terminal_predecessor}
+          ] do
+        setup = accounting_setup(%{price_version: unique_price_version(label)})
+        %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+        digest = :crypto.strong_rand_bytes(32)
+        semantic_digest = :crypto.strong_rand_bytes(32)
+
+        {session, _predecessor, attempt} =
+          eligible_predecessor!(setup, digest, semantic_digest, now)
+
+        Repo.update!(
+          Ecto.Changeset.change(attempt, response_metadata: update.(attempt.response_metadata))
+        )
+
+        result =
+          Accounting.claim_client_retry_successor(
+            setup.auth,
+            setup.model,
+            %{"model" => setup.model.exposed_model_id, "input" => []},
+            successor_opts(setup, session, digest, semantic_digest, now)
+          )
+
+        case expected do
+          :ok -> assert {:ok, %ClientRetry.SuccessorClaim{}} = result, label
+          reason -> assert {:error, ^reason} = result, label
+        end
+      end
+    end
+  end
+
+  defp lifecycle_only_observation do
+    %{
+      "version" => 1,
+      "authority_complete" => true,
+      "output_item_done_count" => 0,
+      "output_item_done_count_saturated" => false,
+      "partial_reasoning_seen" => false,
+      "first_visible_at" => nil,
+      "terminal_seen" => false,
+      "terminal_candidate_seen" => false
+    }
+  end
+
+  # The metadata a lifecycle-only cut persists (findings issue 124): only
+  # `response.created` and `response.in_progress` arrived before the TLS
+  # connection closed under the receive loop.
+  defp lifecycle_cut_metadata do
+    %{
+      "transport_failure" => %{
+        "phase" => "receive",
+        "termination_source" => "mint_transport_error",
+        "exception" => "Mint.TransportError",
+        "reason" => "closed",
+        "transport_signal" => "ssl_closed",
+        "terminal_seen" => false,
+        "terminal_candidate_seen" => false,
+        "last_upstream_event_type" => "response.in_progress"
+      },
+      "native_client_retry_observation" => lifecycle_only_observation()
+    }
+  end
+
+  defp lifecycle_cut_rows do
+    now = ~U[2026-09-11 09:00:35.000000Z]
+    request_id = Ecto.UUID.generate()
+    attempt_id = Ecto.UUID.generate()
+
+    request = %Request{
+      id: request_id,
+      status: "failed",
+      last_error_code: "upstream_stream_error",
+      response_status_code: 502,
+      transport: "websocket",
+      completed_at: now
+    }
+
+    attempt = %Attempt{
+      id: attempt_id,
+      request_id: request_id,
+      status: "failed",
+      network_error_code: "upstream_stream_error",
+      transport: "websocket",
+      replay_generation: 0,
+      completed_at: now,
+      response_metadata: lifecycle_cut_metadata()
+    }
+
+    turn = %CodexTurn{
+      request_id: request_id,
+      status: "failed",
+      error_code: "upstream_stream_error",
+      final_attempt_id: attempt_id,
+      transport_kind: "websocket",
+      first_visible_output_at: now,
+      completed_at: now
+    }
+
+    {turn, request, attempt}
+  end
+
+  defp update_observation(%Attempt{response_metadata: metadata} = attempt, fun) do
+    %{
+      attempt
+      | response_metadata: Map.update!(metadata, "native_client_retry_observation", fun)
+    }
+  end
+
+  defp update_transport_failure(%Attempt{response_metadata: metadata} = attempt, fun) do
+    %{attempt | response_metadata: Map.update!(metadata, "transport_failure", fun)}
   end
 
   defp succeed_turn!(setup, session, request, sequence, semantic_digest, now) do

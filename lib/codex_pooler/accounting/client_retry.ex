@@ -25,6 +25,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @failed_predecessor_prefix "codex-request-retry:"
   @retry_window_seconds 30
   @task_exception_code "owner_task_exception"
+  @stream_error_code "upstream_stream_error"
   @compaction_retry_window_seconds 330
 
   defmodule SuccessorClaim do
@@ -119,7 +120,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   end
 
   @type observation_metadata :: %{
-          required(String.t()) => boolean() | non_neg_integer() | String.t()
+          required(String.t()) => boolean() | non_neg_integer() | String.t() | nil
         }
 
   @type reclaimable_successor :: %{
@@ -612,15 +613,20 @@ defmodule CodexPooler.Accounting.ClientRetry do
   def complete_without_terminal(%Observation{} = observation),
     do: %{observation | authority_complete?: true}
 
+  # A lifecycle-only stream (nothing but `response.created`,
+  # `response.in_progress`, `response.queued`, or `codex.*` frames before the
+  # cut) never sets `first_visible_at`; its complete observation is persisted
+  # with a null timestamp so the zero-output evidence is not dropped.
   @spec final_observation_metadata(Observation.t()) :: {:ok, observation_metadata()} | :ineligible
   def final_observation_metadata(
         %Observation{
           version: @version,
           authority_complete?: true,
           authority_poisoned?: false,
-          first_visible_at: %DateTime{} = first_visible_at
+          first_visible_at: first_visible_at
         } = observation
-      ) do
+      )
+      when is_nil(first_visible_at) or is_struct(first_visible_at, DateTime) do
     {:ok,
      %{
        "version" => @version,
@@ -628,13 +634,74 @@ defmodule CodexPooler.Accounting.ClientRetry do
        "output_item_done_count" => observation.output_item_done_count,
        "output_item_done_count_saturated" => observation.output_item_done_count_saturated?,
        "partial_reasoning_seen" => observation.partial_reasoning_seen?,
-       "first_visible_at" => DateTime.to_iso8601(first_visible_at),
+       "first_visible_at" => first_visible_at_metadata(first_visible_at),
        "terminal_seen" => observation.terminal_seen?,
        "terminal_candidate_seen" => observation.terminal_candidate_seen?
      }}
   end
 
   def final_observation_metadata(%Observation{}), do: :ineligible
+
+  defp first_visible_at_metadata(nil), do: nil
+  defp first_visible_at_metadata(%DateTime{} = at), do: DateTime.to_iso8601(at)
+
+  # A verified lifecycle-only stream cut: the provider sent only lifecycle
+  # frames before the connection closed under the receive loop, so no output
+  # item, no reasoning, and no terminal reached the client. Turn, request, and
+  # the generation-zero websocket attempt failed together with the stream
+  # code, the complete observation proves the stream stayed lifecycle-only, and
+  # the attempt carries the close evidence the partial-reasoning cut requires.
+  @spec verified_lifecycle_cut?(term(), term(), term()) :: boolean()
+  def verified_lifecycle_cut?(
+        %CodexTurn{status: "failed", error_code: @stream_error_code, completed_at: %DateTime{}},
+        %Request{
+          status: "failed",
+          last_error_code: @stream_error_code,
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          status: "failed",
+          network_error_code: @stream_error_code,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata:
+            %{
+              "native_client_retry_observation" => %{
+                "version" => @version,
+                "authority_complete" => true,
+                "output_item_done_count" => 0,
+                "output_item_done_count_saturated" => false,
+                "partial_reasoning_seen" => false,
+                "first_visible_at" => nil,
+                "terminal_seen" => false,
+                "terminal_candidate_seen" => false
+              }
+            } = metadata
+        }
+      ),
+      do: validate_close_evidence(metadata) == :ok
+
+  def verified_lifecycle_cut?(_turn, _request, _attempt), do: false
+
+  # The postvisible stream cut the client retry contract has always admitted:
+  # visible output that was only partial reasoning, no completed output item,
+  # no terminal, an authority-complete observation, and close evidence.
+  @spec verified_partial_reasoning_cut?(term(), term(), term()) :: boolean()
+  def verified_partial_reasoning_cut?(
+        %CodexTurn{} = turn,
+        %Request{} = request,
+        %Attempt{} = attempt
+      ) do
+    with :ok <- validate_terminal_lifecycle(turn, request, attempt),
+         :ok <- validate_observation(attempt.response_metadata) do
+      validate_close_evidence(attempt.response_metadata) == :ok
+    else
+      {:error, _reason} -> false
+    end
+  end
+
+  def verified_partial_reasoning_cut?(_turn, _request, _attempt), do: false
 
   defp observe_decoded_frame(observation, %{"type" => type} = decoded) when is_binary(type) do
     observation
@@ -953,6 +1020,9 @@ defmodule CodexPooler.Accounting.ClientRetry do
         :ok
 
       verified_provider_terminal_failure?(turn, request, attempt) ->
+        :ok
+
+      verified_lifecycle_cut?(turn, request, attempt) ->
         :ok
 
       true ->

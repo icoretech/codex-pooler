@@ -34,6 +34,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:abrupt_close_mid_stream, [String.t()]}
           | :close_before_headers
           | {:websocket_text, [String.t()]}
+          | {:websocket_text_then_abrupt_close, [String.t()]}
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
           | {:websocket_terminal_then_close_barrier, String.t(), non_neg_integer(), String.t(),
              pid(), reference()}
@@ -354,6 +355,17 @@ defmodule CodexPooler.FakeUpstream do
   @spec websocket_text_frames([iodata()]) :: mode()
   def websocket_text_frames(messages) when is_list(messages) do
     {:websocket_text, Enum.map(messages, &IO.iodata_to_binary/1)}
+  end
+
+  @doc """
+  Pushes `messages` as native text frames, then drops the TCP connection
+  without a websocket close frame, so the Pooler's Mint receive loop observes
+  the transport close (`Mint.TransportError` with reason `:closed`) rather than
+  a peer close frame or a terminal.
+  """
+  @spec websocket_text_frames_then_abrupt_close([iodata()]) :: mode()
+  def websocket_text_frames_then_abrupt_close(messages) when is_list(messages) do
+    {:websocket_text_then_abrupt_close, Enum.map(messages, &IO.iodata_to_binary/1)}
   end
 
   @doc """
@@ -1055,6 +1067,7 @@ defmodule CodexPooler.FakeUpstream do
   defp validate_mode!(_mode), do: :ok
 
   defp native_websocket_mode?({:websocket_text, _messages}), do: true
+  defp native_websocket_mode?({:websocket_text_then_abrupt_close, _messages}), do: true
   defp native_websocket_mode?({:websocket_frame_barrier, _, _, _}), do: true
   defp native_websocket_mode?({:websocket_sse_then_close, _chunks, _code, _reason}), do: true
   defp native_websocket_mode?({:websocket_terminal_then_close_barrier, _, _, _, _, _}), do: true
@@ -1665,6 +1678,29 @@ defmodule CodexPooler.FakeUpstream do
     def handle_info({:fake_upstream_close_websocket, code, reason}, state),
       do: {:stop, :normal, {code, reason}, state}
 
+    # The pushed frames are already written to the socket; killing the
+    # connection process closes it without a close frame. `terminate/2` does
+    # not run for a killed process, so drop its registration first.
+    def handle_info(:fake_upstream_abrupt_close_websocket, %{pid: pid} = state) do
+      websocket_pid = self()
+
+      Agent.update(pid, fn agent_state ->
+        %{
+          agent_state
+          | websocket_pids:
+              MapSet.delete(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
+            websocket_pids_by_connection:
+              Map.delete(
+                Map.get(agent_state, :websocket_pids_by_connection, %{}),
+                state.connection_id
+              )
+        }
+      end)
+
+      Process.exit(websocket_pid, :kill)
+      {:ok, state}
+    end
+
     def handle_info(
           {:fake_upstream_close_websocket, code, reason, notify, close_ref},
           state
@@ -1787,6 +1823,11 @@ defmodule CodexPooler.FakeUpstream do
 
     defp handle_websocket_message({:close, code, reason}, state),
       do: {:stop, reason, {code, reason}, state}
+
+    defp handle_websocket_message({:push_then_abrupt_close, messages}, state) do
+      send(self(), :fake_upstream_abrupt_close_websocket)
+      {:push, Enum.map(messages, &{:text, &1}), state}
+    end
 
     defp handle_websocket_message({:push_then_close, messages, code, reason}, state) do
       send(self(), {:fake_upstream_close_websocket, code, reason})
@@ -1922,6 +1963,9 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp websocket_messages({:websocket_text, messages}, _request), do: messages
+
+    defp websocket_messages({:websocket_text_then_abrupt_close, messages}, _request),
+      do: {:push_then_abrupt_close, messages}
 
     defp websocket_messages({:websocket_frame_barrier, frames, notify, release_ref}, _request),
       do: {:frame_barriers, frames, notify, release_ref}

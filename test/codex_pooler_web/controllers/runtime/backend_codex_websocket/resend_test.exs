@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, ClientRetry, Request}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, CodexTurn, RoutingCircuitState}
@@ -361,6 +361,144 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
                where: link.predecessor_request_id == ^request.id
              )
            )
+  end
+
+  @tag :stream_cut_resend
+  test "lifecycle-only stream cut persists the native client retry observation with a null first_visible_at" do
+    enable_owner_forwarding!()
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings issue 124 (lifecycle frames then a transport close without a terminal)
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, stream_cut_frames("persisted", []))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    turn_state = Ecto.UUID.generate()
+
+    payload =
+      stream_cut_payload(
+        setup,
+        tool_continuation_input("persisted lifecycle cut prompt sentinel"),
+        "persisted"
+      )
+
+    {_server, port} = start_public_endpoint_with_server!()
+
+    %{conn: conn, request: request, attempt: attempt, turn: turn} =
+      stream_cut_first_turn!(setup, port, turn_state, payload, "response.in_progress")
+
+    Mint.HTTP.close(conn)
+
+    assert request.native_client_retry_version == 1
+
+    assert attempt.response_metadata["native_client_retry_observation"] == %{
+             "version" => 1,
+             "authority_complete" => true,
+             "output_item_done_count" => 0,
+             "output_item_done_count_saturated" => false,
+             "partial_reasoning_seen" => false,
+             "first_visible_at" => nil,
+             "terminal_seen" => false,
+             "terminal_candidate_seen" => false
+           }
+
+    assert ClientRetry.verified_lifecycle_cut?(turn, request, attempt)
+    refute inspect(attempt.response_metadata) =~ "prompt sentinel"
+    assert FakeUpstream.count(upstream) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  @tag :stream_cut_resend
+  test "lifecycle-only stream cut on a tool-continuation turn admits the byte-identical resend with a derived request claim" do
+    %{request: request, resend: resend, log: log} =
+      stream_cut_resend_scenario(
+        tool_continuation_input("tool continuation lifecycle cut prompt sentinel"),
+        "tool_continuation",
+        expect: :admitted
+      )
+
+    assert String.starts_with?(request.correlation_id, "codex-request:")
+
+    assert {:ok, resend.correlation_id} ==
+             ClientRetry.deterministic_failed_predecessor_claim(
+               request.correlation_id,
+               request.id
+             )
+
+    assert resend.request_metadata["client_resend"] == %{
+             "predecessor_request_id" => request.id,
+             "reason" => "failed_predecessor"
+           }
+
+    assert log =~ "websocket client resend admitted stage=websocket_turn_claim"
+    assert log =~ "reason_code=failed_predecessor_retry"
+    assert log =~ "predecessor_request_id=#{request.id}"
+    assert log =~ "predecessor_shape=lifecycle_cut"
+
+    refute Repo.exists?(
+             from(link in CodexPooler.Accounting.RequestClientRetryLink,
+               where: link.predecessor_request_id == ^request.id
+             )
+           )
+  end
+
+  @tag :stream_cut_resend
+  test "stream cut after one completed output item keeps the duplicate turn fence for the byte-identical resend" do
+    completed_item =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_item.done",
+        "output_index" => 0,
+        "item" => %{
+          "type" => "message",
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "text" => "synthetic completed item"}]
+        }
+      })
+
+    %{request: request, attempt: attempt, log: log} =
+      stream_cut_resend_scenario(
+        tool_continuation_input("completed item cut prompt sentinel"),
+        "completed_item",
+        expect: :rejected,
+        pre_close_frames: [completed_item],
+        last_upstream_event_type: "response.output_item"
+      )
+
+    assert %{"output_item_done_count" => 1, "first_visible_at" => first_visible_at} =
+             attempt.response_metadata["native_client_retry_observation"]
+
+    assert is_binary(first_visible_at)
+    assert String.starts_with?(request.correlation_id, "codex-request:")
+
+    assert log =~
+             "websocket replay rejection stage=websocket_turn_claim reason_code=reservation_duplicate"
+
+    assert log =~ "resend_disposition=terminal_predecessor"
+    refute log =~ "websocket client resend admitted"
+  end
+
+  @tag :stream_cut_resend
+  test "lifecycle-only stream cut on a text-only turn admits the byte-identical resend as one client-retry successor" do
+    %{request: request, resend: resend} =
+      stream_cut_resend_scenario(
+        native_text_input("text only lifecycle cut prompt sentinel"),
+        "text_only",
+        expect: :admitted
+      )
+
+    assert String.starts_with?(request.correlation_id, "codex-turn:")
+    assert String.starts_with?(resend.correlation_id, "client-retry-v1:")
+
+    assert Repo.one!(
+             from(link in CodexPooler.Accounting.RequestClientRetryLink,
+               where: link.predecessor_request_id == ^request.id,
+               select: link.successor_request_id
+             )
+           ) == resend.id
   end
 
   @tag :provider_terminal_resend
@@ -766,6 +904,248 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert :ok = FakeUpstream.verify!(upstream)
 
     %{setup: setup, request: request, attempt: attempt, turn: turn, resend: resend, log: log}
+  end
+
+  # Strict finite scenario for a stream cut: the first turn receives
+  # `response.created`, `response.in_progress`, and any `pre_close_frames`, then
+  # the upstream drops the TCP connection without a terminal or a close frame
+  # (findings issue 124). An admitted byte-identical resend after the client
+  # reconnects is the only other send and arrives on a replacement connection.
+  defp stream_cut_resend_scenario(input, label, opts) do
+    expect = Keyword.fetch!(opts, :expect)
+    pre_close_frames = Keyword.get(opts, :pre_close_frames, [])
+    enable_owner_forwarding!()
+
+    completed_response_id = "resp_after_stream_cut_#{label}"
+
+    replies =
+      case expect do
+        :admitted ->
+          [
+            strict_native_request(1, stream_cut_frames(label, pre_close_frames)),
+            strict_native_request(2, completed_response_frames(completed_response_id, 3, 1))
+          ]
+
+        :rejected ->
+          [strict_native_request(1, stream_cut_frames(label, pre_close_frames))]
+      end
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings issue 124 (lifecycle frames, transport close; items and resend reply synthetic)
+        FakeUpstream.strict_sequence(replies)
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    turn_state = Ecto.UUID.generate()
+    payload = stream_cut_payload(setup, input, label)
+
+    # The attempt records the bounded event family, not the raw frame type.
+    last_event_type = Keyword.get(opts, :last_upstream_event_type, "response.in_progress")
+
+    {_server, port} = start_public_endpoint_with_server!()
+
+    %{conn: conn, request: request, attempt: attempt, turn: turn} =
+      stream_cut_first_turn!(setup, port, turn_state, payload, last_event_type)
+
+    failed_request_id = request.id
+
+    # The client disconnects; the old socket's cleanup completes before the
+    # byte-identical resend, as in the incident's reconnect sequence.
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+    assert %{downstream: %{pid: downstream_pid}} = :sys.get_state(owner_pid)
+    downstream_monitor = Process.monitor(downstream_pid)
+
+    {resend_outcome, log} =
+      with_info_log(fn ->
+        Mint.HTTP.close(conn)
+
+        assert_receive {:DOWN, ^downstream_monitor, :process, ^downstream_pid, _reason},
+                       @connection_shutdown_timeout_ms
+
+        {retry_conn, retry_websocket, retry_ref} =
+          public_websocket_connect!(port, setup, turn_state)
+
+        {retry_conn, retry_websocket} =
+          public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, payload)
+
+        {retry_conn, _retry_websocket, _types, terminal} =
+          receive_public_websocket_until_terminal(retry_conn, retry_websocket, retry_ref, [])
+
+        Mint.HTTP.close(retry_conn)
+
+        case terminal do
+          %{"type" => "response.completed", "response" => %{"id" => id}} ->
+            {:completed, id}
+
+          %{"type" => "error", "status" => status, "error" => %{"code" => code}} ->
+            {:error, status, code}
+
+          %{"type" => "response.failed"} = failed ->
+            {:failed, get_in(failed, ["response", "error", "code"])}
+        end
+      end)
+
+    refute log =~ "prompt sentinel"
+
+    resend =
+      case expect do
+        :admitted ->
+          assert resend_outcome == {:completed, completed_response_id}
+          refute log =~ "websocket replay rejection"
+
+          assert [%Request{id: ^failed_request_id}, resend] =
+                   Repo.all(
+                     from(r in Request,
+                       where: r.pool_id == ^setup.pool.id,
+                       order_by: [asc: r.admitted_at]
+                     )
+                   )
+
+          resend_id = resend.id
+
+          assert_receive {Events,
+                          %{
+                            reason: "request_finalized",
+                            payload: %{"request_id" => ^resend_id, "status" => "succeeded"}
+                          }},
+                         @websocket_frame_timeout
+
+          assert Repo.aggregate(
+                   from(t in CodexTurn, where: t.codex_session_id == ^turn.codex_session_id),
+                   :count
+                 ) == 2
+
+          assert FakeUpstream.count(upstream) == 2
+          Repo.get!(Request, resend_id)
+
+        :rejected ->
+          assert resend_outcome == {:error, 409, "duplicate_turn"}
+
+          assert [%Request{id: ^failed_request_id}] =
+                   Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+          assert Repo.aggregate(
+                   from(t in CodexTurn, where: t.codex_session_id == ^turn.codex_session_id),
+                   :count
+                 ) == 1
+
+          assert FakeUpstream.count(upstream) == 1
+          nil
+      end
+
+    assert :ok = FakeUpstream.verify!(upstream)
+
+    %{setup: setup, request: request, attempt: attempt, turn: turn, resend: resend, log: log}
+  end
+
+  # Runs the cut turn over the public endpoint and returns the finalized rows.
+  # The predecessor shape both resend paths judge: every row failed with
+  # `upstream_stream_error`, the turn counted `response.created` as visible,
+  # and the attempt carries the exact Mint closed evidence with no terminal.
+  defp stream_cut_first_turn!(setup, port, turn_state, payload, last_event_type) do
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+
+    {conn, _websocket, seen_types, failure_frame} =
+      receive_public_websocket_until_terminal(conn, websocket, ref, [])
+
+    assert %{"type" => "error", "status" => 502} = failure_frame
+    assert ["response.created", "response.in_progress" | _rest] = seen_types
+
+    assert_receive {Events,
+                    %{
+                      reason: "request_finalized",
+                      payload: %{"request_id" => failed_request_id, "status" => "failed"}
+                    }},
+                   @websocket_frame_timeout
+
+    request = Repo.get!(Request, failed_request_id)
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    turn = await_turn_completed!(request.id)
+
+    assert %{
+             request: {request.status, request.last_error_code},
+             attempt: {attempt.status, attempt.network_error_code, attempt.replay_generation},
+             turn: {turn.status, turn.error_code, turn.final_attempt_id}
+           } == %{
+             request: {"failed", "upstream_stream_error"},
+             attempt: {"failed", "upstream_stream_error", 0},
+             turn: {"failed", "upstream_stream_error", attempt.id}
+           }
+
+    refute is_nil(turn.first_visible_output_at)
+
+    assert Map.take(
+             attempt.response_metadata["transport_failure"],
+             ~w(phase termination_source exception reason transport_signal terminal_seen terminal_candidate_seen last_upstream_event_type)
+           ) == %{
+             "phase" => "receive",
+             "termination_source" => "mint_transport_error",
+             "exception" => "Mint.TransportError",
+             "reason" => "closed",
+             "transport_signal" => "tcp_closed",
+             "terminal_seen" => false,
+             "terminal_candidate_seen" => false,
+             "last_upstream_event_type" => last_event_type
+           }
+
+    %{conn: conn, request: request, attempt: attempt, turn: turn}
+  end
+
+  defp stream_cut_frames(label, pre_close_frames) do
+    response_id = "resp_stream_cut_#{label}"
+
+    FakeUpstream.websocket_text_frames_then_abrupt_close(
+      [
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.created",
+          "response" => %{"id" => response_id, "status" => "in_progress"}
+        }),
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.in_progress",
+          "response" => %{"id" => response_id, "status" => "in_progress"}
+        })
+      ] ++ pre_close_frames
+    )
+  end
+
+  defp stream_cut_payload(setup, input, label) do
+    thread_id = Ecto.UUID.generate()
+
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "client_metadata" => %{
+        "x-codex-turn-metadata" =>
+          CodexPooler.JSON.encode!(%{
+            "session_id" => thread_id,
+            "thread_id" => thread_id,
+            "turn_id" => "stream-cut-#{label}-turn",
+            "request_kind" => "turn"
+          })
+      },
+      "input" => input,
+      "stream" => true,
+      "generate" => true
+    })
+  end
+
+  defp enable_owner_forwarding! do
+    previous_owner_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      stop_registered_websocket_owner_sessions()
+
+      case previous_owner_forwarding do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
   end
 
   defp provider_terminal_failure_frames(label) do

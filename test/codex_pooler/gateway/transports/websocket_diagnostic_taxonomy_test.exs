@@ -100,6 +100,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomyTest do
     end
   end
 
+  describe "resend_predecessor_shape/1" do
+    test "renders only the fixed resend predecessor shape vocabulary" do
+      for shape <- ~w(provider_terminal task_exception lifecycle_cut partial_reasoning_cut) do
+        assert DiagnosticTaxonomy.resend_predecessor_shape(shape) == shape
+        assert DiagnosticTaxonomy.resend_predecessor_shape(String.to_atom(shape)) == shape
+      end
+
+      for value <- [nil, "unknown_cut", "lifecycle_cut ", "prompt", 1, %{shape: :lifecycle_cut}] do
+        assert DiagnosticTaxonomy.resend_predecessor_shape(value) == nil
+      end
+    end
+  end
+
   describe "safe_correlator/1" do
     test "normalizes punctuation, empty values, and caps output at 120 characters" do
       assert DiagnosticTaxonomy.safe_correlator("request/id with spaces") ==

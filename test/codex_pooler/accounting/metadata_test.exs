@@ -26,6 +26,54 @@ defmodule CodexPooler.Accounting.MetadataTest do
       end
     end
 
+    test "native client retry observation keeps a null first_visible_at without widening the shape" do
+      lifecycle_only = %{
+        "version" => 1,
+        "authority_complete" => true,
+        "output_item_done_count" => 0,
+        "output_item_done_count_saturated" => false,
+        "partial_reasoning_seen" => false,
+        "first_visible_at" => nil,
+        "terminal_seen" => false,
+        "terminal_candidate_seen" => false
+      }
+
+      assert Accounting.sanitize_metadata(%{"native_client_retry_observation" => lifecycle_only}) ==
+               %{"native_client_retry_observation" => lifecycle_only}
+
+      visible = Map.put(lifecycle_only, "first_visible_at", "2026-09-11T09:00:00.123456Z")
+
+      assert Accounting.sanitize_metadata(%{"native_client_retry_observation" => visible}) ==
+               %{"native_client_retry_observation" => visible}
+
+      for invalid <- ["not a timestamp", "2026-09-11T09:00:00+02:00", 0, false, %{}, []] do
+        sanitized =
+          Accounting.sanitize_metadata(%{
+            "native_client_retry_observation" =>
+              lifecycle_only
+              |> Map.put("first_visible_at", invalid)
+              |> Map.put("raw_frame", "private frame")
+          })
+
+        assert sanitized["native_client_retry_observation"] ==
+                 Map.delete(lifecycle_only, "first_visible_at")
+      end
+
+      for {key, value} <- [
+            {"version", nil},
+            {"authority_complete", nil},
+            {"output_item_done_count", nil},
+            {"terminal_seen", nil}
+          ] do
+        sanitized =
+          Accounting.sanitize_metadata(%{
+            "native_client_retry_observation" => Map.put(lifecycle_only, key, value)
+          })
+
+        refute Map.has_key?(sanitized["native_client_retry_observation"], key)
+      end
+    end
+
     test "rejects invalid usage observation envelopes without retaining arbitrary content" do
       valid = %{
         "version" => 1,

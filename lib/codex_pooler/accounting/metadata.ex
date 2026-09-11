@@ -472,6 +472,9 @@ defmodule CodexPooler.Accounting.Metadata do
              is_boolean(value) ->
         Map.put(sanitized, key, value)
 
+      {"first_visible_at", nil}, sanitized ->
+        Map.put(sanitized, "first_visible_at", nil)
+
       {"first_visible_at", value}, sanitized when is_binary(value) ->
         case DateTime.from_iso8601(value) do
           {:ok, _timestamp, 0} -> Map.put(sanitized, "first_visible_at", value)

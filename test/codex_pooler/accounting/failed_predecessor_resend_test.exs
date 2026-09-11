@@ -62,7 +62,7 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
 
       fail_predecessor!(setup, session, predecessor, "server_error")
 
-      assert {:ok, %{request: resend}} =
+      assert {:ok, %{request: resend, client_resend: %{predecessor_shape: :provider_terminal}}} =
                Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
 
       {:ok, expected_claim} =
@@ -199,11 +199,118 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
 
       fail_predecessor!(setup, session, predecessor, "owner_task_exception")
 
-      assert {:ok, %{request: resend, client_resend: %{predecessor_request_id: predecessor_id}}} =
-               Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+      assert {:ok,
+              %{
+                request: resend,
+                client_resend: %{
+                  predecessor_request_id: predecessor_id,
+                  predecessor_shape: :task_exception
+                }
+              }} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
 
       assert predecessor_id == predecessor.id
       assert String.starts_with?(resend.correlation_id, @retry_prefix)
+    end
+
+    test "admits an upstream stream error predecessor with verified lifecycle-cut or partial-reasoning evidence",
+         %{setup: setup, session: session, opts: opts} do
+      for {shape, metadata} <- [
+            lifecycle_cut: lifecycle_cut_metadata(),
+            partial_reasoning_cut: partial_reasoning_cut_metadata()
+          ] do
+        opts = %{opts | correlation_id: request_claim()}
+
+        {:ok, %{request: predecessor}} =
+          Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+
+        fail_predecessor!(setup, session, predecessor, "upstream_stream_error",
+          response_metadata: metadata
+        )
+
+        assert {:ok,
+                %{
+                  request: resend,
+                  client_resend: %{
+                    predecessor_request_id: predecessor_id,
+                    predecessor_shape: ^shape
+                  }
+                }} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+
+        {:ok, expected_claim} =
+          ClientRetry.deterministic_failed_predecessor_claim(opts.correlation_id, predecessor.id)
+
+        assert predecessor_id == predecessor.id
+        assert resend.correlation_id == expected_claim
+
+        assert resend.request_metadata["client_resend"] == %{
+                 "predecessor_request_id" => predecessor.id,
+                 "reason" => "failed_predecessor"
+               }
+      end
+
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 4
+    end
+
+    test "keeps the duplicate fence for an upstream stream error without verified cut evidence",
+         %{setup: setup, session: session, opts: opts} do
+      non_closed_transport_failure = %{
+        "phase" => "receive",
+        "termination_source" => "mint_transport_error",
+        "exception" => "Mint.TransportError",
+        "reason" => "timeout",
+        "transport_signal" => "ssl_closed"
+      }
+
+      for {label, metadata} <- [
+            without_observation:
+              Map.delete(lifecycle_cut_metadata(), "native_client_retry_observation"),
+            one_completed_output_item:
+              put_in(
+                lifecycle_cut_metadata(),
+                ["native_client_retry_observation", "output_item_done_count"],
+                1
+              ),
+            non_closed_transport_failure:
+              Map.put(lifecycle_cut_metadata(), "transport_failure", non_closed_transport_failure),
+            visible_without_reasoning:
+              put_in(
+                partial_reasoning_cut_metadata(),
+                ["native_client_retry_observation", "partial_reasoning_seen"],
+                false
+              )
+          ] do
+        opts = %{opts | correlation_id: request_claim()}
+
+        {:ok, %{request: predecessor}} =
+          Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+
+        fail_predecessor!(setup, session, predecessor, "upstream_stream_error",
+          response_metadata: metadata
+        )
+
+        assert {:error, %{code: :duplicate_request, resend_disposition: :terminal_predecessor}} =
+                 Accounting.claim_websocket_turn(setup.auth, setup.model, opts),
+               "expected #{label} to keep the fence"
+      end
+
+      # A replayed attempt carrying lifecycle-cut evidence is not the
+      # generation-zero cut the resend repeats.
+      opts = %{opts | correlation_id: request_claim()}
+
+      {:ok, %{request: predecessor}} =
+        Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+
+      %{attempt: attempt} =
+        fail_predecessor!(setup, session, predecessor, "upstream_stream_error",
+          response_metadata: lifecycle_cut_metadata()
+        )
+
+      Repo.update!(Ecto.Changeset.change(attempt, replay_generation: 1))
+
+      assert {:error, %{code: :duplicate_request, resend_disposition: :terminal_predecessor}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 5
     end
 
     test "keeps the duplicate fence for an anchored resend of a provider failure",
@@ -307,8 +414,14 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
     })
   end
 
-  defp fail_predecessor!(setup, session, request, code) do
+  defp fail_predecessor!(setup, session, request, code, opts \\ []) do
     now = db_now()
+
+    response_metadata =
+      Keyword.get(opts, :response_metadata, %{
+        "stream_terminal_type" => "response.failed",
+        "error_kind" => code
+      })
 
     attempt =
       attempt_fixture(request, setup.assignment, %{
@@ -317,7 +430,7 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
         network_error_code: code,
         transport: "websocket",
         usage_status: "usage_unknown",
-        response_metadata: %{"stream_terminal_type" => "response.failed", "error_kind" => code}
+        response_metadata: response_metadata
       })
 
     sequence =
@@ -337,6 +450,7 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
         status: "failed",
         error_code: code,
         final_attempt_id: attempt.id,
+        first_visible_output_at: now,
         started_at: now,
         completed_at: now,
         created_at: now,
@@ -355,6 +469,44 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
       )
 
     %{request: request, attempt: attempt, turn: turn}
+  end
+
+  # The metadata a lifecycle-only cut persists (findings issue 124): only
+  # `response.created` and `response.in_progress` arrived before the TLS
+  # connection closed under the receive loop.
+  defp lifecycle_cut_metadata do
+    %{
+      "transport_failure" => %{
+        "phase" => "receive",
+        "termination_source" => "mint_transport_error",
+        "exception" => "Mint.TransportError",
+        "reason" => "closed",
+        "transport_signal" => "ssl_closed",
+        "terminal_seen" => false,
+        "terminal_candidate_seen" => false
+      },
+      "native_client_retry_observation" => %{
+        "version" => 1,
+        "authority_complete" => true,
+        "output_item_done_count" => 0,
+        "output_item_done_count_saturated" => false,
+        "partial_reasoning_seen" => false,
+        "first_visible_at" => nil,
+        "terminal_seen" => false,
+        "terminal_candidate_seen" => false
+      }
+    }
+  end
+
+  defp partial_reasoning_cut_metadata do
+    metadata = lifecycle_cut_metadata()
+
+    observation =
+      metadata["native_client_retry_observation"]
+      |> Map.put("partial_reasoning_seen", true)
+      |> Map.put("first_visible_at", "2026-09-11T09:00:00.123456Z")
+
+    Map.put(metadata, "native_client_retry_observation", observation)
   end
 
   defp db_now do

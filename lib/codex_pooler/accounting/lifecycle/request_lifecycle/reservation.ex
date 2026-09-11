@@ -127,8 +127,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     }
 
     case FailedPredecessorResend.resolve(attr(opts, :correlation_id), scope) do
-      {:ok, %{claim: claim, predecessor: predecessor}} ->
-        {claim, %{predecessor_request_id: predecessor.id, reason: :failed_predecessor}}
+      {:ok, %{claim: claim, predecessor: predecessor, predecessor_shape: shape}} ->
+        {claim,
+         %{
+           predecessor_request_id: predecessor.id,
+           reason: :failed_predecessor,
+           predecessor_shape: shape
+         }}
 
       {:error, disposition} ->
         Repo.rollback(duplicate_request_error(disposition))
