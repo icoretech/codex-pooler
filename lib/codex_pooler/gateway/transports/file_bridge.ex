@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   require Logger
 
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Routing.RoutingSelection
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -276,7 +277,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
         {"x-ms-blob-type", "BlockBlob"}
       ],
       redirect: false,
-      retry: false
+      retry: false,
+      finch: OperationalSettings.upstream_http_pool_options()
     )
   end
 

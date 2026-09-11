@@ -1,10 +1,12 @@
 defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Transports.FileBridge
+  alias CodexPooler.UpstreamConnPoolTelemetry
 
   @request_detection_timeout_ms 15_000
 
@@ -139,6 +141,34 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     assert byte_size(request_body) == byte_size(contents)
     assert :crypto.hash(:sha256, request_body) == :crypto.hash(:sha256, contents)
     refute log =~ "file bridge transport failed"
+  end
+
+  test "presigned upload PUTs carry the outbound connection idle bound from settings" do
+    {:ok, storage} = FakeUpstream.start_link({:raw_body, 201, "", []})
+    on_exit(fn -> FakeUpstream.stop(storage) end)
+    upload_url = FakeUpstream.url(storage) <> "/upload"
+
+    UpstreamConnPoolTelemetry.put_idle_bound!(0)
+    UpstreamConnPoolTelemetry.attach!(upload_url)
+
+    request_options =
+      %{request_id: Ecto.UUID.generate()}
+      |> RequestOptions.build("/v1/files", %{})
+      |> RequestOptions.put_file_bridge(operation: :upload, endpoint: "/v1/files/upload")
+
+    for index <- 1..2 do
+      path = upload_tempfile!("synthetic upload #{index}")
+
+      assert :ok =
+               FileBridge.upload_file(
+                 upload_url,
+                 %{"path" => path, "content_type" => "text/plain"},
+                 request_options
+               )
+    end
+
+    assert FakeUpstream.count(storage) == 2
+    assert UpstreamConnPoolTelemetry.drain_events() == [:conn_max_idle_time_exceeded]
   end
 
   test "file control-plane envelope removes mixed-case residency forwarding" do

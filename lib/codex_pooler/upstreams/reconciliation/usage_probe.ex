@@ -1,8 +1,8 @@
 defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   @moduledoc false
 
-  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Jobs
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Quotas.{AccountAvailability, Evidence}
   alias CodexPooler.Quotas.Evidence.CodexParsers
   alias CodexPooler.Quotas.Evidence.Descriptors
@@ -316,7 +316,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
       headers: CloudflareCookies.request_headers(url, headers),
       retry: false,
       receive_timeout: timeout,
-      finch: OperationalSettings.upstream_http_pool_options(),
+      finch: OutboundHTTP.pool_options(),
       decode_body: false
     )
     |> decode_usage_response()

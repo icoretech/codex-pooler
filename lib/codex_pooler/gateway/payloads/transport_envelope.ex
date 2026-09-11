@@ -64,10 +64,10 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   # `protocols: [:http1]` holds and upstream HTTP never negotiates HTTP/2.
   # `conn_max_idle_time` exists only for Finch HTTP/1 pools; an HTTP/2 pool
   # would need `http2: [ping_interval:]` or `max_connection_age` instead. The
-  # idle bound is explained at `OperationalSettings`, whose
-  # `upstream_http_pool_options/0` also bounds the non-gateway provider Req
-  # callers; they land on a different Finch instance because they keep their
-  # own connect timeout. The bound is read from the current settings snapshot
+  # idle bound is explained at `CodexPooler.Platform.OutboundHTTP`, which also
+  # bounds every non-gateway outbound Req caller; those land on a different
+  # Finch instance because they keep their own connect timeout. The bound is
+  # read from the current settings snapshot
   # here rather than carried in `TimeoutConfig`: that struct travels inside
   # versioned websocket owner requests whose field set is validated exactly
   # across nodes, and an owner never opens a Finch HTTP connection.

@@ -4,6 +4,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   import Ecto.Query
 
   alias CodexPooler.Catalog.{OpenAIPricingFormat, PricingSnapshot}
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
 
   @source "openai-json-pricing"
@@ -59,7 +60,12 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   end
 
   defp fetch(url) do
-    case Req.get(url, decode_body: false, receive_timeout: :timer.seconds(30), retry: false) do
+    case Req.get(url,
+           decode_body: false,
+           receive_timeout: :timer.seconds(30),
+           retry: false,
+           finch: OutboundHTTP.pool_options()
+         ) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_binary(body) ->
         {:ok, body}
 

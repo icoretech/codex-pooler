@@ -1,5 +1,6 @@
 defmodule CodexPooler.Status.FeedClient do
   @moduledoc "Req boundary for the fixed OpenAI status RSS feed."
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Status.FeedParser
   @url "https://status.openai.com/feed.rss"
   @max_bytes 1_000_000
@@ -19,7 +20,9 @@ defmodule CodexPooler.Status.FeedClient do
       decode_body: false,
       retry: false,
       receive_timeout: timeout,
-      connect_options: [timeout: timeout],
+      # Req refuses `connect_options` together with `finch`, so the connect
+      # timeout travels as Finch `conn_opts` next to the idle bound.
+      finch: [conn_opts: [transport_opts: [timeout: timeout]]] ++ OutboundHTTP.pool_options(),
       redirect: false
     ]
 

@@ -6,8 +6,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   import Ecto.Query
 
   alias CodexPooler.Events
-  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Routing.CircuitHealth
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -703,7 +703,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              ),
            retry: false,
            receive_timeout: recovery.receive_timeout,
-           finch: OperationalSettings.upstream_http_pool_options()
+           finch: OutboundHTTP.pool_options()
          )
          |> store_cloudflare_cookies(recovery.list_url) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) ->
@@ -1012,7 +1012,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
            receive_timeout: recovery.receive_timeout,
-           finch: OperationalSettings.upstream_http_pool_options()
+           finch: OutboundHTTP.pool_options()
          )
          |> store_cloudflare_cookies(recovery.consume_url) do
       {:ok, %{status: status, body: response_body}} ->
@@ -2282,7 +2282,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              ),
            retry: false,
            receive_timeout: receive_timeout,
-           finch: OperationalSettings.upstream_http_pool_options()
+           finch: OutboundHTTP.pool_options()
          )
          |> store_cloudflare_cookies(url) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) ->
@@ -2385,7 +2385,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
            receive_timeout: reserved_claim.receive_timeout,
-           finch: OperationalSettings.upstream_http_pool_options()
+           finch: OutboundHTTP.pool_options()
          )
          |> store_cloudflare_cookies(url) do
       {:ok, %{status: status, body: response_body}} ->

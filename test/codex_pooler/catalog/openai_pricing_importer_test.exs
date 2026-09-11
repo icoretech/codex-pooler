@@ -4,6 +4,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   alias CodexPooler.Catalog.{OpenAIPricingImporter, PricingSnapshot}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
+  alias CodexPooler.UpstreamConnPoolTelemetry
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -158,6 +159,39 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert Repo.aggregate(CodexPooler.Catalog.Model, :count) == models_before
     assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "HTTP imports carry the outbound connection idle bound from settings" do
+    payload = valid_payload("http-idle-bound-model")
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: synthetic_adversarial (two scheduled fetches reusing one origin)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(payload)
+          ),
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(payload)
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    url = FakeUpstream.url(upstream) <> "/pricing.json"
+
+    UpstreamConnPoolTelemetry.put_idle_bound!(0)
+    UpstreamConnPoolTelemetry.attach!(url)
+
+    assert {:ok, %{inserted: 1}} = OpenAIPricingImporter.import_url(url)
+    assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_url(url)
+
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert UpstreamConnPoolTelemetry.drain_events() == [:conn_max_idle_time_exceeded]
   end
 
   test "HTTP status, invalid JSON and incompatible catalogs fail without writes" do

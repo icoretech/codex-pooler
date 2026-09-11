@@ -16,32 +16,37 @@ defmodule CodexPooler.UpstreamConnPoolTelemetry do
   import ExUnit.Callbacks, only: [on_exit: 1]
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Platform.OutboundHTTP
 
   @events [[:finch, :reused_connection], [:finch, :conn_max_idle_time_exceeded]]
 
   @doc """
-  Sets `upstream_conn_max_idle_time_ms` in the operational settings test
-  override for the rest of the test and restores the previous override on exit.
+  Sets the outbound connection idle bound in both test overrides, the gateway
+  operational settings snapshot and `CodexPooler.Platform.OutboundHTTP`, for
+  the rest of the test and restores the previous overrides on exit.
   A zero bound is below the Instance Setting minimum on purpose: it makes every
   checked-in connection stale at its next checkout without waiting.
   """
   @spec put_idle_bound!(non_neg_integer()) :: :ok
   def put_idle_bound!(idle_ms) when is_integer(idle_ms) and idle_ms >= 0 do
     previous = Application.get_env(:codex_pooler, OperationalSettings)
+    previous_outbound = Application.get_env(:codex_pooler, OutboundHTTP)
     settings = Keyword.get(previous || [], :settings, %OperationalSettings{})
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: %{settings | upstream_conn_max_idle_time_ms: idle_ms}
     )
 
+    Application.put_env(:codex_pooler, OutboundHTTP, conn_max_idle_time_ms: idle_ms)
+
     on_exit(fn ->
-      if previous do
-        Application.put_env(:codex_pooler, OperationalSettings, previous)
-      else
-        Application.delete_env(:codex_pooler, OperationalSettings)
-      end
+      restore_env(OperationalSettings, previous)
+      restore_env(OutboundHTTP, previous_outbound)
     end)
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:codex_pooler, key)
+  defp restore_env(key, previous), do: Application.put_env(:codex_pooler, key, previous)
 
   @doc "Forwards Finch checkout events for the origin at `base_url` to the test process."
   @spec attach!(String.t()) :: :ok

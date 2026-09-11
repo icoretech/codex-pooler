@@ -11,6 +11,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
 
   alias CodexPooler.Alerts.Delivery.{AttemptLifecycle, WebhookPayload, WebhookSigning}
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
   alias CodexPooler.TransportFailureReason
 
@@ -179,7 +180,8 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
       headers: headers,
       decode_body: false,
       receive_timeout: @receive_timeout_ms,
-      retry: false
+      retry: false,
+      finch: OutboundHTTP.pool_options()
     )
   rescue
     exception in [
