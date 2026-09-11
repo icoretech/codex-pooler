@@ -21,7 +21,7 @@ validate_paths() {
       test/codex_pooler/upstreams/saved_reset_redemption_test.exs|\
       test/codex_pooler/upstreams/quota/windows/provider_cycle_confirmation_test.exs|\
       test/codex_pooler/upstreams_test.exs|\
-      test/codex_pooler_web/controllers/runtime/backend_codex_websocket_test.exs|\
+      test/codex_pooler_web/controllers/runtime/backend_codex_websocket/*_test.exs|\
       test/codex_pooler_web/live/admin/pages/upstreams_live_test.exs|\
       scripts/verification/quota-convergence/check-receipts.sh|\
       scripts/verification/quota-convergence/check-scope.sh|\
