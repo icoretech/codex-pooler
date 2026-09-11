@@ -2,10 +2,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   @moduledoc false
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Runtime.Dispatch.AuthRefresh
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Finalization
@@ -16,12 +15,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
   alias CodexPooler.Gateway.Websocket
-  alias CodexPooler.Upstreams.Auth.TokenRefresh
-  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
-  alias CodexPooler.Upstreams.Secrets
-
-  @access_token_secret_kind "access_token"
-  @auth_refresh_trigger_kind "websocket_terminal_auth_failure"
 
   # Dialyzer cannot prove the JSON-decoded websocket terminal auth signatures that
   # UpstreamWebsocketSession classifies at runtime, so it marks this retry branch
@@ -30,12 +23,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
              [
                finalize_not_retryable_auth_refresh: 6,
                retry_after_websocket_auth_refresh: 5,
-               record_auth_refresh_first_attempt_failure: 4,
-               refresh_websocket_auth: 1,
-               record_auth_refresh_metadata: 2,
-               refresh_in_progress_metadata: 1,
-               maybe_put_safe_metadata: 3,
-               safe_refresh_reason: 1
+               record_auth_refresh_first_attempt_failure: 4
              ]}
 
   @type callbacks :: %{
@@ -197,7 +185,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
         {:stale_generation, finalized}
 
       {:ok, _recorded_failure} ->
-        with {:ok, refresh_metadata, refreshed_identity} <- refresh_websocket_auth(context),
+        with {:ok, refresh_metadata, refreshed_identity} <-
+               AuthRefresh.refresh(context, :websocket),
              {:ok, refreshed_context} <- record_auth_refresh_metadata(context, refresh_metadata),
              {:ok, retry_context} <-
                create_same_assignment_retry_context(%{
@@ -205,8 +194,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
                  | identity: refreshed_identity,
                    auth_refresh_retry_attempted?: true
                }),
-             {:ok, refreshed_token} <-
-               Secrets.decrypt_active_secret(refreshed_identity, @access_token_secret_kind) do
+             {:ok, refreshed_token} <- AuthRefresh.decrypt_access_token(refreshed_identity) do
           retry_prepared_context = %{
             prepared_context
             | context: retry_context,
@@ -515,7 +503,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
             response_context.upstream_websocket_connection
           )
         )
-        |> Map.put("auth_refresh_trigger", @auth_refresh_trigger_kind),
+        |> Map.put("auth_refresh_trigger", AuthRefresh.trigger_kind(:websocket)),
       retry_count: context.retry_count,
       before_finalize: fn ->
         SideEffects.observe_websocket_response(context, response_context.response)
@@ -523,57 +511,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     })
   end
 
-  # The 401 was produced by the credentials this dispatch connected with:
-  # carrying their epoch lets a late follower skip the provider refresh when
-  # another caller already rotated, and retry with the returned identity.
-  # At token expiry every in-flight request on the identity fails auth at
-  # once, so this is the highest-frequency duplicate-refresh source.
-  defp refresh_websocket_auth(context) do
-    case TokenRefresh.refresh_access_token(context.identity,
-           trigger_kind: @auth_refresh_trigger_kind,
-           expected_credential_epoch: CredentialFencing.credential_epoch(context.identity)
-         ) do
-      {:ok, %{status: :active, identity: refreshed_identity}} ->
-        {:ok, %{"status" => "succeeded", "trigger_kind" => @auth_refresh_trigger_kind},
-         refreshed_identity}
-
-      {:ok, result} ->
-        {:refresh_not_retryable,
-         %{
-           "status" => to_string(result.status),
-           "trigger_kind" => @auth_refresh_trigger_kind
-         }}
-
-      {:error, :refresh_in_progress, metadata} ->
-        {:refresh_not_retryable,
-         metadata
-         |> refresh_in_progress_metadata()
-         |> Map.put("trigger_kind", @auth_refresh_trigger_kind)}
-
-      {:error, reason} ->
-        {:refresh_not_retryable,
-         %{
-           "status" => "failed",
-           "trigger_kind" => @auth_refresh_trigger_kind,
-           "reason" => safe_refresh_reason(reason)
-         }}
-    end
-  end
-
-  defp record_auth_refresh_metadata(context, metadata) do
-    case Accounting.merge_request_metadata(context.reserved.request, %{"auth_refresh" => metadata}) do
-      {:ok, request} ->
-        {:ok, %{context | reserved: %{context.reserved | request: request}}}
-
-      {:error, reason} ->
-        FailureResponse.accounting_failure(
-          :merge_websocket_auth_refresh_metadata,
-          context.reserved.request,
-          context.attempt,
-          reason
-        )
-    end
-  end
+  # The fenced provider refresh itself lives in the shared AuthRefresh helper.
+  defp record_auth_refresh_metadata(context, metadata),
+    do: AuthRefresh.record_metadata(context, metadata, :merge_websocket_auth_refresh_metadata)
 
   defp maybe_put_websocket_callbacks(%{terminal: terminal} = finalization, callbacks) do
     case websocket_terminal_outcome(terminal, Map.get(finalization, :body, "")) do
@@ -661,23 +601,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   end
 
   defp auth_header_error_code(_headers), do: nil
-
-  defp refresh_in_progress_metadata(metadata) when is_map(metadata) do
-    %{"status" => "refresh_in_progress"}
-    |> maybe_put_safe_metadata("attempt_id", metadata[:attempt_id])
-    |> maybe_put_safe_metadata("generation", metadata[:generation])
-    |> maybe_put_safe_metadata("started_at", metadata[:started_at])
-    |> maybe_put_safe_metadata("stale_after_ms", metadata[:stale_after_ms])
-  end
-
-  defp maybe_put_safe_metadata(attrs, key, value) when is_binary(value) or is_integer(value),
-    do: Map.put(attrs, key, value)
-
-  defp maybe_put_safe_metadata(attrs, _key, _value), do: attrs
-
-  defp safe_refresh_reason(%{code: code}), do: to_string(code)
-  defp safe_refresh_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp safe_refresh_reason(_reason), do: "token_refresh_failed"
 
   defp create_same_assignment_retry_context(context) do
     case Accounting.create_attempt(context.reserved.request, context.assignment, %{
@@ -802,21 +725,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       is_map(owner.downstream)
   end
 
-  defp bound_reset_probe?(context) do
-    case context.request_options.routing.reset_probe do
-      %ResetProbe{} = probe ->
-        ResetProbe.matches?(
-          probe,
-          context.assignment.id,
-          context.identity.id,
-          context.request_options.routing.effective_model || context.model.exposed_model_id,
-          context.route_class
-        )
-
-      nil ->
-        false
-    end
-  end
+  defp bound_reset_probe?(context), do: AuthRefresh.bound_reset_probe?(context)
 
   defp first_event_retry_policy(context) do
     cond do
@@ -831,11 +740,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     end
   end
 
-  defp retry_suppressed?(context) do
-    bound_reset_probe?(context) or
-      RequestOptions.connection_bound_compaction?(context.request_options) or
-      match?(%ClientRetry.DispatchAuthority{}, context.client_retry_dispatch_authority)
-  end
+  defp retry_suppressed?(context), do: AuthRefresh.retry_suppressed?(context)
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)
 end

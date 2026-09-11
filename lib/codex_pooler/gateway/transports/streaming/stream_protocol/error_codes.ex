@@ -22,6 +22,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   @terminal_default_code "upstream_websocket_terminal_failure"
   @upstream_request_failed_code "upstream_request_failed"
   @websocket_request_failed_code "websocket_request_failed"
+  # Gateway-owned retryable code for exhausted upstream credential refresh on
+  # either transport; the client-facing 401 stays reserved for API-key rejection.
+  @upstream_unauthorized_code "upstream_unauthorized"
 
   # Keep provider vocabulary in one module while exposing separate predicates:
   # retry, terminal classification, and route health deliberately have
@@ -104,12 +107,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
                            @rate_limit_exceeded_code,
                            @terminal_default_code,
                            @upstream_request_failed_code,
-                           @websocket_request_failed_code
+                           @websocket_request_failed_code,
+                           @upstream_unauthorized_code
                          ]
                      )
 
   @spec known_error_codes() :: [String.t()]
   def known_error_codes, do: @known_error_codes
+
+  @spec upstream_unauthorized_code() :: String.t()
+  def upstream_unauthorized_code, do: @upstream_unauthorized_code
 
   @spec upstream_request_failed_code() :: String.t()
   def upstream_request_failed_code, do: @upstream_request_failed_code

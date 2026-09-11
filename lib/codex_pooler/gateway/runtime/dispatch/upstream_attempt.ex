@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.ModelMetadata
+  alias CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt
@@ -67,11 +68,15 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
     case UpstreamDispatch.http_request(dispatch_request) do
       {:ok, response} ->
-        Finalization.handle_http_response(
-          response,
-          context,
-          finalization_callbacks(callbacks)
-        )
+        if HttpAuthRefresh.eligible?(prepared_context, response) do
+          HttpAuthRefresh.handle(prepared_context, response, &dispatch_http(&1, callbacks))
+        else
+          Finalization.handle_http_response(
+            response,
+            context,
+            finalization_callbacks(callbacks)
+          )
+        end
 
       {:error, reason} ->
         Finalization.handle_dispatch_error(reason, context, elapsed_ms(context.started))
