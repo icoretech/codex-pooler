@@ -9,6 +9,11 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
 
   @call_timeout 1_000
+  # The caller waits this long for the synchronous pre-dispatch renewal before
+  # it gives the renewal up as owner_unavailable. Production keeps the 1 s
+  # bound: a longer wait would hold the renewal's pool connection behind a
+  # locked session row. A start option overrides it.
+  @renew_call_timeout_ms 1_000
   @http_transports ["http_json", "http_sse", "http_compact_json"]
 
   defstruct [
@@ -24,6 +29,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     :renewal_token,
     :handoff_ref,
     :handoff_token,
+    :renew_call_timeout_ms,
     :test_observer
   ]
 
@@ -47,12 +53,14 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   end
 
   def run(%RequestOptions{} = request_options, callback) when is_function(callback, 1) do
-    case start(request_options, schedule?: false) do
+    start_opts = [schedule?: false] ++ test_start_options()
+
+    case start(request_options, start_opts) do
       :ignore ->
         callback.(nil)
 
       {:ok, heartbeat} ->
-        case renew_now(heartbeat) do
+        case renew_now(heartbeat, renew_call_timeout_ms(start_opts)) do
           :ok -> run_callback(heartbeat, callback)
           {:error, reason} -> {:error, reason}
         end
@@ -102,6 +110,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
       caller_monitor: caller_monitor,
       renew: lifecycle.renew,
       renewal_delay: lifecycle.renewal_delay,
+      renew_call_timeout_ms: lifecycle.renew_call_timeout_ms,
       test_observer: lifecycle.test_observer
     }
 
@@ -185,8 +194,8 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     :exit, _reason -> {:error, :owner_unavailable}
   end
 
-  defp renew_now(heartbeat) do
-    GenServer.call(heartbeat, :renew_now, @call_timeout)
+  defp renew_now(heartbeat, timeout) do
+    GenServer.call(heartbeat, :renew_now, timeout)
   catch
     :exit, _reason ->
       terminate_after_call_failure(heartbeat)
@@ -230,6 +239,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
          renew: Keyword.get(opts, :renew, &SessionContinuity.renew_owner_token/3),
          renewal_delay:
            Keyword.get(opts, :renewal_delay, &OwnerRenewalSchedule.staggered_delay/1),
+         renew_call_timeout_ms: renew_call_timeout_ms(opts),
          test_observer: test_observer(request_options)
        }}
     else
@@ -241,6 +251,13 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     case request_options.continuity.bridge_owner_lease_ttl_seconds do
       ttl when is_integer(ttl) and ttl > 0 -> ttl
       _value -> OperationalSettings.current().bridge_owner_lease_ttl_seconds
+    end
+  end
+
+  defp renew_call_timeout_ms(opts) do
+    case Keyword.get(opts, :renew_call_timeout_ms) do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _value -> @renew_call_timeout_ms
     end
   end
 
@@ -334,6 +351,15 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   defp demonitor_caller(state), do: state
 
   if Mix.env() == :test do
+    # Controller tests set this in the request process, the only place a
+    # synchronous renewal's start options can come from on that path.
+    defp test_start_options do
+      case Process.get({__MODULE__, :renew_call_timeout_ms}) do
+        timeout when is_integer(timeout) and timeout > 0 -> [renew_call_timeout_ms: timeout]
+        _value -> []
+      end
+    end
+
     defp test_observer(%RequestOptions{extra: %{session_lease_heartbeat_test_observer: observer}})
          when is_pid(observer),
          do: observer
@@ -346,6 +372,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
 
     defp notify_test_observer(_state, _event), do: :ok
   else
+    defp test_start_options, do: []
     defp test_observer(%RequestOptions{}), do: nil
     defp notify_test_observer(_state, _event), do: :ok
   end

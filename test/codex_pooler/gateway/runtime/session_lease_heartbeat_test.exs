@@ -87,6 +87,24 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
              )
   end
 
+  test "the synchronous renewal call keeps its 1 s bound unless a start option overrides it" do
+    %{session: session, token: token} = owner_session_fixture()
+    request_options = http_request_options(session, token)
+
+    assert {:ok, default} = SessionLeaseHeartbeat.start(request_options, schedule?: false)
+    assert %{renew_call_timeout_ms: 1_000} = :sys.get_state(default)
+    assert :ok = SessionLeaseHeartbeat.stop(default)
+
+    assert {:ok, overridden} =
+             SessionLeaseHeartbeat.start(request_options,
+               schedule?: false,
+               renew_call_timeout_ms: 5_000
+             )
+
+    assert %{renew_call_timeout_ms: 5_000} = :sys.get_state(overridden)
+    assert :ok = SessionLeaseHeartbeat.stop(overridden)
+  end
+
   test "uses the bounded cadence and reschedules only after a successful renewal" do
     %{session: session, token: token} = owner_session_fixture()
     request_options = http_request_options(session, token, ttl_seconds: 9)
