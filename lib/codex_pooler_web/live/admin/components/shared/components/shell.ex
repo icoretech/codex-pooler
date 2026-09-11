@@ -82,6 +82,13 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   @admin_footer_nav_items [
     %{
+      key: :incidents,
+      id: "admin-nav-incidents",
+      label: "OpenAI incidents",
+      path: "/admin/incidents",
+      icon: "hero-exclamation-triangle"
+    },
+    %{
       key: :alerts,
       id: "admin-nav-alerts",
       label: "Alerts",
@@ -101,6 +108,9 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
   attr :current_scope, :any, required: true
   attr :active_nav, :atom, required: true
   attr :alert_notification_center, :map, required: true
+
+  attr :openai_status_aggregate, :map,
+    default: %{incidents: [], last_success_at: nil, stale?: false}
 
   slot :inner_block, required: true
 
@@ -322,6 +332,12 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
           class="relative ml-16 h-full min-h-0 overflow-x-hidden overflow-y-auto bg-base-200 pt-12 xl:ml-64"
         >
           <div class="flex min-w-0 flex-col gap-6 p-4 sm:p-6 xl:p-8">
+            <.openai_status_banner
+              :if={
+                @active_nav != :incidents and openai_status_banner_visible?(@openai_status_aggregate)
+              }
+              aggregate={@openai_status_aggregate}
+            />
             {render_slot(@inner_block)}
           </div>
         </main>
@@ -329,6 +345,62 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
     </Layouts.app>
     """
   end
+
+  attr :aggregate, :map, required: true
+
+  defp openai_status_banner(assigns) do
+    titles = assigns.aggregate |> Map.get(:incidents, []) |> Enum.map(& &1.title) |> Enum.take(3)
+    assigns = assign(assigns, :titles, titles)
+
+    ~H"""
+    <section
+      id="admin-openai-status-banner"
+      role="status"
+      aria-live="polite"
+      class="grid gap-3 rounded-box border border-warning/40 bg-warning/15 p-4 text-base-content shadow-sm sm:flex sm:items-center sm:justify-between sm:gap-5"
+    >
+      <div class="min-w-0 grid gap-1">
+        <p class="font-semibold">Incidents reported on the status feed</p>
+        <p class="text-sm leading-5 text-base-content/80">
+          <span :for={{title, index} <- Enum.with_index(@titles)}>
+            {if index > 0, do: ", "}{title}
+          </span><span :if={length(@aggregate.incidents) > 3}> +{length(@aggregate.incidents) - 3} more</span>
+        </p>
+        <p :if={@aggregate.stale?} id="admin-openai-status-stale" class="text-xs text-base-content/70">
+          The feed may be out of date; automatic refresh continues every five minutes.
+        </p>
+      </div>
+      <div class="flex shrink-0 flex-wrap items-center gap-2">
+        <.link
+          id="admin-openai-status-link"
+          navigate={~p"/admin/incidents"}
+          class="btn btn-warning btn-sm"
+        >
+          View incidents
+        </.link>
+        <button
+          id="admin-openai-status-dismiss"
+          type="button"
+          phx-click="dismiss_openai_status"
+          class="btn btn-ghost btn-sm text-base-content/75 hover:text-base-content"
+          aria-label="Dismiss current status incidents"
+        >
+          Dismiss
+        </button>
+      </div>
+    </section>
+    """
+  end
+
+  defp openai_status_banner_visible?(%{
+         incidents: incidents,
+         last_success_at: %DateTime{} = timestamp
+       })
+       when is_list(incidents) do
+    DateTime.diff(DateTime.utc_now(), timestamp, :second) <= 86_400 and incidents != []
+  end
+
+  defp openai_status_banner_visible?(_), do: false
 
   defp admin_nav_item_class(active?) do
     [

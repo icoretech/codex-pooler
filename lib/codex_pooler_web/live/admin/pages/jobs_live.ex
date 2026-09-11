@@ -185,6 +185,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
       current_scope={@current_scope}
       active_nav={:jobs}
       alert_notification_center={@alert_notification_center}
+      openai_status_aggregate={@openai_status_aggregate}
     >
       <div id="job-detail-drawer-root" class="drawer drawer-end">
         <input

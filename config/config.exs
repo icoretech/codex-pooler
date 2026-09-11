@@ -120,6 +120,26 @@ jobs_schedule = [
     workers: [CodexPooler.Jobs.RequestReplayCleanupWorker],
     scheduled_worker: CodexPooler.Jobs.RequestReplayCleanupWorker,
     cadence: %{label: "Every minute", cron: "* * * * *"}
+  },
+  %{
+    key: :openai_status_sync,
+    id: "openai-status-sync",
+    title: "OpenAI status polling",
+    description: "OpenAI incident feed refresh",
+    icon: "hero-signal",
+    workers: [CodexPooler.Jobs.OpenAIStatusSyncWorker],
+    scheduled_worker: CodexPooler.Jobs.OpenAIStatusSyncWorker,
+    cadence: %{label: "Every 5 min", cron: "*/5 * * * *"}
+  },
+  %{
+    key: :openai_status_cleanup,
+    id: "openai-status-cleanup",
+    title: "OpenAI status retention",
+    description: "Retired incident cleanup",
+    icon: "hero-trash",
+    workers: [CodexPooler.Jobs.OpenAIStatusCleanupWorker],
+    scheduled_worker: CodexPooler.Jobs.OpenAIStatusCleanupWorker,
+    cadence: %{label: "Daily at 00:00 UTC", cron: "0 0 * * *"}
   }
 ]
 

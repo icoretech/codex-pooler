@@ -48,6 +48,7 @@ defmodule CodexPooler.SchemaContractTest do
     models operator_pool_assignments platform_bootstrap_state pricing_snapshots recovery_codes request_log_facts requests routing_circuit_states
     sessions sync_runs pools pool_routing_settings pool_upstream_assignments totp_settings
     upstream_identities upstream_oauth_flows users
+    openai_status_feed_states openai_status_incidents openai_status_dismissals
   )
 
   @schema_modules [
@@ -96,7 +97,10 @@ defmodule CodexPooler.SchemaContractTest do
     CodexPooler.Upstreams.Schemas.EncryptedSecret,
     OAuthFlow,
     CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
-    UpstreamIdentity
+    UpstreamIdentity,
+    CodexPooler.Status.Schemas.FeedState,
+    CodexPooler.Status.Schemas.Incident,
+    CodexPooler.Status.Schemas.Dismissal
   ]
 
   test "creates the final source table inventory with pgcrypto enabled" do
@@ -189,7 +193,12 @@ defmodule CodexPooler.SchemaContractTest do
           "upstream_oauth_flows_state_token_hash_uq",
           "upstream_oauth_flows_pool_status_expires_idx",
           "upstream_oauth_flows_identity_status_expires_idx",
-          "upstream_oauth_flows_requested_status_inserted_idx"
+          "upstream_oauth_flows_requested_status_inserted_idx",
+          "openai_status_incidents_guid_uq",
+          "openai_status_incidents_retention_idx",
+          "openai_status_incidents_active_idx",
+          "openai_status_dismissals_operator_incident_revision_uq",
+          "openai_status_dismissals_operator_idx"
         ] do
       assert Map.has_key?(indexes, name)
     end

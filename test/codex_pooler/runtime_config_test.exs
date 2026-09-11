@@ -85,6 +85,14 @@ defmodule CodexPooler.RuntimeConfigTest do
         assert oban_config.queues != [] == queues?
         assert oban_config.stager != false == stager?
 
+        if services? do
+          {Oban.Cron, cron_opts} = Enum.find(oban_config.plugins, &match?({Oban.Cron, _}, &1))
+          crontab = Keyword.fetch!(cron_opts, :crontab)
+
+          assert {"*/5 * * * *", CodexPooler.Jobs.OpenAIStatusSyncWorker} in crontab
+          assert {"0 0 * * *", CodexPooler.Jobs.OpenAIStatusCleanupWorker} in crontab
+        end
+
         for service <- [Oban.Cron, Oban.Lifeline, Oban.Pruner] do
           assert MapSet.member?(plugin_modules, service) == services?
         end

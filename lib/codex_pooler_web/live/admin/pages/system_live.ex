@@ -312,6 +312,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       current_scope={@current_scope}
       active_nav={:system}
       alert_notification_center={@alert_notification_center}
+      openai_status_aggregate={@openai_status_aggregate}
     >
       <section id="admin-system-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header

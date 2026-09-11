@@ -270,6 +270,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
       current_scope={@current_scope}
       active_nav={:api_keys}
       alert_notification_center={@alert_notification_center}
+      openai_status_aggregate={@openai_status_aggregate}
     >
       <section id="admin-api-keys-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header

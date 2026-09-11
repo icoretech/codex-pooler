@@ -524,6 +524,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       current_scope={@current_scope}
       active_nav={:upstreams}
       alert_notification_center={@alert_notification_center}
+      openai_status_aggregate={@openai_status_aggregate}
     >
       <div
         :for={warning <- @pool_editor_warnings}

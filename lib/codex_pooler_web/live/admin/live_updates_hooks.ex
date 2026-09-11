@@ -36,6 +36,9 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   import Phoenix.Component, only: [assign: 3]
 
   alias CodexPooler.Events
+  alias CodexPooler.OpenAIStatus
+  alias CodexPooler.Status.Events, as: StatusEvents
+  alias CodexPoolerWeb.Admin.OpenAIIncidentsReadModel
   alias Phoenix.LiveView.Socket
 
   @paused_assign :live_updates_paused?
@@ -58,6 +61,13 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
         :admin_live_updates_gate,
         :handle_info,
         &gate_live_update/2
+      )
+      |> assign_openai_status()
+      |> subscribe_openai_status()
+      |> Phoenix.LiveView.attach_hook(
+        :admin_openai_status,
+        :handle_info,
+        &handle_openai_status/2
       )
 
     {:cont, socket}
@@ -170,7 +180,64 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
     if changed?, do: {:halt, announce(socket, wanted)}, else: {:halt, socket}
   end
 
+  defp handle_live_updates_event("dismiss_openai_status", _params, socket) do
+    operator_id = get_in(socket.assigns, [:current_scope, Access.key(:user), Access.key(:id)])
+    aggregate = Map.get(socket.assigns, :openai_status_aggregate, %{})
+
+    viewed =
+      aggregate
+      |> Map.get(:incidents, [])
+      |> Enum.map(&{&1.id, &1.revision})
+
+    case {operator_id, viewed} do
+      {operator_id, [_ | _]} when is_binary(operator_id) ->
+        case OpenAIStatus.dismiss_many(operator_id, viewed) do
+          {:ok, _count} -> {:halt, assign_openai_status(socket)}
+          {:error, _reason} -> {:halt, assign_openai_status(socket)}
+        end
+
+      _ ->
+        {:halt, socket}
+    end
+  end
+
   defp handle_live_updates_event(_event, _params, socket), do: {:cont, socket}
+
+  defp assign_openai_status(socket) do
+    operator_id = get_in(socket.assigns, [:current_scope, Access.key(:user), Access.key(:id)])
+    assign(socket, :openai_status_aggregate, OpenAIStatus.aggregate(operator_id: operator_id))
+  end
+
+  defp subscribe_openai_status(socket) do
+    if Phoenix.LiveView.connected?(socket), do: StatusEvents.subscribe()
+    socket
+  end
+
+  defp handle_openai_status({:openai_status_updated, payload}, socket) do
+    case StatusEvents.decode(payload) do
+      {:ok, event} ->
+        current = get_in(socket.assigns, [:openai_status_aggregate, :aggregate_revision]) || -1
+
+        if event.aggregate_revision > current do
+          {:halt, refresh_openai_status(socket)}
+        else
+          {:halt, socket}
+        end
+
+      :ignore ->
+        {:halt, socket}
+    end
+  end
+
+  defp handle_openai_status(_message, socket), do: {:cont, socket}
+
+  defp refresh_openai_status(socket) do
+    socket = assign_openai_status(socket)
+
+    if Map.has_key?(socket.assigns, :incidents_page),
+      do: assign(socket, :incidents_page, OpenAIIncidentsReadModel.load()),
+      else: socket
+  end
 
   # The icon swapping is easy to miss on a control this small, and the
   # consequence of pausing — that lists stop moving — is not something to leave

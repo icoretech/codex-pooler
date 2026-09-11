@@ -5,12 +5,16 @@ defmodule CodexPooler.Events.PostgresBridge do
 
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
+  alias CodexPooler.Status.Events, as: StatusEvents
 
   require Logger
 
   @notifications CodexPooler.Events.PostgresNotifications
 
-  @type state :: %{required(:listen_ref) => reference() | nil}
+  @type state :: %{
+          required(:listen_ref) => reference() | nil,
+          required(:status_listen_ref) => reference() | nil
+        }
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(opts) do
@@ -31,7 +35,12 @@ defmodule CodexPooler.Events.PostgresBridge do
       |> Postgrex.Notifications.listen(Events.postgres_channel())
       |> listen_ref!()
 
-    {:ok, %{listen_ref: listen_ref}}
+    status_listen_ref =
+      @notifications
+      |> Postgrex.Notifications.listen(StatusEvents.postgres_channel())
+      |> listen_ref!()
+
+    {:ok, %{listen_ref: listen_ref, status_listen_ref: status_listen_ref}}
   end
 
   @impl true
@@ -45,6 +54,23 @@ defmodule CodexPooler.Events.PostgresBridge do
 
       {:error, reason} ->
         Logger.warning("pool event postgres relay ignored payload: #{inspect(reason)}")
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:notification, _pid, listen_ref, channel, payload},
+        %{status_listen_ref: listen_ref} = state
+      ) do
+    if channel == StatusEvents.postgres_channel() do
+      case StatusEvents.relay_payload(payload) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("status postgres relay ignored payload: #{inspect(reason)}")
+      end
     end
 
     {:noreply, state}

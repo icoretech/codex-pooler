@@ -194,6 +194,12 @@ Job metadata can include worker name, queue, state, attempt count, timestamps, a
 
 Typical job areas include catalog refresh, pricing import, account reconciliation, alert evaluation, token refresh, usage rollup rebuilds, and runtime cleanup. A failed or retrying job usually means an owner should check the affected product area, for example upstream quota freshness, Pool catalog state, alert rules, or request accounting.
 
+## Incidents status feed
+
+The authenticated admin shell can show one content banner for active incidents reported by the public status feed. The feed is checked every five minutes, and the banner links to the read-only `/admin/incidents` page. It shows up to three incident titles plus an exact `+N more` count and can be dismissed for the current incident revisions by the signed-in operator.
+
+The incidents page preserves the last known good metadata when a refresh fails and labels unavailable or stale data explicitly. The banner is hidden when the last successful refresh is older than 24 hours, and it never appears on the incidents page itself. Resolved incidents stay in bounded history; omission retirement and retention cleanup are handled by scheduled jobs.
+
 ## System settings
 
 System settings are owner-facing controls for instance behavior. They cover runtime limits, route admission, diagnostics, ingress trust, circuit thresholds, model metadata, pricing catalog settings, operator email, MCP service gates, metrics authentication, and SMTP delivery.

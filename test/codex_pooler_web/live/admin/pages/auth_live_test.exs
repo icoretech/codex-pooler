@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
 
   @admin_routes [
     {"/admin/alerts", "#admin-alerts-live"},
+    {"/admin/incidents", "#admin-incidents-page"},
     {"/admin/request-logs", "#admin-request-logs-live"},
     {"/admin/pools", "#admin-pools-live"},
     {"/admin/stats", "#admin-stats"},
@@ -39,6 +40,7 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
   ]
 
   @admin_footer_nav_selectors [
+    "#admin-nav-incidents",
     "#admin-nav-alerts",
     "#admin-nav-settings",
     "#admin-sidebar-logout"

@@ -156,6 +156,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
       current_scope={@current_scope}
       active_nav={:stats}
       alert_notification_center={@alert_notification_center}
+      openai_status_aggregate={@openai_status_aggregate}
     >
       <section
         id="admin-stats"

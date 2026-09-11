@@ -210,6 +210,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       current_scope={@current_scope}
       active_nav={:request_logs}
       alert_notification_center={@alert_notification_center}
+      openai_status_aggregate={@openai_status_aggregate}
     >
       <div id="request-log-detail-drawer-root" class="drawer drawer-end">
         <input

@@ -20,7 +20,8 @@ defmodule CodexPoolerWeb.Admin.PageTitlesTest do
       {"Invites", ~p"/admin/invites"},
       {"Operators", ~p"/admin/operators"},
       {"Settings", ~p"/admin/settings"},
-      {"System", ~p"/admin/system"}
+      {"System", ~p"/admin/system"},
+      {"OpenAI incidents", ~p"/admin/incidents"}
     ]
 
     for {section, path} <- pages do
