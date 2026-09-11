@@ -346,7 +346,12 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   defp classify_renewal({:error, :owner_unavailable}),
     do: {:error, :owner_unavailable, :owner_unavailable}
 
-  defp classify_renewal({:error, :lock_timeout}), do: {:error, :owner_unavailable, :lock_timeout}
+  defp classify_renewal({:error, {:lock_timeout, diagnostics}}),
+    do: {:error, :owner_unavailable, {:lock_timeout, diagnostics}}
+
+  defp classify_renewal({:error, :lock_timeout}),
+    do: {:error, :owner_unavailable, {:lock_timeout, nil}}
+
   defp classify_renewal(_other), do: {:error, :owner_unavailable, :unexpected_result}
 
   defp exception_reason_class(%DBConnection.ConnectionError{}), do: :database_unavailable
@@ -360,10 +365,59 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   # the trusted internal session correlator, never the lease token.
   defp log_renewal_failure(session_id, phase, reason_class) do
     Logger.warning(
-      "session lease renewal failed phase=#{phase} reason=#{reason_class} " <>
-        "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)}"
+      "session lease renewal failed phase=#{phase} #{reason_field(reason_class)} " <>
+        "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)}" <>
+        lock_wait_fields(reason_class)
     )
   end
+
+  defp reason_field({:lock_timeout, _diagnostics}), do: "reason=lock_timeout"
+  defp reason_field(reason_class), do: "reason=#{reason_class}"
+
+  # A lock timeout names the row the renewal waited on and, when the renewal
+  # resolved it, the transaction holding that row: its PostgreSQL state and wait
+  # class, transaction age, application name, a fingerprint of its current
+  # statement (never the text), and the relation it is itself waiting on. The
+  # waiter and blocker backend pids join this line to PostgreSQL lock-wait logs.
+  # Free-text values pass the diagnostic identifier allowlist or fingerprint.
+  defp lock_wait_fields({:lock_timeout, %{relation: relation, blocker: blocker} = diagnostics}),
+    do:
+      " relation=#{relation} waiter_pid=#{backend_pid(Map.get(diagnostics, :waiter_pid))}" <>
+        blocker_fields(blocker)
+
+  defp lock_wait_fields({:lock_timeout, _diagnostics}),
+    do: " relation=unknown blocker=unresolved"
+
+  defp lock_wait_fields(_reason_class), do: ""
+
+  defp blocker_fields(%{} = blocker) do
+    " blocker=resolved blocker_pid=#{backend_pid(Map.get(blocker, :pid))}" <>
+      " blocker_state=#{diagnostic_token(blocker.state)}" <>
+      " blocker_wait_event_type=#{diagnostic_token(blocker.wait_event_type)}" <>
+      " blocker_xact_age_ms=#{transaction_age(blocker.transaction_age_ms)}" <>
+      " blocker_application=#{diagnostic_token(blocker.application_name)}" <>
+      " blocker_query_fingerprint=#{query_fingerprint(blocker.query_fingerprint)}" <>
+      " blocker_waiting_relation=#{diagnostic_token(blocker.waiting_relation)}"
+  end
+
+  defp blocker_fields(_blocker), do: " blocker=unresolved"
+
+  defp diagnostic_token(value) when is_binary(value) and value != "",
+    do: value |> String.replace(" ", "_") |> DiagnosticTaxonomy.identifier()
+
+  defp diagnostic_token(_value), do: "none"
+
+  defp backend_pid(pid) when is_integer(pid) and pid > 0, do: pid
+  defp backend_pid(_pid), do: "none"
+
+  defp transaction_age(age_ms) when is_integer(age_ms) and age_ms >= 0, do: age_ms
+  defp transaction_age(_age_ms), do: "none"
+
+  defp query_fingerprint(<<fingerprint::binary-size(12)>>) do
+    if fingerprint =~ ~r/\A[0-9a-f]{12}\z/, do: fingerprint, else: "none"
+  end
+
+  defp query_fingerprint(_fingerprint), do: "none"
 
   defp renewal_options(state) do
     RequestOptions.build(

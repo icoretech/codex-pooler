@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   import CodexPooler.PoolerFixtures
   import Ecto.Query
 
+  alias CodexPooler.Access
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Accounting.Request
@@ -476,6 +477,107 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       report_direction(@renewal_first_direction, records)
     end
 
+    @tag :session_continuity_contention
+    @tag timeout: 30_000
+    test "a bounded renewal behind a session holder waiting on the API key row names that wait" do
+      fixture = unboxed_owner_session_fixture("bounded-renewal-api-key-chain", 1)
+      api_key = fixture.auth.api_key
+      parent = self()
+      ref = make_ref()
+
+      # The API key row is shared by every session of the key; this holder takes
+      # it the way every runtime reservation, claim, and finalization does.
+      key_holder =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(fn ->
+              {:ok, _authorization} =
+                Access.authorize_api_key_runtime_turn(
+                  api_key.id,
+                  api_key.runtime_revocation_epoch
+                )
+
+              send(parent, {:api_key_holder_ready, ref, backend_pid!()})
+
+              receive do
+                {:release_api_key_holder, ^ref} -> :ok
+              after
+                15_000 -> raise "API key holder was not released"
+              end
+            end)
+          end)
+        end)
+
+      Process.put({__MODULE__, ref, :key_holder}, key_holder)
+
+      try do
+        assert_receive {:api_key_holder_ready, ^ref, key_holder_backend_pid}, 5_000
+
+        # Session first, then the API key: the HTTP reservation's lock order.
+        session_holder =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              Repo.transaction(fn ->
+                _session = SessionContinuity.lock_codex_session_for_turn(fixture.session)
+                send(parent, {:session_holder_locked, ref, backend_pid!()})
+
+                Access.authorize_api_key_runtime_turn(
+                  api_key.id,
+                  api_key.runtime_revocation_epoch
+                )
+              end)
+            end)
+          end)
+
+        Process.put({__MODULE__, ref, :session_holder}, session_holder)
+
+        assert_receive {:session_holder_locked, ^ref, session_holder_backend_pid}, 5_000
+
+        assert observe_session_holder_wait!(session_holder_backend_pid, key_holder_backend_pid) ==
+                 "api_keys"
+
+        renewal =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              send(parent, {:bounded_renewal_waiter_ready, ref, backend_pid!()})
+              bounded_renewal(fixture)
+            end)
+          end)
+
+        Process.put({__MODULE__, ref, :renewal}, renewal)
+        assert_receive {:bounded_renewal_waiter_ready, ^ref, waiter_backend_pid}, 5_000
+
+        assert observe_renewal_lock_wait!(waiter_backend_pid, session_holder_backend_pid) ==
+                 "codex_sessions"
+
+        assert {:error,
+                {:lock_timeout,
+                 %{relation: :codex_sessions, waiter_pid: ^waiter_backend_pid, blocker: holder}}} =
+                 Task.await(renewal, 15_000)
+
+        assert holder.pid == session_holder_backend_pid
+
+        assert %{state: "active", wait_event_type: "Lock", waiting_relation: "api_keys"} = holder
+        assert holder.query_fingerprint =~ ~r/\A[0-9a-f]{12}\z/
+        assert is_integer(holder.transaction_age_ms) and holder.transaction_age_ms >= 0
+
+        send(key_holder.pid, {:release_api_key_holder, ref})
+        assert {:ok, :ok} = Task.await(key_holder, 15_000)
+        assert {:ok, {:ok, _authorization}} = Task.await(session_holder, 15_000)
+      after
+        send(key_holder.pid, {:release_api_key_holder, ref})
+
+        for role <- [:renewal, :session_holder, :key_holder] do
+          case Process.delete({__MODULE__, ref, role}) do
+            %Task{} = task -> shutdown_task(task)
+            nil -> :ok
+          end
+        end
+
+        cleanup_unboxed_fixture!()
+      end
+    end
+
     for held_row <- [:session, :lease] do
       @tag :session_continuity_contention
       @tag timeout: 30_000
@@ -522,9 +624,21 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           assert observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid) ==
                    renewal_row_relation(held_row)
 
-          # The blocker still holds its row, so only PostgreSQL can end the wait.
-          assert {:error, :lock_timeout} = Task.await(renewal, 15_000)
+          # The blocker still holds its row, so only PostgreSQL can end the wait,
+          # and the still-open renewal transaction names the idle holder.
+          assert {:error,
+                  {:lock_timeout, %{relation: relation, waiter_pid: ^waiter_backend_pid} = wait}} =
+                   Task.await(renewal, 15_000)
+
+          holder = wait.blocker
+          assert holder.pid == blocker_backend_pid
+
           assert Process.alive?(blocker.pid)
+          assert Atom.to_string(relation) == renewal_row_relation(held_row)
+
+          assert %{state: "idle in transaction", waiting_relation: nil} = holder
+          assert holder.query_fingerprint == statement_fingerprint("SELECT pg_backend_pid()")
+          assert is_integer(holder.transaction_age_ms) and holder.transaction_age_ms >= 0
 
           send(blocker.pid, {:release_bounded_renewal_blocker, ref})
           assert {:ok, :ok} = Task.await(blocker, 15_000)
@@ -1684,6 +1798,17 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         where: lease.codex_session_id == ^session_id and lease.status == "active",
         lock: "FOR UPDATE"
     )
+  end
+
+  defp statement_fingerprint(statement) do
+    :sha256 |> :crypto.hash(statement) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+  end
+
+  # The session holder itself waits on the API key row, so its blocked
+  # statement is observed before the renewal starts; no lock timeout bounds it.
+  defp observe_session_holder_wait!(waiter_backend_pid, blocker_backend_pid) do
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline)
   end
 
   defp renewal_row_relation(:session), do: "codex_sessions"

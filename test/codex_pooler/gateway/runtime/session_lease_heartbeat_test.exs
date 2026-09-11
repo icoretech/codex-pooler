@@ -119,7 +119,22 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
                                                     _renewal_options,
                                                     renewal_opts ->
       send(parent, {:synchronous_renewal_options, renewal_opts})
-      {:error, :lock_timeout}
+
+      {:error,
+       {:lock_timeout,
+        %{
+          relation: :codex_sessions,
+          waiter_pid: 4_101,
+          blocker: %{
+            pid: 4_102,
+            state: "idle in transaction",
+            wait_event_type: "Client",
+            transaction_age_ms: 1_234,
+            application_name: "",
+            query_fingerprint: "0123456789ab",
+            waiting_relation: nil
+          }
+        }}}
     end)
 
     logs =
@@ -135,6 +150,14 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
     assert [line] = renewal_failure_lines(logs)
     assert line =~ "phase=synchronous reason=lock_timeout"
     assert line =~ "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session.id)}"
+
+    assert line =~
+             "relation=codex_sessions waiter_pid=4101 blocker=resolved blocker_pid=4102 " <>
+               "blocker_state=idle_in_transaction " <>
+               "blocker_wait_event_type=Client blocker_xact_age_ms=1234 " <>
+               "blocker_application=none blocker_query_fingerprint=0123456789ab " <>
+               "blocker_waiting_relation=none"
+
     refute logs =~ token
   end
 
