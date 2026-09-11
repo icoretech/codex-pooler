@@ -37,7 +37,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexSseDeliveryReceiptTest do
 
     upstream =
       start_upstream(
-        # provenance: observed findings issue 122 (native Responses SSE created/delta/completed shape; payload values invented)
+        # provenance: observed findings issue 122 (native Responses SSE created/delta/completed
+        # shape; payload values invented)
         FakeUpstream.strict_sequence([
           expect_dispatch(
             FakeUpstream.sse_stream([
@@ -155,7 +156,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexSseDeliveryReceiptTest do
 
     upstream =
       start_upstream(
-        # provenance: observed findings issue 122 (native Responses SSE failed after visible output; payload values invented)
+        # provenance: observed findings issue 122 (native Responses SSE failed after visible output;
+        # payload values invented)
         FakeUpstream.strict_sequence([
           expect_dispatch(
             FakeUpstream.sse_stream(
