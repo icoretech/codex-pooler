@@ -393,36 +393,34 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   defp release_frame_barrier(pid, release_ref, remaining?) do
-    taken =
-      Agent.get_and_update(pid, fn state ->
-        case Map.pop(state.frame_barriers_waiting, release_ref) do
-          {nil, _waiting} ->
-            {{:error, :no_frame_barrier_waiting}, state}
-
-          {{handler, ordinal}, waiting} ->
-            auto_release =
-              if remaining?,
-                do: MapSet.put(state.frame_barrier_auto_release, release_ref),
-                else: state.frame_barrier_auto_release
-
-            {{:ok, handler},
-             %{
-               state
-               | frame_barriers_waiting: waiting,
-                 frame_barrier_auto_release: auto_release,
-                 acknowledged:
-                   MapSet.put(state.acknowledged, {:frame_barrier, release_ref, ordinal})
-             }}
-        end
-      end)
-
-    case taken do
+    case Agent.get_and_update(pid, &take_frame_barrier(&1, release_ref, remaining?)) do
       {:ok, handler} ->
         send(handler, {:fake_upstream_release_frame, release_ref})
         :ok
 
       error ->
         error
+    end
+  end
+
+  defp take_frame_barrier(state, release_ref, remaining?) do
+    case Map.pop(state.frame_barriers_waiting, release_ref) do
+      {nil, _waiting} ->
+        {{:error, :no_frame_barrier_waiting}, state}
+
+      {{handler, ordinal}, waiting} ->
+        auto_release =
+          if remaining?,
+            do: MapSet.put(state.frame_barrier_auto_release, release_ref),
+            else: state.frame_barrier_auto_release
+
+        {{:ok, handler},
+         %{
+           state
+           | frame_barriers_waiting: waiting,
+             frame_barrier_auto_release: auto_release,
+             acknowledged: MapSet.put(state.acknowledged, {:frame_barrier, release_ref, ordinal})
+         }}
     end
   end
 
