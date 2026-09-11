@@ -757,6 +757,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     end
   end
 
+  # Dialyzer reads the capture options as outside `capture_log/2`'s declared
+  # keyword type and reports a no-return; the helper is exercised by five
+  # families and returns the captured log.
+  @dialyzer {:no_return, capture_websocket_lifecycle_log: 1}
   def capture_websocket_lifecycle_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
     Logger.configure(level: :info)
