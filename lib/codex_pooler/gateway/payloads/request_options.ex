@@ -172,6 +172,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :session_header_source,
     :session_key,
     :session_owner_witness,
+    :tenant_scope,
     :timeout,
     :transport,
     :upload_bytes,
@@ -198,6 +199,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     "prompt_cache_key",
     "request_method",
     "session_owner_witness",
+    "tenant_scope",
     "transport",
     "websocket_delivery_mode"
   ]
@@ -800,6 +802,28 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   end
 
   def capture_api_key_runtime_epoch(%__MODULE__{} = options, _auth), do: options
+
+  @doc """
+  Captures the trusted Pool and API key ids of the authenticated runtime
+  principal. They scope the provider `session-id` synthesized for public `/v1`
+  prompt-cache keys, so the ids only ever come from the authenticated auth
+  context and never from controller opts, params, headers, or the body. An
+  auth context without both ids clears the scope, which suppresses the header.
+  """
+  @spec capture_tenant_scope(t(), CodexPooler.Access.auth_context()) :: t()
+  def capture_tenant_scope(
+        %__MODULE__{runtime: %RuntimeContext{} = runtime} = options,
+        %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}
+      )
+      when is_binary(pool_id) and byte_size(pool_id) > 0 and is_binary(api_key_id) and
+             byte_size(api_key_id) > 0 do
+    %{options | runtime: %{runtime | tenant_scope: %{pool_id: pool_id, api_key_id: api_key_id}}}
+  end
+
+  def capture_tenant_scope(%__MODULE__{runtime: %RuntimeContext{} = runtime} = options, _auth),
+    do: %{options | runtime: %{runtime | tenant_scope: nil}}
+
+  def capture_tenant_scope(%__MODULE__{} = options, _auth), do: options
 
   @spec put_payload_context(t(), keyword()) :: t()
   def put_payload_context(%__MODULE__{} = options, updates) when is_list(updates) do

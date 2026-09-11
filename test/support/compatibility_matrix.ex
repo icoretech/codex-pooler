@@ -1691,14 +1691,19 @@ defmodule CodexPooler.CompatibilityMatrix do
             client_headers: "local_only_never_forwarded",
             synthesized_header: "session-id",
             derived_from: "prompt_cache_key",
-            derivation: "uuid_v5_fixed_pooler_namespace_over_raw_key",
+            derivation: "uuid_v5_fixed_pooler_namespace_over_pool_id_api_key_id_and_raw_key",
+            name_encoding: "netstring_pool_id_then_netstring_api_key_id_then_raw_key",
             namespace: "0aac30b0-0311-52bd-8fb7-258f9c6f0278",
+            scope: "authenticated_pool_and_api_key",
+            missing_scope: "no_header_fail_closed_no_unscoped_derivation",
+            model: "excluded_from_derivation",
             key_contract: "non_empty_string_max_512_bytes",
             routes: ["/v1/responses", "/v1/chat/completions"],
             transports: ["http_json", "http_sse"],
             websocket_surfaces: "unaffected_prompt_cache_bound_to_reused_upstream_connection",
             local_session: "none_bridge_eligibility_stays_fail_closed",
-            client_key_contract: "conversation_scoped_key_expected_shared_key_shares_one_provider_session_id",
+            client_key_contract:
+              "shared_key_within_one_api_key_shares_one_provider_session_id_never_across_api_keys_or_pools",
             privacy: "derived_value_not_persisted_or_logged"
           }
         },
@@ -3167,7 +3172,8 @@ defmodule CodexPooler.CompatibilityMatrix do
       public_v1_upstream_session_id: %{
         header: "session-id",
         derived_from: "prompt_cache_key",
-        derivation: "uuid_v5_fixed_pooler_namespace_over_raw_key",
+        derivation: "uuid_v5_fixed_pooler_namespace_over_pool_id_api_key_id_and_raw_key",
+        scope: "authenticated_pool_and_api_key",
         key_contract: "non_empty_string_max_512_bytes",
         routes: [
           %{method: :post, path: "/v1/responses"},
@@ -3175,7 +3181,8 @@ defmodule CodexPooler.CompatibilityMatrix do
         ],
         client_session_id_header: "local_only_never_forwarded",
         local_session: "none_bridge_eligibility_stays_fail_closed",
-        client_key_contract: "conversation_scoped_key_expected_shared_key_shares_one_provider_session_id",
+        client_key_contract:
+          "shared_key_within_one_api_key_shares_one_provider_session_id_never_across_api_keys_or_pools",
         privacy: "derived_value_not_persisted_or_logged"
       },
       pinned_continuation_reauth: %{

@@ -200,7 +200,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp execute_with_validation(auth, endpoint, payload, %RequestOptions{} = opts, validation)
        when is_map(payload) do
-    opts = RequestOptions.capture_api_key_runtime_epoch(opts, auth)
+    opts =
+      opts
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+      |> RequestOptions.capture_tenant_scope(auth)
 
     if image_generation_permission_denied?(auth, opts) do
       {:error,

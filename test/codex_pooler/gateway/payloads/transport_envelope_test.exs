@@ -12,6 +12,13 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  @tenant_pool_id "11111111-1111-4111-8111-111111111111"
+  @tenant_api_key_id "22222222-2222-4222-8222-222222222222"
+  @other_api_key_id "33333333-3333-4333-8333-333333333333"
+  @other_pool_id "44444444-4444-4444-8444-444444444444"
+  @tenant_scope %{pool_id: @tenant_pool_id, api_key_id: @tenant_api_key_id}
+  @tenant_auth %{pool: %{id: @tenant_pool_id}, api_key: %{id: @tenant_api_key_id}}
+
   describe "timeout_config/2" do
     test "returns the typed timeout config used by Req options" do
       options = request_options(%TimeoutConfig{pool_timeout_ms: 25, receive_timeout_ms: 50})
@@ -317,10 +324,14 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       ]
 
       payload = %{"model" => "example-model", "prompt_cache_key" => "fixture-cache-key"}
-      expected = TransportEnvelope.prompt_cache_session_id("fixture-cache-key")
+      expected = TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key")
+      assert is_binary(expected)
 
       for source_endpoint <- ["/v1/responses", "/v1/chat/completions"] do
-        options = public_v1_options(source_endpoint, payload, forwarded_headers: client_headers)
+        options =
+          source_endpoint
+          |> public_v1_options(payload, forwarded_headers: client_headers)
+          |> RequestOptions.capture_tenant_scope(@tenant_auth)
 
         # The client's own continuity headers stay local on /v1; only the
         # Pooler-derived session-id goes upstream.
@@ -341,7 +352,25 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                end) == [{"session-id", expected}]
       end
 
-      options = public_v1_options("/v1/responses", payload, forwarded_headers: client_headers)
+      options =
+        "/v1/responses"
+        |> public_v1_options(payload, forwarded_headers: client_headers)
+        |> RequestOptions.capture_tenant_scope(@tenant_auth)
+
+      # Another API key in the same Pool gets its own provider session-id.
+      other_tenant_options =
+        RequestOptions.capture_tenant_scope(options, %{
+          pool: %{id: @tenant_pool_id},
+          api_key: %{id: @other_api_key_id}
+        })
+
+      assert [{"session-id", other_tenant_value}] =
+               UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+                 other_tenant_options,
+                 payload
+               )
+
+      assert other_tenant_value != expected
 
       # Without a usable key nothing is synthesized and the client headers are
       # still not forwarded.
@@ -359,6 +388,33 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       end
 
       assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(options) == []
+
+      # Fail closed without a trusted tenant scope: there is no unscoped
+      # derivation, controller opts and runtime updates cannot supply the
+      # scope, and an auth context missing either id clears a captured one.
+      unscoped = public_v1_options("/v1/responses", payload, forwarded_headers: client_headers)
+
+      for unscoped_options <- [
+            unscoped,
+            public_v1_options("/v1/responses", payload,
+              forwarded_headers: client_headers,
+              tenant_scope: @tenant_scope
+            ),
+            RequestOptions.put_runtime_context(unscoped, tenant_scope: @tenant_scope),
+            RequestOptions.capture_tenant_scope(options, %{
+              pool: %{id: nil},
+              api_key: %{id: @tenant_api_key_id}
+            }),
+            RequestOptions.capture_tenant_scope(options, %{pool: %{id: @tenant_pool_id}})
+          ] do
+        assert unscoped_options.runtime.tenant_scope == nil
+        refute Map.has_key?(unscoped_options.extra, :tenant_scope)
+
+        assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+                 unscoped_options,
+                 payload
+               ) == []
+      end
 
       # Native routes keep forwarding the client's headers verbatim and never
       # synthesize from the body.
@@ -559,40 +615,116 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     }
   end
 
-  describe "prompt_cache_session_id/1" do
+  describe "prompt_cache_session_id/2" do
     # RFC 4122 version 5: version nibble `5`, variant bits `10xx`.
     @uuid_v5 ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
 
-    test "uses the fixed Pooler namespace and RFC 4122 v5 derivation" do
+    test "uses the fixed Pooler namespace and RFC 4122 v5 over the netstring tenant name" do
       # The namespace is itself UUID v5 of the RFC 4122 URL namespace over the
-      # project URL; every value below was cross-checked with Python's uuid5.
+      # project URL. Every value below was cross-checked with Python's
+      # `uuid.uuid5(uuid.UUID("0aac30b0-0311-52bd-8fb7-258f9c6f0278"), name)`
+      # where `name` is the UTF-8 bytes of
+      # `f"{len(pool_id)}:{pool_id},{len(api_key_id)}:{api_key_id},{key}"`
+      # (lengths in bytes).
       assert TransportEnvelope.prompt_cache_session_namespace() ==
                "0aac30b0-0311-52bd-8fb7-258f9c6f0278"
 
-      assert TransportEnvelope.prompt_cache_session_id("fixture-cache-key") ==
-               "b5f972d4-5751-5a43-9ccc-5f82a52174cf"
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key") ==
+               "f228c884-887f-5139-9116-d0d12a32b2a4"
 
-      assert TransportEnvelope.prompt_cache_session_id("other-cache-key") ==
-               "1f500e28-7da5-5c91-98bc-667a4cf365bd"
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, "other-cache-key") ==
+               "5f4379e8-576a-5b98-9e51-76eae22095d9"
 
-      assert TransportEnvelope.prompt_cache_session_id(String.duplicate("a", 512)) ==
-               "1ab9533d-5a8e-5dba-8a6b-04f783b3c09b"
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, String.duplicate("a", 512)) ==
+               "1b022668-2e28-5cd7-95d7-7a37ce6fa1f6"
+
+      assert TransportEnvelope.prompt_cache_session_id(
+               %{pool_id: @tenant_pool_id, api_key_id: @other_api_key_id},
+               "fixture-cache-key"
+             ) == "64dd4d61-404c-5b01-a009-c2e97f90cbc7"
+
+      assert TransportEnvelope.prompt_cache_session_id(
+               %{pool_id: @other_pool_id, api_key_id: @tenant_api_key_id},
+               "fixture-cache-key"
+             ) == "fb4ebc53-19a1-5fb9-aac2-498e7ea5e124"
     end
 
     test "is deterministic, v5-shaped, and bounded by the raw key" do
       for key <- ["fixture-cache-key", "conv:01/𝔘nicode key", String.duplicate("z", 512)] do
-        value = TransportEnvelope.prompt_cache_session_id(key)
+        value = TransportEnvelope.prompt_cache_session_id(@tenant_scope, key)
 
         assert value =~ @uuid_v5
         assert TransportEnvelope.provider_session_header_value?(value)
-        assert TransportEnvelope.prompt_cache_session_id(key) == value
+        assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, key) == value
       end
 
-      assert TransportEnvelope.prompt_cache_session_id("fixture-cache-key") !=
-               TransportEnvelope.prompt_cache_session_id("fixture-cache-key ")
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key") !=
+               TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key ")
 
       for ignored <- ["", String.duplicate("z", 513), nil, 42, %{}, ["fixture-cache-key"]] do
-        assert TransportEnvelope.prompt_cache_session_id(ignored) == nil
+        assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, ignored) == nil
+      end
+    end
+
+    test "separates tenants: the same key under another API key or Pool gets another id" do
+      key = "default"
+      tenant = TransportEnvelope.prompt_cache_session_id(@tenant_scope, key)
+
+      assert TransportEnvelope.prompt_cache_session_id(
+               %{pool_id: @tenant_pool_id, api_key_id: @tenant_api_key_id},
+               key
+             ) == tenant
+
+      other_values =
+        Enum.map(
+          [
+            %{pool_id: @tenant_pool_id, api_key_id: @other_api_key_id},
+            %{pool_id: @other_pool_id, api_key_id: @tenant_api_key_id},
+            %{pool_id: @other_pool_id, api_key_id: @other_api_key_id},
+            # Swapping the two ids is a different tenant name.
+            %{pool_id: @tenant_api_key_id, api_key_id: @tenant_pool_id}
+          ],
+          &TransportEnvelope.prompt_cache_session_id(&1, key)
+        )
+
+      assert Enum.all?(other_values, &(&1 =~ @uuid_v5))
+      assert Enum.uniq([tenant | other_values]) == [tenant | other_values]
+    end
+
+    test "is injective over (pool id, api key id, key) even when values contain separators" do
+      # A plain `:`-joined name would collapse both triples to "a:b:c:d".
+      assert Enum.join(["a:b", "c", "d"], ":") == Enum.join(["a", "b:c", "d"], ":")
+
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "a:b", api_key_id: "c"}, "d") ==
+               "3d589036-54f8-57d8-9b56-f5e5c9e1b239"
+
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "a", api_key_id: "b:c"}, "d") ==
+               "e27cde86-c9b7-54aa-bae6-74143ea50a11"
+
+      # A pool id that itself looks like a netstring prefix stays distinct.
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "1:a,", api_key_id: "b"}, "c") ==
+               "e1bbbf29-e1d3-5b30-a99d-d9408dce3c8d"
+
+      # Moving the separator byte across the api key id / key boundary changes
+      # the name, because the api key id is length-prefixed.
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "a", api_key_id: "b,"}, "c") !=
+               TransportEnvelope.prompt_cache_session_id(%{pool_id: "a", api_key_id: "b"}, ",c")
+    end
+
+    test "returns nil without a complete trusted tenant scope" do
+      for scope <- [
+            nil,
+            %{},
+            %{pool_id: @tenant_pool_id},
+            %{api_key_id: @tenant_api_key_id},
+            %{pool_id: "", api_key_id: @tenant_api_key_id},
+            %{pool_id: @tenant_pool_id, api_key_id: ""},
+            %{pool_id: nil, api_key_id: @tenant_api_key_id},
+            %{pool_id: @tenant_pool_id, api_key_id: 42},
+            {@tenant_pool_id, @tenant_api_key_id},
+            "fixture-cache-key"
+          ] do
+        assert TransportEnvelope.prompt_cache_session_id(scope, "fixture-cache-key") == nil
       end
     end
   end

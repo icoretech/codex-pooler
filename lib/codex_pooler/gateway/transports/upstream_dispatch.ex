@@ -302,8 +302,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   # Public `/v1` origin: the client's continuity headers stay local, and the
   # only provider session header sent upstream is the Pooler-derived
-  # `session-id` synthesized from the request's `prompt_cache_key`. It goes
-  # through the same `forwarded_metadata_header/2` bounds as a client header.
+  # `session-id` synthesized from the request's `prompt_cache_key`, scoped to
+  # the authenticated Pool and API key captured in the runtime context so two
+  # tenants that send the same key never share a provider session. Without a
+  # captured tenant scope nothing is synthesized. It goes through the same
+  # `forwarded_metadata_header/2` bounds as a client header.
   # The `/v1` websocket surfaces are unaffected on purpose: a bridged HTTP turn
   # rides the continuity owner's upstream connection and a public websocket
   # turn rides its socket-bound upstream session, and the provider pins the
@@ -312,17 +315,23 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         %RequestOptions{
           transport: %{upstream_endpoint: endpoint},
           openai_compatibility: %{source_endpoint: source_endpoint}
-        },
+        } = request_options,
         %{"prompt_cache_key" => prompt_cache_key}
       )
       when endpoint in @regular_runtime_metadata_endpoints and is_binary(source_endpoint) do
-    case TransportEnvelope.prompt_cache_session_id(prompt_cache_key) do
+    case TransportEnvelope.prompt_cache_session_id(
+           prompt_cache_tenant_scope(request_options),
+           prompt_cache_key
+         ) do
       session_id when is_binary(session_id) -> forwarded_metadata_header("session-id", session_id)
       nil -> []
     end
   end
 
   def regular_runtime_forwarded_metadata_headers(%RequestOptions{}, _payload), do: []
+
+  defp prompt_cache_tenant_scope(%RequestOptions{runtime: %{tenant_scope: scope}}), do: scope
+  defp prompt_cache_tenant_scope(%RequestOptions{}), do: nil
 
   defp filter_regular_runtime_forwarded_metadata_headers(headers) do
     Enum.flat_map(headers, fn
