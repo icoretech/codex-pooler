@@ -307,10 +307,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   # tenants that send the same key never share a provider session. Without a
   # captured tenant scope nothing is synthesized. It goes through the same
   # `forwarded_metadata_header/2` bounds as a client header.
-  # The `/v1` websocket surfaces are unaffected on purpose: a bridged HTTP turn
-  # rides the continuity owner's upstream connection and a public websocket
-  # turn rides its socket-bound upstream session, and the provider pins the
-  # prompt cache to that connection rather than to a per-request header.
+  # `websocket_provider_session_headers/2` applies the same policy to the `/v1`
+  # websocket handshake, where the derived id survives an owner reconnect.
   def regular_runtime_forwarded_metadata_headers(
         %RequestOptions{
           transport: %{upstream_endpoint: endpoint},
@@ -511,12 +509,18 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         request_options: %RequestOptions{} = request_options,
         client_retry_dispatch_authority: client_retry_dispatch_authority
       }) do
+    # The final upstream body is read twice on a websocket handshake — for the
+    # routing hint and for the `/v1` derived provider session id — so decode it
+    # once per turn.
+    decoded_payload = decoded_upstream_payload(payload_body)
+
     headers =
       websocket_headers(
         identity,
         token,
-        routing_hint_header(payload_body, routing_hint_authorized?, request_options),
-        request_options
+        routing_hint_header(decoded_payload, routing_hint_authorized?, request_options),
+        request_options,
+        decoded_payload
       )
 
     emit_egress_observation(:websocket, headers, request_options, payload_body)
@@ -1497,14 +1501,20 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp multi_agent_round_request_id(_request, %RequestOptions{} = request_options),
     do: request_options.request_metadata.request_id
 
-  defp websocket_headers(identity, token, routing_hint, %RequestOptions{} = request_options) do
+  defp websocket_headers(
+         identity,
+         token,
+         routing_hint,
+         %RequestOptions{} = request_options,
+         decoded_payload
+       ) do
     upstream_headers(
       identity,
       token,
       maybe_put_routing_hint_header(
         [
           {"openai-beta", "responses_websockets=2026-02-06"}
-          | websocket_provider_session_headers(request_options)
+          | websocket_provider_session_headers(request_options, decoded_payload)
         ],
         routing_hint
       )
@@ -1519,14 +1529,17 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   # value per name. They stay in the upstream websocket reuse key: a connection
   # opened with one client's values never serves a turn carrying other values or
   # none. `/v1` origins (translated, bridged, public websocket) send none.
-  defp websocket_provider_session_headers(%RequestOptions{
-         transport: %{upstream_endpoint: endpoint, forwarded_metadata_headers: headers},
-         openai_compatibility: %{
-           source_endpoint: nil,
-           openai_chat_payload: nil,
-           public_openai_responses_stream: false
-         }
-       })
+  defp websocket_provider_session_headers(
+         %RequestOptions{
+           transport: %{upstream_endpoint: endpoint, forwarded_metadata_headers: headers},
+           openai_compatibility: %{
+             source_endpoint: nil,
+             openai_chat_payload: nil,
+             public_openai_responses_stream: false
+           }
+         },
+         _decoded_payload
+       )
        when endpoint in @regular_runtime_metadata_endpoints and is_list(headers) do
     names = TransportEnvelope.provider_session_header_names()
 
@@ -1542,7 +1555,41 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> Enum.uniq_by(fn {name, _value} -> name end)
   end
 
-  defp websocket_provider_session_headers(%RequestOptions{}), do: []
+  # Public `/v1` origin (bridged HTTP turn and public websocket alike): the
+  # caller's own session headers stay local, and the only provider session
+  # header on the handshake is the Pooler-derived `session-id`, synthesized the
+  # same way as on the `/v1` HTTP path from the raw `prompt_cache_key` of the
+  # final upstream body and the authenticated tenant scope. The routing copy is
+  # nulled for websocket and the stored form is hashed, so the body is the only
+  # source of the production key. Without a tenant scope or a usable key the
+  # handshake sends nothing, exactly as on HTTP.
+  #
+  # The provider pins the prompt cache to the replica `session-id` selects, so a
+  # turn whose owner socket had to reconnect still lands on the replica holding
+  # the warm prefix instead of starting cold (measured locally: cached/input
+  # 0.0 without the header and 0.9856 with it, four pairs per arm,
+  # codex-pooler-findings#133). Like every other handshake header except the
+  # routing hint it enters `UpstreamWebsocketSession.request_key/1`, so a later
+  # turn that changes or drops `prompt_cache_key` opens its own connection
+  # rather than riding one whose handshake carried another conversation's id.
+  defp websocket_provider_session_headers(
+         %RequestOptions{
+           transport: %{upstream_endpoint: endpoint},
+           openai_compatibility: %{source_endpoint: source_endpoint}
+         } = request_options,
+         {:ok, %{"prompt_cache_key" => prompt_cache_key}}
+       )
+       when endpoint in @regular_runtime_metadata_endpoints and is_binary(source_endpoint) do
+    case TransportEnvelope.prompt_cache_session_id(
+           prompt_cache_tenant_scope(request_options),
+           prompt_cache_key
+         ) do
+      session_id when is_binary(session_id) -> forwarded_metadata_header("session-id", session_id)
+      nil -> []
+    end
+  end
+
+  defp websocket_provider_session_headers(%RequestOptions{}, _decoded_payload), do: []
 
   defp normalize_upstream_transport_result(
          {:error, %Finch.TransportError{} = exception},
@@ -1733,14 +1780,22 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   # the final upstream body (effective model after aliasing, effective tier
   # after policy and `fast` canonicalization). A caller-supplied header is never
   # the source.
+  defp routing_hint_header(body, routing_hint_authorized?, %RequestOptions{} = request_options)
+       when is_binary(body) do
+    routing_hint_header(
+      decoded_upstream_payload(body),
+      routing_hint_authorized?,
+      request_options
+    )
+  end
+
   defp routing_hint_header(
-         body,
+         {:ok, %{} = payload},
          true,
          %RequestOptions{transport: %{upstream_endpoint: endpoint}}
        )
-       when endpoint in @regular_runtime_metadata_endpoints and is_binary(body) do
-    with {:ok, %{} = payload} <- CodexPooler.JSON.decode(body),
-         {:ok, model} <- routing_hint_component(Map.get(payload, "model")),
+       when endpoint in @regular_runtime_metadata_endpoints do
+    with {:ok, model} <- routing_hint_component(Map.get(payload, "model")),
          {:ok, service_tier} <- routing_hint_service_tier(payload) do
       case service_tier do
         nil -> "model=#{model}"
@@ -1751,7 +1806,19 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
-  defp routing_hint_header(_body, _routing_hint_authorized?, %RequestOptions{}), do: nil
+  defp routing_hint_header(_payload, _routing_hint_authorized?, %RequestOptions{}), do: nil
+
+  # The decoded final upstream body, or `:error` for anything that is not a
+  # JSON object. Header derivation reads the body the upstream actually
+  # receives, never a caller-supplied value.
+  defp decoded_upstream_payload(body) when is_binary(body) do
+    case CodexPooler.JSON.decode(body) do
+      {:ok, %{} = payload} -> {:ok, payload}
+      _other -> :error
+    end
+  end
+
+  defp decoded_upstream_payload(_body), do: :error
 
   defp routing_hint_service_tier(payload) do
     case Map.fetch(payload, "service_tier") do

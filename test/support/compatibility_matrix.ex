@@ -1769,7 +1769,7 @@ defmodule CodexPooler.CompatibilityMatrix do
             upstream_connection_reuse_key:
               "included_differing_or_absent_values_open_a_new_connection",
             owner_forwarded_turns: "carried_in_owner_request_headers_built_on_the_proxy_node",
-            public_v1_origins: "never_forwarded"
+            public_v1_origins: "caller_values_never_forwarded_derived_session_id_only"
           },
           public_v1: %{
             client_headers: "local_only_never_forwarded",
@@ -1783,8 +1783,11 @@ defmodule CodexPooler.CompatibilityMatrix do
             model: "excluded_from_derivation",
             key_contract: "non_empty_string_max_512_bytes",
             routes: ["/v1/responses", "/v1/chat/completions"],
-            transports: ["http_json", "http_sse"],
-            websocket_surfaces: "unaffected_prompt_cache_bound_to_reused_upstream_connection",
+            transports: ["http_json", "http_sse", "websocket"],
+            websocket_surfaces: "derived_session_id_on_the_upstream_websocket_handshake",
+            websocket_source: "raw_prompt_cache_key_of_the_final_upstream_body",
+            websocket_upstream_connection_reuse_key:
+              "included_changed_or_absent_prompt_cache_key_opens_a_new_connection",
             local_session: "none_bridge_eligibility_stays_fail_closed",
             client_key_contract:
               "shared_key_within_one_api_key_shares_one_provider_session_id_never_across_api_keys_or_pools",

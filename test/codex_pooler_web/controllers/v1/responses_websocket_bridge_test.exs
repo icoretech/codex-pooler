@@ -31,6 +31,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
 
@@ -514,6 +515,84 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert completed_id(response.resp_body) == "resp_bridge_routing_hint"
     assert :ok = FakeUpstream.verify!(upstream)
     refute inspect(FakeUpstream.requests(upstream)) =~ "forged"
+  end
+
+  test "bridged turns carry the tenant-derived provider session-id on the handshake and nowhere else",
+       %{conn: conn} do
+    cache_key = "bridged-derived-session-cache-key"
+    upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_unused")]))
+    setup = gateway_setup(upstream)
+
+    # The trusted Pool and API key ids of the authenticated principal survive
+    # into the bridged owner options, so the bridged handshake derives the same
+    # id the /v1 HTTP path would send for this conversation.
+    expected =
+      TransportEnvelope.prompt_cache_session_id(
+        %{pool_id: setup.pool.id, api_key_id: setup.api_key.id},
+        cache_key
+      )
+
+    assert is_binary(expected)
+
+    FakeUpstream.set_mode(
+      upstream,
+      # provenance: synthetic_adversarial (invented completed reply; the derived handshake session-id is the claim)
+      FakeUpstream.strict_sequence([
+        FakeUpstream.expect_request(
+          method: "WEBSOCKET",
+          path: "/backend-api/codex/responses",
+          websocket_connection_ordinal: 1,
+          headers: [
+            required: %{"session-id" => expected},
+            forbidden: ["thread-id", "x-client-request-id", "x-session-id"]
+          ],
+          json: [valid: true, required: ["prompt_cache_key"]],
+          respond: websocket_frames([completed_event("resp_bridge_derived_session")])
+        )
+      ])
+    )
+
+    {response, logs} =
+      with_log(fn ->
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> put_req_header(
+          "x-session-id",
+          "derived-session-#{System.unique_integer([:positive])}"
+        )
+        |> put_req_header("session-id", "caller-session-fixture")
+        |> put_req_header("thread-id", "caller-thread-fixture")
+        |> put_req_header("x-client-request-id", "caller-client-request-fixture")
+        |> post(
+          "/v1/responses",
+          setup
+          |> stream_payload("derived session id turn")
+          |> Map.put("prompt_cache_key", cache_key)
+        )
+      end)
+
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_bridge_derived_session"
+    assert :ok = FakeUpstream.verify!(upstream)
+
+    # A caller-supplied session header never reaches the provider.
+    refute inspect(FakeUpstream.requests(upstream)) =~ "caller-"
+
+    # The derived value is as sensitive as the client key it comes from, so the
+    # handshake header is its only egress: the dispatch egress observation emits
+    # header names only, and no finalization path carries the value into the
+    # downstream stream, the request and attempt rows, or the logs.
+    request = latest_request(setup.pool)
+    assert [attempt] = attempts_for(request)
+    assert attempt.transport == "websocket"
+
+    refute logs =~ expected
+    refute response.resp_body =~ expected
+
+    for row <- [request, attempt] do
+      refute inspect(row, limit: :infinity, printable_limit: :infinity) =~ expected
+    end
   end
 
   test "bridged turns keep one upstream websocket when the routing tier changes", %{conn: conn} do

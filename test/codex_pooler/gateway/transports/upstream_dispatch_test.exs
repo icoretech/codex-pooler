@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Accounting.{Attempt, RequestReplay}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.{NativeCodexTurnMetadata, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.{NativeCodexTurnMetadata, RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
@@ -1382,6 +1382,160 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "public /v1 websocket handshakes carry the tenant-derived session-id, never a caller value" do
+    cache_key = "fixture-v1-websocket-cache-key"
+    other_cache_key = "fixture-v1-websocket-other-cache-key"
+
+    tenant = %{pool: %{id: Ecto.UUID.generate()}, api_key: %{id: Ecto.UUID.generate()}}
+    other_api_key = %{pool: tenant.pool, api_key: %{id: Ecto.UUID.generate()}}
+    other_pool = %{pool: %{id: Ecto.UUID.generate()}, api_key: %{id: Ecto.UUID.generate()}}
+
+    expected = derived_session_id(tenant, cache_key)
+    other_conversation = derived_session_id(tenant, other_cache_key)
+    other_api_key_session = derived_session_id(other_api_key, cache_key)
+    other_pool_session = derived_session_id(other_pool, cache_key)
+
+    sessions = [expected, other_conversation, other_api_key_session, other_pool_session]
+    assert Enum.all?(sessions, &is_binary/1)
+    assert Enum.uniq(sessions) == sessions
+
+    caller_headers = [
+      {"session-id", "caller-session-fixture"},
+      {"thread-id", "caller-thread-fixture"},
+      {"x-client-request-id", "caller-thread-fixture"},
+      {"x-session-id", "caller-local-continuity-fixture"}
+    ]
+
+    caller_header_names = ["thread-id", "x-client-request-id", "x-session-id"]
+
+    derived_turn = fn session_id, id ->
+      strict_websocket_turn(websocket_success(id),
+        headers: [required: %{"session-id" => session_id}, forbidden: caller_header_names]
+      )
+    end
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: synthetic_adversarial (invented completed replies; the derived handshake session-id is the claim)
+        FakeUpstream.strict_sequence([
+          derived_turn.(expected, "v1-ws-session-first"),
+          derived_turn.(expected, "v1-ws-session-second"),
+          derived_turn.(other_conversation, "v1-ws-session-other-conversation"),
+          derived_turn.(other_api_key_session, "v1-ws-session-other-api-key"),
+          derived_turn.(other_pool_session, "v1-ws-session-other-pool"),
+          strict_websocket_turn(websocket_success("v1-ws-session-keyless"),
+            headers: [forbidden: ["session-id" | caller_header_names]]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-session-unscoped"),
+            headers: [forbidden: ["session-id" | caller_header_names]]
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    # Two turns of one conversation, then another conversation, another API key
+    # of the same Pool, another Pool, a turn that drops the key, and a turn
+    # without a trusted tenant scope.
+    turns = [
+      {tenant, cache_key},
+      {tenant, cache_key},
+      {tenant, other_cache_key},
+      {other_api_key, cache_key},
+      {other_pool, cache_key},
+      {tenant, nil},
+      {nil, cache_key}
+    ]
+
+    for {auth, key} <- turns do
+      request_options =
+        %{
+          receive_timeout_ms: 1_000,
+          forwarded_headers: caller_headers,
+          openai_source_endpoint: "/v1/responses"
+        }
+        |> RequestOptions.for_websocket(%{"model" => "example-model"})
+        |> RequestOptions.capture_tenant_scope(auth || %{})
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload: v1_websocket_payload(key)
+      }
+
+      assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+    end
+
+    refute inspect(FakeUpstream.requests(upstream)) =~ "caller-"
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "a changed or dropped prompt_cache_key opens its own upstream websocket connection" do
+    cache_key = "fixture-v1-reuse-cache-key"
+    other_cache_key = "fixture-v1-reuse-other-cache-key"
+    tenant = %{pool: %{id: Ecto.UUID.generate()}, api_key: %{id: Ecto.UUID.generate()}}
+
+    first = derived_session_id(tenant, cache_key)
+    second = derived_session_id(tenant, other_cache_key)
+    assert is_binary(first) and is_binary(second) and first != second
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # The derived id is an ordinary handshake header, so it scopes the
+        # connection the way the native client session headers do.
+        # provenance: synthetic_adversarial (invented completed replies; handshake-scoped connection reuse is the claim)
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("v1-ws-reuse-first"),
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"session-id" => first}]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-reuse-second"),
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"session-id" => first}]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-reuse-other-key"),
+            websocket_connection_ordinal: 2,
+            headers: [required: %{"session-id" => second}]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-reuse-keyless"),
+            websocket_connection_ordinal: 3,
+            headers: [forbidden: ["session-id"]]
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    dispatch = fn key ->
+      request_options =
+        %{
+          receive_timeout_ms: 1_000,
+          openai_source_endpoint: "/v1/responses",
+          upstream_websocket_session: session
+        }
+        |> RequestOptions.for_websocket(%{"model" => "example-model"})
+        |> RequestOptions.capture_tenant_scope(tenant)
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload: v1_websocket_payload(key)
+      }
+
+      assert {:ok, result} = UpstreamDispatch.websocket_request(request)
+      result.upstream_websocket_connection
+    end
+
+    refute dispatch.(cache_key).reused
+    assert dispatch.(cache_key).reused
+    refute dispatch.(other_cache_key).reused
+    refute dispatch.(nil).reused
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 3
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "native-shaped provider-specific and API-key paths omit routing hints on HTTP and websocket dispatch" do
     {:ok, http_upstream} =
       FakeUpstream.start_link(
@@ -2554,6 +2708,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assignment_advertised?: false,
       request_options: request_options
     }
+  end
+
+  defp derived_session_id(%{pool: %{id: pool_id}, api_key: %{id: api_key_id}}, cache_key) do
+    TransportEnvelope.prompt_cache_session_id(
+      %{pool_id: pool_id, api_key_id: api_key_id},
+      cache_key
+    )
+  end
+
+  defp v1_websocket_payload(prompt_cache_key) do
+    payload = %{"type" => "response.create", "model" => "upstream-routing-model", "input" => []}
+
+    payload =
+      if is_binary(prompt_cache_key),
+        do: Map.put(payload, "prompt_cache_key", prompt_cache_key),
+        else: payload
+
+    CodexPooler.JSON.encode!(payload)
   end
 
   defp websocket_success(id) do
