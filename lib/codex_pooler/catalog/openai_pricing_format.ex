@@ -394,6 +394,14 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
     end)
   end
 
+  defp unsupported_prices_valid?(
+         "per_minute",
+         %{"standard" => %{"default" => values} = buckets} = prices
+       )
+       when map_size(prices) == 1 and map_size(buckets) == 1 do
+    exact_numeric_keys?(values, ["price_per_minute"])
+  end
+
   defp unsupported_prices_valid?("per_minute", %{"standard" => buckets} = prices)
        when map_size(prices) == 1 and map_size(buckets) > 0 do
     Enum.all?(buckets, fn
