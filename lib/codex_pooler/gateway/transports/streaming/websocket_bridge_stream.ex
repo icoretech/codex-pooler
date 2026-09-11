@@ -24,6 +24,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   before upstream submission. Ambiguous task exits, send failures, peer closes,
   and local receive/pong timeouts commit a fatal stream error because the
   provider may already be generating.
+
+  An owner error or completion frame that lands before commitment is terminal
+  for the turn, and the owner replies to the submit call before sending it, so
+  the relay yields on the submit task for one short hop
+  (`owner_terminal_settle_timeout_ms`) rather than the full settle window
+  before reporting. A submit still blocked after that hop cannot add
+  pre-submission proof; it keeps the remainder of the settle budget only for
+  attempt metadata, which the take collects after the client-visible report.
   """
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -55,6 +63,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         }
 
   @default_settle_timeout_ms 5_000
+  # One scheduling hop: the owner replies to the submit call before it sends
+  # the terminal owner error/complete frame, so the task result is already
+  # queued or in flight when that frame is handled.
+  @default_owner_terminal_settle_timeout_ms 100
   @default_preflight_timeout_ms 15_000
   @max_precommit_frames 64
   @max_precommit_bytes 1_048_576
@@ -90,6 +102,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     ref = make_ref()
     settle_timeout_ms = Keyword.get(opts, :settle_timeout_ms, @default_settle_timeout_ms)
 
+    owner_terminal_settle_timeout_ms =
+      Keyword.get(
+        opts,
+        :owner_terminal_settle_timeout_ms,
+        @default_owner_terminal_settle_timeout_ms
+      )
+
     preflight_timeout_ms =
       Keyword.get(opts, :preflight_timeout_ms, @default_preflight_timeout_ms)
 
@@ -104,11 +123,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           ref: ref,
           correlation_id: correlation_id,
           settle_timeout_ms: settle_timeout_ms,
+          owner_terminal_settle_timeout_ms: owner_terminal_settle_timeout_ms,
           preflight_timeout_ms: preflight_timeout_ms,
           precontent_deadline_ms: precontent_deadline_ms,
           precontent_deadline_armed?: false,
           epoch: nil,
           task: nil,
+          task_settle_deadline_ms: nil,
           pending: [],
           pending_count: 0,
           pending_bytes: 0,
@@ -503,7 +524,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   defp pre_submission_failure?(_transport_failure), do: false
 
   defp preflight_owner_error(state, error) do
-    state = settle_task(state)
+    state = settle_owner_terminal_task(state)
     reason = owner_error_reason(error)
 
     if pre_submission_failure?(state.transport_failure) do
@@ -515,7 +536,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   end
 
   defp preflight_complete(state) do
-    state = settle_task(state)
+    state = settle_owner_terminal_task(state)
 
     if pre_submission_failure?(state.transport_failure) do
       report_fallback(
@@ -653,6 +674,56 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp settle_task(%{task: nil} = state), do: state
 
+  # Pre-content owner error/complete frames are terminal for the turn, and the
+  # owner has already replied to the submit call by the time it sends them, so
+  # the task result — the only carrier of the `transport_failure` the fallback
+  # decision reads — is settled, queued, or one scheduling hop away. Yield for
+  # that hop only. A task still blocked afterwards cannot add pre-submission
+  # proof, so the decision is reported at once and the task keeps the rest of
+  # the settle budget for attempt metadata (see `settle_task_before_take/1`).
+  defp settle_owner_terminal_task(%{task: %Task{} = task} = state) do
+    case Task.yield(task, state.owner_terminal_settle_timeout_ms) do
+      {:ok, result} ->
+        put_submit_result_connection(%{state | task: nil}, result)
+
+      {:exit, _reason} ->
+        %{state | task: nil}
+
+      nil ->
+        remaining_ms = max(state.settle_timeout_ms - state.owner_terminal_settle_timeout_ms, 0)
+
+        %{
+          state
+          | task_settle_deadline_ms: System.monotonic_time(:millisecond) + remaining_ms
+        }
+    end
+  end
+
+  defp settle_owner_terminal_task(%{task: nil} = state), do: state
+
+  # The take is the last consumer of attempt metadata, so a submit left pending
+  # by an owner-terminal report gets the remainder of its settle budget here,
+  # after the client-visible report, before it is discarded.
+  defp settle_task_before_take(%{task: %Task{} = task} = state) do
+    remaining_ms =
+      max((state.task_settle_deadline_ms || 0) - System.monotonic_time(:millisecond), 0)
+
+    state =
+      case Task.yield(task, remaining_ms) do
+        {:ok, result} ->
+          put_submit_result_connection(state, result)
+
+        {:exit, _reason} ->
+          state
+
+        nil ->
+          Task.shutdown(task, :brutal_kill)
+          state
+      end
+
+    %{state | task: nil}
+  end
+
   defp relay_committed_frame(state, frame, continue) when is_function(continue, 1) do
     send(state.parent, {state.ref, {:data, sse_block_context(frame)}})
 
@@ -669,7 +740,38 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     end
   end
 
-  defp metadata_loop(state) do
+  # A submit left pending by an owner-terminal report is still watched here so
+  # its late settlement feeds the take; every exit reaps it.
+  defp metadata_loop(%{task: %Task{ref: task_ref} = task} = state) do
+    receive do
+      {:take_upstream_websocket_attempt_metadata, caller, query_ref}
+      when is_pid(caller) and is_reference(query_ref) ->
+        state = settle_task_before_take(state)
+        send(caller, {query_ref, attempt_metadata(state)})
+
+      {^task_ref, result} ->
+        state
+        |> put_submit_result_and_clear_task(result)
+        |> metadata_loop()
+
+      {:DOWN, ^task_ref, :process, _pid, _reason} ->
+        metadata_loop(%{state | task: nil})
+
+      {:DOWN, parent_monitor, :process, _pid, _reason}
+      when parent_monitor == state.parent_monitor ->
+        Task.shutdown(task, :brutal_kill)
+
+      :cancel ->
+        Task.shutdown(task, :brutal_kill)
+        metadata_loop(%{state | task: nil})
+    after
+      state.settle_timeout_ms -> Task.shutdown(task, :brutal_kill)
+    end
+
+    :ok
+  end
+
+  defp metadata_loop(%{task: nil} = state) do
     receive do
       {:take_upstream_websocket_attempt_metadata, caller, query_ref}
       when is_pid(caller) and is_reference(query_ref) ->

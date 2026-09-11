@@ -998,7 +998,10 @@ defmodule CodexPooler.Gateway.Websocket do
         idle_shutdown_ms: OperationalSettings.current().websocket_owner_idle_timeout_ms
       ]
 
-      start_opts = maybe_put_owner_upstream(start_opts, opts)
+      start_opts =
+        start_opts
+        |> maybe_put_owner_upstream(opts)
+        |> maybe_put_owner_handoff_timeouts(opts)
 
       case WebsocketOwnerSession.start_owner(start_opts) do
         {:ok, _pid} -> :ok
@@ -1146,6 +1149,26 @@ defmodule CodexPooler.Gateway.Websocket do
       nil -> start_opts
       upstream -> Keyword.put(start_opts, :upstream, upstream)
     end
+  end
+
+  @owner_handoff_timeout_keys [:handoff_soft_timeout_ms, :handoff_absolute_timeout_ms]
+
+  # `WebsocketOwnerSession.start_owner/1` reads its handoff timeouts from its
+  # own option list, and the forwarder options are the only request-scoped
+  # carrier for them, so copy positive integer values through beside the
+  # upstream boundary. Absent or malformed values keep the owner defaults.
+  defp maybe_put_owner_handoff_timeouts(start_opts, %RequestOptions{
+         transport: %{websocket_owner: %{forwarder_opts: opts}}
+       }) do
+    Enum.reduce(@owner_handoff_timeout_keys, start_opts, fn key, acc ->
+      case Keyword.get(opts, key) do
+        timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 ->
+          Keyword.put(acc, key, timeout_ms)
+
+        _absent_or_invalid ->
+          acc
+      end
+    end)
   end
 
   defp websocket_metadata(opts) do

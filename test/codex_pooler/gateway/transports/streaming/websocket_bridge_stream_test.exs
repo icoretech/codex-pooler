@@ -256,9 +256,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     refute_receive {^ref, :done}, 100
   end
 
-  # An owner error that lands pre-content is reported only after the relay has
-  # given the in-flight submit its settle window (`settle_task/1`), so these
-  # fail-closed cases pass a short window instead of burning the 5 s default.
+  # A pre-content owner error is reported after one short owner-terminal hop by
+  # default; the short `settle_timeout_ms` here only bounds how long the relay
+  # then lingers for attempt metadata after the report.
   test "internal-only frames followed by an owner error fail closed" do
     stream = start_armed(blocking_submit(), settle_timeout_ms: 50)
     ref = stream.ref
@@ -560,6 +560,107 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     assert_receive {^ref, {:preflight, :stream}}, @detection_timeout_ms
     assert_receive {^ref, {:bridge_error, :owner_busy}}, @detection_timeout_ms
     refute_received {:fallback, _event, _measurements, _metadata}
+  end
+
+  # Findings #119 item 1: an owner error or completion that lands pre-content
+  # is terminal for the turn. The relay may wait one scheduling hop for the
+  # submit result that the owner has already replied with, never the 5 s
+  # settle window, so a blocked submit no longer stalls the fail-closed error.
+  @owner_terminal_report_budget_ms 500
+
+  test "a pre-content owner error is reported well under the settle window while the submit stays blocked" do
+    attach_fallback_handler(self())
+    stream = start_armed(registered_submit(self()))
+    ref = stream.ref
+
+    assert_receive {:submit_task, task_pid}, @detection_timeout_ms
+
+    started_ms = System.monotonic_time(:millisecond)
+    owner_frame(stream, {:error, :owner_busy, %{"status" => 409}})
+
+    assert_receive {^ref, {:preflight, :stream}}, @detection_timeout_ms
+    assert_receive {^ref, {:bridge_error, :owner_busy}}, @detection_timeout_ms
+    elapsed_ms = System.monotonic_time(:millisecond) - started_ms
+
+    assert elapsed_ms < @owner_terminal_report_budget_ms,
+           "pre-content owner error reported after #{elapsed_ms} ms"
+
+    refute_received {:fallback, _event, _measurements, _metadata}
+
+    # The report did not discard the still-blocked submit: its late settlement
+    # keeps feeding attempt metadata, and the take waits for it deterministically.
+    send(
+      task_pid,
+      {:return,
+       {:error,
+        %{
+          reason: :upstream_websocket_terminal_delivery_timeout,
+          transport_failure: terminal_timeout_metadata()
+        }}}
+    )
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: terminal_timeout_metadata()
+           }
+  end
+
+  test "a pre-content completion is reported well under the settle window while the submit stays blocked" do
+    stream = start_armed(blocking_submit())
+    ref = stream.ref
+
+    started_ms = System.monotonic_time(:millisecond)
+    owner_frame(stream, {:data, ~s({"type":"response.created"})})
+    owner_frame(stream, :complete)
+
+    assert_receive {^ref, {:preflight, :stream}}, @detection_timeout_ms
+    assert_receive {^ref, {:bridge_error, :upstream_websocket_error}}, @detection_timeout_ms
+    elapsed_ms = System.monotonic_time(:millisecond) - started_ms
+
+    assert elapsed_ms < @owner_terminal_report_budget_ms,
+           "pre-content completion reported after #{elapsed_ms} ms"
+
+    refute_receive {^ref, {:data, _data}}, 100
+    refute_received {^ref, {:preflight, {:fallback, _reason}}}
+  end
+
+  test "the fallback decision still reads a connect-phase transport failure that settles beside the owner error" do
+    attach_fallback_handler(self())
+
+    stream =
+      start_armed(registered_submit(self()),
+        owner_terminal_settle_timeout_ms: @detection_timeout_ms
+      )
+
+    ref = stream.ref
+
+    assert_receive {:submit_task, task_pid}, @detection_timeout_ms
+
+    # The frame is queued at the relay before the result leaves the task, so
+    # the decision has to read the settlement that arrives after the frame.
+    owner_frame(stream, {:error, :owner_unavailable, %{"status" => 503}})
+
+    send(
+      task_pid,
+      {:return,
+       {:error,
+        %{
+          reason: :owner_unavailable,
+          transport_failure: %{
+            "phase" => "connect",
+            "upstream_committed" => false,
+            "reason" => "owner_unavailable"
+          }
+        }}}
+    )
+
+    assert_receive {^ref, {:preflight, {:fallback, :owner_unavailable}}}, @detection_timeout_ms
+
+    assert_receive {:fallback, [:codex_pooler, :gateway, :websocket_bridge, :fallback],
+                    %{count: 1}, %{reason: "owner_unavailable"}},
+                   @detection_timeout_ms
+
+    refute_received {^ref, {:bridge_error, _reason}}
   end
 
   test "a submit error without pre-submission proof fails closed" do

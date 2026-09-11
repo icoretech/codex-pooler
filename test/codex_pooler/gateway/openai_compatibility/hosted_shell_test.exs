@@ -151,6 +151,53 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.HostedShellTest do
     assert_rejected(shell_output(%{"output" => [output_chunk("", overflow, exit_outcome(0))]}))
   end
 
+  # The bound is code points, not bytes: two-byte text crosses the byte count
+  # of the limit at half the code points and must still be counted exactly.
+  @tag timeout: 120_000
+  test "enforces the output limit by code point when every code point is multi-byte" do
+    multibyte_maximum = String.duplicate("é", 10_485_760)
+    multibyte_overflow = multibyte_maximum <> "é"
+
+    assert_accepted(
+      shell_output(%{"output" => [output_chunk(multibyte_maximum, "", exit_outcome(0))]})
+    )
+
+    assert_rejected(
+      shell_output(%{"output" => [output_chunk("", multibyte_overflow, exit_outcome(0))]})
+    )
+  end
+
+  # Findings #119 item 5: a full-size output chunk used to cost ~400 ms of
+  # per-code-point scanning on the /v1 path. The count is the claim here.
+  test "classifies a 10 MiB output chunk well under 100 ms" do
+    stdout = String.duplicate("x", 10_485_760)
+    item = shell_output(%{"output" => [output_chunk(stdout, "", exit_outcome(0))]})
+
+    {elapsed_us, result} = :timer.tc(fn -> HostedShell.validate_item(item) end)
+
+    assert {:ok, ^item} = result
+
+    assert elapsed_us < 100_000,
+           "10 MiB stdout classification took #{div(elapsed_us, 1_000)} ms"
+  end
+
+  test "rejects invalid UTF-8 in identifiers and output text" do
+    invalid_sequences = [
+      <<0xFF>>,
+      <<0xC3>>,
+      <<0xED, 0xA0, 0x80>>,
+      <<0xC0, 0x80>>,
+      "ok" <> <<0xFF>> <> "ok"
+    ]
+
+    Enum.each(invalid_sequences, fn bytes ->
+      assert_rejected(shell_call(%{"call_id" => bytes}))
+      assert_rejected(shell_call(%{"caller" => %{"type" => "program", "caller_id" => bytes}}))
+      assert_rejected(shell_output(%{"output" => [output_chunk(bytes, "", exit_outcome(0))]}))
+      assert_rejected(shell_output(%{"output" => [output_chunk("", bytes, exit_outcome(0))]}))
+    end)
+  end
+
   test "rejects unknown keys at every object boundary including created_by" do
     cases = [
       Map.put(shell_call(), "unknown", true),

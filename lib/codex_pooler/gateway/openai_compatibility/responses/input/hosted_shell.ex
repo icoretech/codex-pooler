@@ -203,24 +203,32 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.HostedShell do
 
   defp bounded_identifier(_value), do: :error
 
+  # Valid UTF-8 encodes every code point in one to four bytes, so the byte
+  # size brackets the code point count without a walk: `ceil(bytes / 4)` is
+  # a lower bound and `bytes` an upper bound. Validity is checked once, on at
+  # most `4 * maximum` bytes; only inputs that fall between the brackets are
+  # counted, and that count stops at `maximum + 1`.
   @spec bounded_codepoints?(binary(), non_neg_integer(), pos_integer()) :: boolean()
-  defp bounded_codepoints?(value, minimum, maximum),
-    do: scan_codepoints(value, 0, minimum, maximum)
+  defp bounded_codepoints?(value, minimum, maximum) do
+    bytes = byte_size(value)
 
-  @spec scan_codepoints(binary(), non_neg_integer(), non_neg_integer(), pos_integer()) ::
-          boolean()
-  defp scan_codepoints(value, count, minimum, maximum) do
-    case String.next_codepoint(value) do
-      nil ->
-        count >= minimum
-
-      {_codepoint, _rest} when count == maximum ->
-        false
-
-      {codepoint, rest} ->
-        String.valid?(codepoint) and scan_codepoints(rest, count + 1, minimum, maximum)
+    cond do
+      bytes < minimum -> false
+      bytes > maximum * 4 -> false
+      not String.valid?(value, :fast_ascii) -> false
+      bytes >= minimum * 4 and bytes <= maximum -> true
+      true -> codepoints_within?(value, 0, minimum, maximum)
     end
   end
+
+  # Runs only on validated UTF-8, so the utf8 segment matches until empty.
+  @spec codepoints_within?(binary(), non_neg_integer(), non_neg_integer(), pos_integer()) ::
+          boolean()
+  defp codepoints_within?(<<>>, count, minimum, _maximum), do: count >= minimum
+  defp codepoints_within?(_value, maximum, _minimum, maximum), do: false
+
+  defp codepoints_within?(<<_::utf8, rest::binary>>, count, minimum, maximum),
+    do: codepoints_within?(rest, count + 1, minimum, maximum)
 
   @spec exact_keys(map(), [String.t()]) :: :ok | :error
   defp exact_keys(item, allowed_keys) do

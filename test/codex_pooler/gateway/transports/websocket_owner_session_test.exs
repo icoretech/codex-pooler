@@ -1453,6 +1453,42 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert %{idle_shutdown_ms: ^second_timeout} = :sys.get_state(second_owner)
   end
 
+  # Findings #119 item 4: the forwarder options carried the handoff timeouts
+  # accepted by `start_owner/1`, but the local gateway start path forwarded
+  # only the upstream boundary, so the started owner silently kept defaults.
+  test "local gateway owners start with the handoff timeouts from the forwarder options" do
+    previous_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    on_exit(fn -> restore_owner_forwarding(previous_forwarding) end)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    auth = auth_context()
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    handoff_soft_timeout_ms = 25
+    handoff_absolute_timeout_ms = 2_000
+
+    assert {:ok, runtime} =
+             Gateway.prepare_websocket_session(auth, %{
+               accepted_turn_state: "owner-handoff-#{System.unique_integer([:positive])}",
+               websocket_owner_forwarder_opts: [
+                 upstream: upstream,
+                 handoff_soft_timeout_ms: handoff_soft_timeout_ms,
+                 handoff_absolute_timeout_ms: handoff_absolute_timeout_ms
+               ]
+             })
+
+    session_id = runtime.codex_session.id
+    on_exit(fn -> cleanup_owner_session(session_id) end)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert {:ok, owner} = WebsocketOwnerSession.lookup(session_id)
+
+    assert %{
+             handoff_soft_timeout_ms: ^handoff_soft_timeout_ms,
+             handoff_absolute_timeout_ms: ^handoff_absolute_timeout_ms
+           } = :sys.get_state(owner)
+  end
+
   test "owner lifecycle logs start reuse lookup miss and terminate metadata", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     request_id = "req-owner-lifecycle-#{System.unique_integer([:positive])}"
