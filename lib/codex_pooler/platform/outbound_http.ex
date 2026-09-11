@@ -41,15 +41,20 @@ defmodule CodexPooler.Platform.OutboundHTTP do
   are clamped so a bad value cannot make Finch reject every outbound request.
 
   Callers add `finch: pool_options()` and keep their own receive, retry, and
-  redirect options. Every caller that needs no connect timeout of its own
-  passes exactly these options, so they share one Finch instance per saved
-  value; a caller that sets a connect timeout adds `conn_opts` and gets one more
-  instance. Each saved value starts new instances, and the previous ones stay
-  idle until restart because `pool_max_idle_time` stays unset: stopping an idle
-  per-origin pool can race a request that has just looked it up, and stale
-  connections are already dropped at checkout. Req refuses `finch:` together
-  with `connect_options:`, so a connect timeout travels as
-  `conn_opts: [transport_opts: [timeout: ms]]` inside `finch:`.
+  redirect options. Req starts one Finch instance per distinct `finch:` pool
+  option tuple; `pool_timeout` and `receive_timeout` are per-request options
+  outside that key. Every caller that needs no connect timeout of its own
+  passes exactly these options, so they share one instance per saved value; a
+  caller that sets a connect timeout adds `conn_opts` and gets its own instance
+  per idle bound and connect timeout pair. `pool_max_idle_time` stays unset, so
+  no instance is ever stopped: stopping an idle per-origin pool can race a
+  request that has just looked it up, and stale connections are already
+  dropped at checkout. Each distinct combination of this setting and the
+  gateway connect timeout saved since boot therefore keeps its pools until
+  restart, so both settings are low-churn and must not be driven from
+  automation. Req refuses `finch:` together with `connect_options:`, so a
+  connect timeout travels as `conn_opts: [transport_opts: [timeout: ms]]`
+  inside `finch:`.
   """
 
   alias CodexPooler.InstanceSettings
