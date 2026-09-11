@@ -84,6 +84,10 @@ Set release environment variables for values the app needs before it can read da
       <td>DNS clustering query when clustering is enabled</td>
     </tr>
     <tr>
+      <td><code>CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS</code></td>
+      <td>Longest idle time, in milliseconds, before a pooled upstream HTTP connection is replaced instead of reused, default <code>45000</code>. The bound is checked only when a connection is taken for a new request, so it never interrupts an in-flight or streaming request. Keep it below the idle timeout of any NAT gateway, load balancer, or proxy on the egress path; a longer bound means fewer reconnects but more exposure to silently dropped connections. <code>infinity</code> removes the bound</td>
+    </tr>
+    <tr>
       <td><code>CODEX_POOLER_TOTP_ENCRYPTION_KEY</code></td>
       <td>TOTP encryption root key</td>
     </tr>

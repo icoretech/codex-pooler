@@ -837,6 +837,101 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     refute Map.has_key?(second_headers, "cookie")
   end
 
+  describe "upstream connection pool idle bound" do
+    setup do
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
+        )
+
+      previous = Application.fetch_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+      handler_id = {__MODULE__, :finch_pool_event, make_ref()}
+
+      :ok =
+        :telemetry.attach_many(
+          handler_id,
+          [[:finch, :reused_connection], [:finch, :conn_max_idle_time_exceeded]],
+          &__MODULE__.handle_finch_pool_event/4,
+          %{parent: self(), port: URI.parse(FakeUpstream.url(upstream)).port}
+        )
+
+      on_exit(fn ->
+        :telemetry.detach(handler_id)
+        FakeUpstream.stop(upstream)
+
+        case previous do
+          {:ok, value} ->
+            Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
+
+          :error ->
+            Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+        end
+      end)
+
+      {:ok, upstream: upstream}
+    end
+
+    test "http dispatch discards a pooled connection idle past the configured bound", %{
+      upstream: upstream
+    } do
+      # A zero bound makes every checked-in connection stale at its next
+      # checkout, so the second dispatch must open a new connection instead of
+      # reusing the first one. Both events are emitted before the request
+      # returns, so no wait is needed.
+      Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, 0)
+      request = idle_bound_dispatch_request(upstream)
+
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+
+      assert_received {:finch_pool_event, [:finch, :conn_max_idle_time_exceeded], _meta}
+      refute_received {:finch_pool_event, [:finch, :reused_connection], _meta}
+      assert FakeUpstream.count(upstream) == 2
+    end
+
+    test "http dispatch reuses a pooled connection inside the bound from a dedicated pool", %{
+      upstream: upstream
+    } do
+      Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, :timer.minutes(10))
+      request = idle_bound_dispatch_request(upstream)
+
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+
+      assert_received {:finch_pool_event, [:finch, :reused_connection], %{name: finch_name}}
+      refute_received {:finch_pool_event, [:finch, :conn_max_idle_time_exceeded], _meta}
+      refute finch_name == Req.Finch
+      assert FakeUpstream.count(upstream) == 2
+    end
+  end
+
+  def handle_finch_pool_event(event, _measurements, %{port: port} = meta, %{
+        parent: parent,
+        port: port
+      }) do
+    send(parent, {:finch_pool_event, event, Map.take(meta, [:name, :host, :port])})
+  end
+
+  def handle_finch_pool_event(_event, _measurements, _meta, _config), do: :ok
+
+  defp idle_bound_dispatch_request(upstream) do
+    payload = %{"model" => "example-model"}
+
+    %UpstreamDispatch.Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: CodexPooler.JSON.encode!(payload),
+      original_payload: payload,
+      identity: upstream_identity(),
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 15_000},
+          "/backend-api/codex/responses",
+          payload
+        )
+    }
+  end
+
   test "native Responses HTTP and compact dispatch derive routing hints from normalized upstream payloads" do
     for {endpoint, path} <- [
           {"/backend-api/codex/responses", "/backend-api/codex/responses"},

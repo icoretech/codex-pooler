@@ -361,6 +361,69 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.bulkheads["proxy_control"].max_concurrency == 8
   end
 
+  describe "upstream connection idle bound config" do
+    test "defaults to 45 seconds when the release env is absent or blank" do
+      previous = System.get_env("CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS")
+      System.delete_env("CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS")
+
+      try do
+        assert OperationalSettings.parse_upstream_conn_max_idle_time_env!() == 45_000
+      after
+        if previous,
+          do: System.put_env("CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS", previous)
+      end
+
+      assert OperationalSettings.parse_upstream_conn_max_idle_time!(" ") == 45_000
+    end
+
+    test "parses positive milliseconds and infinity" do
+      assert OperationalSettings.parse_upstream_conn_max_idle_time!("45000") == 45_000
+      assert OperationalSettings.parse_upstream_conn_max_idle_time!(" 1 ") == 1
+      assert OperationalSettings.parse_upstream_conn_max_idle_time!("Infinity") == :infinity
+    end
+
+    test "rejects invalid release env values without echoing them" do
+      for value <- ["0", "-1", "30s", "1.5", "99999999999", "SECRET_SENTINEL_DO_NOT_STORE_123"] do
+        error =
+          assert_raise ArgumentError, fn ->
+            OperationalSettings.parse_upstream_conn_max_idle_time!(value)
+          end
+
+        message = Exception.message(error)
+        assert message =~ "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS"
+        refute message =~ "SECRET_SENTINEL_DO_NOT_STORE_123"
+      end
+    end
+
+    test "reads the app env and falls back on values Finch would reject" do
+      previous = Application.fetch_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+
+      try do
+        for {value, expected} <- [
+              {5_000, 5_000},
+              {0, 0},
+              {:infinity, :infinity},
+              {-1, 45_000},
+              {"5000", 45_000}
+            ] do
+          Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
+          assert OperationalSettings.upstream_conn_max_idle_time_ms() == expected
+        end
+
+        Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+        assert OperationalSettings.upstream_conn_max_idle_time_ms() == 45_000
+      after
+        case previous do
+          {:ok, value} ->
+            Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
+
+          :error ->
+            Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+        end
+      end
+    end
+  end
+
   describe "websocket owner forwarding topology config" do
     test "defaults disabled when release env is absent and app env is unset" do
       with_websocket_owner_forwarding_env(nil, fn ->

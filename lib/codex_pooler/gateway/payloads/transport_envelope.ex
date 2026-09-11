@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   Shared upstream HTTP transport envelope helpers.
   """
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
   alias CodexPooler.Upstreams.Auth.CodexAuth
@@ -54,13 +55,26 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
     }
   end
 
+  # `conn_opts` and `conn_max_idle_time` are Finch pool options, so Req runs
+  # these requests on its own Finch instance keyed by them (one HTTP/1 pool per
+  # origin, shared by every account) rather than on the global `Req.Finch`.
+  # Keeping them per request keeps the connect timeout an instance setting that
+  # applies without a restart; a Finch started at boot would freeze it. No
+  # `connect_options` are passed, so Req's default `protocols: [:http1]` holds
+  # and upstream HTTP never negotiates HTTP/2. `conn_max_idle_time` exists only
+  # for Finch HTTP/1 pools; an HTTP/2 pool would need `http2: [ping_interval:]`
+  # or `max_connection_age` instead. The idle bound is explained at
+  # `OperationalSettings`. `pool_max_idle_time` stays unset: stopping an idle
+  # per-origin pool can race a request that has just looked it up, and stale
+  # connections are already dropped at checkout.
   @spec req_timeout_options(TimeoutConfig.t() | timeout_settings()) :: keyword()
   def req_timeout_options(timeouts) do
     [
       receive_timeout: timeouts.receive_timeout_ms,
       finch: [
         pool_timeout: timeouts.pool_timeout_ms,
-        conn_opts: [transport_opts: [timeout: timeouts.connect_timeout_ms]]
+        conn_opts: [transport_opts: [timeout: timeouts.connect_timeout_ms]],
+        conn_max_idle_time: OperationalSettings.upstream_conn_max_idle_time_ms()
       ]
     ]
   end

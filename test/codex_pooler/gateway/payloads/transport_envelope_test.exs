@@ -41,13 +41,36 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         receive_timeout_ms: 30
       }
 
-      assert TransportEnvelope.req_timeout_options(timeouts) == [
-               receive_timeout: 30,
-               finch: [
-                 pool_timeout: 20,
-                 conn_opts: [transport_opts: [timeout: 10]]
+      with_upstream_conn_max_idle_time_app_env(:unset, fn ->
+        assert TransportEnvelope.req_timeout_options(timeouts) == [
+                 receive_timeout: 30,
+                 finch: [
+                   pool_timeout: 20,
+                   conn_opts: [transport_opts: [timeout: 10]],
+                   conn_max_idle_time: 45_000
+                 ]
                ]
-             ]
+      end)
+    end
+
+    test "carries the configured upstream connection idle bound as a Finch pool option" do
+      timeouts = %TimeoutConfig{
+        connect_timeout_ms: 10,
+        pool_timeout_ms: 20,
+        receive_timeout_ms: 30
+      }
+
+      for {app_env, expected} <- [
+            {{:set, 1_234}, 1_234},
+            {{:set, :infinity}, :infinity},
+            {{:set, -1}, 45_000},
+            {{:set, "30000"}, 45_000}
+          ] do
+        with_upstream_conn_max_idle_time_app_env(app_env, fn ->
+          assert TransportEnvelope.req_timeout_options(timeouts)[:finch][:conn_max_idle_time] ==
+                   expected
+        end)
+      end
     end
 
     test "executes the configured Req transport without deprecation warnings" do
@@ -816,6 +839,24 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   defp identity do
     %UpstreamIdentity{chatgpt_account_id: "acct_test"}
+  end
+
+  defp with_upstream_conn_max_idle_time_app_env(app_env, fun) do
+    previous = Application.fetch_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+
+    case app_env do
+      :unset -> Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+      {:set, value} -> Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
+    end
+
+    try do
+      fun.()
+    after
+      case previous do
+        {:ok, value} -> Application.put_env(:codex_pooler, :upstream_conn_max_idle_time_ms, value)
+        :error -> Application.delete_env(:codex_pooler, :upstream_conn_max_idle_time_ms)
+      end
+    end
   end
 
   defp start_http_server! do
