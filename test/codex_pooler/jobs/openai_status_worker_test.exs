@@ -63,6 +63,15 @@ defmodule CodexPooler.Jobs.OpenAIStatusWorkerTest do
     assert OpenAIStatus.feed_state().active_count == 0
   end
 
+  test "network failures remain retryable" do
+    Application.put_env(:codex_pooler, :openai_status_sync_fetcher, fn _state, _opts ->
+      {:error, %{code: :network_error, message: "transport unavailable"}}
+    end)
+
+    assert {:error, {:status_feed, "network_error"}} =
+             OpenAIStatusSyncWorker.perform(%Oban.Job{args: %{}})
+  end
+
   test "worker returns a bounded cancellation for an invalid normalized item" do
     now = ~U[2026-09-10 10:00:00.000000Z]
 

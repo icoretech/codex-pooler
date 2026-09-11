@@ -149,6 +149,20 @@ defmodule CodexPooler.Status.SyncTest do
     end)
   end
 
+  test "preserves transient network failures for worker retry classification" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+
+    assert {:error, %{code: "network_error"}} =
+             Sync.sync(
+               fetcher: fn _state, _opts ->
+                 {:error, %{code: :network_error, message: "transport unavailable"}}
+               end,
+               now: now
+             )
+
+    assert OpenAIStatus.feed_state().last_error_code == "network_error"
+  end
+
   test "an enclosing rollback removes sync rows and suppresses its notification" do
     now = ~U[2026-09-10 10:00:00.000000Z]
     guid = "rollback-#{System.unique_integer([:positive])}"
