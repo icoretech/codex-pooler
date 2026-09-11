@@ -1942,8 +1942,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
       assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
 
-      assert [first_attempt, second_attempt] =
-               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+      assert [first_attempt, second_attempt] = pool_attempts(setup.pool.id)
 
       assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
       assert first_attempt.status == "retryable_failed"
@@ -2071,8 +2070,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert is_reference(second_opaque_connection_id)
       assert first_opaque_connection_id != second_opaque_connection_id
 
-      assert [first_attempt, second_attempt] =
-               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+      assert [first_attempt, second_attempt] = pool_attempts(setup.pool.id)
 
       refute first_attempt.pool_upstream_assignment_id ==
                second_attempt.pool_upstream_assignment_id
@@ -2959,8 +2957,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [%Request{status: "rejected", last_error_code: "api_key_paused"}] =
                request_logs(setup.pool.id)
 
-      assert Repo.aggregate(Attempt, :count) == 0
-      assert Repo.aggregate(LedgerEntry, :count) == 0
+      assert pool_attempts(setup.pool.id) == []
+      assert pool_ledger_entries(setup.pool.id) == []
       assert Repo.aggregate(CodexTurn, :count) == 0
       assert FakeUpstream.count(upstream) == 0
       refute_received {:websocket_owner_harness_node_call, _call}
@@ -4710,8 +4708,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
       refute Repo.exists?(from d in BridgeDemotion, where: d.pool_id == ^setup.pool.id)
 
-      assert [first_attempt, second_attempt] =
-               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+      assert [first_attempt, second_attempt] = pool_attempts(setup.pool.id)
 
       assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
       assert first_attempt.status == "retryable_failed"
@@ -7253,9 +7250,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           refute error_frame =~ internal_reason
           assert FakeUpstream.requests(upstream) == []
-          assert Repo.aggregate(Request, :count) == 0
-          assert Repo.aggregate(Attempt, :count) == 0
-          assert Repo.aggregate(LedgerEntry, :count) == 0
+          assert request_logs(setup.pool.id) == []
+          assert pool_attempts(setup.pool.id) == []
+          assert pool_ledger_entries(setup.pool.id) == []
         after
           Admission.release(lease)
           CodexResponsesSocket.terminate(:closed, state)
@@ -7815,6 +7812,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_crash"}))
     setup = gateway_setup(upstream)
+    # Auto mode commits; the rows this test owns are purged so table-wide
+    # assertions elsewhere in the file keep an empty baseline.
+    pool_id = setup.pool.id
+    on_exit(fn -> purge_committed_pool_rows!(pool_id) end)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
@@ -12665,6 +12666,58 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     after
       100 -> :ok
     end
+  end
+
+  # Removes every row an auto-mode test committed for its Pool, children first.
+  defp purge_committed_pool_rows!(pool_id) do
+    Sandbox.unboxed_run(Repo, fn ->
+      request_ids = Repo.all(from(r in Request, where: r.pool_id == ^pool_id, select: r.id))
+      session_ids = Repo.all(from(s in CodexSession, where: s.pool_id == ^pool_id, select: s.id))
+
+      Repo.delete_all(from(l in BridgeOwnerLease, where: l.codex_session_id in ^session_ids))
+      Repo.delete_all(from(t in CodexTurn, where: t.codex_session_id in ^session_ids))
+      Repo.delete_all(from(e in RequestReplayEntitlement, where: e.request_id in ^request_ids))
+
+      Repo.delete_all(
+        from(l in RequestClientRetryLink,
+          where:
+            l.predecessor_request_id in ^request_ids or l.successor_request_id in ^request_ids
+        )
+      )
+
+      Repo.delete_all(from(l in LedgerEntry, where: l.request_id in ^request_ids))
+      Repo.delete_all(from(a in Attempt, where: a.request_id in ^request_ids))
+      Repo.delete_all(from(f in RequestLogFact, where: f.request_id in ^request_ids))
+      Repo.delete_all(from(r in Request, where: r.pool_id == ^pool_id))
+      Repo.delete_all(from(s in CodexSession, where: s.pool_id == ^pool_id))
+      Repo.delete_all(from(k in APIKey, where: k.pool_id == ^pool_id))
+      Repo.delete_all(from(p in CodexPooler.Pools.Pool, where: p.id == ^pool_id))
+    end)
+
+    :ok
+  end
+
+  # Crash tests in this file run the sandbox in auto mode and commit their
+  # rows, so every table assertion is scoped to the test's own Pool.
+  defp pool_attempts(pool_id) do
+    Repo.all(
+      from(a in Attempt,
+        join: r in Request,
+        on: r.id == a.request_id,
+        where: r.pool_id == ^pool_id,
+        order_by: [asc: a.attempt_number]
+      )
+    )
+  end
+
+  defp pool_ledger_entries(pool_id) do
+    Repo.all(
+      from(l in LedgerEntry,
+        join: r in Request,
+        on: r.id == l.request_id,
+        where: r.pool_id == ^pool_id
+      )
+    )
   end
 
   defp request_logs(pool_id) do
