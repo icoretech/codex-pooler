@@ -2409,6 +2409,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       )
 
     assert %{output_commit_probe_timeout_ms: ^default_ms} = :sys.get_state(invalid_owner)
+
+    # This owner carries a UUID session id with no persisted lease, so stopping
+    # it runs lifecycle recovery. Stop it here, where the warnings are captured
+    # and asserted, rather than from on_exit, where they would print.
+    log = capture_log(fn -> cleanup_owner_session(invalid_context.codex_session_id) end)
+
+    assert log =~
+             "websocket owner exit persistence failed codex_session_id=#{invalid_context.codex_session_id} operation=release_owner_lease"
+
+    assert log =~
+             "websocket owner lifecycle recovery failed codex_session_id=#{invalid_context.codex_session_id} recovery_reason=owner_drained failure_reason=stale_owner_cleanup"
   end
 
   test "native owner interruption probe is acknowledged by the sole socket task", context do

@@ -4,6 +4,10 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
   alias CodexPooler.Gateway.Websocket.ResponseTask
 
+  # Failure-detection budget for a response task or watcher that must exit on
+  # a socket-death signal; never a scenario timer.
+  @shutdown_detection_ms 15_000
+
   setup do
     registry = :"websocket-response-task-registry-#{System.unique_integer([:positive])}"
     start_supervised!({ActivityRegistry, name: registry})
@@ -270,6 +274,123 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     assert ActivityRegistry.activities(name: registry) == []
   end
 
+  for kind <- [:direct, :proxy] do
+    test "tracked #{kind} delivery wait settles aborted and exits when its socket dies without acknowledging",
+         %{registry: registry} do
+      test_pid = self()
+      socket = spawn(fn -> forward_socket_messages(test_pid) end)
+
+      {:ok, pid} =
+        ResponseTask.start(
+          socket,
+          unquote(kind),
+          fn _task_pid -> :ok end,
+          fn _task_pid, _reason -> :ok end,
+          activity_registry: registry
+        )
+
+      on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
+      monitor = Process.monitor(pid)
+      assert_receive {:socket_received, {:websocket_response_activity, ^pid, token}}
+      assert_receive {:socket_received, {:codex_response_done, ^pid, :ok}}
+
+      assert {_epoch, [%{token: ^token, pid: ^pid}]} =
+               ActivityRegistry.begin_drain(name: registry)
+
+      assert {:active, :admitted} = ActivityRegistry.status(token, name: registry)
+
+      Process.exit(socket, :kill)
+
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, @shutdown_detection_ms
+      assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
+      assert ActivityRegistry.activities(name: registry) == []
+    end
+  end
+
+  test "a delivery acknowledgement sent before the socket dies still settles completed", %{
+    registry: registry
+  } do
+    test_pid = self()
+
+    socket =
+      spawn(fn ->
+        receive do
+          {:websocket_response_activity, task_pid, token} ->
+            send(test_pid, {:socket_saw_activity, task_pid, token})
+
+            receive do
+              :acknowledge_and_die ->
+                ResponseTask.acknowledge_delivery(task_pid, token, :completed)
+                exit(:kill_after_ack)
+            end
+        end
+      end)
+
+    {:ok, pid} =
+      ResponseTask.start(
+        socket,
+        :direct,
+        fn _task_pid -> :ok end,
+        fn _task_pid, _reason -> :ok end,
+        activity_registry: registry
+      )
+
+    monitor = Process.monitor(pid)
+    assert_receive {:socket_saw_activity, ^pid, token}
+    assert {_epoch, [%{token: ^token}]} = ActivityRegistry.begin_drain(name: registry)
+    send(socket, :acknowledge_and_die)
+
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, @shutdown_detection_ms
+    assert {:finished, :completed} = ActivityRegistry.status(token, name: registry)
+    assert ActivityRegistry.activities(name: registry) == []
+  end
+
+  test "a cancellation watcher waiting for delivery settles aborted when its socket dies", %{
+    registry: registry
+  } do
+    test_pid = self()
+    socket = spawn(fn -> forward_socket_messages(test_pid) end)
+
+    {:ok, pid} =
+      ResponseTask.start(
+        socket,
+        :proxy,
+        fn _task_pid ->
+          send(test_pid, :proxy_upstream_started)
+
+          receive do
+            :release_proxy_work -> :ok
+          end
+        end,
+        fn task_pid, reason -> send(test_pid, {:proxy_cancelled, task_pid, reason}) end,
+        activity_registry: registry
+      )
+
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
+    assert_receive :proxy_upstream_started
+    assert {_epoch, [%{token: token, pid: ^pid}]} = ActivityRegistry.begin_drain(name: registry)
+    monitor = Process.monitor(pid)
+    assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
+    assert_receive {:proxy_cancelled, ^pid, :owner_drained}
+
+    assert_receive {:socket_received,
+                    {:websocket_response_activity_cancelled, ^pid, ^token, watcher,
+                     :owner_drained}}
+
+    on_exit(fn -> if Process.alive?(watcher), do: Process.exit(watcher, :kill) end)
+    watcher_monitor = Process.monitor(watcher)
+
+    Process.exit(socket, :kill)
+
+    assert_receive {:DOWN, ^watcher_monitor, :process, ^watcher, :normal},
+                   @shutdown_detection_ms
+
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}, @shutdown_detection_ms
+    assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
+    assert ActivityRegistry.activities(name: registry) == []
+    refute_received {:proxy_cancelled, ^pid, :owner_drained}
+  end
+
   test "untracked local-owner submitted work waits for delivery without double-counting", %{
     registry: registry
   } do
@@ -377,5 +498,13 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     refute_receive {:websocket_response_activity, ^pid, _token}, 0
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
     assert {_epoch, []} = ActivityRegistry.begin_drain(name: registry)
+  end
+
+  defp forward_socket_messages(test_pid) do
+    receive do
+      message ->
+        send(test_pid, {:socket_received, message})
+        forward_socket_messages(test_pid)
+    end
   end
 end

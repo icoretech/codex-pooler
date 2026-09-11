@@ -31,6 +31,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   }
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
   alias CodexPooler.Gateway.Websocket.DeliveryReceipt
   alias CodexPooler.Pools
   alias CodexPooler.Repo
@@ -1491,12 +1492,109 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     StreamProtocol.internal_control_event?(frame)
   end
 
+  # Takes only the task's result. The activity token the task reported ahead of
+  # it stays unprocessed, so the socket settles the task as untracked and the
+  # task stays parked on its delivery acknowledgement until the socket process
+  # exits. Use receive_socket_turn_done/2 to model the WebSock loop.
   def receive_socket_done(state, timeout_ms \\ @detection_timeout_ms) do
     receive do
       {:codex_response_done, pid, result} ->
         CodexResponsesSocket.handle_info({:codex_response_done, pid, result}, state)
     after
       timeout_ms -> flunk("expected websocket response completion")
+    end
+  end
+
+  # Drives a turn's completion the way the WebSock loop does: the activity
+  # token the task reports ahead of its result is taken in mailbox order, and
+  # the delivery completion the socket schedules for itself while handling the
+  # result is processed, so the task receives its delivery acknowledgement and
+  # exits. The turn must have pushed its terminal first, as on a real socket.
+  def receive_socket_turn_done(state, timeout_ms \\ @detection_timeout_ms) do
+    receive do
+      {:websocket_response_activity, pid, token} ->
+        {:ok, state} =
+          CodexResponsesSocket.handle_info({:websocket_response_activity, pid, token}, state)
+
+        receive_socket_turn_done(state, timeout_ms)
+
+      {:codex_response_done, pid, result} ->
+        {:codex_response_done, pid, result}
+        |> CodexResponsesSocket.handle_info(state)
+        |> complete_scheduled_socket_delivery(pid)
+    after
+      timeout_ms -> flunk("expected websocket response completion")
+    end
+  end
+
+  defp complete_scheduled_socket_delivery({:ok, state}, pid),
+    do: {:ok, process_scheduled_socket_delivery(state, pid)}
+
+  defp complete_scheduled_socket_delivery({:push, frame, state}, pid),
+    do: {:push, frame, process_scheduled_socket_delivery(state, pid)}
+
+  defp complete_scheduled_socket_delivery(result, _pid), do: result
+
+  # The socket schedules delivery completion with a message to itself, so it
+  # is already in the mailbox when the result callback returns.
+  defp process_scheduled_socket_delivery(state, pid) do
+    receive do
+      {:websocket_response_delivery_complete, ^pid, token} ->
+        message = {:websocket_response_delivery_complete, pid, token}
+
+        case CodexResponsesSocket.handle_info(message, state) do
+          {:ok, state} -> state
+          other -> flunk("delivery completion did not keep the socket open: #{elem(other, 0)}")
+        end
+    after
+      0 -> state
+    end
+  end
+
+  # Failure-detection budget for response tasks a finished socket must release;
+  # never a scenario timer.
+  @response_task_release_detection_ms 15_000
+
+  @doc """
+  Asserts that no response task registered with `socket` as its parent is
+  still parked on a delivery acknowledgement: each exits within the detection
+  budget and leaves no activity registry entry. A task still parked when the
+  budget runs out is killed so it cannot leak into later tests.
+  """
+  def assert_socket_response_tasks_released!(socket \\ self()) do
+    registered = socket_response_activities(socket)
+    monitors = Map.new(registered, &{Process.monitor(&1.pid), &1.pid})
+    deadline = System.monotonic_time(:millisecond) + @response_task_release_detection_ms
+    parked = await_response_tasks_down(monitors, deadline)
+
+    if map_size(parked) > 0 do
+      Enum.each(parked, fn {ref, pid} ->
+        Process.demonitor(ref, [:flush])
+        Process.exit(pid, :kill)
+      end)
+
+      flunk(
+        "#{map_size(parked)} of #{length(registered)} response tasks still parked " <>
+          "on a delivery acknowledgement after the socket finished"
+      )
+    end
+
+    assert socket_response_activities(socket) == []
+    :ok
+  end
+
+  defp socket_response_activities(socket),
+    do: Enum.filter(ActivityRegistry.activities(), &(Map.get(&1, :direct_parent) == socket))
+
+  defp await_response_tasks_down(monitors, _deadline) when map_size(monitors) == 0,
+    do: monitors
+
+  defp await_response_tasks_down(monitors, deadline) do
+    receive do
+      {:DOWN, ref, :process, _pid, _reason} when is_map_key(monitors, ref) ->
+        await_response_tasks_down(Map.delete(monitors, ref), deadline)
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) -> monitors
     end
   end
 

@@ -70,7 +70,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
         assert %{"type" => "response.output_text.delta"} = CodexPooler.JSON.decode!(delta_frame)
 
         assert {:push, {:text, error_frame}, state} =
-                 receive_socket_done(state, @large_websocket_frame_timeout)
+                 receive_socket_turn_done(state, @large_websocket_frame_timeout)
 
         assert MapSet.size(state.tasks) == 0
         {error_frame, state}
@@ -106,8 +106,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
     assert {:push, {:text, recovered_frame}, state} = receive_socket_push(state)
     assert %{"id" => "resp_after_visible_death"} = CodexPooler.JSON.decode!(recovered_frame)
-    assert {:ok, state} = receive_socket_done(state, @large_websocket_frame_timeout)
+    assert {:ok, state} = receive_socket_turn_done(state, @large_websocket_frame_timeout)
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    assert_socket_response_tasks_released!()
   end
 
   @tag :owner_task_exception

@@ -341,22 +341,27 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
       {:websocket_response_activity_cancelled, coordinator, token, self(), :owner_drained}
     )
 
-    receive do
-      {:websocket_response_delivery_ack, ^token, :completed} ->
+    # A socket that dies without running its acknowledging callback or
+    # terminate/2 never delivers the owner_drained terminal, so its death
+    # settles the cancellation as undelivered instead of parking this watcher.
+    parent_monitor = Process.monitor(parent)
+
+    delivery =
+      receive do
+        {:websocket_response_delivery_ack, ^token, :completed} -> :completed
+        {:websocket_response_delivery_ack, ^token, :aborted} -> :aborted
+        {:websocket_response_delivery_ack, ^token} -> :aborted
+        {:DOWN, ^parent_monitor, :process, ^parent, _reason} -> :aborted
+      end
+
+    Process.demonitor(parent_monitor, [:flush])
+
+    case delivery do
+      :completed ->
         :ok = ActivityRegistry.complete(token, :completed, name: registry)
         send(coordinator, {:websocket_response_cancellation_settled, token})
 
-      {:websocket_response_delivery_ack, ^token, :aborted} ->
-        settle_aborted_cancellation(
-          parent,
-          coordinator,
-          token,
-          registry,
-          kill_coordinator?,
-          before_cancelled_coordinator_termination
-        )
-
-      {:websocket_response_delivery_ack, ^token} ->
+      :aborted ->
         settle_aborted_cancellation(
           parent,
           coordinator,
@@ -398,21 +403,36 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     :ok
   end
 
+  # The socket acknowledges delivery from its callback loop or terminate/2. A
+  # socket that dies without running either (a handler crash or a brutal
+  # shutdown kill) would leave this task parked with its activity still live,
+  # so the socket's death settles the activity as undelivered and the task
+  # exits. An acknowledgement sent before that death is received first.
   defp await_delivery(parent, token, registry, cancel_callback, outcome) do
+    parent_monitor = Process.monitor(parent)
+    :ok = await_delivery(parent, parent_monitor, token, registry, cancel_callback, outcome)
+    Process.demonitor(parent_monitor, [:flush])
+    :ok
+  end
+
+  defp await_delivery(parent, parent_monitor, token, registry, cancel_callback, outcome) do
     receive do
       {:websocket_response_delivery_ack, ^token, :completed} ->
-        :ok = ActivityRegistry.complete(token, :completed, name: registry)
+        ActivityRegistry.complete(token, :completed, name: registry)
 
       {:websocket_response_delivery_ack, ^token, :aborted} ->
-        :ok = ActivityRegistry.complete(token, :aborted, name: registry)
+        ActivityRegistry.complete(token, :aborted, name: registry)
 
       {:websocket_response_delivery_ack, ^token} ->
-        :ok = ActivityRegistry.unregister(token, outcome, name: registry)
+        ActivityRegistry.unregister(token, outcome, name: registry)
 
       {:websocket_activity_cancel, ^token, :owner_drained} ->
         _cancel_result = cancel_callback.(self(), :owner_drained)
         send(parent, {:websocket_response_activity_cancelled, self(), token, :owner_drained})
-        await_delivery(parent, token, registry, cancel_callback, :aborted)
+        await_delivery(parent, parent_monitor, token, registry, cancel_callback, :aborted)
+
+      {:DOWN, ^parent_monitor, :process, ^parent, _reason} ->
+        ActivityRegistry.complete(token, :aborted, name: registry)
     end
   end
 end
