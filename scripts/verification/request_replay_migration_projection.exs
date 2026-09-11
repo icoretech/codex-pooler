@@ -4,7 +4,11 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
   alias CodexPooler.Accounting.{Attempt, RequestLogFacts}
   alias CodexPooler.Repo
 
-  @budget 15_000
+  # The migration's lock budget is hard-coded at 10 s in its `DO $migration_lock$` block.
+  # In the `:expiry` scenario the writer transaction, its release `receive`, and the task
+  # yields all span that whole wait, so every rehearsal-owned wait is a failure-detection
+  # budget sitting well above it rather than the DBConnection/`Task.yield` 15 s defaults.
+  @detection_budget 30_000
 
   @type scenario ::
           :projection
@@ -55,7 +59,7 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
 
       finish(writer, migration, request_id, scenario)
     after
-      Supervisor.stop(supervisor, :normal, @budget)
+      Supervisor.stop(supervisor, :normal, @detection_budget)
     end
   end
 
@@ -117,22 +121,25 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
 
   defp writer(parent, request_id, attempt, scenario) do
     capture(fn ->
-      Repo.transaction(fn ->
-        query("SET LOCAL deadlock_timeout = '500ms'")
-        lock_writer_rows(request_id, attempt, scenario)
-        [[backend]] = query("SELECT pg_backend_pid()").rows
-        send(parent, {:writer_locked_request, backend})
+      Repo.transaction(
+        fn ->
+          query("SET LOCAL deadlock_timeout = '500ms'")
+          lock_writer_rows(request_id, attempt, scenario)
+          [[backend]] = query("SELECT pg_backend_pid()").rows
+          send(parent, {:writer_locked_request, backend})
 
-        receive do
-          :project ->
-            if scenario == :writer_failure, do: raise("synthetic writer failure")
-            RequestLogFacts.record_attempt_written!(attempt)
-            query("UPDATE requests SET status = status WHERE id = $1", [request_id])
-            :ok
-        after
-          @budget -> raise "projection writer release timeout"
-        end
-      end)
+          receive do
+            :project ->
+              if scenario == :writer_failure, do: raise("synthetic writer failure")
+              RequestLogFacts.record_attempt_written!(attempt)
+              query("UPDATE requests SET status = status WHERE id = $1", [request_id])
+              :ok
+          after
+            @detection_budget -> raise "projection writer release timeout"
+          end
+        end,
+        timeout: @detection_budget
+      )
     end)
   end
 
@@ -173,7 +180,7 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
     receive do
       {^event, backend} -> backend
     after
-      @budget -> raise "projection writer readiness timeout"
+      @detection_budget -> raise "projection writer readiness timeout"
     end
   end
 
@@ -197,7 +204,7 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
     end)
   end
 
-  defp await(fun), do: await(fun, System.monotonic_time(:millisecond) + @budget)
+  defp await(fun), do: await(fun, System.monotonic_time(:millisecond) + @detection_budget)
 
   defp await(fun, deadline) do
     case fun.() do
@@ -221,7 +228,7 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
   end
 
   defp await_task(task) do
-    case Task.yield(task, @budget) do
+    case Task.yield(task, @detection_budget) do
       {:ok, result} -> result
       {:exit, _reason} -> {:error, :task_exit}
       nil -> {:error, :task_timeout}
@@ -230,7 +237,9 @@ defmodule CodexPooler.Verification.RequestReplayMigrationProjection do
 
   defp result_class({:error, code}), do: Atom.to_string(code)
   defp result_class({:ok, _result}), do: "committed"
-  defp query(sql, params \\ []), do: Repo.query!(sql, params, log: false, timeout: @budget)
+
+  defp query(sql, params \\ []),
+    do: Repo.query!(sql, params, log: false, timeout: @detection_budget)
 
   defp receipt(stage, values),
     do: IO.puts(CodexPooler.JSON.encode!(Map.put(values, :stage, stage)))

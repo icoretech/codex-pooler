@@ -31,7 +31,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias Ecto.Adapters.SQL.Sandbox
 
-  @detection_timeout_ms 5_000
+  # Failure-detection budget for cross-process signals that follow a kill, shutdown, or
+  # interruption: owner/task/socket DOWNs and the frames the owner emits while it finalizes.
+  # A green path ends when the signal arrives; the budget only bounds a lost signal under
+  # `N=4` scheduling pressure, so it sits well above the suite's 5 s `assert_receive` default.
+  @detection_timeout_ms 15_000
   @remote_node :"codex_pooler@protocol-owner.example"
 
   defmodule CancellationNodeClient do
@@ -569,12 +573,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     Task.shutdown(submitter, :brutal_kill)
 
     assert_receive {:cancellation_node_call, watcher_pid, @remote_node,
-                    :remote_cancel_downstream_v1}
+                    :remote_cancel_downstream_v1},
+                   @detection_timeout_ms
 
     refute watcher_pid == submitter.pid
 
     assert_receive {:cancellation_node_call_complete, ^watcher_pid, @remote_node,
-                    :remote_cancel_downstream_v1, :ok}
+                    :remote_cancel_downstream_v1, :ok},
+                   @detection_timeout_ms
 
     refute_received {:cancellation_node_call, _duplicate, @remote_node,
                      :remote_cancel_downstream_v1}
@@ -583,10 +589,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                    @detection_timeout_ms
 
     assert_receive {:websocket_owner_frame, "corr-cancel", 1,
-                    {:error, :client_disconnected, safe_payload}}
+                    {:error, :client_disconnected, safe_payload}},
+                   @detection_timeout_ms
 
     assert safe_payload.code == "client_disconnected"
-    assert_receive {:websocket_owner_frame, "corr-cancel", 1, :complete}
+    assert_receive {:websocket_owner_frame, "corr-cancel", 1, :complete}, @detection_timeout_ms
     assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
     assert FakeUpstream.count(upstream) == 1
 
@@ -671,13 +678,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       send(first_worker, {:release_pre_visible_owner_submit, release_ref})
 
       assert_receive {:websocket_owner_runtime_recovered, ^correlation_id, 1,
-                      %{websocket_owner_downstream: recovered_downstream}}
+                      %{websocket_owner_downstream: recovered_downstream}},
+                     @detection_timeout_ms
 
       assert recovered_downstream.correlation_id == downstream.correlation_id
       assert recovered_downstream.epoch == downstream.epoch
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, 1, {:data, ^terminal}}
-      assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, {:data, ^terminal}},
+                     @detection_timeout_ms
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete},
+                     @detection_timeout_ms
 
       assert {:ok, %{status: 200, websocket_messages: []}} =
                Task.await(submitter, @detection_timeout_ms)
@@ -764,7 +775,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     Process.exit(owner, :kill)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :killed}
     send(first_worker, {:release_bound_probe_owner_submit, release_ref})
-    assert_receive {:DOWN, ^first_worker_ref, :process, ^first_worker, _reason}
+
+    assert_receive {:DOWN, ^first_worker_ref, :process, ^first_worker, _reason},
+                   @detection_timeout_ms
 
     assert {:error, %{code: "owner_crashed", status: 502}} =
              Task.await(submitter, @detection_timeout_ms)
@@ -1066,10 +1079,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       refute_received {:mandatory_callback_invoked, ^callback_kind}
 
       assert_receive {:websocket_owner_frame, ^correlation_id, 1,
-                      {:error, :owner_crashed, safe_payload}}
+                      {:error, :owner_crashed, safe_payload}},
+                     @detection_timeout_ms
 
       assert safe_payload.code == "owner_crashed"
-      assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete},
+                     @detection_timeout_ms
+
       refute_received {:websocket_owner_frame, ^correlation_id, 1, _duplicate}
       assert_failed_accounting!(fixture.accounting, "failed", "owner_crashed")
     end

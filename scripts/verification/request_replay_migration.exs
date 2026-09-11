@@ -27,6 +27,9 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
   @version 20_260_902_024_410
   @migration CodexPooler.Repo.Migrations.AddRequestReplayEntitlements
   @budget 60_000
+  # Failure-detection budget for CREATE/DROP DATABASE on a loaded PostgreSQL host. Ecto's
+  # storage helpers otherwise give up with "command timed out" after their own 15 s default.
+  @storage_budget 60_000
 
   @spec run([String.t()]) :: :ok
   def run(["--help"]), do: IO.puts(@moduledoc)
@@ -39,11 +42,11 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
 
   def run(["--rows", value]) do
     case Integer.parse(value) do
-      {rows, ""} when rows in 1_000..100_000 and rem(rows, 4) == 0 ->
+      {rows, ""} when rows in 4..100_000 and rem(rows, 4) == 0 ->
         run_rehearsal(&rehearse(&1, rows))
 
       _ ->
-        raise ArgumentError, "--rows requires a multiple of four between 1000 and 100000"
+        raise ArgumentError, "--rows requires a multiple of four between 4 and 100000"
     end
   end
 
@@ -59,15 +62,51 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
     Logger.configure(level: :warning)
     {:ok, _} = Application.ensure_all_started(:ecto_sql)
     {:ok, _} = Application.ensure_all_started(:postgrex)
-    :ok = Postgres.storage_up(config)
+    :ok = Postgres.storage_up(storage_options(config))
 
-    try do
-      {:ok, :ok, _} = Migrator.with_repo(Repo, fun, pool_size: 8)
-    after
-      :ok = Postgres.storage_down(config)
-      receipt("cleanup", %{database_dropped: true, build_cache_retained: true})
+    outcome =
+      try do
+        {:ok, :ok, _} = Migrator.with_repo(Repo, fun, pool_size: 8)
+        :ok
+      catch
+        kind, reason -> {:failed, kind, reason, __STACKTRACE__}
+      end
+
+    dropped? = drop_owned_database(config)
+
+    case outcome do
+      :ok when dropped? -> :ok
+      :ok -> raise "owned rehearsal database was not dropped"
+      {:failed, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
     end
   end
+
+  # Cleanup is unconditional: the receipt is printed whether or not the rehearsal succeeded,
+  # a drop failure is reported in the receipt instead of masking the rehearsal error, and the
+  # forced drop terminates backends that are still closing after the repo stopped.
+  defp drop_owned_database(config) do
+    case Postgres.storage_down(storage_options(config, force_drop: true)) do
+      :ok ->
+        receipt("cleanup", %{database_dropped: true, build_cache_retained: true})
+        true
+
+      {:error, reason} ->
+        receipt("cleanup", %{
+          database_dropped: false,
+          build_cache_retained: true,
+          reason: cleanup_reason(reason)
+        })
+
+        false
+    end
+  end
+
+  defp cleanup_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp cleanup_reason(reason) when is_binary(reason), do: String.slice(reason, 0, 200)
+  defp cleanup_reason(reason), do: reason |> inspect() |> String.slice(0, 200)
+
+  defp storage_options(config, extra \\ []),
+    do: config |> Keyword.put(:timeout, @storage_budget) |> Keyword.merge(extra)
 
   defp projection_rehearsal(_repo, scenario \\ :projection) do
     Sandbox.mode(Repo, :auto)
