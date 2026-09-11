@@ -1,5 +1,15 @@
 SHELL := /bin/bash
 
+# The repository pins its Elixir/Erlang in mise.toml and CONTRIBUTING.md tells
+# contributors to use those versions, so every Mix invocation here goes through
+# mise when it is installed; otherwise it falls back to whatever is on PATH.
+MISE := $(shell command -v mise 2>/dev/null)
+ifeq ($(MISE),)
+MIX := mix
+else
+MIX := $(MISE) x -- mix
+endif
+
 PORT ?= 4000
 POSTGRES_PORT ?= 5433
 POSTGRES_WAIT_TIMEOUT ?= 60
@@ -15,13 +25,13 @@ DEV_DB_ENV := POSTGRES_HOST=localhost POSTGRES_PORT=$(POSTGRES_PORT) POSTGRES_DB
 DEV_SECRET_ENV := if [ -f .env ]; then while IFS= read -r line; do case "$$line" in CODEX_POOLER_UPSTREAM_SECRET_KEY=*|CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION=*|CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING=*) export "$$line";; esac; done < .env; fi;
 N ?= 4
 # Test-only shell acceptance overrides. Normal runs must use the default commands.
-TEST_FAST_COMMAND ?= mix test
-TEST_FAST_DROP_COMMAND ?= mix ecto.drop --quiet
+TEST_FAST_COMMAND ?= $(MIX) test
+TEST_FAST_DROP_COMMAND ?= $(MIX) ecto.drop --quiet
 
 .PHONY: dev dev-prepare dev-db dev-compile dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-fast
 
 dev: dev-prepare
-	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) DEV_SERVER_COMMAND='PORT=$(PORT) mix phx.server' $(DEV_SERVER_LIFECYCLE) start
+	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) DEV_SERVER_COMMAND='PORT=$(PORT) $(MIX) phx.server' $(DEV_SERVER_LIFECYCLE) start
 
 dev-prepare:
 	@$(MAKE) --no-print-directory dev-stop
@@ -50,14 +60,14 @@ dev-db:
 	exit 1
 
 dev-compile:
-	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) mix compile --force
+	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) compile --force
 
 dev-migrate:
-	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) mix ecto.create --quiet
-	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) mix ecto.migrate
+	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) ecto.create --quiet
+	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) ecto.migrate
 
 dev-pricing:
-	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) mix pricing.import_openai
+	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) pricing.import_openai
 
 dev-stop:
 	@DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) $(DEV_SERVER_LIFECYCLE) stop
@@ -69,7 +79,7 @@ dev-logs:
 	@tail -f $(DEV_LOG)
 
 precommit:
-	@mix precommit
+	@$(MIX) precommit
 
 test-fast:
 	@partitions="$(N)"; \
