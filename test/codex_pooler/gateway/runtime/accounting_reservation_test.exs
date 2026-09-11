@@ -135,13 +135,15 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       Enum.find_index(events, &(&1.source == "codex_sessions" and &1.for_update?))
 
     api_key_lock_index =
-      Enum.find_index(events, &(&1.source == "api_keys" and &1.for_update?))
+      Enum.find_index(events, &(&1.source == "api_keys" and &1.for_share?))
 
     replay_query_index =
       Enum.find_index(events, &(&1.source == "codex_turns" and not &1.for_update?))
 
+    assert is_integer(api_key_lock_index)
     assert session_lock_index < api_key_lock_index
     assert api_key_lock_index < replay_query_index
+    refute Enum.any?(events, &(&1.source == "api_keys" and &1.for_update?))
   end
 
   test "prepare_replay_intent classifies active and suspended lifecycle and rejects changed claims" do
@@ -1756,7 +1758,8 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
               %{
                 source: metadata[:source],
                 operation: query_operation(query),
-                for_update?: String.contains?(String.upcase(query), "FOR UPDATE")
+                for_update?: String.contains?(String.upcase(query), "FOR UPDATE"),
+                for_share?: String.contains?(String.upcase(query), "FOR SHARE")
               }
             })
           end

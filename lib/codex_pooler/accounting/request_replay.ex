@@ -1820,8 +1820,10 @@ defmodule CodexPooler.Accounting.RequestReplay do
   defp lock_session(session_id),
     do: Repo.one(from row in CodexSession, where: row.id == ^session_id, lock: "FOR UPDATE")
 
+  # Reader lock: no replay transaction writes the `api_keys` row, and each one
+  # holds its codex session first; finalization reached from here reads too.
   defp lock_api_key!(api_key_id),
-    do: Repo.one!(from row in APIKey, where: row.id == ^api_key_id, lock: "FOR UPDATE")
+    do: Access.lock_api_key_for_read(api_key_id) || raise(Ecto.NoResultsError, queryable: APIKey)
 
   defp lock_turn!(turn_id),
     do: Repo.one!(from row in CodexTurn, where: row.id == ^turn_id, lock: "FOR UPDATE")

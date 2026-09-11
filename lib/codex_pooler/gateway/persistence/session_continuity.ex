@@ -164,7 +164,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       opts.runtime.api_key_runtime_epoch || auth.api_key.runtime_revocation_epoch
 
     Repo.transaction(fn ->
-      case Access.authorize_api_key_runtime_turn(auth.api_key, captured_epoch) do
+      case Access.authorize_api_key_runtime_turn_for_read(auth.api_key, captured_epoch) do
         {:ok, _authorization} -> :ok
         {:error, reason} -> Repo.rollback(reason)
       end

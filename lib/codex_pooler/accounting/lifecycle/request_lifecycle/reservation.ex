@@ -69,7 +69,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
     Repo.transaction(fn ->
       :ok = lock_resend_session(resend_session)
-      api_key = authorize_runtime_turn!(api_key, captured_epoch)
+      api_key = authorize_runtime_turn_for_read!(api_key, captured_epoch)
       maybe_test_runtime_authorization_barrier(:claim, :after)
       {correlation_id, client_resend} = resend_claim!(resend_session, pool, api_key, model, opts)
 
@@ -736,8 +736,22 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp requested_model(payload, opts), do: attr(opts, :requested_model) || attr(payload, :model)
 
+  # Reservations keep the `api_keys` writer lock. Window limits are checked
+  # against usage summed over the whole key, while only the effective policy
+  # binding row is locked, so two same-key requests that resolve to different
+  # bindings (a model binding and the default one) serialize only on this row.
   defp authorize_runtime_turn!(api_key, captured_epoch) do
     case Access.authorize_api_key_runtime_turn(api_key, captured_epoch) do
+      {:ok, %{api_key: authorized_api_key}} -> authorized_api_key
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  # A websocket claim writes no ledger entry and checks no window limit; the
+  # session lock and `requests_correlation_id_uq` fence concurrent claims, so it
+  # takes the reader lock and never writes the key row afterwards.
+  defp authorize_runtime_turn_for_read!(api_key, captured_epoch) do
+    case Access.authorize_api_key_runtime_turn_for_read(api_key, captured_epoch) do
       {:ok, %{api_key: authorized_api_key}} -> authorized_api_key
       {:error, reason} -> Repo.rollback(reason)
     end

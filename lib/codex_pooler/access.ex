@@ -41,6 +41,21 @@ defmodule CodexPooler.Access do
     to: APIKeys,
     as: :authorize_runtime_turn
 
+  @spec authorize_api_key_runtime_turn_for_read(
+          APIKey.t() | Ecto.UUID.t(),
+          APIKeys.RuntimeAuthorization.epoch()
+        ) ::
+          {:ok, APIKeys.RuntimeAuthorization.authorization()}
+          | {:error, APIKeys.RuntimeAuthorization.disposition()}
+  defdelegate authorize_api_key_runtime_turn_for_read(api_key_or_id, captured_epoch),
+    to: APIKeys,
+    as: :authorize_runtime_turn_for_read
+
+  @spec lock_api_key_for_read(Ecto.UUID.t() | nil) :: APIKey.t() | nil
+  defdelegate lock_api_key_for_read(api_key_id),
+    to: APIKeys,
+    as: :lock_runtime_api_key_for_read
+
   @spec api_key_runtime_epoch_for_status_change(APIKey.t(), String.t()) ::
           APIKeys.RuntimeAuthorization.epoch()
   defdelegate api_key_runtime_epoch_for_status_change(api_key, target_status),

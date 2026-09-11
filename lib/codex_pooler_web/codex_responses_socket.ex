@@ -776,7 +776,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        )
        when is_binary(api_key_id) and is_integer(captured_epoch) and captured_epoch >= 0 do
     case Repo.transact(fn ->
-           Access.authorize_api_key_runtime_turn(api_key_id, captured_epoch)
+           Access.authorize_api_key_runtime_turn_for_read(api_key_id, captured_epoch)
          end) do
       {:ok, {:ok, _authorization}} ->
         {:authorized, state}

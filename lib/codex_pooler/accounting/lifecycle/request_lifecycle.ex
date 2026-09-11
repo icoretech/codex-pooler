@@ -628,12 +628,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           lock: "FOR UPDATE"
       )
 
+    # Reader lock: finalization never writes the `api_keys` row, and interruption
+    # and replay transactions reach this prefix after taking the reader lock, so
+    # a writer lock here would upgrade theirs inside one transaction.
     _api_key =
-      Repo.one!(
-        from api_key in CodexPooler.Access.APIKey,
-          where: api_key.id == ^request.api_key_id,
-          lock: "FOR UPDATE"
-      )
+      CodexPooler.Access.lock_api_key_for_read(request.api_key_id) ||
+        raise(Ecto.NoResultsError, queryable: CodexPooler.Access.APIKey)
 
     _turn =
       Repo.one!(

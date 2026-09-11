@@ -822,7 +822,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       with :ok <- validate_replay_session_binding(locked_session, context.auth),
            {:ok, authorization} <-
-             Access.authorize_api_key_runtime_turn(
+             Access.authorize_api_key_runtime_turn_for_read(
                context.auth.api_key.id,
                context.api_key_runtime_epoch
              ),

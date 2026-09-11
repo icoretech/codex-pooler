@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   import Ecto.Query
 
+  alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestReplayEntitlement}
@@ -55,7 +56,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   def interrupt_direct_request(receipt, reason) do
     Repo.transaction(fn ->
       session = codex_session_for_update(receipt.session_id)
-      _key = Repo.one(from k in APIKey, where: k.id == ^receipt.api_key_id, lock: "FOR UPDATE")
+      _key = Access.lock_api_key_for_read(receipt.api_key_id)
 
       _turn =
         Repo.one(
@@ -198,7 +199,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   def finalize_task_exception_request(receipt, reason) when is_binary(reason) do
     Repo.transaction(fn ->
       session = codex_session_for_update(receipt.session_id)
-      _key = Repo.one(from k in APIKey, where: k.id == ^receipt.api_key_id, lock: "FOR UPDATE")
+      _key = Access.lock_api_key_for_read(receipt.api_key_id)
 
       turn =
         Repo.one(
@@ -426,10 +427,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
            true <- DateTime.compare(expiry, now()) == :gt,
            false <- replacement_turn_active?(session_id, witness.request_id),
            %Request{} = snapshot <- Repo.get(Request, witness.request_id),
-           %APIKey{} <-
-             Repo.one(
-               from key in APIKey, where: key.id == ^snapshot.api_key_id, lock: "FOR UPDATE"
-             ),
+           %APIKey{} <- Access.lock_api_key_for_read(snapshot.api_key_id),
            %CodexTurn{} = turn <- exact_owner_turn(session_id, witness),
            %Request{} = request <- request_for_update(witness.request_id),
            %Attempt{} = attempt <- latest_attempt_for_update(witness.request_id),
