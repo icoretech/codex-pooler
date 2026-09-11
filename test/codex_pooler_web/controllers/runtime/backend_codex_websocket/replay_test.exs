@@ -933,6 +933,283 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
            ) == 2
   end
 
+  for {label, legacy_snapshot?} <- [
+        {"with a preserved snapshot", false},
+        {"from a legacy snapshot", true}
+      ] do
+    @tag :replay_matrix
+    @tag legacy_snapshot?: legacy_snapshot?
+    test "native replay #{label} never relays a provider x-models-etag",
+         %{legacy_snapshot?: legacy_snapshot?} do
+      previous_owner_forwarding =
+        Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+      on_exit(fn ->
+        case previous_owner_forwarding do
+          nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+          value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+        end
+      end)
+
+      release_ref = make_ref()
+      provider_etag = ~s(W/"provider-models-etag-replay-sentinel")
+
+      # Strict finite scenario: the initial send dies pre-visibly on the first
+      # connection; the byte-identical replay on the replacement connection gets a
+      # provider codex.response.metadata frame carrying its own x-models-etag
+      # before the terminal, and nothing else reaches the upstream.
+      upstream =
+        start_upstream(
+          # provenance: synthetic_adversarial (header names from the released Codex client; values invented)
+          FakeUpstream.strict_sequence([
+            strict_native_request(
+              1,
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: release_ref,
+                code: 1001,
+                reason: "synthetic pre-visible replay etag disconnect"
+              )
+            ),
+            strict_native_request(
+              2,
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "type" => "codex.response.metadata",
+                  "headers" => %{
+                    "x-models-etag" => provider_etag,
+                    "openai-model" => "synthetic-provider-model",
+                    "x-reasoning-included" => "true"
+                  }
+                }),
+                CodexPooler.JSON.encode!(%{
+                  "type" => "response.completed",
+                  "response" => %{
+                    "id" => "resp_replay_etag_completed_1234",
+                    "status" => "completed",
+                    "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+                  }
+                })
+              ])
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      assert :ok = Events.subscribe_pool(setup.pool)
+      thread_id = Ecto.UUID.generate()
+      turn_state = Ecto.UUID.generate()
+
+      raw_payload =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "client_metadata" => %{
+            "x-codex-turn-metadata" =>
+              CodexPooler.JSON.encode!(%{
+                "session_id" => thread_id,
+                "thread_id" => thread_id,
+                "turn_id" => "replay-provider-etag",
+                "request_kind" => "turn"
+              })
+          },
+          "input" => [
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_replay_provider_etag",
+              "output" => "synthetic replay etag output"
+            }
+          ],
+          "stream" => true,
+          "generate" => true
+        })
+
+      {server, port} = start_public_endpoint_with_server!()
+      {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+      {conn, _websocket} = public_websocket_send_text!(conn, websocket, ref, raw_payload)
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid,
+                      ^release_ref},
+                     @large_websocket_frame_timeout
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
+      assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+      owner_state = :sys.get_state(owner_pid)
+
+      assert :suspended =
+               WebsocketOwnerSession.detach_downstream(owner_pid, owner_state.downstream)
+
+      send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+
+      assert %RequestReplayEntitlement{status: "armed"} =
+               Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
+
+      assert [%Attempt{replay_generation: 0, status: "retryable_failed"} = initial_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      persisted_etag =
+        get_in(initial_attempt.response_metadata, ["native_replay_preparation", "models_etag"])
+
+      assert <<"W/\"cp-models-v1-", _digest::binary-size(64), "\"">> = persisted_etag
+
+      if legacy_snapshot? do
+        # An original attempt settled before the snapshot carried the models ETag.
+        initial_attempt
+        |> Ecto.Changeset.change(
+          response_metadata:
+            update_in(
+              initial_attempt.response_metadata,
+              ["native_replay_preparation"],
+              &Map.delete(&1, "models_etag")
+            )
+        )
+        |> Repo.update!()
+      end
+
+      {replay_conn, replay_websocket, replay_ref} =
+        public_websocket_connect!(port, setup, turn_state)
+
+      {replay_conn, replay_websocket} =
+        public_websocket_send_text!(replay_conn, replay_websocket, replay_ref, raw_payload)
+
+      {replay_conn, _replay_websocket, frames} =
+        receive_raw_texts_until_terminal!(replay_conn, replay_websocket, replay_ref, [])
+
+      assert_receive {Events,
+                      %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                     @connection_shutdown_timeout_ms
+
+      # The native replay path is the only one that settles a generation 1
+      # attempt on the original request; a fresh dispatch would open a new one.
+      assert [
+               %Attempt{replay_generation: 0, status: "retryable_failed"},
+               %Attempt{replay_generation: 1, status: "succeeded"}
+             ] =
+               Repo.all(
+                 from(a in Attempt,
+                   where: a.request_id == ^request.id,
+                   order_by: [asc: a.attempt_number]
+                 )
+               )
+
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 1
+
+      decoded = Enum.map(frames, &CodexPooler.JSON.decode!/1)
+      frame_types = Enum.map(decoded, & &1["type"])
+      assert List.last(frame_types) == "response.completed"
+
+      for frame <- frames do
+        refute frame =~ "provider-models-etag-replay-sentinel",
+               "provider x-models-etag reached the client; frame types: #{inspect(frame_types)}"
+      end
+
+      models_conn = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+      assert [models_etag] = get_resp_header(models_conn, "etag")
+
+      etag_frames = Enum.filter(decoded, &get_in(&1, ["headers", "x-models-etag"]))
+      metadata_frames = Enum.filter(decoded, &(&1["type"] == "codex.response.metadata"))
+      assert persisted_etag == models_etag
+
+      if legacy_snapshot? do
+        # Without a preserved value the replay authors no ETag of its own.
+        assert etag_frames == [], "frame types: #{inspect(frame_types)}"
+        assert frame_types == ["codex.response.metadata", "response.completed"]
+      else
+        assert [
+                 %{
+                   "type" => "codex.response.metadata",
+                   "headers" => %{"x-models-etag" => ^models_etag}
+                 }
+               ] = etag_frames,
+               "expected exactly one Pooler-authored metadata event; frame types: #{inspect(frame_types)}"
+
+        assert hd(decoded) == hd(etag_frames)
+
+        assert frame_types == [
+                 "codex.response.metadata",
+                 "codex.response.metadata",
+                 "response.completed"
+               ]
+      end
+
+      provider_headers = List.last(metadata_frames)["headers"]
+      refute Map.has_key?(provider_headers, "x-models-etag")
+      assert provider_headers["x-reasoning-included"] == "true"
+
+      {:ok, connections} = ThousandIsland.connection_pids(server)
+      connection_monitors = Enum.map(connections, &{&1, Process.monitor(&1)})
+      _result = Mint.HTTP.close(replay_conn)
+      _result = Mint.HTTP.close(conn)
+
+      Enum.each(connection_monitors, fn {pid, monitor} ->
+        assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, @connection_shutdown_timeout_ms
+      end)
+
+      await_websocket_owner_absent!(turn.codex_session_id)
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+  end
+
+  # Collects every downstream text frame, internal control events included,
+  # until a terminal event arrives. Only socket messages are taken so pool
+  # events stay in the mailbox for the finalization assertion.
+  defp receive_raw_texts_until_terminal!(conn, websocket, ref, acc) do
+    receive do
+      {tag, _socket, _data} = message when tag in [:tcp, :tcp_error] ->
+        stream_raw_texts!(conn, websocket, ref, acc, message)
+
+      {:tcp_closed, _socket} = message ->
+        stream_raw_texts!(conn, websocket, ref, acc, message)
+    after
+      @large_websocket_frame_timeout -> flunk("timed out waiting for a terminal websocket frame")
+    end
+  end
+
+  defp stream_raw_texts!(conn, websocket, ref, acc, message) do
+    case Mint.WebSocket.stream(conn, message) do
+      {:ok, conn, responses} ->
+        {websocket, texts} = decode_raw_texts!(responses, websocket, ref)
+        acc = acc ++ texts
+
+        if Enum.any?(texts, &terminal_text?/1),
+          do: {conn, websocket, acc},
+          else: receive_raw_texts_until_terminal!(conn, websocket, ref, acc)
+
+      {:error, conn, reason, _responses} ->
+        Mint.HTTP.close(conn)
+        flunk("websocket receive failed: #{inspect(reason)}")
+
+      :unknown ->
+        receive_raw_texts_until_terminal!(conn, websocket, ref, acc)
+    end
+  end
+
+  defp decode_raw_texts!(responses, websocket, ref) do
+    Enum.reduce(responses, {websocket, []}, fn
+      {:data, ^ref, data}, {current, texts} -> append_raw_texts!(current, texts, data)
+      {:done, ^ref}, _acc -> flunk("websocket closed before a terminal frame")
+      _part, current_acc -> current_acc
+    end)
+  end
+
+  defp append_raw_texts!(websocket, texts, data) do
+    case decode_public_websocket_data!(websocket, data) do
+      {:ok, websocket, new_texts} -> {websocket, texts ++ new_texts}
+      {:cont, {:cont, websocket}} -> {websocket, texts}
+    end
+  end
+
+  defp terminal_text?(text) do
+    match?(
+      {:ok, %{"type" => type}}
+      when type in ["response.completed", "response.failed", "response.incomplete", "error"],
+      CodexPooler.JSON.decode(text)
+    )
+  end
+
   defp assert_replay_red_boundary(payload_builder) do
     previous_owner_forwarding =
       Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)

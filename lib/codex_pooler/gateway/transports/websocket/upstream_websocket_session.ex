@@ -2240,6 +2240,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         sanitized = Map.drop(decoded, ["headers"])
         {CodexPooler.JSON.encode!(sanitized), sanitized}
 
+      "codex.response.metadata" ->
+        case NativeCodexResponseControl.strip_untrusted_models_etag(decoded) do
+          {:changed, sanitized} -> {CodexPooler.JSON.encode!(sanitized), sanitized}
+          _unchanged -> {text, decoded}
+        end
+
       _other ->
         {text, decoded}
     end

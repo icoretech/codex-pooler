@@ -488,7 +488,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         payload,
         model,
         request_options,
-        Map.put(replay, :routing_settings, routing_settings),
+        replay
+        |> Map.put(:routing_settings, routing_settings)
+        |> Map.put(
+          :models_etag,
+          ReplayPreparation.models_etag(original_attempt.response_metadata)
+        ),
         identity
       )
     else
@@ -1419,6 +1424,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         candidates: [{replay.assignment, identity}],
         routing_settings: replay.routing_settings
       })
+      |> put_replay_models_etag(replay)
 
     context = %SelectedCandidateContext{
       auth: auth,
@@ -1453,6 +1459,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
     CandidateDispatch.dispatch_selected(context, &dispatch_decrypted_candidate/1)
   end
+
+  # A native replay does not rebuild the catalog snapshot: it re-emits the
+  # original turn's models ETag (backend_responses_etag.snapshot_lifetime).
+  defp put_replay_models_etag(%RouteState{} = route_state, %{models_etag: models_etag})
+       when is_binary(models_etag),
+       do: RouteState.put_codex_models_etag(route_state, models_etag)
+
+  defp put_replay_models_etag(%RouteState{} = route_state, _replay), do: route_state
 
   @spec replay_route_plan(
           auth(),

@@ -595,11 +595,18 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                http: :request,
                websocket: :response_create_turn,
                retry: :preserve,
+               native_replay: :preserve,
                owner_forwarding: :preserve,
                next_websocket_turn: :reresolve
              }
 
       assert fixture.upstream_etag_relay == false
+
+      assert fixture.provider_metadata_event == %{
+               order: :after_pooler_event,
+               x_models_etag: :removed,
+               consumer_etag_source: :metadata_event_carrying_x_models_etag
+             }
 
       assert fixture.included_routes == [
                "/backend-api/codex/responses",

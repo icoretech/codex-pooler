@@ -155,6 +155,84 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
     end
   end
 
+  test "native websocket relays provider metadata after the Pooler event without its ETag" do
+    provider_etag = ~s(W/"provider-models-etag-direct-sentinel")
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"codex.response.metadata",
+           %{
+             "type" => "codex.response.metadata",
+             "headers" => %{
+               "x-models-etag" => provider_etag,
+               "openai-model" => "synthetic-provider-model",
+               "x-reasoning-included" => "true"
+             }
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_ws_provider_metadata_etag",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    models_conn = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+    assert [models_etag] = get_resp_header(models_conn, "etag")
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               CodexPooler.JSON.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("synthetic provider metadata request"),
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-provider-metadata-etag", capture_metadata_control?: true},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    frames = received_provider_metadata_frames([])
+    decoded = Enum.map(frames, &CodexPooler.JSON.decode!/1)
+
+    assert [
+             %{
+               "type" => "codex.response.metadata",
+               "headers" => %{"x-models-etag" => ^models_etag}
+             },
+             %{"type" => "codex.response.metadata", "headers" => provider_headers},
+             %{"type" => "response.completed"}
+           ] = decoded
+
+    assert provider_headers == %{
+             "openai-model" => "synthetic-provider-model",
+             "x-reasoning-included" => "true"
+           }
+
+    assert [_pooler_event] = Enum.filter(decoded, &get_in(&1, ["headers", "x-models-etag"]))
+
+    for frame <- frames do
+      refute frame =~ "provider-models-etag-direct-sentinel"
+    end
+  end
+
+  defp received_provider_metadata_frames(frames) do
+    receive do
+      {:websocket_frame, frame} -> received_provider_metadata_frames([frame | frames])
+    after
+      0 -> Enum.reverse(frames)
+    end
+  end
+
   @tag :prompt_cache_adaptation
   test "GET /backend-api/codex/responses adapts prompt cache controls in a response.create frame" do
     upstream =

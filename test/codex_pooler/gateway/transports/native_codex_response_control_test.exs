@@ -274,6 +274,55 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControlTest do
     end
   end
 
+  describe "strip_untrusted_models_etag/1" do
+    test "removes every provider models ETag spelling and keeps the other fields" do
+      event = %{
+        "type" => "codex.response.metadata",
+        "headers" => %{
+          "x-models-etag" => "hostile-provider-etag-sentinel",
+          "X-Models-Etag" => "hostile-provider-etag-sentinel-mixed",
+          "x-reasoning-included" => "true"
+        },
+        "sequence_number" => 3
+      }
+
+      assert NativeCodexResponseControl.strip_untrusted_models_etag(event) ==
+               {:changed,
+                %{
+                  "type" => "codex.response.metadata",
+                  "headers" => %{"x-reasoning-included" => "true"},
+                  "sequence_number" => 3
+                }}
+    end
+
+    test "omits an emptied or malformed header container" do
+      assert NativeCodexResponseControl.strip_untrusted_models_etag(%{
+               "type" => "codex.response.metadata",
+               "headers" => %{"x-models-etag" => "hostile-provider-etag-sentinel"}
+             }) == {:changed, %{"type" => "codex.response.metadata"}}
+
+      for malformed <- [[["x-models-etag", "hostile"]], "x-models-etag: hostile", 1, nil] do
+        assert NativeCodexResponseControl.strip_untrusted_models_etag(%{
+                 "type" => "codex.response.metadata",
+                 "headers" => malformed
+               }) == {:changed, %{"type" => "codex.response.metadata"}}
+      end
+    end
+
+    test "leaves other events and metadata without a models ETag unchanged" do
+      for event <- [
+            %{"type" => "codex.response.metadata", "headers" => %{"openai-model" => "gpt-x"}},
+            %{"type" => "codex.response.metadata"},
+            %{"type" => "response.output_text.delta", "delta" => "synthetic"}
+          ] do
+        assert NativeCodexResponseControl.strip_untrusted_models_etag(event) == :unchanged
+      end
+
+      assert NativeCodexResponseControl.strip_untrusted_models_etag("event") ==
+               {:error, :invalid_event}
+    end
+  end
+
   describe "pooler_metadata_event/2" do
     test "constructs Pooler-owned metadata from the trusted ETag and safe provider model only" do
       provider_headers = %{

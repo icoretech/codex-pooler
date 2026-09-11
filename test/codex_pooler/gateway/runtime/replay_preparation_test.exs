@@ -65,6 +65,50 @@ defmodule CodexPooler.Gateway.Runtime.ReplayPreparationTest do
     end
   end
 
+  test "preparation preserves only a well-formed turn models ETag for the replay" do
+    models_etag = ~s(W/"cp-models-v1-#{String.duplicate("0f", 32)}")
+    original = original_context()
+
+    original = %{
+      original
+      | route_state: RouteState.put_codex_models_etag(original.route_state, models_etag)
+    }
+
+    metadata = original |> ReplayPreparation.attempt_metadata() |> Accounting.sanitize_metadata()
+    assert metadata["native_replay_preparation"]["models_etag"] == models_etag
+    assert ReplayPreparation.models_etag(metadata) == models_etag
+
+    assert {:ok, _restored, _settings} =
+             ReplayPreparation.restore(RequestOptions.for_websocket(%{}, %{}), metadata)
+
+    legacy = ReplayPreparation.attempt_metadata(original_context())
+    refute Map.has_key?(legacy["native_replay_preparation"], "models_etag")
+    assert ReplayPreparation.models_etag(legacy) == nil
+
+    snapshot = metadata["native_replay_preparation"]
+
+    for invalid <- [
+          "hostile-provider-etag-sentinel",
+          ~s(W/"cp-models-v1-short"),
+          ~s(W/"cp-models-v1-#{String.duplicate("0F", 32)}"),
+          models_etag <> "\n",
+          1,
+          nil
+        ] do
+      sanitized =
+        Accounting.sanitize_metadata(%{
+          "native_replay_preparation" => Map.put(snapshot, "models_etag", invalid)
+        })
+
+      assert sanitized["native_replay_preparation"] == Map.delete(snapshot, "models_etag")
+      assert ReplayPreparation.models_etag(sanitized) == nil
+    end
+
+    for malformed <- [nil, "metadata", %{"native_replay_preparation" => "synthetic"}] do
+      assert ReplayPreparation.models_etag(malformed) == nil
+    end
+  end
+
   test "ordinary and public translated requests do not receive native replay preparation" do
     original = original_context()
 

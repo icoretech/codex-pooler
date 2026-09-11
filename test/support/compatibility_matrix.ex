@@ -133,7 +133,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :backend_responses_etag,
       contract:
-        "backend Responses HTTP SSE response headers expose x-models-etag equal byte-for-byte to the exact authenticated backend models ETag from the request snapshot; websocket upgrade headers retain the same backward-compatible connection-opening value, while each accepted backend websocket turn emits an authoritative codex.response.metadata x-models-etag from that turn's current predispatch snapshot; the value is never relayed from upstream and is excluded from backend JSON, compact, public /v1, usage, unauthenticated, and unrelated routes"
+        "backend Responses HTTP SSE response headers expose x-models-etag equal byte-for-byte to the exact authenticated backend models ETag from the request snapshot; websocket upgrade headers retain the same backward-compatible connection-opening value, while each accepted backend websocket turn emits an authoritative codex.response.metadata x-models-etag from that turn's current predispatch snapshot; the value is never relayed from upstream and is excluded from backend JSON, compact, public /v1, usage, unauthenticated, and unrelated routes; a native websocket replay re-emits the original turn's preserved snapshot value, provider codex.response.metadata events are relayed after the Pooler event with x-models-etag removed, and consumers must take the ETag only from metadata events that carry it"
     },
     %{
       slug: :pool_model_serving_modes,
@@ -881,10 +881,16 @@ defmodule CodexPooler.CompatibilityMatrix do
         http: :request,
         websocket: :response_create_turn,
         retry: :preserve,
+        native_replay: :preserve,
         owner_forwarding: :preserve,
         next_websocket_turn: :reresolve
       },
       upstream_etag_relay: false,
+      provider_metadata_event: %{
+        order: :after_pooler_event,
+        x_models_etag: :removed,
+        consumer_etag_source: :metadata_event_carrying_x_models_etag
+      },
       included_routes: [
         "/backend-api/codex/responses",
         "/backend-api/codex/v1/responses"

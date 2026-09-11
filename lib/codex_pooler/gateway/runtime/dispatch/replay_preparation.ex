@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Pools.RoutingSettings
 
@@ -102,13 +103,28 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
     if valid_mode?(snapshot) and valid_reasoning?(snapshot) and
          is_boolean(snapshot["supports_reasoning_summary"]) and
          is_boolean(snapshot["request_compression_enabled"]) do
-      Map.take(snapshot, @snapshot_keys)
+      snapshot
+      |> Map.take(@snapshot_keys)
+      |> put_valid_models_etag(snapshot["models_etag"])
     else
       %{}
     end
   end
 
   def sanitize(_snapshot), do: %{}
+
+  # The original turn's models ETag, preserved so a native replay re-emits the
+  # same Pooler-authored value (backend_responses_etag.snapshot_lifetime).
+  # Attempts written before the field existed, or with a malformed value, give nil.
+  @spec models_etag(term()) :: String.t() | nil
+  def models_etag(metadata) when is_map(metadata) do
+    case sanitize(Map.get(metadata, @metadata_key)) do
+      %{"models_etag" => models_etag} -> models_etag
+      _snapshot -> nil
+    end
+  end
+
+  def models_etag(_metadata), do: nil
 
   defp eligible?(%RequestOptions{
          transport: %{transport: "websocket", websocket_owner: %{enabled?: true}},
@@ -137,7 +153,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
           "supports_reasoning_summary" =>
             options.routing.supports_reasoning_summary_parameter? != false,
           "request_compression_enabled" =>
-            Map.get(route_state.routing_settings || %{}, :request_compression_enabled) == true
+            Map.get(route_state.routing_settings || %{}, :request_compression_enabled) == true,
+          "models_etag" => route_state_models_etag(route_state)
         })
 
       _invalid ->
@@ -156,6 +173,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
        when mode in ~w(lite full), do: true
 
   defp valid_mode?(_snapshot), do: false
+
+  defp route_state_models_etag(%RouteState{} = route_state),
+    do: RouteState.codex_models_etag(route_state)
+
+  defp route_state_models_etag(_route_state), do: nil
+
+  defp put_valid_models_etag(
+         sanitized,
+         <<"W/\"cp-models-v1-", digest::binary-size(64), "\"">> = models_etag
+       ) do
+    if String.match?(digest, ~r/\A[0-9a-f]{64}\z/),
+      do: Map.put(sanitized, "models_etag", models_etag),
+      else: sanitized
+  end
+
+  defp put_valid_models_etag(sanitized, _models_etag), do: sanitized
 
   defp valid_reasoning?(snapshot) do
     Map.has_key?(@modes, snapshot["reasoning_mode"]) and

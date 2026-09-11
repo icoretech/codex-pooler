@@ -920,6 +920,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_etag.contract =~ "authoritative codex.response.metadata"
       assert responses_etag.contract =~ "current predispatch snapshot"
       assert responses_etag.contract =~ "never relayed from upstream"
+      assert responses_etag.contract =~ "native websocket replay re-emits"
+
+      assert responses_etag.contract =~
+               "relayed after the Pooler event with x-models-etag removed"
+
+      assert responses_etag.contract =~ "only from metadata events that carry it"
 
       assert terminal_failure_diagnostics.contract =~ "failed and retryable_failed"
 
@@ -960,10 +966,16 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  http: :request,
                  websocket: :response_create_turn,
                  retry: :preserve,
+                 native_replay: :preserve,
                  owner_forwarding: :preserve,
                  next_websocket_turn: :reresolve
                },
                upstream_etag_relay: false,
+               provider_metadata_event: %{
+                 order: :after_pooler_event,
+                 x_models_etag: :removed,
+                 consumer_etag_source: :metadata_event_carrying_x_models_etag
+               },
                included_routes: [
                  "/backend-api/codex/responses",
                  "/backend-api/codex/v1/responses"

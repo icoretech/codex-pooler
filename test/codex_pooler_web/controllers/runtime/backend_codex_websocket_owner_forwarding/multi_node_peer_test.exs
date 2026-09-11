@@ -590,6 +590,132 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     end
   end
 
+  test "local and remote owners relay provider metadata after the Pooler event without its ETag" do
+    provider_etag = ~s(W/"provider-models-etag-owner-sentinel")
+
+    provider_metadata =
+      CodexPooler.JSON.encode!(%{
+        "type" => "codex.response.metadata",
+        "headers" => %{
+          "x-models-etag" => provider_etag,
+          "openai-model" => "synthetic-provider-model",
+          "x-reasoning-included" => "true"
+        }
+      })
+
+    upstream =
+      start_upstream(
+        # Strict finite scenario: the local and the remote owner each forward
+        # exactly one native turn whose provider metadata precedes the response.
+        # provenance: synthetic_adversarial (header names from the released Codex client; values invented)
+        FakeUpstream.strict_sequence(
+          for response_id <- ["resp_local_provider_metadata", "resp_remote_provider_metadata"] do
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  provider_metadata,
+                  CodexPooler.JSON.encode!(%{"id" => response_id, "object" => "response"})
+                ])
+            )
+          end
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, local_state} =
+      owner_socket(auth, "ws-local-provider-metadata", "local-provider-metadata")
+
+    {:ok, remote_state} =
+      owner_socket(auth, "ws-remote-provider-metadata", "remote-provider-metadata")
+
+    remote_node = :"codex_pooler@remote-provider-metadata.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = remote_owner_state(remote_state, remote_node, node_opts)
+    models_conn = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+    assert [models_etag] = get_resp_header(models_conn, "etag")
+
+    try do
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "local provider metadata"),
+                 owner_response_options(local_state, []),
+                 fn _data -> :ok end
+               )
+
+      {local_frames, local_state} = receive_owner_raw_frames(local_state, 3)
+
+      assert_provider_metadata_after_pooler_event!(
+        local_frames,
+        models_etag,
+        "resp_local_provider_metadata"
+      )
+
+      assert {:ok, _local_state} = receive_owner_socket_complete(local_state)
+
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "remote provider metadata"),
+                 owner_response_options(remote_state, node_opts),
+                 fn _data -> :ok end
+               )
+
+      {remote_frames, remote_state} = receive_owner_raw_frames(remote_state, 3)
+
+      assert_provider_metadata_after_pooler_event!(
+        remote_frames,
+        models_etag,
+        "resp_remote_provider_metadata"
+      )
+
+      assert {:ok, _remote_state} = receive_owner_socket_complete(remote_state)
+      assert :ok = FakeUpstream.verify!(upstream)
+    after
+      CodexResponsesSocket.terminate(:closed, local_state)
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
+  defp receive_owner_raw_frames(state, count) do
+    Enum.map_reduce(1..count, state, fn _index, current ->
+      assert {:push, {:text, frame}, current} = receive_owner_socket_raw_push(current)
+      {frame, current}
+    end)
+  end
+
+  defp assert_provider_metadata_after_pooler_event!(frames, models_etag, response_id) do
+    assert [pooler_frame, provider_frame, response_frame] = frames
+
+    assert %{
+             "type" => "codex.response.metadata",
+             "headers" => %{"x-models-etag" => ^models_etag}
+           } = CodexPooler.JSON.decode!(pooler_frame)
+
+    assert CodexPooler.JSON.decode!(provider_frame) == %{
+             "type" => "codex.response.metadata",
+             "headers" => %{
+               "openai-model" => "synthetic-provider-model",
+               "x-reasoning-included" => "true"
+             }
+           }
+
+    assert owner_response_id(response_frame) == response_id
+
+    for frame <- frames do
+      refute frame =~ "provider-models-etag-owner-sentinel"
+    end
+  end
+
   defp public_stream_payload(setup, input) do
     %{"model" => setup.model.exposed_model_id, "input" => input, "stream" => true}
   end
