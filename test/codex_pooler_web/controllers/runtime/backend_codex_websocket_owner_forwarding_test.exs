@@ -7815,7 +7815,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     # Auto mode commits; the rows this test owns are purged so table-wide
     # assertions elsewhere in the file keep an empty baseline.
     pool_id = setup.pool.id
-    on_exit(fn -> purge_committed_pool_rows!(pool_id) end)
+    identity_id = setup.identity.id
+    on_exit(fn -> purge_committed_pool_rows!(pool_id, identity_id) end)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
@@ -12669,7 +12670,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   # Removes every row an auto-mode test committed for its Pool, children first.
-  defp purge_committed_pool_rows!(pool_id) do
+  defp purge_committed_pool_rows!(pool_id, identity_id) do
     Sandbox.unboxed_run(Repo, fn ->
       request_ids = Repo.all(from(r in Request, where: r.pool_id == ^pool_id, select: r.id))
       session_ids = Repo.all(from(s in CodexSession, where: s.pool_id == ^pool_id, select: s.id))
@@ -12691,7 +12692,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       Repo.delete_all(from(r in Request, where: r.pool_id == ^pool_id))
       Repo.delete_all(from(s in CodexSession, where: s.pool_id == ^pool_id))
       Repo.delete_all(from(k in APIKey, where: k.pool_id == ^pool_id))
+
+      Repo.delete_all(
+        from(a in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
+          where: a.pool_id == ^pool_id
+        )
+      )
+
       Repo.delete_all(from(p in CodexPooler.Pools.Pool, where: p.id == ^pool_id))
+
+      Repo.delete_all(
+        from(s in CodexPooler.Upstreams.Schemas.EncryptedSecret,
+          where: s.upstream_identity_id == ^identity_id
+        )
+      )
+
+      Repo.delete_all(from(i in UpstreamIdentity, where: i.id == ^identity_id))
     end)
 
     :ok
