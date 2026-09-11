@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
 
   alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Websocket, as: Gateway
 
   @detection_timeout 15_000
@@ -26,6 +27,9 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
   # interval and does not need to span one.
   @handoff_post_stop_observation_ms 100
   @handoff_max_elapsed_ms 5_000
+  # The renewal is parked on a barrier that is never released, so this call
+  # bound is the only way the synchronous renewal can end.
+  @parked_renewal_call_timeout_ms 50
 
   test "run renews synchronously before a deferred callback and advances both PostgreSQL deadlines" do
     %{session: session, token: token} = owner_session_fixture()
@@ -103,6 +107,100 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
 
     assert %{renew_call_timeout_ms: 5_000} = :sys.get_state(overridden)
     assert :ok = SessionLeaseHeartbeat.stop(overridden)
+  end
+
+  test "a synchronous renewal bounds its lock wait below the call and logs one lock timeout" do
+    %{session: session, token: token} = owner_session_fixture()
+    request_options = http_request_options(session, token)
+    parent = self()
+
+    Process.put({SessionLeaseHeartbeat, :renew}, fn _session_id,
+                                                    _owner_token,
+                                                    _renewal_options,
+                                                    renewal_opts ->
+      send(parent, {:synchronous_renewal_options, renewal_opts})
+      {:error, :lock_timeout}
+    end)
+
+    logs =
+      capture_log(fn ->
+        assert {:error, :owner_unavailable} =
+                 SessionLeaseHeartbeat.run(request_options, fn ->
+                   flunk("callback must not run")
+                 end)
+      end)
+
+    assert_received {:synchronous_renewal_options, [lock_timeout_ms: 800]}
+
+    assert [line] = renewal_failure_lines(logs)
+    assert line =~ "phase=synchronous reason=lock_timeout"
+    assert line =~ "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session.id)}"
+    refute logs =~ token
+  end
+
+  test "a synchronous renewal that outlives its call bound is killed and logged once" do
+    %{session: session, token: token} = owner_session_fixture()
+    request_options = http_request_options(session, token, observer: self())
+
+    Process.put({SessionLeaseHeartbeat, :renew_call_timeout_ms}, @parked_renewal_call_timeout_ms)
+
+    Process.put({SessionLeaseHeartbeat, :renew}, fn _session_id,
+                                                    _owner_token,
+                                                    _renewal_options,
+                                                    _renewal_opts ->
+      receive do
+        :release_parked_renewal -> {:ok, session}
+      end
+    end)
+
+    logs =
+      capture_log(fn ->
+        assert {:error, :owner_unavailable} =
+                 SessionLeaseHeartbeat.run(request_options, fn ->
+                   flunk("callback must not run")
+                 end)
+      end)
+
+    assert_received {:session_lease_heartbeat, :started, heartbeat}
+    refute Process.alive?(heartbeat)
+
+    assert [line] = renewal_failure_lines(logs)
+    assert line =~ "phase=synchronous reason=call_timeout"
+    refute logs =~ token
+  end
+
+  test "a failed scheduled renewal stops the heartbeat with one unbounded-wait warning" do
+    for {failure, reason_class} <- [
+          {fn -> {:error, :stale_owner} end, "stale_owner"},
+          {fn -> raise DBConnection.ConnectionError, "synthetic" end, "database_unavailable"}
+        ] do
+      %{session: session, token: token} = owner_session_fixture()
+      request_options = http_request_options(session, token)
+      parent = self()
+
+      renew = fn _session_id, _owner_token, _renewal_options, renewal_opts ->
+        send(parent, {:scheduled_renewal_options, renewal_opts})
+        failure.()
+      end
+
+      logs =
+        capture_log(fn ->
+          assert {:ok, heartbeat} = SessionLeaseHeartbeat.start(request_options, renew: renew)
+          assert %{renewal_token: renewal_token} = :sys.get_state(heartbeat)
+          monitor = Process.monitor(heartbeat)
+
+          send(heartbeat, {:session_lease_heartbeat_renew, renewal_token})
+
+          assert_receive {:DOWN, ^monitor, :process, ^heartbeat, :normal}, @detection_timeout
+        end)
+
+      assert_received {:scheduled_renewal_options, []}
+
+      assert [line] = renewal_failure_lines(logs)
+      assert line =~ "phase=scheduled reason=#{reason_class}"
+      assert line =~ "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session.id)}"
+      refute logs =~ token
+    end
   end
 
   test "uses the bounded cadence and reschedules only after a successful renewal" do
@@ -341,8 +439,20 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
     assert DateTime.compare(session.owner_lease_expires_at, previous_expiry) == :gt
   end
 
+  defp renewal_failure_lines(logs) do
+    logs
+    |> String.split("\n")
+    |> Enum.filter(&String.contains?(&1, "session lease renewal failed"))
+  end
+
   defp http_request_options(%CodexSession{} = session, token, opts \\ []) do
     ttl_seconds = Keyword.get(opts, :ttl_seconds, 45)
+
+    observer_options =
+      case Keyword.get(opts, :observer) do
+        observer when is_pid(observer) -> [session_lease_heartbeat_test_observer: observer]
+        nil -> []
+      end
 
     request_options =
       RequestOptions.build(
@@ -350,7 +460,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
           codex_session: session,
           bridge_owner_lease_ttl_seconds: ttl_seconds,
           transport: "http_json"
-        ],
+        ] ++ observer_options,
         "/backend-api/codex/responses",
         %{}
       )

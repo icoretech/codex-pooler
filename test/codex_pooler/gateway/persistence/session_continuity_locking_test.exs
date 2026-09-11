@@ -32,6 +32,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   @renewal_first_direction "session_lease_renewal_first"
   @deadlock_context {__MODULE__, :replacement_deadlock_context}
   @deadlock_paused {__MODULE__, :replacement_deadlock_paused}
+  # A real PostgreSQL lock_timeout is the behavior under test: each bounded
+  # renewal case waits it out once while the blocker holds its row, so a case
+  # runs for about one second. The same window bounds the blocked observation.
+  @bounded_renewal_lock_timeout_ms 1_000
 
   describe "session continuity baseline characterization" do
     @tag :session_continuity_pin
@@ -470,6 +474,87 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       assert length(records) == @direction_iterations
       report_direction(@renewal_first_direction, records)
+    end
+
+    for held_row <- [:session, :lease] do
+      @tag :session_continuity_contention
+      @tag timeout: 30_000
+      test "a bounded renewal ends its wait on a held #{held_row} row inside PostgreSQL" do
+        held_row = unquote(held_row)
+        fixture = unboxed_owner_session_fixture("bounded-renewal-#{held_row}", 1)
+        parent = self()
+        ref = make_ref()
+
+        blocker =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              Repo.transaction(fn ->
+                lock_renewal_row!(held_row, fixture.session.id)
+                send(parent, {:bounded_renewal_blocker_ready, ref, backend_pid!()})
+
+                receive do
+                  {:release_bounded_renewal_blocker, ^ref} -> :ok
+                after
+                  15_000 -> raise "bounded renewal blocker was not released"
+                end
+              end)
+            end)
+          end)
+
+        try do
+          assert_receive {:bounded_renewal_blocker_ready, ^ref, blocker_backend_pid}, 5_000
+          before_session = unboxed_get_session!(fixture.session.id)
+          before_lease = unboxed_active_lease!(fixture.session.id)
+
+          renewal =
+            Task.async(fn ->
+              Sandbox.unboxed_run(Repo, fn ->
+                send(parent, {:bounded_renewal_waiter_ready, ref, backend_pid!()})
+                bounded_renewal(fixture)
+              end)
+            end)
+
+          Process.put({__MODULE__, ref, :renewal}, renewal)
+
+          assert_receive {:bounded_renewal_waiter_ready, ^ref, waiter_backend_pid}, 5_000
+          assert waiter_backend_pid != blocker_backend_pid
+
+          assert observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid) ==
+                   renewal_row_relation(held_row)
+
+          # The blocker still holds its row, so only PostgreSQL can end the wait.
+          assert {:error, :lock_timeout} = Task.await(renewal, 15_000)
+          assert Process.alive?(blocker.pid)
+
+          send(blocker.pid, {:release_bounded_renewal_blocker, ref})
+          assert {:ok, :ok} = Task.await(blocker, 15_000)
+
+          after_session = unboxed_get_session!(fixture.session.id)
+          after_lease = unboxed_active_lease!(fixture.session.id)
+          assert after_session.owner_lease_expires_at == before_session.owner_lease_expires_at
+          assert after_session.last_heartbeat_at == before_session.last_heartbeat_at
+          assert after_lease.expires_at == before_lease.expires_at
+          assert after_lease.renewed_at == before_lease.renewed_at
+
+          assert {:ok, %CodexSession{} = renewed} =
+                   Sandbox.unboxed_run(Repo, fn -> bounded_renewal(fixture) end)
+
+          assert DateTime.compare(
+                   renewed.owner_lease_expires_at,
+                   before_session.owner_lease_expires_at
+                 ) == :gt
+        after
+          send(blocker.pid, {:release_bounded_renewal_blocker, ref})
+          shutdown_task(blocker)
+
+          case Process.delete({__MODULE__, ref, :renewal}) do
+            %Task{} = renewal -> shutdown_task(renewal)
+            nil -> :ok
+          end
+
+          cleanup_unboxed_fixture!()
+        end
+      end
     end
   end
 
@@ -1578,6 +1663,64 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp shutdown_task(task) do
     if Process.alive?(task.pid), do: Task.shutdown(task, :brutal_kill)
+  end
+
+  defp bounded_renewal(fixture) do
+    SessionContinuity.renew_owner_token(
+      fixture.session.id,
+      fixture.token,
+      request_options(bridge_owner_lease_ttl_seconds: 120),
+      lock_timeout_ms: @bounded_renewal_lock_timeout_ms
+    )
+  end
+
+  defp lock_renewal_row!(:session, session_id) do
+    Repo.one!(from session in CodexSession, where: session.id == ^session_id, lock: "FOR UPDATE")
+  end
+
+  defp lock_renewal_row!(:lease, session_id) do
+    Repo.one!(
+      from lease in BridgeOwnerLease,
+        where: lease.codex_session_id == ^session_id and lease.status == "active",
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp renewal_row_relation(:session), do: "codex_sessions"
+  defp renewal_row_relation(:lease), do: "bridge_owner_leases"
+
+  defp observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid) do
+    deadline = System.monotonic_time(:millisecond) + @bounded_renewal_lock_timeout_ms
+    do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline)
+  end
+
+  defp do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline) do
+    rows =
+      Sandbox.unboxed_run(Repo, fn ->
+        SQL.query!(
+          Repo,
+          """
+          SELECT query FROM pg_stat_activity
+          WHERE pid = $1 AND wait_event_type = 'Lock' AND $2 = ANY(pg_blocking_pids(pid))
+          """,
+          [waiter_backend_pid, blocker_backend_pid]
+        ).rows
+      end)
+
+    case rows do
+      [[query]] ->
+        case Regex.run(~r/FROM "(\w+)"/, query) do
+          [_match, relation] -> relation
+          nil -> flunk("blocked renewal statement did not name a relation")
+        end
+
+      [] ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          flunk("bounded renewal was not observed waiting on the blocker's row lock")
+        else
+          do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline)
+        end
+    end
   end
 
   defp backend_pid! do

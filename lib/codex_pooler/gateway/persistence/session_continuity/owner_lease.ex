@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   alias CodexPooler.Repo
 
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
+  @type renewal_option :: {:lock_timeout_ms, pos_integer()}
   @type session_ref :: CodexSession.t() | Ecto.UUID.t() | String.t()
 
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
@@ -124,10 +125,28 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
 
   @spec renew_owner_token(session_ref(), Ecto.UUID.t() | String.t(), RequestOptions.t()) ::
           {:ok, CodexSession.t()} | {:error, :stale_owner | :owner_unavailable}
-  def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts) do
+  def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts),
+    do: renew_owner_token(session_ref, owner_lease_token, opts, [])
+
+  # `lock_timeout_ms` bounds the total time the renewal may wait for the session
+  # and lease row locks. PostgreSQL applies `lock_timeout` per statement, so the
+  # remaining budget is set again before each lock wait; exhausting it rolls the
+  # renewal back cleanly as `:lock_timeout` instead of leaving the caller to kill
+  # a process that is still inside the transaction.
+  @spec renew_owner_token(
+          session_ref(),
+          Ecto.UUID.t() | String.t(),
+          RequestOptions.t(),
+          [renewal_option()]
+        ) ::
+          {:ok, CodexSession.t()} | {:error, :stale_owner | :owner_unavailable | :lock_timeout}
+  def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts, renewal_opts)
+      when is_list(renewal_opts) do
+    lock_deadline = lock_deadline(renewal_opts)
+
     Repo.transaction(fn ->
       with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
-             active_snapshot_for_update(session_ref),
+             active_snapshot_for_update(session_ref, lock_deadline),
            now <- db_now(),
            :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now) do
         expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
@@ -151,6 +170,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       end
     end)
     |> unwrap_owner_token_renewal()
+  rescue
+    error in Postgrex.Error ->
+      if lock_timeout_error?(error, renewal_opts),
+        do: {:error, :lock_timeout},
+        else: reraise(error, __STACKTRACE__)
   end
 
   @spec release(session_ref(), Ecto.UUID.t() | String.t(), String.t()) ::
@@ -335,9 +359,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     end
   end
 
-  defp active_snapshot_for_update(session_ref) do
+  defp active_snapshot_for_update(session_ref, lock_deadline) do
     with {:ok, session_id} <- session_id(session_ref),
+         :ok <- put_lock_timeout(lock_deadline),
          %CodexSession{} = session <- codex_session_for_update(session_id),
+         :ok <- put_lock_timeout(lock_deadline),
          %BridgeOwnerLease{} = lease <- active_for_update(session.id) do
       {:ok, session, lease}
     else
@@ -428,6 +454,36 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
     now
   end
+
+  defp lock_deadline(renewal_opts) do
+    case Keyword.get(renewal_opts, :lock_timeout_ms) do
+      timeout when is_integer(timeout) and timeout > 0 ->
+        System.monotonic_time(:millisecond) + timeout
+
+      _no_bound ->
+        nil
+    end
+  end
+
+  defp put_lock_timeout(nil), do: :ok
+
+  defp put_lock_timeout(deadline) do
+    case deadline - System.monotonic_time(:millisecond) do
+      remaining when remaining > 0 ->
+        _result =
+          Repo.query!("SELECT set_config('lock_timeout', $1, true)", ["#{remaining}ms"])
+
+        :ok
+
+      _exhausted ->
+        {:error, :lock_timeout}
+    end
+  end
+
+  defp lock_timeout_error?(%Postgrex.Error{postgres: %{code: :lock_not_available}}, renewal_opts),
+    do: not is_nil(lock_deadline(renewal_opts))
+
+  defp lock_timeout_error?(%Postgrex.Error{}, _renewal_opts), do: false
 
   defp unwrap_ok_transaction({:ok, :ok}), do: :ok
   defp unwrap_ok_transaction({:error, reason}), do: {:error, reason}
