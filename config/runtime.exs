@@ -53,15 +53,25 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
+  oban_mode = System.get_env("OBAN_MODE", "web")
+
+  # PostgreSQL shows the release role in `pg_stat_activity` and in lock-wait
+  # and deadlock log lines. An unknown mode boots with web behavior, so it
+  # carries the web name; the raw value is never echoed.
+  repo_application_name =
+    case oban_mode do
+      mode when mode in ["worker", "scheduler", "all"] -> "codex_pooler_" <> mode
+      _web_or_unknown -> "codex_pooler_web"
+    end
+
   config :codex_pooler, CodexPooler.Repo,
     # ssl: true,
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
     # pool_count: 4,
-    socket_options: maybe_ipv6
-
-  oban_mode = System.get_env("OBAN_MODE", "web")
+    socket_options: maybe_ipv6,
+    parameters: [application_name: repo_application_name]
 
   oban_services = [
     cron: [crontab: CodexPooler.Jobs.Schedule.oban_crontab()],

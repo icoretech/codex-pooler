@@ -632,6 +632,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
           holder = wait.blocker
           assert holder.pid == blocker_backend_pid
+          # The configured Repo application_name names the holder's role.
+          assert holder.application_name == "codex_pooler_test"
 
           assert Process.alive?(blocker.pid)
           assert Atom.to_string(relation) == renewal_row_relation(held_row)

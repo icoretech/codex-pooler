@@ -100,6 +100,24 @@ defmodule CodexPooler.RuntimeConfigTest do
     end
   end
 
+  test "the Repo names its PostgreSQL backends after the release role" do
+    for {mode, application_name} <- [
+          {"web", "codex_pooler_web"},
+          {"worker", "codex_pooler_worker"},
+          {"scheduler", "codex_pooler_scheduler"},
+          {"all", "codex_pooler_all"},
+          {"unexpected-role-value", "codex_pooler_web"}
+        ] do
+      with_env(Map.put(@required_env, "OBAN_MODE", mode), fn ->
+        config = Config.Reader.read!("config/runtime.exs", env: :prod)
+        repo_config = config[:codex_pooler][CodexPooler.Repo]
+
+        assert repo_config[:parameters] == [application_name: application_name]
+        assert byte_size(application_name) <= 63
+      end)
+    end
+  end
+
   test "the upstream connection idle bound is an instance setting, not release env" do
     env = Map.put(@required_env, "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS", "30s")
 

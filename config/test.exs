@@ -75,7 +75,8 @@ config :codex_pooler, CodexPooler.Repo,
   port: String.to_integer(test_postgres_port),
   database: test_database,
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: test_repo_pool_size
+  pool_size: test_repo_pool_size,
+  parameters: [application_name: "codex_pooler_test"]
 
 config :codex_pooler, Oban,
   notifier: if(test_partition, do: Oban.Notifiers.PG, else: Oban.Notifiers.Postgres),

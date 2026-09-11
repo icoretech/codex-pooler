@@ -17,7 +17,8 @@ config :codex_pooler, CodexPooler.Repo,
   database: dev_postgres_database,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
-  pool_size: 10
+  pool_size: 10,
+  parameters: [application_name: "codex_pooler_dev"]
 
 config :codex_pooler, CodexPoolerWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.

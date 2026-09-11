@@ -68,6 +68,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     maybe_test_runtime_authorization_barrier(:claim, :before)
 
     Repo.transaction(fn ->
+      :ok = lock_resend_session(resend_session)
       api_key = authorize_runtime_turn!(api_key, captured_epoch)
       maybe_test_runtime_authorization_barrier(:claim, :after)
       {correlation_id, client_resend} = resend_claim!(resend_session, pool, api_key, model, opts)
@@ -111,6 +112,21 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       else
         reraise(error, __STACKTRACE__)
       end
+  end
+
+  # Runtime writes lock the codex session before `api_keys`. A resend claim that
+  # authorized the key first held it while waiting on a session an HTTP
+  # reservation already held, which waited on the key in turn. The row is taken
+  # without raising so a missing session still resolves the key authorization
+  # first; `resend_claim!/5` then re-reads it under the lock this transaction
+  # already holds and raises for a missing session exactly as before.
+  defp lock_resend_session(nil), do: :ok
+
+  defp lock_resend_session(%CodexSession{id: session_id}) do
+    _locked_or_missing =
+      Repo.one(from session in CodexSession, where: session.id == ^session_id, lock: "FOR UPDATE")
+
+    :ok
   end
 
   defp resend_claim!(nil, _pool, _api_key, _model, opts), do: {attr(opts, :correlation_id), nil}
