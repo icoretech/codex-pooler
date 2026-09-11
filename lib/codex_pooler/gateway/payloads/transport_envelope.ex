@@ -19,6 +19,25 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   @provider_session_header_names ["session-id", "thread-id", "x-client-request-id"]
   @provider_session_header_max_bytes 128
 
+  # Fixed namespace for the `session-id` the Pooler synthesizes on public
+  # `/v1` routes from the client's `prompt_cache_key`. OpenAI-compatible
+  # clients never send the provider's session headers, so the derived id is
+  # what keeps consecutive HTTP turns of one conversation on the replica that
+  # holds the warm prompt cache. It is UUID v5 of the RFC 4122 URL namespace
+  # (`6ba7b811-9dad-11d1-80b4-00c04fd430c8`) over
+  # `https://github.com/icoretech/codex-pooler/v1/session-id`. Never change
+  # it: every derived id would change and every warm cache would be lost.
+  @prompt_cache_session_namespace "0aac30b0-0311-52bd-8fb7-258f9c6f0278"
+  @prompt_cache_session_namespace_bytes Base.decode16!(
+                                          String.replace(
+                                            @prompt_cache_session_namespace,
+                                            "-",
+                                            ""
+                                          ),
+                                          case: :lower
+                                        )
+  @prompt_cache_session_key_max_bytes 512
+
   @type timeout_settings :: %{
           required(:connect_timeout_ms) => non_neg_integer(),
           required(:pool_timeout_ms) => non_neg_integer(),
@@ -60,6 +79,45 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   end
 
   def provider_session_header_value?(_value), do: false
+
+  @doc """
+  The fixed namespace UUID behind `prompt_cache_session_id/1`.
+  """
+  @spec prompt_cache_session_namespace() :: String.t()
+  def prompt_cache_session_namespace, do: @prompt_cache_session_namespace
+
+  @doc """
+  The provider `session-id` synthesized for a public `/v1` request from its
+  raw `prompt_cache_key`: RFC 4122 UUID v5 over the fixed Pooler namespace and
+  the key bytes, so the same key yields the same value on every node and
+  across restarts without persistence.
+
+  Returns `nil` for anything but a non-empty binary of at most
+  #{@prompt_cache_session_key_max_bytes} bytes. The value derives from a
+  client-chosen key and must be treated like the key itself: it belongs only
+  in the upstream request header, never in logs, request metadata, or debug
+  summaries.
+  """
+  @spec prompt_cache_session_id(term()) :: String.t() | nil
+  def prompt_cache_session_id(key)
+      when is_binary(key) and byte_size(key) in 1..@prompt_cache_session_key_max_bytes do
+    <<time_low::32, time_mid::16, time_hi::16, clock_seq::16, node::48, _rest::binary>> =
+      :crypto.hash(:sha, @prompt_cache_session_namespace_bytes <> key)
+
+    time_hi = Bitwise.bor(Bitwise.band(time_hi, 0x0FFF), 0x5000)
+    clock_seq = Bitwise.bor(Bitwise.band(clock_seq, 0x3FFF), 0x8000)
+
+    :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [
+      time_low,
+      time_mid,
+      time_hi,
+      clock_seq,
+      node
+    ])
+    |> IO.iodata_to_binary()
+  end
+
+  def prompt_cache_session_id(_key), do: nil
 
   @spec headers(UpstreamIdentity.t(), String.t(), [{String.t(), String.t()}], keyword()) :: [
           {String.t(), String.t()}

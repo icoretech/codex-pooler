@@ -259,12 +259,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         opts \\ []
       )
       when is_list(headers) and is_list(opts) do
+    {payload, opts} = Keyword.pop(opts, :payload)
+
     envelope_opts =
       opts
       |> Keyword.put(:include_codex_identity?, true)
       |> Keyword.put(
         :forwarded_headers,
-        regular_runtime_forwarded_metadata_headers(request_options)
+        regular_runtime_forwarded_metadata_headers(request_options, payload)
       )
 
     headers = maybe_put_responses_lite_header(headers, request_options)
@@ -275,18 +277,49 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   @doc false
   @spec regular_runtime_forwarded_metadata_headers(RequestOptions.t()) :: [header()]
-  def regular_runtime_forwarded_metadata_headers(%RequestOptions{
-        transport: %{
-          upstream_endpoint: endpoint,
-          forwarded_metadata_headers: forwarded_headers
+  def regular_runtime_forwarded_metadata_headers(%RequestOptions{} = request_options),
+    do: regular_runtime_forwarded_metadata_headers(request_options, nil)
+
+  @doc false
+  @spec regular_runtime_forwarded_metadata_headers(RequestOptions.t(), map() | nil) ::
+          [header()]
+  def regular_runtime_forwarded_metadata_headers(
+        %RequestOptions{
+          transport: %{
+            upstream_endpoint: endpoint,
+            forwarded_metadata_headers: forwarded_headers
+          },
+          openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
         },
-        openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
-      })
+        _payload
+      )
       when endpoint in @regular_runtime_metadata_endpoints and is_list(forwarded_headers) do
     filter_regular_runtime_forwarded_metadata_headers(forwarded_headers)
   end
 
-  def regular_runtime_forwarded_metadata_headers(%RequestOptions{}), do: []
+  # Public `/v1` origin: the client's continuity headers stay local, and the
+  # only provider session header sent upstream is the Pooler-derived
+  # `session-id` synthesized from the request's `prompt_cache_key`. It goes
+  # through the same `forwarded_metadata_header/2` bounds as a client header.
+  # The `/v1` websocket surfaces are unaffected on purpose: a bridged HTTP turn
+  # rides the continuity owner's upstream connection and a public websocket
+  # turn rides its socket-bound upstream session, and the provider pins the
+  # prompt cache to that connection rather than to a per-request header.
+  def regular_runtime_forwarded_metadata_headers(
+        %RequestOptions{
+          transport: %{upstream_endpoint: endpoint},
+          openai_compatibility: %{source_endpoint: source_endpoint}
+        },
+        %{"prompt_cache_key" => prompt_cache_key}
+      )
+      when endpoint in @regular_runtime_metadata_endpoints and is_binary(source_endpoint) do
+    case TransportEnvelope.prompt_cache_session_id(prompt_cache_key) do
+      session_id when is_binary(session_id) -> forwarded_metadata_header("session-id", session_id)
+      nil -> []
+    end
+  end
+
+  def regular_runtime_forwarded_metadata_headers(%RequestOptions{}, _payload), do: []
 
   defp filter_regular_runtime_forwarded_metadata_headers(headers) do
     Enum.flat_map(headers, fn
@@ -405,7 +438,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
                else: "application/json"
              )}
           ],
-          routing_hint: routing_hint_header(body, routing_hint_authorized?, opts)
+          routing_hint: routing_hint_header(body, routing_hint_authorized?, opts),
+          payload: payload
         )
       )
 

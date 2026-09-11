@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -2343,7 +2344,20 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  names: ["session-id", "thread-id", "x-client-request-id"],
                  value_contract: "ascii_identifier_max_128_bytes",
                  purpose: "provider_sticky_routing_for_prompt_cache",
-                 local_only_headers: ["x-session-id", "x-session-affinity"]
+                 local_only_headers: ["x-session-id", "x-session-affinity"],
+                 public_v1: %{
+                   client_headers: "local_only_never_forwarded",
+                   synthesized_header: "session-id",
+                   derived_from: "prompt_cache_key",
+                   derivation: "uuid_v5_fixed_pooler_namespace_over_raw_key",
+                   namespace: TransportEnvelope.prompt_cache_session_namespace(),
+                   key_contract: "non_empty_string_max_512_bytes",
+                   routes: ["/v1/responses", "/v1/chat/completions"],
+                   transports: ["http_json", "http_sse"],
+                   websocket_surfaces:
+                     "unaffected_prompt_cache_bound_to_reused_upstream_connection",
+                   privacy: "derived_value_not_persisted_or_logged"
+                 }
                },
                relayed_response_headers: ["x-codex-turn-state"],
                not_forwarded_on: [
@@ -2632,6 +2646,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~
                "without forwarding session-id, x-session-id, or x-session-affinity"
 
+      assert feature.contract =~
+               "synthesize the upstream session-id header on POST /v1/responses and POST /v1/chat/completions as UUID v5 of the fixed Pooler namespace over a non-empty prompt_cache_key of at most 512 bytes without persisting or logging the derived value"
+
       assert feature.contract =~ "pinned /v1/responses continuations"
       assert feature.contract =~ "restart_with_full_context recovery guidance"
       assert feature.contract =~ "accept Responses truncation auto and disabled locally"
@@ -2835,6 +2852,19 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "x-session-id",
                "x-session-affinity"
              ]
+
+      assert fixture.public_v1_upstream_session_id == %{
+               header: "session-id",
+               derived_from: "prompt_cache_key",
+               derivation: "uuid_v5_fixed_pooler_namespace_over_raw_key",
+               key_contract: "non_empty_string_max_512_bytes",
+               routes: [
+                 %{method: :post, path: "/v1/responses"},
+                 %{method: :post, path: "/v1/chat/completions"}
+               ],
+               client_session_id_header: "local_only_never_forwarded",
+               privacy: "derived_value_not_persisted_or_logged"
+             }
 
       assert fixture.pinned_continuation_reauth == %{
                routes: [

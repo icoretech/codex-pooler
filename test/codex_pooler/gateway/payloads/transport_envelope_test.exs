@@ -309,6 +309,71 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
              ]
     end
 
+    test "synthesizes the provider session-id from prompt_cache_key on public /v1 origins only" do
+      client_headers = [
+        {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+        {"thread-id", "thread_01.a:b"},
+        {"x-session-id", "local-only"}
+      ]
+
+      payload = %{"model" => "example-model", "prompt_cache_key" => "fixture-cache-key"}
+      expected = TransportEnvelope.prompt_cache_session_id("fixture-cache-key")
+
+      for source_endpoint <- ["/v1/responses", "/v1/chat/completions"] do
+        options = public_v1_options(source_endpoint, payload, forwarded_headers: client_headers)
+
+        # The client's own continuity headers stay local on /v1; only the
+        # Pooler-derived session-id goes upstream.
+        assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(options, payload) ==
+                 [{"session-id", expected}]
+
+        headers =
+          UpstreamDispatch.regular_runtime_headers(
+            identity(),
+            "upstream-token",
+            options,
+            [{"content-type", "application/json"}],
+            payload: payload
+          )
+
+        assert Enum.filter(headers, fn {name, _value} ->
+                 name in ["session-id", "thread-id", "x-session-id"]
+               end) == [{"session-id", expected}]
+      end
+
+      options = public_v1_options("/v1/responses", payload, forwarded_headers: client_headers)
+
+      # Without a usable key nothing is synthesized and the client headers are
+      # still not forwarded.
+      for absent_payload <- [
+            %{"model" => "example-model"},
+            %{"model" => "example-model", "prompt_cache_key" => ""},
+            %{"model" => "example-model", "prompt_cache_key" => String.duplicate("k", 513)},
+            %{"model" => "example-model", "prompt_cache_key" => %{"nested" => "key"}},
+            nil
+          ] do
+        assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+                 options,
+                 absent_payload
+               ) == []
+      end
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(options) == []
+
+      # Native routes keep forwarding the client's headers verbatim and never
+      # synthesize from the body.
+      native_options =
+        runtime_options("/backend-api/codex/responses", forwarded_headers: client_headers)
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+               native_options,
+               payload
+             ) == [
+               {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
+               {"thread-id", "thread_01.a:b"}
+             ]
+    end
+
     test "gates forwarded metadata to backend responses and compact transport only" do
       assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
                runtime_options("/backend-api/codex/responses")
@@ -492,6 +557,52 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       usage_authentication: nil,
       file_bridge: nil
     }
+  end
+
+  describe "prompt_cache_session_id/1" do
+    # RFC 4122 version 5: version nibble `5`, variant bits `10xx`.
+    @uuid_v5 ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
+
+    test "uses the fixed Pooler namespace and RFC 4122 v5 derivation" do
+      # The namespace is itself UUID v5 of the RFC 4122 URL namespace over the
+      # project URL; every value below was cross-checked with Python's uuid5.
+      assert TransportEnvelope.prompt_cache_session_namespace() ==
+               "0aac30b0-0311-52bd-8fb7-258f9c6f0278"
+
+      assert TransportEnvelope.prompt_cache_session_id("fixture-cache-key") ==
+               "b5f972d4-5751-5a43-9ccc-5f82a52174cf"
+
+      assert TransportEnvelope.prompt_cache_session_id("other-cache-key") ==
+               "1f500e28-7da5-5c91-98bc-667a4cf365bd"
+
+      assert TransportEnvelope.prompt_cache_session_id(String.duplicate("a", 512)) ==
+               "1ab9533d-5a8e-5dba-8a6b-04f783b3c09b"
+    end
+
+    test "is deterministic, v5-shaped, and bounded by the raw key" do
+      for key <- ["fixture-cache-key", "conv:01/𝔘nicode key", String.duplicate("z", 512)] do
+        value = TransportEnvelope.prompt_cache_session_id(key)
+
+        assert value =~ @uuid_v5
+        assert TransportEnvelope.provider_session_header_value?(value)
+        assert TransportEnvelope.prompt_cache_session_id(key) == value
+      end
+
+      assert TransportEnvelope.prompt_cache_session_id("fixture-cache-key") !=
+               TransportEnvelope.prompt_cache_session_id("fixture-cache-key ")
+
+      for ignored <- ["", String.duplicate("z", 513), nil, 42, %{}, ["fixture-cache-key"]] do
+        assert TransportEnvelope.prompt_cache_session_id(ignored) == nil
+      end
+    end
+  end
+
+  defp public_v1_options(source_endpoint, payload, opts) do
+    opts
+    |> Map.new()
+    |> Map.put(:openai_source_endpoint, source_endpoint)
+    |> Map.put(:openai_translated_endpoint, "/backend-api/codex/responses")
+    |> RequestOptions.build("/backend-api/codex/responses", payload || %{})
   end
 
   defp runtime_options(endpoint, opts \\ []) do
