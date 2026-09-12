@@ -34,6 +34,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   @turn_failed TurnStatus.failed_status()
   @turn_interrupted TurnStatus.interrupted_status()
 
+  # How much authority the interruption had over the turn it reports on. A zero
+  # `interrupted_turn_count` has always meant two different things -- nothing
+  # was in flight, or the caller could not name the turn that is -- and only the
+  # first is a completed cleanup (icoretech/codex-pooler-findings#179). These
+  # are fixed internal tokens, never row content.
+  @authority_selected :selected
+  @authority_session_idle :session_idle
+  @authority_no_selector :no_selector
+  @authority_unresolved :unresolved
+  @authority_no_session :no_session
+
   @spec owner_finalization_pending?(OwnerCleanup.t()) :: boolean()
   def owner_finalization_pending?(%OwnerCleanup{} = witness) do
     Repo.exists?(
@@ -387,21 +398,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   def interrupt_codex_turn(%CodexSession{id: id}, opts), do: interrupt_codex_turn(id, opts)
 
   def interrupt_codex_turn(session_id, %RequestOptions{} = opts) when is_binary(session_id) do
-    case request_id(opts) do
-      nil ->
-        {:ok, %{interrupted_turn_count: 0}}
-
-      request_id ->
-        interrupt_session_turn(
-          session_id,
-          {:request_id, request_id},
-          opts,
-          interrupt_reason(opts)
-        )
-    end
+    interrupt_session_turn(session_id, turn_selector(opts), opts, interrupt_reason(opts))
   end
 
-  def interrupt_codex_turn(_session_id, _opts), do: {:ok, %{interrupted_turn_count: 0}}
+  def interrupt_codex_turn(_session_id, _opts),
+    do: {:ok, %{interrupted_turn_count: 0, turn_authority: @authority_no_session}}
+
+  defp turn_selector(%RequestOptions{} = opts) do
+    case request_id(opts) do
+      nil -> :none
+      request_id -> {:request_id, request_id}
+    end
+  end
 
   @spec interrupt_detached_codex_turn(session_ref(), opts()) ::
           {:ok, term()} | {:error, term()}
@@ -414,7 +422,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   end
 
   def interrupt_detached_codex_turn(_session_id, _opts),
-    do: {:ok, %{interrupted_turn_count: 0}}
+    do: {:ok, %{interrupted_turn_count: 0, turn_authority: @authority_no_session}}
 
   @spec recover_owner_lifecycle_leftovers(session_ref(), atom() | String.t(), opts()) ::
           {:ok, term()} | {:error, term()}
@@ -542,7 +550,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           now: now,
           next_status: @session_interrupted,
           lease_expires_at: DateTime.add(now, reconnect_window_seconds(opts), :second),
-          caller_owned_transaction?: caller_owned_transaction?
+          caller_owned_transaction?: caller_owned_transaction?,
+          turn_authority: @authority_selected
         })
       else
         _missing_or_stale -> Repo.rollback(:stale_owner_cleanup)
@@ -706,17 +715,76 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
     Repo.transaction(fn ->
       session = codex_session_for_update(session_id)
-      turn = turn_for_selector(session_id, turn_selector)
-      interrupt_selected_session_turn(session, Map.put(interruption_context, :turn, turn))
+
+      {turn, authority} = resolve_interrupt_turn(session, turn_selector, reason)
+
+      interrupt_selected_session_turn(
+        session,
+        Map.merge(interruption_context, %{turn: turn, turn_authority: authority})
+      )
     end)
     |> finalize_transaction(caller_owned_transaction?)
   end
 
-  defp interrupt_selected_session_turn(nil, _interruption_context),
-    do: interruption_result(0, [])
+  # The exact selector is never widened: `turn_for_selector/2` still matches one
+  # request correlation id and nothing else, because a selector that accepts
+  # more identifier shapes lets a stale cleanup close a turn that is not its
+  # own. What changes here is what happens when it names nothing. The session
+  # row is already locked, so the session's own in-progress turns are resolved
+  # under that lock, and the result says which of the two zeroes this is: an
+  # idle session, or a turn that exists and the caller could not name
+  # (icoretech/codex-pooler-findings#179).
+  #
+  # An unnamed in-progress turn is refused, never seized. The same rule already
+  # governs `release_owner_cleanup_lease/3` through `other_active_turn?/2`: a
+  # cleanup that cannot prove the in-progress turn is its own has no way to tell
+  # an orphan apart from a turn another live connection is still serving, and
+  # force-failing the second one is the harm the provenance fences exist to
+  # prevent.
+  defp resolve_interrupt_turn(nil, _selector, _reason), do: {nil, @authority_no_session}
 
-  defp interrupt_selected_session_turn(_session, %{turn: nil}),
-    do: interruption_result(0, [])
+  defp resolve_interrupt_turn(%CodexSession{} = session, selector, reason) do
+    case turn_for_selector(session.id, selector) do
+      %CodexTurn{} = turn -> {turn, @authority_selected}
+      nil -> resolve_unnamed_turn(session, selector, reason)
+    end
+  end
+
+  defp resolve_unnamed_turn(session, selector, reason) do
+    case count_in_progress_turns(session.id) do
+      0 ->
+        {nil, if(selector == :none, do: @authority_no_selector, else: @authority_session_idle)}
+
+      active_turn_count ->
+        log_unresolved_turn_selector(session.id, selector, reason, active_turn_count)
+        {nil, @authority_unresolved}
+    end
+  end
+
+  # The miss that recorded nothing durable anywhere, which is why it stayed
+  # invisible. Every value here is a fixed internal token, a trusted internal
+  # correlator, or a bounded count, so the line is sanitized cleartext.
+  defp log_unresolved_turn_selector(session_id, selector, reason, active_turn_count) do
+    Logger.info(
+      "websocket interrupt selector resolved no turn " <>
+        "codex_session_id=#{safe_log_value(session_id)} " <>
+        "interrupt_reason=#{safe_log_value(reason)} " <>
+        "turn_selector=#{selector_kind(selector)} " <>
+        "active_turn_count=#{active_turn_count} " <>
+        "turn_authority=#{@authority_unresolved}"
+    )
+
+    :ok
+  end
+
+  defp selector_kind(:none), do: "absent"
+  defp selector_kind({:request_id, _request_id}), do: "request_id"
+
+  defp interrupt_selected_session_turn(nil, _interruption_context),
+    do: interruption_result(0, [], @authority_no_session)
+
+  defp interrupt_selected_session_turn(_session, %{turn: nil, turn_authority: authority}),
+    do: interruption_result(0, [], authority)
 
   defp interrupt_selected_session_turn(%CodexSession{} = session, interruption_context) do
     %{
@@ -726,12 +794,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       now: now,
       next_status: next_status,
       lease_expires_at: lease_expires_at,
-      caller_owned_transaction?: caller_owned_transaction?
+      caller_owned_transaction?: caller_owned_transaction?,
+      turn_authority: authority
     } = interruption_context
 
     case preserve_succeeded_turn(turn, now) do
       :preserved ->
-        interruption_result(0, [])
+        interruption_result(0, [], authority)
 
       :continue ->
         {interrupted_count, interrupted_outcomes} =
@@ -748,7 +817,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         })
         |> Repo.update!()
 
-        interruption_result(interrupted_count, interrupted_outcomes)
+        interruption_result(interrupted_count, interrupted_outcomes, authority)
     end
   end
 
@@ -823,17 +892,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         # written on weaker evidence admits a resend whose predecessor may
         # still hold reserved budget.
         #
-        # It was unreachable for two independent reasons, neither structural,
-        # so do not read the removal as proof that this branch cannot be
-        # entered -- it can, and a test drives it. The one caller that comes
-        # close, `cancel_direct_response_task/2`, runs only in the non-owner
-        # branch, so `Adapter.response_options/3` builds its options with
+        # It was unreachable for reasons that are not structural, so do not
+        # read the removal as proof that this branch cannot be entered -- it
+        # can, and tests drive it through `interrupt_codex_turn/2` with a
+        # turn's own correlation id. The caller that looked closest,
+        # `cancel_direct_response_task/2`, runs only in the non-owner branch,
+        # so `Adapter.response_options/3` builds its options with
         # `websocket_response_options/4` and no owner binding exists to gate
-        # on; and it selects the turn by the socket's connection-level request
-        # id while a native turn's `correlation_id` is its request claim key,
-        # so `turn_for_selector/2` matches nothing and this branch is never
-        # entered at all (icoretech/codex-pooler-findings#179). Fixing that
-        # selector makes this branch live again.
+        # on. It also never reaches any selector: its `nil` branch is taken
+        # only when the socket has no `%DirectCleanup{}` context for the task,
+        # and the context is written exactly when `codex_session` is present,
+        # so that branch always ran with no session at all. It used to pass the
+        # socket's connection-level request id anyway -- which a native turn's
+        # claim-key `correlation_id` never equals -- and now passes the
+        # receipt's exact request id or records that it holds no turn identity
+        # (icoretech/codex-pooler-findings#179). Neither shape revives this
+        # branch from that caller.
         release_unattempted_request!(
           request,
           opts,
@@ -966,6 +1040,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     )
   end
 
+  defp turn_for_selector(_session_id, :none), do: nil
+
   defp turn_for_selector(session_id, {:request_id, request_id}) do
     Repo.one(
       from turn in CodexTurn,
@@ -975,6 +1051,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         order_by: [desc: turn.started_at],
         limit: 1,
         lock: "FOR UPDATE"
+    )
+  end
+
+  defp count_in_progress_turns(session_id) do
+    Repo.aggregate(
+      from(turn in CodexTurn,
+        where: turn.codex_session_id == ^session_id and turn.status == ^@turn_in_progress
+      ),
+      :count
     )
   end
 
@@ -1102,9 +1187,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-  defp interruption_result(interrupted_turn_count, interrupted_outcomes) do
+  defp interruption_result(
+         interrupted_turn_count,
+         interrupted_outcomes,
+         turn_authority \\ @authority_selected
+       ) do
     %{
-      public_result: %{interrupted_turn_count: interrupted_turn_count},
+      public_result: %{
+        interrupted_turn_count: interrupted_turn_count,
+        turn_authority: turn_authority
+      },
       interrupted_outcomes: interrupted_outcomes
     }
   end

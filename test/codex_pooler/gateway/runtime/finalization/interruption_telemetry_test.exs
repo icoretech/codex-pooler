@@ -28,7 +28,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
       capture_outcomes(fn ->
         result = run_unboxed(fn -> interrupt_turn(fixture) end)
 
-        assert result == {:ok, %{interrupted_turn_count: 1}}
+        assert result == {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
 
         assert_receive {:stream_outcome,
                         %{
@@ -45,7 +45,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
                }
 
         assert run_unboxed(fn -> interrupt_turn(fixture) end) ==
-                 {:ok, %{interrupted_turn_count: 0}}
+                 {:ok, %{interrupted_turn_count: 0, turn_authority: :selected}}
 
         refute_received {:stream_outcome, _metadata}
       end)
@@ -60,7 +60,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     try do
       capture_outcomes(fn ->
         assert run_unboxed(fn -> interrupt_turn(fixture) end) ==
-                 {:ok, %{interrupted_turn_count: 1}}
+                 {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
 
         assert_receive {:stream_outcome,
                         %{
@@ -101,8 +101,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
 
           expected_interruption_result =
             case ordering do
-              :interruption_first -> {:ok, %{interrupted_turn_count: 1}}
-              :transport_finalizer_first -> {:ok, %{interrupted_turn_count: 0}}
+              :interruption_first ->
+                {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
+
+              :transport_finalizer_first ->
+                {:ok, %{interrupted_turn_count: 0, turn_authority: :selected}}
             end
 
           assert Enum.find(results, &match?({:ok, %{interrupted_turn_count: _}}, &1)) ==
@@ -164,7 +167,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
           result =
             run_unboxed(fn ->
               Repo.transaction(fn ->
-                assert interrupt_turn(fixture) == {:ok, %{interrupted_turn_count: 1}}
+                assert interrupt_turn(fixture) ==
+                         {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
 
                 case outer_result do
                   :commit -> :committed

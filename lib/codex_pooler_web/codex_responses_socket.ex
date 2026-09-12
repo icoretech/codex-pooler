@@ -4146,14 +4146,45 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         end
 
       nil ->
-        opts =
-          state
-          |> response_task_opts(task_pid)
-          |> RequestOptions.put_runtime_context(interrupt_reason: "owner_drained")
-
-        Websocket.interrupt_codex_turn(Map.get(state, :codex_session), opts)
+        cancel_direct_response_receipt(state, task_pid, "owner_drained")
     end
   end
+
+  # With no `%DirectCleanup{}` context this socket bound no request for the
+  # task, so the receipt is the only exact request id it could still hold. What
+  # it must not fall back to is its own connection-level request id: a native
+  # websocket request's `correlation_id` is its claim key, never the connection
+  # id, so that selector named no turn and the call returned
+  # `interrupted_turn_count: 0` -- indistinguishable from an idle socket, and
+  # recorded nowhere (icoretech/codex-pooler-findings#179).
+  defp cancel_direct_response_receipt(state, task_pid, reason) do
+    case Map.get(Map.get(state, :direct_cleanup_receipts, %{}), task_pid) do
+      nil ->
+        log_unidentified_direct_cleanup(state, reason)
+
+      receipt ->
+        receipt
+        |> DirectCleanup.interrupt(reason)
+        |> log_interrupt_failure(state)
+    end
+  end
+
+  defp log_unidentified_direct_cleanup(state, reason) do
+    Logger.info(
+      "websocket direct cleanup has no turn identity " <>
+        "codex_session_id=#{codex_session_id(state)} " <>
+        "interrupt_reason=#{interrupt_reason_token(reason)} " <>
+        "turn_authority=no_receipt"
+    )
+
+    :ok
+  end
+
+  defp interrupt_reason_token(reason)
+       when reason in ["owner_drained", "client_disconnected"],
+       do: reason
+
+  defp interrupt_reason_token(_reason), do: "unknown"
 
   defp owner_drained_response_task_exit?(:exit, :normal, state),
     do: owner_forwarded_socket?(state)
