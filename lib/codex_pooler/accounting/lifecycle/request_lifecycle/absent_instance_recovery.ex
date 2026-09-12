@@ -7,6 +7,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   alias CodexPooler.Accounting.RequestLifecycle
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
   alias CodexPooler.Platform.InstancePresence
+  alias CodexPooler.Platform.InstancePresence.Identity
   alias CodexPooler.Repo
 
   @open_request_statuses ~w(accepted in_progress)
@@ -29,13 +30,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   a drain that exhausted its budget. What every one of those has in common is
   that the owning instance stops publishing presence.
 
+  Ownership is the node name *and* the VM incarnation that dispatched the
+  attempt. The node name on its own derives from the pod IP, so a container
+  that restarts in place comes back under it and refreshes the very row that
+  would otherwise have proved its predecessor gone; the incarnation is what
+  keeps the two VMs apart.
+
   The pass settles through the ordinary interrupted path the drain uses,
   releasing the reservation and interrupting the turn, but with its own error
   code so triage can separate a recovered orphan from a drained stream. It
   records no upstream health: an instance disappearing says nothing about the
   provider. The six-hour stale-reservation sweep remains the backstop for
-  attempts this pass cannot reach, including attempts with no recorded owner
-  and owners that never published presence at all.
+  attempts this pass cannot reach, including attempts with no recorded owner,
+  attempts written before incarnations existed, and owners that never published
+  presence at all.
   """
   @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
           {:ok, summary()} | {:error, term()}
@@ -50,36 +58,57 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
 
   # An attempt qualifies only when its request still holds a recorded
   # reservation with no release, no replay entitlement owns the lifecycle, the
-  # attempt itself is older than the liveness window, and the owning instance
+  # attempt itself is older than the liveness window, and the owning incarnation
   # has a presence row that stopped being refreshed. A live runtime turn with a
   # current owner lease is excluded as well, so a session that moved to another
   # replica keeps its work.
+  #
+  # The join is on the incarnation, not the node name: an attempt with no
+  # recorded boot id — every attempt written before incarnations existed — names
+  # no incarnation, matches no presence row, and stays with the six-hour sweep.
   defp absent_instance_attempts(now, cutoff, limit) do
-    Repo.all(
-      from attempt in Attempt,
-        join: request in Request,
-        on: request.id == attempt.request_id,
-        join: presence in InstancePresence.Instance,
-        on: presence.instance_id == attempt.owner_instance_id,
-        join: reservation in LedgerEntry,
-        on:
-          reservation.request_id == request.id and reservation.entry_kind == "reservation" and
-            reservation.amount_status == "recorded",
-        left_join: release in LedgerEntry,
-        on: release.request_id == request.id and release.entry_kind == "release",
-        left_join: replay in RequestReplayEntitlement,
-        on: replay.request_id == request.id,
-        where:
-          request.status in ^@open_request_statuses and
-            attempt.status in ^@open_attempt_statuses and attempt.started_at <= ^cutoff and
-            presence.last_seen_at <= ^cutoff and is_nil(release.id) and is_nil(replay.id),
-        order_by: [asc: attempt.started_at, asc: attempt.id],
-        limit: ^limit,
-        select: {request, attempt}
-    )
+    cutoff
+    |> open_attempts_of_absent_incarnations(limit)
+    |> still_holding_their_reservation()
+    |> Repo.all()
     |> Enum.reject(fn {request, _attempt} ->
       RuntimeCleanup.active_runtime_request?(request, now)
     end)
+  end
+
+  # The ownership half: an open attempt older than the liveness window whose
+  # incarnation has a presence row that stopped being refreshed.
+  defp open_attempts_of_absent_incarnations(cutoff, limit) do
+    from attempt in Attempt,
+      join: request in Request,
+      on: request.id == attempt.request_id,
+      join: presence in InstancePresence.Instance,
+      on:
+        presence.node_name == attempt.owner_instance_id and
+          presence.boot_id == attempt.owner_instance_boot_id,
+      where:
+        request.status in ^@open_request_statuses and
+          attempt.status in ^@open_attempt_statuses and
+          not is_nil(attempt.owner_instance_boot_id) and attempt.started_at <= ^cutoff and
+          presence.last_seen_at <= ^cutoff,
+      order_by: [asc: attempt.started_at, asc: attempt.id],
+      limit: ^limit,
+      select: {request, attempt}
+  end
+
+  # The settlement half: the reservation is still recorded, nothing released
+  # it, and no replay entitlement owns the lifecycle.
+  defp still_holding_their_reservation(query) do
+    from [_attempt, request] in query,
+      join: reservation in LedgerEntry,
+      on:
+        reservation.request_id == request.id and reservation.entry_kind == "reservation" and
+          reservation.amount_status == "recorded",
+      left_join: release in LedgerEntry,
+      on: release.request_id == request.id and release.entry_kind == "release",
+      left_join: replay in RequestReplayEntitlement,
+      on: replay.request_id == request.id,
+      where: is_nil(release.id) and is_nil(replay.id)
   end
 
   defp recover({request, attempt}, {:ok, summary}, now, opts) do
@@ -94,7 +123,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   # before settling: an instance that started reporting again between the scan
   # and this row is serving, and its stream must keep its own outcome.
   defp settle(%Request{} = request, %Attempt{} = attempt, now, opts) do
-    if InstancePresence.absent?(attempt.owner_instance_id, now, opts) do
+    owner = Identity.owner(attempt.owner_instance_id, attempt.owner_instance_boot_id)
+
+    if InstancePresence.absent?(owner, now, opts) do
       finalize(request, attempt, now)
     else
       {:ok, :noop}

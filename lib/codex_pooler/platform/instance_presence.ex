@@ -2,19 +2,29 @@ defmodule CodexPooler.Platform.InstancePresence do
   @moduledoc """
   Shared-Postgres presence for the running application instances.
 
-  Every instance publishes one row keyed by its node identity and refreshes
+  Every instance publishes one row keyed by its identity and refreshes
   `last_seen_at` on an interval (`CodexPooler.Platform.InstanceHeartbeat`).
   Recovery paths that must decide whether work owned by another instance can
   still be finishing read this table instead of node-local process state: a
   killed pod, a crashed VM, and a drain that ran out of budget all stop
   refreshing, while node-local registries only ever see the current node.
 
+  Identity is the node name *and* the VM incarnation that minted it
+  (`CodexPooler.Platform.InstancePresence.Identity`). The node name alone
+  derives from the pod IP, so a container that restarts in place reuses it and
+  republishes against its predecessor's row; that row then never goes stale and
+  the orphans the previous VM left behind can never be recovered. One row per
+  incarnation means each VM's row ages on its own schedule, including the two
+  incarnations of one in-place restart.
+
   Absence is deliberately one-directional. An instance counts as absent only
   when its row exists *and* has not been refreshed inside the liveness window;
   a missing row means "unknown", never "gone", so an instance that never
   published (an older release, a failed first write) keeps its work and falls
-  back to the six-hour stale-reservation sweep. Presence is therefore safe to
-  miss and never safe to invent.
+  back to the six-hour stale-reservation sweep. A successor publishing under
+  the same node name is never taken as proof that its predecessor ended,
+  because node names are unique per *running* VM only when distribution names
+  them so. Presence is therefore safe to miss and never safe to invent.
 
   The liveness window is eight heartbeat intervals. It has to outlast a
   scheduler stall, a brief database outage, and the full rollout drain budget,
@@ -25,7 +35,7 @@ defmodule CodexPooler.Platform.InstancePresence do
 
   import Ecto.Query
 
-  alias CodexPooler.Platform.InstancePresence.Instance
+  alias CodexPooler.Platform.InstancePresence.{Identity, Instance}
   alias CodexPooler.Repo
 
   @heartbeat_interval_ms 15_000
@@ -42,23 +52,21 @@ defmodule CodexPooler.Platform.InstancePresence do
 
   @doc """
   Identity of the instance this process runs on.
-
-  The node name is already the durable owner identity for websocket sessions
-  and owner leases, so attempts record the same value and the two ownership
-  stories stay comparable.
   """
-  @spec local_instance_id() :: String.t()
-  def local_instance_id, do: Atom.to_string(node())
+  @spec local_identity() :: Identity.t()
+  def local_identity, do: Identity.local()
 
-  @spec record_heartbeat(String.t(), DateTime.t()) :: {:ok, Instance.t()} | {:error, term()}
-  def record_heartbeat(instance_id \\ local_instance_id(), now \\ now())
+  @spec record_heartbeat(Identity.t(), DateTime.t()) :: {:ok, Instance.t()} | {:error, term()}
+  def record_heartbeat(identity \\ local_identity(), now \\ now())
 
-  def record_heartbeat(instance_id, %DateTime{} = now) when is_binary(instance_id) do
+  def record_heartbeat(%Identity{} = identity, %DateTime{} = now) do
     now = DateTime.truncate(now, :microsecond)
 
     Repo.insert(
       %Instance{
-        instance_id: instance_id,
+        instance_id: identity.instance_id,
+        node_name: identity.node_name,
+        boot_id: identity.boot_id,
         started_at: now,
         last_seen_at: now,
         updated_at: now
@@ -77,24 +85,28 @@ defmodule CodexPooler.Platform.InstancePresence do
   end
 
   @doc """
-  Whether `instance_id` has a presence row that stopped being refreshed.
+  Whether `identity` has a presence row that stopped being refreshed.
 
-  Unknown instances and instances still inside the liveness window answer
-  `false`: only a row that exists and is stale proves the owner is gone.
+  Unknown incarnations and incarnations still inside the liveness window answer
+  `false`: only a row that exists and is stale proves that VM is gone. An owner
+  that names no incarnation — `nil`, or an attempt written before incarnations
+  existed — answers `false` as well.
   """
-  @spec absent?(String.t() | nil, DateTime.t(), keyword()) :: boolean()
-  def absent?(instance_id, now, opts \\ [])
+  @spec absent?(Identity.t() | nil, DateTime.t(), keyword()) :: boolean()
+  def absent?(identity, now, opts \\ [])
 
-  def absent?(instance_id, %DateTime{} = now, opts) when is_binary(instance_id) do
+  def absent?(%Identity{node_name: node_name, boot_id: boot_id}, %DateTime{} = now, opts) do
     cutoff = absent_cutoff(now, opts)
 
     Repo.exists?(
       from instance in Instance,
-        where: instance.instance_id == ^instance_id and instance.last_seen_at <= ^cutoff
+        where:
+          instance.node_name == ^node_name and instance.boot_id == ^boot_id and
+            instance.last_seen_at <= ^cutoff
     )
   end
 
-  def absent?(_instance_id, %DateTime{}, _opts), do: false
+  def absent?(_identity, %DateTime{}, _opts), do: false
 
   @doc """
   Removes presence rows for instances that have been gone far longer than any

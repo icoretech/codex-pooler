@@ -1796,6 +1796,8 @@ defmodule CodexPooler.Accounting.RequestReplay do
         is_nil(turn.completed_at)
 
   defp insert_replay_attempt!(request, eligible_attempt, _provisional_digest, now) do
+    owner = InstancePresence.local_identity()
+
     %Attempt{
       request_id: request.id,
       attempt_number: eligible_attempt.attempt_number + 1,
@@ -1805,7 +1807,8 @@ defmodule CodexPooler.Accounting.RequestReplay do
       model_id: eligible_attempt.model_id || request.model_id,
       upstream_model_id: eligible_attempt.upstream_model_id,
       transport: eligible_attempt.transport,
-      owner_instance_id: InstancePresence.local_instance_id(),
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       status: "in_progress",
       started_at: now,
       retryable: false,

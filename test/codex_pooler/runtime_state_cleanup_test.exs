@@ -21,6 +21,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
 
   alias CodexPooler.Jobs
   alias CodexPooler.Platform.InstancePresence
+  alias CodexPooler.Platform.InstancePresence.Identity
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -474,7 +475,8 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     setup = accounting_setup()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     dispatched_at = DateTime.add(now, -10, :minute)
-    absent_instance = "codex_pooler@10.0.0.#{System.unique_integer([:positive])}"
+    unique = System.unique_integer([:positive])
+    absent_instance = Identity.new("codex_pooler@10.0.0.#{unique}", "boot#{unique}")
 
     {:ok, _presence} =
       InstancePresence.record_heartbeat(absent_instance, DateTime.add(now, -10, :minute))
@@ -494,7 +496,8 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     {:ok, attempt} =
       Accounting.create_attempt(reserved.request, setup.assignment, %{
         now: dispatched_at,
-        owner_instance_id: absent_instance
+        owner_instance_id: absent_instance.node_name,
+        owner_instance_boot_id: absent_instance.boot_id
       })
 
     assert {:ok, summary} = Jobs.cleanup_runtime_state(now)

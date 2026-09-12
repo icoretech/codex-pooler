@@ -31,7 +31,7 @@ defmodule CodexPooler.Platform.InstanceHeartbeat do
   @impl GenServer
   def init(opts) do
     state = %{
-      instance_id: Keyword.get(opts, :instance_id, InstancePresence.local_instance_id()),
+      identity: Keyword.get(opts, :identity, InstancePresence.local_identity()),
       interval_ms: Keyword.get(opts, :interval_ms, InstancePresence.heartbeat_interval_ms()),
       timer_ref: nil
     }
@@ -48,12 +48,12 @@ defmodule CodexPooler.Platform.InstanceHeartbeat do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp publish(state) do
-    _result = write(state.instance_id)
+    _result = write(state.identity)
     schedule(state)
   end
 
-  defp write(instance_id) do
-    InstancePresence.record_heartbeat(instance_id)
+  defp write(identity) do
+    InstancePresence.record_heartbeat(identity)
   rescue
     _error -> log_failure()
   catch

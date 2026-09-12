@@ -4,9 +4,16 @@ defmodule CodexPooler.Application do
   use Application
 
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
+  alias CodexPooler.Platform.InstancePresence.Identity
 
   @impl true
   def start(_type, _args) do
+    # One VM, one incarnation, minted before any child can record ownership or
+    # publish presence: a container that restarts in place reuses its node name,
+    # so the incarnation is what makes the previous VM's presence row go stale
+    # on schedule instead of being refreshed by its successor.
+    _boot_id = Identity.mint_boot_id!()
+
     children = [
       CodexPoolerWeb.Telemetry,
       CodexPooler.Repo,

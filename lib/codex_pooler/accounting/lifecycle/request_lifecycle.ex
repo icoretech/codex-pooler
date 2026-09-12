@@ -1083,6 +1083,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   defp insert_attempt!(request, assignment, attrs, timestamp) do
     model = attempt_model(request, attrs)
     pricing_snapshot = attempt_pricing_snapshot(request, model, attrs)
+    {owner_instance_id, owner_instance_boot_id} = attempt_owner(attrs)
 
     attempt_number =
       Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count, :id) + 1
@@ -1097,10 +1098,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       model_id: request.model_id,
       upstream_model_id: (model && model.upstream_model_id) || request.requested_model,
       transport: request.transport,
-      # The dispatching instance owns this attempt until it settles. Recording
-      # it here, before any upstream byte arrives, is what lets another replica
-      # recover the row when this instance never comes back.
-      owner_instance_id: Map.get(attrs, :owner_instance_id, InstancePresence.local_instance_id()),
+      owner_instance_id: owner_instance_id,
+      owner_instance_boot_id: owner_instance_boot_id,
       status: Map.get(attrs, :status, "in_progress"),
       started_at: timestamp,
       retryable: Map.get(attrs, :retryable, false),
@@ -1124,6 +1123,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
       {:error, changeset} ->
         Repo.rollback(changeset)
+    end
+  end
+
+  # The dispatching instance owns this attempt until it settles. Recording it
+  # here, before any upstream byte arrives, is what lets another replica recover
+  # the row when this instance never comes back. The owner is the node name and
+  # the VM incarnation together, because a container that restarts in place
+  # comes back under the same node name; the pair is taken or overridden
+  # atomically so an attempt never mixes one instance's name with another's
+  # incarnation.
+  defp attempt_owner(attrs) do
+    case Map.fetch(attrs, :owner_instance_id) do
+      {:ok, owner_instance_id} ->
+        {owner_instance_id, Map.get(attrs, :owner_instance_boot_id)}
+
+      :error ->
+        owner = InstancePresence.local_identity()
+        {owner.node_name, owner.boot_id}
     end
   end
 
