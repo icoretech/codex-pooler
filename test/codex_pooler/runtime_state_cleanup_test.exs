@@ -368,6 +368,43 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     assert summary.expired_aliases == 1
   end
 
+  test "every cleanup step contributes to the summary" do
+    # The pass runs seven independent kinds of cleanup. They used to run in one
+    # `with` chain, which made each conditional on all the earlier ones: a fault
+    # in file expiry silently skipped ownership recovery and presence pruning,
+    # and nothing distinguished "recovery ran and found nothing" from "recovery
+    # never ran". Asserting one key per step keeps that honest — a reintroduced
+    # chain would drop the keys of everything behind the first failure.
+    now = ~U[2026-05-03 03:00:00Z]
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    session = session_fixture(pool, api_key, assignment, now)
+
+    file_record_fixture(pool, api_key, %{
+      status: "uploaded",
+      expires_at: DateTime.add(now, -1, :second)
+    })
+
+    alias_fixture(session, pool, api_key, DateTime.add(now, -1, :second))
+
+    assert {:ok, summary} = Jobs.cleanup_runtime_state(now)
+
+    for key <- [
+          :expired_files,
+          :expired_owner_leases,
+          :stale_reservations_released,
+          :absent_instance_attempts_recovered,
+          :instance_presence_rows_pruned,
+          :stale_catalog_sync_runs_failed,
+          :stale_account_reconciliations_failed
+        ] do
+      assert Map.has_key?(summary, key), "il riepilogo non riporta #{key}"
+    end
+
+    assert summary.expired_files == 1
+    assert summary.expired_aliases == 1
+  end
+
   defp file_record_fixture(pool, api_key, attrs) do
     now = ~U[2026-05-03 01:00:00Z]
     expires_at = Map.get(attrs, :expires_at, DateTime.add(now, 7200, :second))
