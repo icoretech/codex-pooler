@@ -468,10 +468,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
           health_result()
   def record_terminal_health_failure(code, headers, %SelectedCandidateContext{} = context)
       when is_binary(code) do
-    if health_neutral_terminal_failure?(code, headers) do
-      DispatchLifecycle.neutral_completion(context)
-    else
-      record_health_failure(code, code, context)
+    cond do
+      ErrorCodes.provider_overload_error_code?(code) ->
+        DispatchLifecycle.overload_completion(context)
+
+      health_neutral_terminal_failure?(code, headers) ->
+        DispatchLifecycle.neutral_completion(context)
+
+      true ->
+        record_health_failure(code, code, context)
     end
   end
 

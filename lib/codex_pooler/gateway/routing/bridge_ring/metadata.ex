@@ -142,6 +142,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing.Metadata do
   defp sanitized_reason_code("upstream_unauthorized"), do: "upstream_unauthorized"
   defp sanitized_reason_code("upstream_5xx"), do: "upstream_5xx"
   defp sanitized_reason_code("upstream_network_error"), do: "upstream_network_error"
+  defp sanitized_reason_code("provider_overloaded"), do: "provider_overloaded"
   defp sanitized_reason_code(code) when is_binary(code), do: String.slice(code, 0, 80)
   defp sanitized_reason_code(code), do: code |> to_string() |> String.slice(0, 80)
 end

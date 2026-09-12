@@ -39,6 +39,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   @default_strategy "bridge_ring"
   @default_ring_size 3
   @demotion_seconds 60
+  # A first overload is a brief skip rather than a verdict: long enough to move
+  # the next turn or two off the account, short enough that one cold prompt is
+  # the worst it can cost. A second overload while the first window is still
+  # open is the repeat this exists to prevent, so it extends. A success clears
+  # the row outright, so an account that recovers returns immediately.
+  @overload_demotion_seconds 20
+  @overload_repeat_demotion_seconds 120
+  @overload_reason_code "provider_overloaded"
   @prompt_cache_affinity_kind "prompt_cache"
   @affinity_conflict_target {:unsafe_fragment,
                              "(pool_id, api_key_id, model_identifier, affinity_kind, affinity_key_hash) WHERE status = 'active'"}
@@ -183,6 +191,41 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     end
 
     reason_code
+  end
+
+  @doc """
+  Records an ordering-only demotion for a provider overload terminal.
+
+  An overload says the provider refused the work, not that the account is
+  unhealthy, so this deliberately does less than `record_failure/5`: it writes
+  the demotion and nothing else. No affinity miss, because the session's prompt
+  cache must survive one overload; no circuit state, because the terminal stays
+  health-neutral by contract. The penalty is ordering inside the candidate's
+  quota tier, so an overloaded account is still reachable behind the others.
+  """
+  @spec record_overload(
+          route_plan(),
+          PoolUpstreamAssignment.t(),
+          UpstreamIdentity.t(),
+          term()
+        ) :: String.t()
+  def record_overload(plan, assignment, identity, request_id \\ nil) do
+    now = now()
+
+    locked_side_effect(:overload_demotion_upsert, assignment, identity, fn ->
+      seconds = overload_demotion_seconds(plan, assignment, now)
+
+      upsert_overload_demotion!(
+        plan,
+        assignment,
+        identity,
+        request_id,
+        now,
+        seconds
+      )
+    end)
+
+    @overload_reason_code
   end
 
   # The upsert's implicit FK checks lock the assignment row before the identity
@@ -667,8 +710,75 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   end
 
   defp upsert_demotion!(plan, assignment, identity, reason_code, request_id, now) do
-    metadata = %{"source" => "gateway_failure"}
-    demoted_until = DateTime.add(now, @demotion_seconds, :second)
+    do_upsert_demotion!(
+      plan,
+      assignment,
+      identity,
+      reason_code,
+      request_id,
+      now,
+      @demotion_seconds,
+      "gateway_failure"
+    )
+  end
+
+  # Progressive rather than one flat window. The repeat signal is the demotion
+  # row itself: an active overload row whose window has not yet expired means
+  # this account refused work again while still being skipped, which is the
+  # cascade this exists to break. Anything else — no row, an expired one, or a
+  # row written by an ordinary failure — is a first overload.
+  defp overload_demotion_seconds(plan, assignment, now) do
+    if active_overload_demotion?(plan, assignment, now) do
+      @overload_repeat_demotion_seconds
+    else
+      @overload_demotion_seconds
+    end
+  end
+
+  defp active_overload_demotion?(plan, assignment, now) do
+    active_status = BridgeDemotion.active_status()
+
+    BridgeDemotion
+    |> where(
+      [demotion],
+      demotion.pool_id == ^plan_affinity_scope(plan, :pool_id) and
+        demotion.api_key_id == ^plan_affinity_scope(plan, :api_key_id) and
+        demotion.model_identifier == ^plan_affinity_scope(plan, :model_identifier) and
+        demotion.pool_upstream_assignment_id == ^assignment.id and
+        demotion.status == ^active_status and
+        demotion.reason_code == ^@overload_reason_code and
+        not is_nil(demotion.demoted_until) and demotion.demoted_until > ^now
+    )
+    |> Repo.exists?()
+  end
+
+  defp upsert_overload_demotion!(plan, assignment, identity, request_id, now, seconds) do
+    do_upsert_demotion!(
+      plan,
+      assignment,
+      identity,
+      @overload_reason_code,
+      request_id,
+      now,
+      seconds,
+      "gateway_overload"
+    )
+  end
+
+  # The conflict clause takes the later of the stored and the new expiry, so a
+  # repeat can only extend a live window, never cut one short.
+  defp do_upsert_demotion!(
+         plan,
+         assignment,
+         identity,
+         reason_code,
+         request_id,
+         now,
+         seconds,
+         source
+       ) do
+    metadata = %{"source" => source}
+    demoted_until = DateTime.add(now, seconds, :second)
 
     attrs = %{
       reason_code: reason_code,

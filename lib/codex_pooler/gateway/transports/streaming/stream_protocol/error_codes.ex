@@ -59,6 +59,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "workspace_owner_credits_depleted",
     "workspace_owner_usage_limit_reached"
   ]
+  # Provider overload specifically, kept apart from the wider health-neutral set.
+  # Those codes share one property — they say nothing about the account's health
+  # — but an overload additionally says the account just refused work, which is
+  # the only one of them worth steering the next turn away from. `slow_down` is
+  # health-neutral too and is deliberately absent: nothing in the tree shows it
+  # means provider overload rather than client pacing.
+  @provider_overload_error_codes [
+    "overloaded_error",
+    "server_is_overloaded"
+  ]
   @health_neutral_error_codes [
     "context_length_exceeded",
     "cyber_policy",
@@ -206,6 +216,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   @spec health_neutral_error_code?(String.t() | nil) :: boolean()
   def health_neutral_error_code?(code) when code in @health_neutral_error_codes, do: true
   def health_neutral_error_code?(_code), do: false
+
+  @spec provider_overload_error_code?(String.t() | nil) :: boolean()
+  def provider_overload_error_code?(code) when code in @provider_overload_error_codes, do: true
+  def provider_overload_error_code?(_code), do: false
 
   @spec codex_compaction_terminal_retryable?(String.t() | nil, String.t() | nil) :: boolean()
   def codex_compaction_terminal_retryable?("response.incomplete", _code), do: true

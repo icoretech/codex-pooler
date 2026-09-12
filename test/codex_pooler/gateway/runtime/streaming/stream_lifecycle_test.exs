@@ -2518,7 +2518,19 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
         assert attempt.response_metadata["upstream_error_param"] == "reasoning.summary"
       end
 
-      assert Repo.all(from(d in BridgeDemotion)) == []
+      # Overload terminals are the one health-neutral family that now steers the
+      # next turn. The circuit is still untouched — an overload says the provider
+      # refused the work, not that the account is unhealthy — but an
+      # ordering-only demotion keeps the next turn off the account that just
+      # refused it. Every other health-neutral code is unchanged.
+      if health_neutral_code in ["overloaded_error", "server_is_overloaded"] do
+        assert [%BridgeDemotion{} = demotion] = Repo.all(from(d in BridgeDemotion))
+        assert demotion.reason_code == "provider_overloaded"
+        assert demotion.status == "active"
+        assert demotion.pool_upstream_assignment_id == setup.assignment.id
+      else
+        assert Repo.all(from(d in BridgeDemotion)) == []
+      end
 
       assert %RoutingCircuitState{} = updated = Repo.get!(RoutingCircuitState, circuit.id)
       assert updated.status == "half_open"

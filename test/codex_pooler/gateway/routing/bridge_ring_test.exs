@@ -1347,6 +1347,120 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
+  describe "record_overload/4" do
+    test "writes an ordering-only demotion and leaves affinity alone" do
+      setup = routing_setup(2)
+      seed = "overload-demotion-key"
+      plan = plan_for(setup, "bridge_ring", seed)
+      {assignment, identity} = hd(plan.candidates)
+
+      assert "provider_overloaded" == BridgeRing.record_overload(plan, assignment, identity)
+
+      assert [%BridgeDemotion{} = demotion] = active_demotions(setup, assignment)
+      assert demotion.reason_code == "provider_overloaded"
+      assert demotion.upstream_identity_id == identity.id
+      assert demotion.metadata == %{"source" => "gateway_overload"}
+      assert demotion.attempt_count == 1
+      assert DateTime.diff(demotion.demoted_until, demotion.created_at, :second) == 20
+
+      # The session's prompt cache has to survive one overload, so unlike an
+      # ordinary failure this records no affinity miss at all.
+      assert [] == all_affinities(setup)
+    end
+
+    test "a second overload while the window is open extends it" do
+      setup = routing_setup(2)
+      plan = plan_for(setup, "bridge_ring", "overload-repeat-key")
+      {assignment, identity} = hd(plan.candidates)
+
+      assert "provider_overloaded" == BridgeRing.record_overload(plan, assignment, identity)
+      assert "provider_overloaded" == BridgeRing.record_overload(plan, assignment, identity)
+
+      assert [%BridgeDemotion{} = demotion] = active_demotions(setup, assignment)
+      assert demotion.attempt_count == 2
+      assert DateTime.diff(demotion.demoted_until, demotion.created_at, :second) == 120
+    end
+
+    test "an ordinary failure demotion is not a repeat, and its longer window survives" do
+      setup = routing_setup(2)
+      plan = plan_for(setup, "bridge_ring", "overload-after-failure-key")
+      {assignment, identity} = hd(plan.candidates)
+
+      assert "upstream_5xx" == BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx")
+      assert "provider_overloaded" == BridgeRing.record_overload(plan, assignment, identity)
+
+      # One row: both write the same conflict target. The overload is a first
+      # one, because the open window belongs to a different reason, and the
+      # conflict clause keeps the later expiry rather than cutting it short.
+      assert [%BridgeDemotion{} = demotion] = active_demotions(setup, assignment)
+      assert demotion.reason_code == "provider_overloaded"
+      assert DateTime.diff(demotion.demoted_until, demotion.created_at, :second) == 60
+    end
+
+    test "a success clears the overload demotion" do
+      setup = routing_setup(2)
+      plan = plan_for(setup, "bridge_ring", "overload-cleared-key")
+      {assignment, identity} = hd(plan.candidates)
+
+      assert "provider_overloaded" == BridgeRing.record_overload(plan, assignment, identity)
+      assert [%BridgeDemotion{}] = active_demotions(setup, assignment)
+
+      BridgeRing.record_success(plan, assignment, identity)
+
+      assert [] == active_demotions(setup, assignment)
+      assert [%BridgeDemotion{status: "resolved"}] = all_demotions(setup, assignment)
+    end
+  end
+
+  describe "overload demotion ordering" do
+    test "an overloaded candidate sinks to the back but stays in the ring" do
+      setup = routing_setup(3)
+      plan = plan_for(setup, "bridge_ring", "overload-order-key")
+      {assignment, identity} = hd(plan.candidates)
+
+      BridgeRing.record_overload(plan, assignment, identity)
+
+      replanned = plan_for(setup, "bridge_ring", "overload-order-key")
+      ring_ids = Enum.map(replanned.candidates, fn {candidate, _identity} -> candidate.id end)
+
+      assert length(ring_ids) == 3
+      assert assignment.id in ring_ids
+      assert List.last(ring_ids) == assignment.id
+    end
+
+    test "truncation drops an overloaded candidate only when the ring is already full of others" do
+      setup = routing_setup(4)
+      plan = plan_for(setup, "bridge_ring", "overload-truncation-key", ring_size: 3)
+      {assignment, identity} = hd(plan.candidates)
+
+      BridgeRing.record_overload(plan, assignment, identity)
+
+      replanned = plan_for(setup, "bridge_ring", "overload-truncation-key", ring_size: 3)
+      ring_ids = Enum.map(replanned.candidates, fn {candidate, _identity} -> candidate.id end)
+
+      # The penalty is ordering, never exclusion of something needed: a demoted
+      # candidate leaves the window only when three others already precede it,
+      # which is exactly when it is not wanted as a fallback.
+      assert length(ring_ids) == 3
+      refute assignment.id in ring_ids
+    end
+
+    test "when every candidate is overloaded the ring is unchanged" do
+      setup = routing_setup(3)
+      plan = plan_for(setup, "bridge_ring", "overload-all-key")
+      before_ids = Enum.map(plan.candidates, fn {candidate, _identity} -> candidate.id end)
+
+      Enum.each(plan.candidates, fn {assignment, identity} ->
+        BridgeRing.record_overload(plan, assignment, identity)
+      end)
+
+      replanned = plan_for(setup, "bridge_ring", "overload-all-key")
+      after_ids = Enum.map(replanned.candidates, fn {candidate, _identity} -> candidate.id end)
+
+      assert after_ids == before_ids
+    end
+  end
+
   describe "record_failure/5 concurrency" do
     test "concurrent first failures for the same assignment leave one active demotion" do
       setup = routing_setup(2)

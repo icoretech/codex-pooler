@@ -49,6 +49,30 @@ defmodule CodexPooler.Gateway.Routing.RouteLifecycle do
     end
   end
 
+  @doc """
+  Neutral completion that also steers the next turn off an overloaded account.
+
+  Same circuit outcome as `selection_neutral_completion/3` — an overload says
+  nothing about the account's health — plus an ordering-only demotion, so the
+  account that just refused work is not the first one the next turn tries.
+  """
+  @spec selection_overload_completion(
+          map(),
+          CodexPooler.Catalog.Model.t(),
+          RoutingSelection.t(),
+          term()
+        ) :: success_result()
+  def selection_overload_completion(auth, model, %RoutingSelection{} = selection, request_id) do
+    BridgeRing.record_overload(
+      selection.route_plan,
+      selection.assignment,
+      selection.identity,
+      request_id
+    )
+
+    selection_neutral_completion(auth, model, selection)
+  end
+
   @spec selection_neutral_completion(map(), CodexPooler.Catalog.Model.t(), RoutingSelection.t()) ::
           success_result()
   def selection_neutral_completion(auth, model, %RoutingSelection{} = selection) do

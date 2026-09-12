@@ -90,6 +90,26 @@ defmodule CodexPooler.Gateway.Routing.RouteLifecycleTest do
     assert Repo.one!(BridgeDemotion).status == "active"
   end
 
+  test "overload completion demotes for ordering and leaves the circuit alone", context do
+    %{auth: auth, model: model, selection: selection} = context
+
+    assert :ok = RouteLifecycle.selection_overload_completion(auth, model, selection, nil)
+
+    demotion = Repo.one!(BridgeDemotion)
+    assert demotion.status == "active"
+    assert demotion.reason_code == "provider_overloaded"
+    assert demotion.metadata == %{"source" => "gateway_overload"}
+    assert demotion.pool_upstream_assignment_id == selection.assignment.id
+
+    # An overload says the provider refused the work, not that the account is
+    # unhealthy, so the terminal stays health-neutral and writes no circuit row.
+    assert Repo.all(RoutingCircuitState) == []
+
+    # And the account comes back as soon as it works, without waiting out the window.
+    assert :ok = RouteLifecycle.selection_success(auth, model, selection)
+    assert Repo.reload!(demotion).status == "resolved"
+  end
+
   test "neutral completion without a circuit does not create one", context do
     assert :ok =
              RouteLifecycle.selection_neutral_completion(
