@@ -113,8 +113,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         %{public_openai_responses: stream_state} = state,
         reason
       ) do
-    if (PublicResponses.visible_seen?(stream_state) or bridge_committed?(state)) and
-         is_nil(PublicResponses.terminal_kind(stream_state)) do
+    if emit_public_openai_responses_synthetic_terminal?(state, stream_state, reason) do
       {sequence_number, stream_state} =
         PublicResponses.track_synthetic_terminal_failure(stream_state)
 
@@ -144,6 +143,60 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   def synthetic_terminal_failure(state, _reason), do: {nil, state}
+
+  # The ordinary gate asks whether the client already holds bytes this terminal
+  # would have to be consistent with: after visible output, or on a committed
+  # bridge, an interruption owes the client an explicit failure. Before any
+  # byte it deliberately stays silent, because an upstream that produced
+  # nothing may still be retried at a higher layer and a fabricated terminal
+  # would foreclose that.
+  #
+  # A drain is not that case. It is our own lifecycle event, the relay cancels
+  # upstream and finalizes once with no retry, and the response is already
+  # committed as `200 text/event-stream` by `send_chunked/2` before the
+  # deferred closure runs. Staying silent therefore hands the client a
+  # zero-byte body that is byte-identical to a successful empty response;
+  # findings 159 measured six such turns. Emit for a drain regardless of
+  # visibility.
+  #
+  # The client-visible code stays `server_error`, the same frame the
+  # post-visible drain and an ordinary interruption already send:
+  #   * It is truthful. The turn failed on our side, not on the caller's input,
+  #     and not because the account ran out of anything.
+  #   * It is the only honest *retryable* signal available in the public
+  #     OpenAI vocabulary, and retryability is the property the caller needs
+  #     here: we deliberately do not retry a drained turn ourselves, and a
+  #     pre-visible drain is the safest possible retry in the system, because
+  #     zero delivered bytes means a client retry cannot duplicate output. The
+  #     post-visible drain already uses this code in the strictly weaker case.
+  #   * A drain-specific code (`owner_drained`) would be worse on both counts:
+  #     it is not in any SDK's vocabulary, so clients would classify it as an
+  #     unknown hard failure rather than retry, and it would leak our own
+  #     rollout vocabulary onto the public wire. Drain provenance stays where
+  #     it belongs, in the request row's `owner_drained` / 499 and the attempt
+  #     metadata.
+  #
+  # This is the one place the emission gate is deliberately wider than
+  # `terminal_missing_interruption_reason/2`'s tagging gate. Tagging exists to
+  # turn a missing terminal into `{:upstream_stream_interrupted, reason}`, and
+  # for a drain that changes nothing: `Finalization.Streaming.error_code/1`
+  # maps the tagged and untagged drain to the same `owner_drained`, the same
+  # 499, and the same health-neutral completion. Widening the tagging gate as
+  # well would only make a pre-visible drain claim the upstream interrupted it.
+  defp emit_public_openai_responses_synthetic_terminal?(state, stream_state, reason) do
+    (owner_drain_reason?(reason) or PublicResponses.visible_seen?(stream_state) or
+       bridge_committed?(state)) and is_nil(PublicResponses.terminal_kind(stream_state))
+  end
+
+  defp owner_drain_reason?(:owner_drained), do: true
+
+  defp owner_drain_reason?({:upstream_stream_interrupted, reason}),
+    do: owner_drain_reason?(reason)
+
+  defp owner_drain_reason?({:upstream_websocket_bridge, reason}),
+    do: owner_drain_reason?(reason)
+
+  defp owner_drain_reason?(_reason), do: false
 
   @spec terminal_missing_interruption_reason(state(), term()) :: term()
   def terminal_missing_interruption_reason(_state, {:upstream_idle_timeout, _reason} = reason),

@@ -1335,6 +1335,88 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert summary["terminal_kind"] == "failed"
     assert summary["finish_class"] == "failed"
     assert summary["synthetic_terminal_sent"] == true
+
+    # The relay is the only witness of downstream visibility, and this stream
+    # did reach the client, so the corrected field must still read false.
+    assert attempt.response_metadata["transport_failure"]["pre_visible_output"] == false
+  end
+
+  test "a drained bridge stream keeps drain provenance and records true pre-visible output" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+
+    request_options =
+      request_options(auth, payload, setup,
+        endpoint: @public_responses_endpoint,
+        public_openai_responses_stream: true
+      )
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @public_responses_endpoint,
+               transport: "http_sse",
+               correlation_id: "bridged-owner-drain-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        endpoint: @public_responses_endpoint,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    # A bridge relay that was drained before relaying a byte. The bridge
+    # reports its own failures wrapped, and the missing-terminal path wraps
+    # that again because a bridge stream is always downstream-committed, so
+    # this is the exact reason finalization receives when the bridge error
+    # arrives ahead of the deferred-stream drain signal.
+    state = DownstreamStream.initial_state(:relay, request_options, :websocket_bridge)
+
+    assert {synthetic_terminal, state} =
+             DownstreamStream.synthetic_terminal_failure(
+               state,
+               {:upstream_websocket_bridge, :owner_drained}
+             )
+
+    assert is_binary(synthetic_terminal)
+
+    response_context = %ResponseContext{context: context, response: sse_response()}
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_failure(
+               synthetic_terminal,
+               {:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}},
+               response_context,
+               state
+             )
+
+    request = Repo.reload!(reserved.request)
+    assert request.status == "failed"
+    assert request.last_error_code == "owner_drained"
+    # The turn was cut by us, so the request row keeps the owner-side 499
+    # rather than the upstream's 200.
+    assert request.response_status_code == 499
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.network_error_code == "owner_drained"
+
+    # Nothing reached the client, and the corrected field must say so instead
+    # of the reason-derived hardcoded false.
+    assert attempt.response_metadata["transport_failure"]["pre_visible_output"] == true
+
+    # Draining is our own lifecycle event: it must not demote the upstream or
+    # open its circuit.
+    assert Repo.aggregate(from(d in BridgeDemotion), :count) == 0
+    assert Repo.aggregate(from(c in RoutingCircuitState), :count) == 0
   end
 
   test "stream partial failure prefers known observer usage over a truncated retained body" do

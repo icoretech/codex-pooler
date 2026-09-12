@@ -276,10 +276,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       )
       |> non_first_event_terminal_attempt_metadata(terminal_failure, code)
       |> TransportFailureReason.maybe_put_upstream_stream_interrupted_metadata(reason, body)
-      |> merge_websocket_transport_failure(
-        websocket_attempt_metadata.transport_failure,
-        stream_state
-      )
+      |> merge_websocket_transport_failure(websocket_attempt_metadata.transport_failure)
+      |> correct_transport_failure_visibility(stream_state)
 
     result =
       AttemptSettlement.finalize_partial_stream_failure(
@@ -389,12 +387,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp upstream_websocket_attempt_metadata(%ResponseContext{}),
     do: %{upstream_websocket_connection: nil, transport_failure: nil}
 
-  defp merge_websocket_transport_failure(metadata, transport_failure, stream_state) do
+  defp merge_websocket_transport_failure(metadata, transport_failure) do
     transport_failure =
       TransportFailureReason.sanitize_transport_failure_metadata(transport_failure)
 
     if map_size(transport_failure) > 0 do
-      transport_failure = put_actual_visibility(transport_failure, stream_state)
       inferred_failure = Map.get(metadata, "transport_failure", %{})
 
       merged_failure =
@@ -407,6 +404,24 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       metadata
     end
   end
+
+  # `pre_visible_output` answers "had the client seen anything yet", and the
+  # only witness is the relay's own stream state. The inferred interruption
+  # metadata cannot know: `maybe_put_upstream_stream_interrupted_metadata/3`
+  # writes it from the reason alone as a hardcoded `false`. Correcting it only
+  # when the upstream websocket bridge happened to retain a non-empty
+  # `transport_failure` left an ordinary HTTP SSE interruption — including
+  # every pre-visible drain, which has no retained bridge metadata at all —
+  # persisting the opposite of the truth. Apply the correction to whichever
+  # `transport_failure` map survived the merge instead.
+  defp correct_transport_failure_visibility(
+         %{"transport_failure" => %{} = transport_failure} = metadata,
+         stream_state
+       ) do
+    Map.put(metadata, "transport_failure", put_actual_visibility(transport_failure, stream_state))
+  end
+
+  defp correct_transport_failure_visibility(metadata, _stream_state), do: metadata
 
   defp put_actual_visibility(transport_failure, stream_state) do
     case DownstreamStream.public_openai_responses_stream_metadata(stream_state) do
@@ -438,6 +453,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   # is written from the missing-terminal path before this code is chosen.
   def error_code(:owner_drained), do: "owner_drained"
   def error_code({:upstream_stream_interrupted, :owner_drained}), do: "owner_drained"
+
+  # A bridged turn reports its failures wrapped in `{:upstream_websocket_bridge,
+  # reason}` (`WebsocketBridgeStream.parse_message/2`), and because a bridge
+  # stream is always downstream-committed the missing-terminal path wraps that
+  # again. Without these two clauses a drain that reached the relay as a bridge
+  # error before the deferred-stream drain signal fell through to
+  # `upstream_stream_error`, which also cost it its 499 and its `interrupted`
+  # turn status (both keyed off this code) and blamed the upstream for our own
+  # rollout. Only the drain is unwrapped: every other bridge reason keeps its
+  # existing classification.
+  def error_code({:upstream_websocket_bridge, :owner_drained}), do: "owner_drained"
+
+  def error_code({:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}}),
+    do: "owner_drained"
+
   def error_code({:upstream_stream_interrupted, _reason}), do: "upstream_stream_error"
 
   def error_code({:collected_response_invalid, _status, code}),
@@ -495,6 +525,30 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp record_stream_failure_health(
          {:upstream_stream_interrupted, :owner_drained},
+         _code,
+         nil,
+         _headers,
+         context
+       ),
+       do: DispatchLifecycle.neutral_completion(context)
+
+  # The bridged drain reaches health classification under the same two wrapped
+  # shapes `error_code/1` now unwraps. It used to land here only by way of the
+  # generic `{:upstream_stream_interrupted, _}` + `"upstream_stream_error"`
+  # clause below; now that its code is `owner_drained`, that clause no longer
+  # matches and the drain would otherwise demote the upstream and open its
+  # circuit.
+  defp record_stream_failure_health(
+         {:upstream_websocket_bridge, :owner_drained},
+         _code,
+         nil,
+         _headers,
+         context
+       ),
+       do: DispatchLifecycle.neutral_completion(context)
+
+  defp record_stream_failure_health(
+         {:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}},
          _code,
          nil,
          _headers,
@@ -644,6 +698,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp failure_response_status({:upstream_stream_interrupted, :owner_drained}, _upstream_status),
     do: 499
+
+  defp failure_response_status({:upstream_websocket_bridge, :owner_drained}, _upstream_status),
+    do: 499
+
+  defp failure_response_status(
+         {:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}},
+         _upstream_status
+       ),
+       do: 499
 
   defp failure_response_status(_reason, upstream_status), do: upstream_status
 

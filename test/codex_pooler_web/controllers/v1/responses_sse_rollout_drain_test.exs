@@ -161,6 +161,90 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
     assert open_attempt_count(setup.pool.id) == 0
 
     refute response.resp_body =~ "owner_drained"
+
+    # The post-visible drain is already correct and must stay that way: one
+    # synthetic terminal, the public `server_error` code, and a summary that
+    # says so.
+    summary = attempt.response_metadata["public_openai_responses_stream"]
+    assert summary["visible_seen"] == true
+    assert summary["synthetic_terminal_sent"] == true
+    assert error_event_codes(response.resp_body) == ["server_error"]
+  end
+
+  test "a rollout drain before any relayed byte still ends the stream with a terminal error",
+       %{conn: conn, drain_name: drain_name, stream_registry: stream_registry} do
+    release_ref = make_ref()
+
+    # provenance: observed findings issue 159 (six driven /v1/responses turns
+    # drained after the upstream SSE headers and before any relayed event, each
+    # recorded visible_seen=false, created_seen=false, terminal_class=none,
+    # synthetic_terminal_sent=false). The upstream sends SSE headers and then
+    # nothing, which is exactly the observed pre-visible window.
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream([],
+          barrier_after: 0,
+          notify: self(),
+          release_ref: release_ref,
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+    session_key = "v1-rollout-drain-pre-visible-#{System.unique_integer([:positive])}"
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        conn
+        |> auth(setup)
+        |> put_req_header("x-session-id", session_key)
+        |> post(@public_path, stream_payload(setup))
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    _stream_entry = await_registered_stream(stream_registry)
+
+    assert %{
+             result: :ok,
+             http_streams_seen: 1,
+             http_streams_completed: 1,
+             http_streams_aborted: 0,
+             http_streams_failed: 0
+           } = RolloutDrain.start_drain(drain_options(drain_name))
+
+    response = Task.await(request_task, @await_timeout_ms)
+    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+
+    # The status is already committed by `send_chunked/2` before the deferred
+    # stream runs, so the only signal left for the client is a terminal event.
+    assert response.status == 200
+
+    assert stream_event_types(response.resp_body) == ["error"]
+    assert error_event_codes(response.resp_body) == ["server_error"]
+
+    request = latest_request(setup.pool.id)
+    assert request.status == "failed"
+    assert request.response_status_code == 499
+    assert request.last_error_code == "owner_drained"
+
+    assert [attempt] = Repo.all(from attempt in Attempt, where: attempt.request_id == ^request.id)
+    assert attempt.network_error_code == "owner_drained"
+
+    summary = attempt.response_metadata["public_openai_responses_stream"]
+    assert summary["visible_seen"] == false
+    assert summary["created_seen"] == false
+    assert summary["synthetic_terminal_sent"] == true
+
+    assert %CodexTurn{status: "interrupted", error_code: "owner_drained"} =
+             Repo.get_by!(CodexTurn, request_id: request.id)
+
+    # The drain is our own lifecycle event; its vocabulary stays owner-side.
+    refute response.resp_body =~ "owner_drained"
   end
 
   test "a stream that already completed is not finalized again by a later drain", %{
@@ -268,6 +352,20 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
     |> Enum.flat_map(fn block ->
       case Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first) do
         [event] -> [event]
+        _missing -> []
+      end
+    end)
+  end
+
+  # The public error frame's own code, read back off the wire. The summary says
+  # a synthetic terminal was sent; this says which code the client actually got.
+  defp error_event_codes(body) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.filter(&(&1 =~ ~r/^event: error$/m))
+    |> Enum.flat_map(fn block ->
+      case Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
+        [data] -> [CodexPooler.JSON.decode!(data)["code"]]
         _missing -> []
       end
     end)
