@@ -559,7 +559,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       {prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
 
       input =
-        [prefix | maybe_responses_lite_instructions(instructions) ++ input]
+        (prefix ++ maybe_responses_lite_instructions(instructions) ++ input)
         |> Enum.map(&strip_responses_lite_image_details/1)
 
       Map.put(payload, "input", input)
@@ -667,14 +667,24 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
-  defp responses_lite_tools_prefix([first | rest] = input, false, _tools) do
-    if canonical_responses_lite_tools_prefix?(first),
-      do: {first, rest},
-      else: {additional_tools([]), input}
+  # Lite carries the developer tool manifest as a leading `additional_tools` input
+  # item instead of top-level `tools`. When the client sent `tools`, the prefix is
+  # exactly the projection of those tools and stays a pure function of them, so
+  # consecutive full-history turns keep a stable upstream prefix; the
+  # request-shaped `additional_tools` items a client may also send are
+  # non-executable input and are never merged into that projection. When the
+  # client sent no `tools` we must not manufacture a second manifest: a manifest
+  # the client already supplied anywhere in `input` is the manifest, and is
+  # forwarded exactly as sent.
+  defp responses_lite_tools_prefix(input, false, _tools) do
+    case Enum.split_while(input, &(not canonical_responses_lite_tools_prefix?(&1))) do
+      {[], [manifest | rest]} -> {[manifest], rest}
+      {_leading, []} -> {[additional_tools([])], input}
+      {_leading, _supplied} -> {[], input}
+    end
   end
 
-  defp responses_lite_tools_prefix([], false, _tools), do: {additional_tools([]), []}
-  defp responses_lite_tools_prefix(input, true, tools), do: {additional_tools(tools), input}
+  defp responses_lite_tools_prefix(input, true, tools), do: {[additional_tools(tools)], input}
 
   defp canonical_responses_lite_tools_prefix?(
          %{
@@ -684,9 +694,18 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
          } = item
        )
        when is_list(tools),
-       do: not Map.has_key?(item, "id")
+       do: canonical_responses_lite_tools_prefix_id?(Map.get(item, "id", :absent))
 
   defp canonical_responses_lite_tools_prefix?(_item), do: false
+
+  # `id` is optional on the item and must be a nonblank binary when present,
+  # matching what the request validator accepts.
+  defp canonical_responses_lite_tools_prefix_id?(:absent), do: true
+
+  defp canonical_responses_lite_tools_prefix_id?(id) when is_binary(id),
+    do: String.trim(id) != ""
+
+  defp canonical_responses_lite_tools_prefix_id?(_id), do: false
 
   defp additional_tools(tools),
     do: %{"type" => "additional_tools", "role" => "developer", "tools" => tools}

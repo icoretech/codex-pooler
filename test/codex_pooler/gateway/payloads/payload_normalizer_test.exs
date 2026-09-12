@@ -2804,6 +2804,227 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       refute Map.has_key?(first, "instructions")
     end
 
+    test "does not add a second Lite tools prefix on full-history compaction" do
+      # Lite carries the developer tool manifest as a leading `additional_tools`
+      # input item rather than top-level `tools`. On a full-history compaction the
+      # client resends its whole history, so a Lite-aware client already carries
+      # that manifest in `input`. Pooler must forward the client's own item and
+      # inject nothing: a second manifest misrepresents the request the client
+      # made. An `id` is optional on the item (the request validator accepts it,
+      # compatibility matrix `additional_tools_input_item.optional`), so an
+      # id-bearing manifest is just as canonical as an id-less one.
+      manifest_tools = [%{"type" => "custom", "name" => "client_manifest_fixture"}]
+
+      canonical_manifest = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => manifest_tools
+      }
+
+      id_bearing_manifest = Map.put(canonical_manifest, "id", "atl_client_manifest_fixture")
+
+      user_message = %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "full history turn"}]
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+
+      variants = [
+        {"canonical id-less manifest sent first", [canonical_manifest, user_message, trigger]},
+        {"manifest carrying an id", [id_bearing_manifest, user_message, trigger]},
+        {"manifest present but not first", [user_message, canonical_manifest, trigger]}
+      ]
+
+      # One combined assertion so a regression reports every variant's upstream
+      # manifest count at once instead of stopping at the first failing shape.
+      upstream_manifests =
+        for {name, input} <- variants do
+          source_payload = %{"model" => "gpt-5.6-terra", "stream" => true, "input" => input}
+
+          {first, second, request_options} = prepare_full_history_lite_compact(source_payload)
+
+          assert request_options.payload_context.compaction_input_mode == :full_history, name
+          assert second == first, name
+          refute Map.has_key?(first, "tools"), name
+
+          {name, Enum.filter(first["input"], &(&1["type"] == "additional_tools")), first["input"]}
+        end
+
+      client_manifests =
+        for {name, input} <- variants do
+          {name, Enum.filter(input, &(&1["type"] == "additional_tools")), input}
+        end
+
+      manifest_counts = fn entries ->
+        Enum.map(entries, fn {name, manifests, _input} -> {name, length(manifests)} end)
+      end
+
+      assert manifest_counts.(upstream_manifests) == manifest_counts.(client_manifests)
+      assert upstream_manifests == client_manifests
+    end
+
+    test "keeps the full-history Lite tools prefix a pure function of the client's tools" do
+      # The two contracts that bound the regression above. A client that sent no
+      # manifest at all still gets the intended injection, and a client that sent
+      # top-level `tools` gets exactly the projection of those tools: request-shaped
+      # `additional_tools` input items are non-executable and are never merged into
+      # the projected manifest (compatibility matrix
+      # `additional_tools_input_item.merges_into_tools`), so they cannot stand in
+      # for it. Keeping the projection a pure function of `tools` is also what lets
+      # consecutive full-history turns share a stable upstream prefix.
+      top_level_tools = [%{"type" => "custom", "name" => "top_level_fixture"}]
+
+      client_manifest = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [%{"type" => "custom", "name" => "client_manifest_fixture"}]
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+
+      {trigger_only, _second, options} =
+        prepare_full_history_lite_compact(%{
+          "model" => "gpt-5.6-terra",
+          "stream" => true,
+          "input" => [trigger]
+        })
+
+      assert options.payload_context.compaction_input_mode == :full_history
+
+      assert trigger_only["input"] == [
+               %{"type" => "additional_tools", "role" => "developer", "tools" => []},
+               trigger
+             ]
+
+      {projected, _second, _options} =
+        prepare_full_history_lite_compact(%{
+          "model" => "gpt-5.6-terra",
+          "stream" => true,
+          "tools" => top_level_tools,
+          "input" => [client_manifest, trigger]
+        })
+
+      assert projected["input"] == [
+               %{"type" => "additional_tools", "role" => "developer", "tools" => top_level_tools},
+               client_manifest,
+               trigger
+             ]
+
+      refute Map.has_key?(projected, "tools")
+    end
+
+    test "does not add a second Lite tools prefix on ordinary non-compact turns" do
+      # The same projection runs outside compaction, so a client-supplied manifest
+      # must survive an ordinary Lite turn without a second injection too.
+      canonical_manifest = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [%{"type" => "custom", "name" => "ordinary_manifest_fixture"}]
+      }
+
+      id_bearing_manifest = Map.put(canonical_manifest, "id", "atl_ordinary_manifest_fixture")
+
+      user_message = %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "ordinary turn"}]
+      }
+
+      variants = [
+        {"canonical id-less manifest sent first", [canonical_manifest, user_message]},
+        {"manifest carrying an id", [id_bearing_manifest, user_message]},
+        {"manifest present but not first", [user_message, canonical_manifest]}
+      ]
+
+      upstream_manifests =
+        for {name, input} <- variants do
+          first = prepare_lite_payload(%{"model" => "gpt-5.6-terra", "input" => input})
+          second = prepare_lite_payload(first)
+
+          assert second == first, name
+          refute Map.has_key?(first, "tools"), name
+
+          {name, Enum.filter(first["input"], &(&1["type"] == "additional_tools")), first["input"]}
+        end
+
+      client_manifests =
+        for {name, input} <- variants do
+          {name, Enum.filter(input, &(&1["type"] == "additional_tools")), input}
+        end
+
+      assert upstream_manifests == client_manifests
+
+      # A client that also sent `instructions` still gets exactly one developer
+      # message and no injected second manifest, with its own manifest in place.
+      with_instructions =
+        prepare_lite_payload(%{
+          "model" => "gpt-5.6-terra",
+          "instructions" => "ordinary instructions",
+          "input" => [user_message, canonical_manifest]
+        })
+
+      assert with_instructions["input"] == [
+               %{
+                 "type" => "message",
+                 "role" => "developer",
+                 "content" => [%{"type" => "input_text", "text" => "ordinary instructions"}]
+               },
+               user_message,
+               canonical_manifest
+             ]
+    end
+
+    @tag :encrypted_reasoning_continuity
+    test "drops non-canonical encrypted reasoning on ordinary routes but not through compaction" do
+      # `backend_codex_invalid_encrypted_reasoning?` is a fail-closed whitelist:
+      # only the canonical continuity shape (`content: null` plus a nonblank
+      # `encrypted_content`) replays upstream, and an item that omits `content`
+      # altogether is dropped rather than kept -- pinned for both transports by
+      # "strips malformed encrypted reasoning shapes from HTTP and websocket
+      # upstream JSON". The compact projection runs neither reject pass, so it
+      # forwards the client's history as sent; pin that asymmetry so a change to
+      # either side has to be deliberate.
+      canonical = %{
+        "type" => "reasoning",
+        "content" => nil,
+        "encrypted_content" => "synthetic-canonical-reasoning"
+      }
+
+      omitted_content = %{
+        "type" => "reasoning",
+        "encrypted_content" => "synthetic-omitted-content-reasoning"
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+      model = %Model{upstream_model_id: "provider-model"}
+      endpoint = "/backend-api/codex/responses"
+      payload = %{"model" => "gpt-5.5", "input" => [canonical, omitted_content]}
+      http_options = RequestOptions.build(%{}, endpoint, payload)
+
+      for request_options <- [http_options, RequestOptions.for_websocket(http_options, payload)] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        assert CodexPooler.JSON.decode!(encoded)["input"] == [canonical]
+      end
+
+      {compact, _second, _options} =
+        prepare_full_history_lite_compact(%{
+          "model" => "gpt-5.6-terra",
+          "stream" => true,
+          "input" => [canonical, omitted_content, trigger]
+        })
+
+      assert compact["input"] == [
+               %{"type" => "additional_tools", "role" => "developer", "tools" => []},
+               canonical,
+               omitted_content,
+               trigger
+             ]
+    end
+
     test "uses the pre-dispatch applied effort for compact payloads without re-deciding policy" do
       payload = %{"model" => "gpt-4.1", "input" => "hello"}
 
@@ -3701,6 +3922,38 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   end
 
   defp prepare_incremental_lite_compact(source_payload) do
+    compact_payload = CompactionTrigger.project_responses_payload(source_payload, :sse)
+
+    request_options =
+      "lite"
+      |> serving_mode_opts()
+      |> Map.merge(%{compaction_trigger_bridge?: true, compaction_result_transport: :sse})
+      |> RequestOptions.build("/backend-api/codex/responses/compact", source_payload)
+
+    model = %Model{upstream_model_id: "provider-model"}
+
+    assert {:ok, first_encoded} =
+             PayloadNormalizer.upstream_payload(
+               compact_payload,
+               model,
+               "/backend-api/codex/responses/compact",
+               request_options
+             )
+
+    first = CodexPooler.JSON.decode!(first_encoded)
+
+    assert {:ok, second_encoded} =
+             PayloadNormalizer.upstream_payload(
+               first,
+               model,
+               "/backend-api/codex/responses/compact",
+               request_options
+             )
+
+    {first, CodexPooler.JSON.decode!(second_encoded), request_options}
+  end
+
+  defp prepare_full_history_lite_compact(source_payload) do
     compact_payload = CompactionTrigger.project_responses_payload(source_payload, :sse)
 
     request_options =
