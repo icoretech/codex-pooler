@@ -7,9 +7,19 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession, CodexTurn}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    BridgeSessionAlias,
+    CodexSession,
+    CodexTurn
+  }
+
+  alias CodexPooler.Gateway.Routing.BridgeRing
+  alias CodexPooler.Gateway.Routing.RoutePlanInput
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
+  alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
@@ -721,6 +731,97 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
     end
   end
 
+  describe "lease-expiry recreation preference, end to end" do
+    # Drives the real path instead of a hand-built struct: PreDispatch attaches
+    # the session through persistence `start_codex_session/2`, which recreates
+    # it because the previous session's owner lease expired, and the preference
+    # has to survive every link from that transaction to candidate ordering.
+    # The preference is only proven by moving an assignment the ring would
+    # otherwise rank last. Asserting that the ring's own first choice comes
+    # first passes whether or not the preference reached routing at all, which
+    # is exactly how this went unnoticed in production.
+    test "the previous assignment moves to the front of ordinary ordering" do
+      context = recreation_context()
+      ordinary_ids = ordinary_candidate_order(context)
+      preferred_id = List.last(ordinary_ids)
+
+      expired = expired_assigned_session!(context, preferred_id, context.session_header)
+
+      assert {:ok, %{request_options: options, candidates: candidates}} =
+               prepare_session_turn(context, context.session_header)
+
+      replacement = options.continuity.codex_session
+
+      refute replacement.id == expired.id
+      assert is_nil(replacement.pool_upstream_assignment_id)
+      assert replacement.recreated_from_assignment_id == preferred_id
+
+      assert candidate_assignment_ids(candidates) ==
+               [preferred_id | List.delete(ordinary_ids, preferred_id)]
+    end
+
+    # Pre-dispatch ordering is not the decision: `BridgeRing.plan_route/1`
+    # re-sorts the whole shortlist afterwards. Both assignments are driven
+    # through a real recreation against one fixed ring seed, so the ring's own
+    # order is the same in both runs and exactly one of them contradicts it.
+    # A single run would pass whenever the ring already favoured the preferred
+    # assignment, which is how this went unnoticed in production.
+    test "the ring selects the previous assignment over its own ordering" do
+      context = recreation_context()
+      pin_ring_seed!(context)
+      route_plan_input = fixed_ring_seed()
+
+      outcomes =
+        Enum.map(context.assignment_ids, fn assignment_id ->
+          session_header = "window-#{System.unique_integer([:positive])}"
+          expired = expired_assigned_session!(context, assignment_id, session_header)
+
+          assert {:ok, %{request_options: options, candidates: candidates}} =
+                   prepare_session_turn(context, session_header)
+
+          replacement = options.continuity.codex_session
+
+          refute replacement.id == expired.id
+          assert replacement.recreated_from_assignment_id == assignment_id
+
+          %{
+            expected: assignment_id,
+            preferred: selected_assignment_id(context, route_plan_input, options, candidates),
+            baseline:
+              selected_assignment_id(
+                context,
+                route_plan_input,
+                without_recreation_preference(options),
+                candidates
+              )
+          }
+        end)
+
+      assert Enum.map(outcomes, & &1.preferred) == Enum.map(outcomes, & &1.expected)
+      assert Enum.any?(outcomes, &(&1.baseline != &1.expected))
+    end
+
+    test "an expired session with no assignment leaves ordinary ordering alone" do
+      context = recreation_context()
+      ordinary_ids = ordinary_candidate_order(context)
+
+      assert {:ok, %{request_options: first_options}} =
+               prepare_session_turn(context, context.session_header)
+
+      expired = first_options.continuity.codex_session
+      expire_owner_lease!(expired.id)
+
+      assert {:ok, %{request_options: options, candidates: candidates}} =
+               prepare_session_turn(context, context.session_header)
+
+      replacement = options.continuity.codex_session
+
+      refute replacement.id == expired.id
+      assert is_nil(replacement.recreated_from_assignment_id)
+      assert candidate_assignment_ids(candidates) == ordinary_ids
+    end
+  end
+
   describe "PreDispatch.prepare/5" do
     test "previous_response_id alias can recover the pinned reauth classification without a live owner lease" do
       setup = pinned_assignment_setup()
@@ -974,6 +1075,150 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       updated_at: now
     }
     |> Repo.insert!()
+  end
+
+  defp streaming_payload(model) do
+    %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("hello"),
+      "stream" => true
+    }
+  end
+
+  # The shape a sessioned native HTTP turn arrives in: a session header and its
+  # source, exactly as `GatewayControllerHelpers.request_opts/1` builds them.
+  defp http_session_request_options(auth, payload, session_header) do
+    RequestOptions.build(
+      %{
+        api_key_policy: auth.api_key,
+        session_header: session_header,
+        session_header_source: "x-codex-window-id"
+      },
+      @endpoint,
+      payload
+    )
+  end
+
+  defp recreation_context do
+    setup = active_pinned_assignment_setup()
+    api_key = active_api_key_fixture(setup.pool)
+    {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
+
+    model =
+      model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+    %{
+      auth: auth,
+      pool: setup.pool,
+      model: model,
+      assignment_ids: [setup.pinned.assignment.id, setup.other.assignment.id],
+      payload: streaming_payload(model),
+      session_header: "window-#{System.unique_integer([:positive])}"
+    }
+  end
+
+  # Sticky session affinity would seed the ring from the replacement session id,
+  # which is new on every recreation. Seeding from a fixed correlation id
+  # instead keeps the ring's own order identical across runs, so the preference
+  # is the only thing that can move the selection.
+  defp pin_ring_seed!(context) do
+    context.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(%{
+      routing_strategy: "bridge_ring",
+      bridge_ring_size: length(context.assignment_ids),
+      sticky_websocket_sessions: false,
+      sticky_http_sessions: false,
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+  end
+
+  defp fixed_ring_seed do
+    %RoutePlanInput{
+      request_id: nil,
+      correlation_id: "ring-seed-#{System.unique_integer([:positive])}"
+    }
+  end
+
+  defp selected_assignment_id(context, %RoutePlanInput{} = route_plan_input, options, candidates) do
+    BridgeRing.plan_route(%{
+      auth: context.auth,
+      model: context.model,
+      candidates: candidates,
+      route_plan_input: route_plan_input,
+      request_options: options
+    }).selected_assignment_id
+  end
+
+  defp without_recreation_preference(options) do
+    RequestOptions.put_continuity(options,
+      codex_session: %{options.continuity.codex_session | recreated_from_assignment_id: nil}
+    )
+  end
+
+  # The ring's ordering for this pool, measured on a key that has no history,
+  # so the recreation assertions compare against the real baseline instead of a
+  # hardcoded order.
+  defp ordinary_candidate_order(context) do
+    assert {:ok, %{request_options: options, candidates: candidates}} =
+             prepare_session_turn(context, "baseline-#{System.unique_integer([:positive])}")
+
+    assert is_nil(options.continuity.codex_session.recreated_from_assignment_id)
+
+    ids = candidate_assignment_ids(candidates)
+    assert length(ids) == 2
+    ids
+  end
+
+  defp prepare_session_turn(context, session_header) do
+    PreDispatch.prepare(
+      context.auth,
+      @endpoint,
+      context.payload,
+      http_session_request_options(context.auth, context.payload, session_header),
+      context.model
+    )
+  end
+
+  # A session that held `assignment_id` and whose owner lease has since expired:
+  # the state a lease-expiry recreation replaces.
+  defp expired_assigned_session!(context, assignment_id, session_header) do
+    assert {:ok, %{request_options: options}} = prepare_session_turn(context, session_header)
+
+    session = options.continuity.codex_session
+
+    bind_session_assignment!(session, assignment_id)
+    expire_owner_lease!(session.id)
+
+    session
+  end
+
+  defp bind_session_assignment!(%CodexSession{} = session, assignment_id)
+       when is_binary(assignment_id) do
+    session
+    |> Ecto.Changeset.change(%{pool_upstream_assignment_id: assignment_id})
+    |> Repo.update!()
+  end
+
+  defp expire_owner_lease!(session_id) do
+    expired_at =
+      DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:microsecond)
+
+    CodexSession
+    |> Repo.get!(session_id)
+    |> Ecto.Changeset.change(%{
+      owner_lease_expires_at: expired_at,
+      last_heartbeat_at: expired_at,
+      updated_at: expired_at
+    })
+    |> Repo.update!()
+
+    BridgeOwnerLease
+    |> where([lease], lease.codex_session_id == ^session_id)
+    |> Repo.update_all(set: [expires_at: expired_at, updated_at: expired_at])
+
+    :ok
   end
 
   defp candidate_assignment_ids(candidates) do

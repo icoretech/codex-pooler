@@ -413,13 +413,39 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
          }
        )
        when is_binary(assignment_id) do
+    prefer_assignment(candidates, assignment_id)
+  end
+
+  # A session recreated after owner-lease expiry has no durable pin yet, so the
+  # clause above cannot see it; the replacement carries the closed session's
+  # assignment in memory instead. The preference has to be applied here and not
+  # only in pre-dispatch: `strategy_order/5` re-sorts the whole shortlist, so an
+  # ordering applied before planning never survives to the selected candidate.
+  # It stays a preference — quota tier and demotion ordering still run after it,
+  # and an assignment that is gone or ineligible is simply absent from the list.
+  defp apply_codex_session_preference(
+         candidates,
+         %RequestOptions{
+           continuity: %{
+             codex_session: %CodexSession{
+               pool_upstream_assignment_id: nil,
+               recreated_from_assignment_id: assignment_id
+             }
+           }
+         }
+       )
+       when is_binary(assignment_id) do
+    prefer_assignment(candidates, assignment_id)
+  end
+
+  defp apply_codex_session_preference(candidates, %RequestOptions{}), do: candidates
+
+  defp prefer_assignment(candidates, assignment_id) do
     {matched, rest} =
       Enum.split_with(candidates, fn {assignment, _identity} -> assignment.id == assignment_id end)
 
     matched ++ rest
   end
-
-  defp apply_codex_session_preference(candidates, %RequestOptions{}), do: candidates
 
   defp apply_prompt_cache_locality(candidates, %{status: "applied", seed: seed}) do
     Enum.sort_by(candidates, fn {assignment, _identity} ->
