@@ -668,7 +668,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       interrupted_outcomes =
         in_progress_turns
-        |> Enum.map(&interrupt_turn!(session, &1, opts, reason, now, caller_owned_transaction?))
+        |> Enum.map(&interrupt_turn!(&1, opts, reason, now, caller_owned_transaction?))
         |> Enum.reject(&is_nil/1)
 
       session
@@ -735,7 +735,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       :continue ->
         {interrupted_count, interrupted_outcomes} =
-          interrupt_selected_turn(session, turn, opts, reason, now, caller_owned_transaction?)
+          interrupt_selected_turn(turn, opts, reason, now, caller_owned_transaction?)
 
         session
         |> Ecto.Changeset.change(%{
@@ -771,28 +771,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   end
 
   defp interrupt_selected_turn(
-         session,
          %CodexTurn{status: @turn_in_progress} = turn,
          opts,
          reason,
          now,
          caller_owned_transaction?
        ) do
-    marker = interrupt_turn!(session, turn, opts, reason, now, caller_owned_transaction?)
+    marker = interrupt_turn!(turn, opts, reason, now, caller_owned_transaction?)
     {1, if(marker, do: [marker], else: [])}
   end
 
-  defp interrupt_selected_turn(
-         _session,
-         _turn,
-         _opts,
-         _reason,
-         _now,
-         _caller_owned_transaction?
-       ),
-       do: {0, []}
+  defp interrupt_selected_turn(_turn, _opts, _reason, _now, _caller_owned_transaction?),
+    do: {0, []}
 
-  defp interrupt_turn!(session, %CodexTurn{} = turn, opts, reason, now, caller_owned_transaction?) do
+  defp interrupt_turn!(%CodexTurn{} = turn, opts, reason, now, caller_owned_transaction?) do
     request = request_for_update(turn.request_id)
     attempt = latest_attempt_for_update(turn.request_id)
 
@@ -815,21 +807,33 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         marker
 
       request && request.status in ["accepted", "in_progress"] ->
-        # The resend marker and the release of the reservation this drain
-        # leaves behind are written here, together, inside the transaction
-        # that already holds the session, turn, and request locks. They are
-        # never allowed to land on separate paths: the whole reason a client
-        # resend may be admitted after a drain is that no attempt row exists
-        # under this request lock, so nothing reached the provider and no
-        # double bill is possible. `ClientRetry.verified_pre_attempt_drain?`
-        # reads the marker and `released_without_settlement?` reads the
-        # release, so a marker that could outlive a missing release would
-        # admit a resend whose predecessor still holds reserved budget, and
-        # a release without the marker leaves the recovery inert. Only this
-        # single locked write makes the missing attempt row authoritative for
-        # both halves at once.
-        request = mark_verified_pre_attempt_drain(session, request, opts, reason)
-
+        # Release only. This branch is not drain-specific: it also serves
+        # `client_disconnected` and the expired-owner sweeper's
+        # `owner_unavailable`, and every one of them leaves a reservation that
+        # has to go back (icoretech/codex-pooler-findings#167).
+        #
+        # It deliberately writes no `websocket_pre_attempt_drain` marker. The
+        # only marker a client resend may act on is the one
+        # `interrupt_direct_request/2` writes from a validated
+        # `%DirectCleanup{}` receipt, where the owner relationship is proven
+        # out of band rather than read back out of the same rows being
+        # interrupted. A second producer here was removed as unreachable in
+        # production (icoretech/codex-pooler-findings#178): do not restore one
+        # without a receipt-equivalent provenance proof, because a marker
+        # written on weaker evidence admits a resend whose predecessor may
+        # still hold reserved budget.
+        #
+        # It was unreachable for two independent reasons, neither structural,
+        # so do not read the removal as proof that this branch cannot be
+        # entered -- it can, and a test drives it. The one caller that comes
+        # close, `cancel_direct_response_task/2`, runs only in the non-owner
+        # branch, so `Adapter.response_options/3` builds its options with
+        # `websocket_response_options/4` and no owner binding exists to gate
+        # on; and it selects the turn by the socket's connection-level request
+        # id while a native turn's `correlation_id` is its request claim key,
+        # so `turn_for_selector/2` matches nothing and this branch is never
+        # entered at all (icoretech/codex-pooler-findings#179). Fixing that
+        # selector makes this branch live again.
         release_unattempted_request!(
           request,
           opts,
@@ -853,94 +857,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         nil
     end
   end
-
-  # The terminating owner carries its own instance id, lease token, and
-  # downstream epoch in the interrupt options. That triple is the same
-  # out-of-band evidence a `%DirectCleanup{}` receipt carries, and supplying it
-  # from the caller rather than from the session row is what keeps the marker's
-  # provenance check from degrading into comparing the database against itself.
-  # A finalization route with no owner lease of its own (a socket that never
-  # forwarded to an owner) produces no binding and therefore no marker.
-  # Dialyzer proves the caller always holds a locked `%CodexSession{}` here, so
-  # there is no second clause: an unreachable fallback would only hide a future
-  # caller that does not.
-  #
-  # This gate refuses far more often than it admits, and every refusal used to
-  # be silent, which is how the marker's absence stayed invisible for ~1,000,000
-  # requests. It now names the clause that refused, for the same reason
-  # `interrupt_direct_request/2`'s gate does: a gate that never matches has to
-  # be distinguishable from a gate that is never reached, from the logs rather
-  # than from row shapes.
-  #
-  # Measured on this tree, no caller that can reach this branch with a
-  # pre-attempt request supplies the owner triple, so `no_owner_binding` is the
-  # clause this branch reports. The marker that a client resend actually reads
-  # is written by `interrupt_direct_request/2` instead, from a `%DirectCleanup{}`
-  # receipt, which is the path a downstream-socket drain really takes.
-  defp mark_verified_pre_attempt_drain(%CodexSession{} = session, request, opts, reason) do
-    evidence = owner_drain_evidence(opts)
-
-    case pre_attempt_drain_marker_clause(session, request, evidence, reason) do
-      :matched ->
-        mark_pre_attempt_owner_drain(request, evidence, reason)
-
-      {:not_matched, clause} ->
-        log_pre_attempt_marker_not_matched(request, reason, clause)
-        request
-    end
-  end
-
-  # `owner_binding: nil` is split out from `pre_attempt_owner_clause/3` on
-  # purpose. That clause answers `:matched` for a request that never forwarded
-  # to an owner, which is correct for the receipt gate but says nothing about
-  # the marker; the marker needs a binding no matter what, so naming its absence
-  # here is what makes the outcome readable.
-  defp pre_attempt_drain_marker_clause(_session, _request, _evidence, reason)
-       when reason != "owner_drained",
-       do: {:not_matched, "non_drain_reason"}
-
-  defp pre_attempt_drain_marker_clause(_session, _request, %{owner_binding: nil}, _reason),
-    do: {:not_matched, "no_owner_binding"}
-
-  defp pre_attempt_drain_marker_clause(session, request, evidence, _reason),
-    do: pre_attempt_owner_clause(session, request, evidence)
-
-  # An interruption for any reason other than a drain refuses here on every
-  # pre-attempt turn, which is the ordinary case, so it stays at debug. Every
-  # other clause is a drain that could have been marked and was not.
-  defp log_pre_attempt_marker_not_matched(request, reason, clause) do
-    message =
-      "websocket pre-attempt drain marker not written " <>
-        "request_id=#{safe_log_value(Map.get(request, :id))} " <>
-        "interrupt_reason=#{safe_log_value(reason)} " <>
-        "refused_clause=#{safe_log_value(clause)}"
-
-    if clause == "non_drain_reason",
-      do: Logger.debug(message),
-      else: Logger.info(message)
-
-    :ok
-  end
-
-  defp owner_drain_evidence(%RequestOptions{
-         transport: %{
-           websocket_owner: %{
-             owner_instance_id: owner,
-             lease_token: token,
-             downstream_epoch: epoch
-           }
-         }
-       })
-       when is_binary(owner) and is_binary(token) and is_integer(epoch) and epoch > 0,
-       do: %{
-         owner_binding: %{
-           owner_instance_id: owner,
-           owner_lease_token: token,
-           downstream_epoch: epoch
-         }
-       }
-
-  defp owner_drain_evidence(%RequestOptions{}), do: %{owner_binding: nil}
 
   # A turn interrupted before any attempt existed still holds whatever the
   # reservation reserved, so the release is written for every reason this
