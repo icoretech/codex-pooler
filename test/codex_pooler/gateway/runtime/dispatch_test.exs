@@ -11,7 +11,7 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, PreAttemptRelease, Request}
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
@@ -775,6 +775,93 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
 
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^reserved.request.id), :count) ==
              0
+  end
+
+  test "http_sse reservation rejected before dispatch releases promptly with a classified phase" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+
+    assert {:ok, reset_probe} =
+             ResetProbe.bind(
+               ResetProbe.new(),
+               Ecto.UUID.generate(),
+               setup.identity.id,
+               setup.model.exposed_model_id,
+               "proxy_http"
+             )
+
+    request_options =
+      auth
+      |> request_options(payload, setup)
+      |> RequestOptions.put_routing(reset_probe: reset_probe)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id: "pre-attempt-phase-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    candidates = [{setup.assignment, setup.identity}]
+
+    assert {:ok, context} =
+             Context.new(%{
+               auth: auth,
+               endpoint: @endpoint_path,
+               payload: payload,
+               model: setup.model,
+               reserved: reserved,
+               candidates: candidates,
+               request_options: request_options,
+               route_state: RouteState.new(%{visible_model: setup.model, candidates: candidates})
+             })
+
+    parent = self()
+    handler_id = {__MODULE__, :pre_attempt_release, System.unique_integer([:positive])}
+
+    :telemetry.attach(
+      handler_id,
+      PreAttemptRelease.telemetry_event(),
+      fn _event, measurements, metadata, _config ->
+        send(parent, {handler_id, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:error, %{status: 503, code: "no_eligible_backend"}} =
+             Dispatch.dispatch(context, fn _selected_context ->
+               send(parent, :transport_called)
+               {:ok, %{status: 200}}
+             end)
+
+    refute_received :transport_called
+    assert FakeUpstream.count(upstream) == 0
+
+    assert %Request{status: "failed", last_error_code: "no_eligible_backend"} =
+             Repo.reload!(reserved.request)
+
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^reserved.request.id), :count) ==
+             0
+
+    assert [release] =
+             Repo.all(
+               from entry in LedgerEntry,
+                 where: entry.request_id == ^reserved.request.id and entry.entry_kind == "release"
+             )
+
+    assert release.attempt_id == nil
+    assert release.details["release_reason"] == "no_eligible_backend"
+
+    assert release.details[PreAttemptRelease.detail_key()] ==
+             PreAttemptRelease.routing_rejected()
+
+    assert_received {^handler_id, %{count: 1},
+                     %{phase: "routing_rejected", transport: "http_sse"}}
   end
 
   test "bound reset probe scope mutations fail before accounting reservation" do

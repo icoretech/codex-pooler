@@ -49,6 +49,7 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 9. routing circuit transition rate by transition, route class, and bounded reason class
 10. saved-reset post-consume convergence rate by bounded source and outcome, plus p95 timing from application to canonical evidence, canonical evidence to lifecycle finish, and application to lifecycle finish
 11. fenced affinity writes per pod by bounded operation and affinity kind
+12. reservations released with no attempt row, by bounded pre-attempt phase and transport
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
@@ -65,6 +66,14 @@ Oversized stream-buffer histogram observations saturate at 128 MiB for Prometheu
 Two bounded labels: `operation` is `success_upsert` or `miss_update`, and `affinity_kind` is `codex_session`, `idempotency_key`, or `request_correlation`. Unrecognized values become `unknown`, giving at most 12 series per app pod. No Pool, API-key, assignment, identity, session, request, or affinity-key value is exported, and **no node or instance name is in the payload**: per-replica attribution comes from the scrape target's `pod` label, which is what the dashboard panel groups by.
 
 A low rate spread across pods is ordinary reordering between two nodes finishing overlapping turns on one affinity key, and it costs nothing but the ordering hint for that key. The signal to act on is a sustained rate concentrated on **one pod**. That replica's clock runs behind its peers, so it loses every affinity write it attempts: it keeps serving traffic normally and simply stops contributing prompt-cache steering, invisibly. Compare that pod's clock against the others. Nothing about routing admission, retries, settlement, accounting, or durable metadata changes either way — affinity is an ordering hint within an already eligible shortlist, never an admission filter.
+
+### Pre-attempt reservation releases
+
+`codex_pooler_accounting_reservation_pre_attempt_release_count` counts reservations released **before any attempt row exists**, apart from every settlement of a dispatched attempt. Two bounded labels: `phase` is `routing_rejected`, `stale_sweep`, or `unrecorded`, and `transport` is `http_json`, `http_sse`, `http_compact_json`, `websocket`, or `unknown`; unrecognized values become `unknown`, giving at most 24 series per app pod. No Pool, API-key, request, session, or upstream identifier is exported.
+
+`routing_rejected` is a deliberate refusal to dispatch and is ordinary traffic. `unrecorded` is a live cleanup path that released the reservation without declaring its phase — the reason for the release is still recorded, on the release ledger entry. `stale_sweep` is the series to act on: it means the six-hour backstop closed a reservation that nothing live ever reached, so a pre-attempt turn was abandoned and only the backstop noticed, six hours later. A steady `stale_sweep` rate is a cleanup-latency signal, not proof of a provider failure and not an accounting leak: the backstop writes a balanced release either way.
+
+Like the saved-reset metric, this one is best-effort per role. Worker and scheduler roles do not run the Prometheus reporter, so on a split deployment the `stale_sweep` series is never exported — the sweep runs there. The durable record is authoritative in every topology: every reservation-failure release entry carries a `pre_attempt_phase` value in its `details`, and an entry with no such key is either a settlement-time release or older than the field.
 
 ### Saved-reset post-consume convergence
 
@@ -281,6 +290,15 @@ histogram_quantile(0.95,
 ```text
 sum by (pod, operation, affinity_kind) (
   rate(codex_pooler_gateway_routing_affinity_stale_write_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
+)
+```
+
+```text
+sum by (phase, transport) (
+  rate(codex_pooler_accounting_reservation_pre_attempt_release_count{
     namespace="codex-pooler",
     job="codex-pooler-app"
   }[5m])

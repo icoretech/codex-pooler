@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Telemetry do
   use Supervisor
   import Telemetry.Metrics
 
+  alias CodexPooler.Accounting.PreAttemptRelease
   alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
@@ -41,6 +42,7 @@ defmodule CodexPoolerWeb.Telemetry do
         }
   @type affinity_stale_write_tags :: %{operation: String.t(), affinity_kind: String.t()}
   @type bridge_fallback_tags :: %{reason: String.t()}
+  @type pre_attempt_release_tags :: %{phase: String.t(), transport: String.t()}
   @type saved_reset_convergence_tags :: %{source: String.t(), outcome: String.t()}
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
@@ -54,6 +56,7 @@ defmodule CodexPoolerWeb.Telemetry do
   @request_logs_reload_scopes ~w(selected_pool all_pools)
   @stream_usage_statuses ~w(usage_known usage_unknown)
   @stream_usage_sources ~w(upstream_usage websocket_upstream_usage unknown)
+  @pre_attempt_release_transports ~w(http_json http_sse http_compact_json websocket unknown)
   @stream_downstream_transports ~w(http_sse websocket unknown)
   @stream_upstream_transports ~w(http_sse websocket unknown)
   @stream_outcomes ~w(succeeded failed settlement_failed interrupted)
@@ -551,6 +554,16 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &circuit_transition_tag_values/1,
         description: "Routing circuit status transitions by bounded route and reason class."
       ),
+      counter("codex_pooler.accounting.reservation.pre_attempt_release.count",
+        event_name: PreAttemptRelease.telemetry_event(),
+        measurement: :count,
+        tags: [:phase, :transport],
+        tag_values: &pre_attempt_release_tag_values/1,
+        description:
+          "Reservations released with no attempt row, by bounded pre-attempt phase and transport. " <>
+            "The stale_sweep phase is only scraped where the six-hour sweeper shares a node with " <>
+            "the Prometheus reporter (OBAN_MODE=all); elsewhere read it from the release ledger."
+      ),
       counter("codex_pooler.gateway.routing.affinity.stale_write.count",
         event_name: [:codex_pooler, :gateway, :routing, :affinity, :stale_write],
         measurement: :count,
@@ -768,6 +781,14 @@ defmodule CodexPoolerWeb.Telemetry do
         admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
       upstream_transport:
         admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports)
+    }
+  end
+
+  @spec pre_attempt_release_tag_values(map()) :: pre_attempt_release_tags()
+  defp pre_attempt_release_tag_values(metadata) do
+    %{
+      phase: admin_stats_enum_value(metadata[:phase], PreAttemptRelease.phases()),
+      transport: admin_stats_enum_value(metadata[:transport], @pre_attempt_release_transports)
     }
   end
 

@@ -3,6 +3,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.PreAttemptRelease
   alias CodexPooler.Accounting.PricingResolution
   alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Accounting.RequestLifecycle.WindowUsage
@@ -248,6 +249,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
           LedgerEntry.t(),
           String.t(),
           String.t() | nil,
+          String.t(),
           DateTime.t()
         ) :: ledger_attrs()
   def reservation_failure_release_attrs(
@@ -255,6 +257,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
         reservation,
         usage_status,
         last_error_code,
+        pre_attempt_phase,
         timestamp
       ) do
     %{
@@ -279,7 +282,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
       source_event_id: release_source_event_id(request.id),
       occurred_at: timestamp,
       created_at: timestamp,
-      details: reservation_failure_release_details(request, last_error_code)
+      details: reservation_failure_release_details(request, last_error_code, pre_attempt_phase)
     }
   end
 
@@ -321,11 +324,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
     |> Map.merge(PricingResolution.details(pricing))
   end
 
-  defp reservation_failure_release_details(request, last_error_code) do
+  # `request_status` is the status this same write just set, so it says nothing
+  # about the phase the reservation was released from. `pre_attempt_phase` is
+  # the field that does, and it is written for every reservation-failure
+  # release — an explicit `unrecorded` when the caller declared nothing, never
+  # an absent key, so the absent key keeps meaning "not a pre-attempt release,
+  # or older than this field".
+  defp reservation_failure_release_details(request, last_error_code, pre_attempt_phase) do
     %{
       "reservation_source_event_id" => reservation_source_event_id(request.id),
       "release_reason" => last_error_code,
-      "request_status" => request.status
+      "request_status" => request.status,
+      PreAttemptRelease.detail_key() => PreAttemptRelease.phase(pre_attempt_phase)
     }
   end
 

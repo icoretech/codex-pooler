@@ -13,6 +13,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     ClientRetry,
     LedgerEntry,
     Metadata,
+    PreAttemptRelease,
     PricingResolution,
     Request,
     RequestLogFacts,
@@ -394,6 +395,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     request_status = Map.get(attrs, :request_status, Map.get(attrs, :status, "failed"))
     last_error_code = blank_to_nil(Map.get(attrs, :last_error_code))
     usage_status = Map.get(attrs, :usage_status, @usage_not_applicable)
+    pre_attempt_phase = PreAttemptRelease.phase(Map.get(attrs, :pre_attempt_phase))
 
     Repo.transaction(fn ->
       request =
@@ -428,6 +430,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           reservation,
           usage_status,
           last_error_code,
+          pre_attempt_phase,
           timestamp
         )
         |> LedgerEntries.create_or_get!()
@@ -435,8 +438,23 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       %{request: request, attempt: nil, release: release}
     end)
     |> unwrap_transaction()
+    |> tap_pre_attempt_release_count(pre_attempt_phase, last_error_code)
     |> tap_request_finalized_events_unless_stale()
   end
+
+  # Counted only once the release is committed, and counted apart from every
+  # settlement of a dispatched attempt: a pre-attempt abandonment that used to
+  # surface only as a six-hour backstop row is a live series here.
+  defp tap_pre_attempt_release_count(
+         {:ok, %{request: request}} = result,
+         pre_attempt_phase,
+         last_error_code
+       ) do
+    PreAttemptRelease.emit(pre_attempt_phase, request.transport, last_error_code)
+    result
+  end
+
+  defp tap_pre_attempt_release_count(result, _pre_attempt_phase, _last_error_code), do: result
 
   defp tap_request_finalized_events_unless_stale({:ok, %{stale_generation?: true}} = result),
     do: result

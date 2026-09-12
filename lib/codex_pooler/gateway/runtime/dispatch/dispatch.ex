@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Accounting.FailureResponse
+  alias CodexPooler.Accounting.PreAttemptRelease
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -301,7 +302,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
     case AttemptSettlement.finalize_reservation_failure(context.reserved.request, %{
            response_status_code: 503,
            last_error_code: "no_eligible_backend",
-           usage_status: "not_applicable"
+           usage_status: "not_applicable",
+           pre_attempt_phase: PreAttemptRelease.routing_rejected()
          }) do
       {:ok, _finalized} ->
         {:error,
@@ -449,7 +451,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
       case AttemptSettlement.finalize_reservation_failure(context.reserved.request, %{
              response_status_code: 503,
              last_error_code: "no_eligible_backend",
-             usage_status: "not_applicable"
+             usage_status: "not_applicable",
+             pre_attempt_phase: PreAttemptRelease.routing_rejected()
            }) do
         {:ok, _finalized} ->
           {:error,
