@@ -6,7 +6,15 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestClientRetryLink}
+
+  alias CodexPooler.Accounting.{
+    Attempt,
+    ClientRetry,
+    PreAttemptRelease,
+    Request,
+    RequestClientRetryLink
+  }
+
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -598,7 +606,8 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       Accounting.finalize_reservation_failure(reserved, %{
         last_error_code: "owner_drained",
         usage_status: "usage_unknown",
-        response_status_code: 499
+        response_status_code: 499,
+        pre_attempt_phase: PreAttemptRelease.turn_interrupted()
       })
 
     Repo.update!(

@@ -30,11 +30,21 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
   # Failure-detection budget for CREATE/DROP DATABASE on a loaded PostgreSQL host. Ecto's
   # storage helpers otherwise give up with "command timed out" after their own 15 s default.
   @storage_budget 60_000
+  # The drop gets bounded attempts inside that budget rather than one command that owns all of
+  # it. `Ecto.Adapters.Postgres.run_query/2` abandons a command that has not answered within its
+  # own timeout, so a single attempt behind a backend that is still closing spends the whole
+  # budget without ever retrying.
+  @drop_attempt_budget 20_000
+  @drop_retry_pause_ms 500
+  # The exact message `run_query/2` produces for an abandoned command.
+  @drop_timeout_reason "command timed out"
 
   @spec run([String.t()]) :: :ok
   def run(["--help"]), do: IO.puts(@moduledoc)
 
   def run(["--projection-lock"]), do: run_rehearsal(&projection_rehearsal/1)
+
+  def run(["--drop-classification"]), do: drop_classification_self_test()
 
   def run(["--lock-matrix"]), do: run_rehearsal(&lock_matrix/1)
 
@@ -54,7 +64,8 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
     do:
       raise(
         ArgumentError,
-        "usage: --rows 10000 | --projection-lock | --lock-matrix | --writer-failure | --help"
+        "usage: --rows 10000 | --projection-lock | --lock-matrix | --writer-failure | " <>
+          "--drop-classification | --help"
       )
 
   defp run_rehearsal(fun) do
@@ -72,12 +83,26 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
         kind, reason -> {:failed, kind, reason, __STACKTRACE__}
       end
 
-    dropped? = drop_owned_database(config)
+    drop = drop_owned_database(config)
 
-    case outcome do
-      :ok when dropped? -> :ok
-      :ok -> raise "owned rehearsal database was not dropped"
-      {:failed, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
+    case {outcome, drop} do
+      {:ok, {:dropped, _attempts}} ->
+        :ok
+
+      # An undropped database is real residue either way, so both still fail. They are named
+      # apart because only the second says something is wrong with the rehearsal.
+      {:ok, {:timed_out, attempts}} ->
+        raise "owned rehearsal database was not dropped: #{attempts} DROP DATABASE attempt(s) " <>
+                "timed out inside the #{@storage_budget}ms cleanup budget " <>
+                "(#{@drop_attempt_budget}ms per attempt). Every rehearsal stage passed; this is " <>
+                "a slow or busy PostgreSQL host, not a rehearsal defect."
+
+      {:ok, {:failed, attempts, reason}} ->
+        raise "owned rehearsal database was not dropped: DROP DATABASE was refused after " <>
+                "#{attempts} attempt(s) (#{cleanup_reason(reason)})"
+
+      {{:failed, kind, reason, stacktrace}, _drop} ->
+        :erlang.raise(kind, reason, stacktrace)
     end
   end
 
@@ -85,19 +110,129 @@ defmodule CodexPooler.Verification.RequestReplayMigration do
   # a drop failure is reported in the receipt instead of masking the rehearsal error, and the
   # forced drop terminates backends that are still closing after the repo stopped.
   defp drop_owned_database(config) do
-    case Postgres.storage_down(storage_options(config, force_drop: true)) do
+    outcome =
+      await_drop(
+        fn timeout ->
+          Postgres.storage_down(storage_options(config, force_drop: true, timeout: timeout))
+        end,
+        drop_budgets()
+      )
+
+    receipt("cleanup", cleanup_receipt(outcome, drop_budgets()))
+    outcome
+  end
+
+  defp drop_budgets,
+    do: %{
+      budget_ms: @storage_budget,
+      attempt_budget_ms: @drop_attempt_budget,
+      pause_ms: @drop_retry_pause_ms
+    }
+
+  @doc """
+  Drops with bounded attempts inside one budget and classifies the result.
+
+  A timed-out attempt is retried while the budget lasts; a refused drop is not retried, because
+  retrying a refusal only hides the rehearsal defect it reports.
+  """
+  @spec await_drop((timeout() -> :ok | {:error, term()}), map()) ::
+          {:dropped, pos_integer()}
+          | {:timed_out, pos_integer()}
+          | {:failed, pos_integer(), term()}
+  def await_drop(drop_fun, budgets) do
+    do_await_drop(drop_fun, budgets, System.monotonic_time(:millisecond) + budgets.budget_ms, 1)
+  end
+
+  defp do_await_drop(drop_fun, budgets, deadline, attempt) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    case drop_fun.(max(1, min(budgets.attempt_budget_ms, remaining))) do
       :ok ->
-        receipt("cleanup", %{database_dropped: true, build_cache_retained: true})
-        true
+        {:dropped, attempt}
+
+      # A command abandoned client-side can still have committed server-side; the next attempt
+      # then finds the database already gone, which is the cleanup contract satisfied.
+      {:error, :already_down} ->
+        {:dropped, attempt}
+
+      {:error, @drop_timeout_reason} ->
+        if System.monotonic_time(:millisecond) + budgets.pause_ms < deadline do
+          Process.sleep(budgets.pause_ms)
+          do_await_drop(drop_fun, budgets, deadline, attempt + 1)
+        else
+          {:timed_out, attempt}
+        end
 
       {:error, reason} ->
-        receipt("cleanup", %{
-          database_dropped: false,
-          build_cache_retained: true,
-          reason: cleanup_reason(reason)
-        })
+        {:failed, attempt, reason}
+    end
+  end
 
-        false
+  defp cleanup_receipt({:dropped, attempts}, _budgets),
+    do: %{
+      database_dropped: true,
+      drop_outcome: "dropped",
+      drop_attempts: attempts,
+      build_cache_retained: true
+    }
+
+  defp cleanup_receipt({:timed_out, attempts}, budgets),
+    do: %{
+      database_dropped: false,
+      drop_outcome: "timed_out",
+      drop_attempts: attempts,
+      drop_budget_ms: budgets.budget_ms,
+      drop_attempt_budget_ms: budgets.attempt_budget_ms,
+      build_cache_retained: true,
+      reason: @drop_timeout_reason
+    }
+
+  defp cleanup_receipt({:failed, attempts, reason}, _budgets),
+    do: %{
+      database_dropped: false,
+      drop_outcome: "failed",
+      drop_attempts: attempts,
+      build_cache_retained: true,
+      reason: cleanup_reason(reason)
+    }
+
+  # Self-test for the cleanup contract, driving the real `await_drop/2` with scripted drop
+  # results. Needs no database and no repo, which is why the test runs it under `--no-start`.
+  defp drop_classification_self_test do
+    budgets = %{budget_ms: 200, attempt_budget_ms: 20, pause_ms: 1}
+
+    [
+      {"retries a timed-out drop inside the budget",
+       scripted([{:error, @drop_timeout_reason}, {:error, @drop_timeout_reason}, :ok])},
+      {"spends the budget when the drop never answers",
+       scripted([{:error, @drop_timeout_reason}])},
+      {"a database already gone is dropped",
+       scripted([{:error, @drop_timeout_reason}, {:error, :already_down}])},
+      {"a refused drop is not retried", scripted([{:error, "permission denied"}, :ok])}
+    ]
+    |> Enum.each(fn {label, drop_fun} ->
+      receipt(
+        "drop_classification",
+        Map.put(cleanup_receipt(await_drop(drop_fun, budgets), budgets), :case, label)
+      )
+    end)
+
+    :ok
+  end
+
+  defp scripted(results) do
+    key = {__MODULE__, :scripted_drop, make_ref()}
+    Process.put(key, results)
+
+    fn _timeout ->
+      case Process.get(key) do
+        [last] ->
+          last
+
+        [head | rest] ->
+          Process.put(key, rest)
+          head
+      end
     end
   end
 

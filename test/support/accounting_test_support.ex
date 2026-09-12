@@ -9,6 +9,18 @@ defmodule CodexPooler.AccountingTestSupport do
   import CodexPooler.PoolerFixtures
 
   def accounting_setup(pricing_attrs \\ %{}) do
+    # Every setup gets its own upstream model identifier and price version, so nothing it
+    # commits can collide with, hide, or be hidden by another setup's pricing row. The exposed
+    # model id stays stable because it is per pool and tests name it in payloads.
+    #
+    # The shared identifier used to be load-bearing in two opposite directions at once:
+    # `pricing_snapshots_version_uq` made a second setup raise while one row was live (which is
+    # how a single leaked unboxed row became a run-wide cascade), and the tests that unprice a
+    # model with `Repo.delete!(setup.pricing)` silently depended on that row being the only one
+    # for the identifier. Both go away when the identifier is per setup.
+    upstream_model_id =
+      "provider-gpt-accounting-mini-#{System.unique_integer([:positive, :monotonic])}"
+
     %{pool: pool, api_key: api_key} =
       key =
       active_api_key_fixture(pool_fixture(), %{
@@ -20,8 +32,8 @@ defmodule CodexPooler.AccountingTestSupport do
     model =
       model_fixture(pool, %{
         exposed_model_id: "gpt-accounting-mini",
-        upstream_model_id: "provider-gpt-accounting-mini",
-        pricing_ref: "provider-gpt-accounting-mini"
+        upstream_model_id: upstream_model_id,
+        pricing_ref: upstream_model_id
       })
 
     %{identity: identity, assignment: assignment} =
@@ -36,8 +48,8 @@ defmodule CodexPooler.AccountingTestSupport do
 
     pricing =
       %PricingSnapshot{
-        model_identifier: "provider-gpt-accounting-mini",
-        price_version: Map.get(pricing_attrs, :price_version, "test-v1"),
+        model_identifier: upstream_model_id,
+        price_version: Map.get_lazy(pricing_attrs, :price_version, &unique_price_version/0),
         currency_code: "USD",
         billing_unit: "token",
         input_token_micros: Map.get(pricing_attrs, :input_token_micros, Decimal.new(10)),
@@ -67,6 +79,11 @@ defmodule CodexPooler.AccountingTestSupport do
       pricing: pricing
     })
   end
+
+  # Kept private: `client_retry_postgres_test.exs` defines its own `unique_price_version/0`, and
+  # exporting this one would conflict with that import. The `test-v` prefix cannot collide with
+  # `pricing_snapshot_fixture/2`'s `test-` prefix, which is followed by a digit.
+  defp unique_price_version, do: "test-v#{System.unique_integer([:positive, :monotonic])}"
 
   def pricing_snapshot_fixture(%PricingSnapshot{} = base, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

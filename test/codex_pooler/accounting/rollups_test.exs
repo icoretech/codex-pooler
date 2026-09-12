@@ -365,7 +365,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2024-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
       parent = self()
 
       rebuild =
@@ -430,7 +430,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2021-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
 
       request =
         Sandbox.unboxed_run(Repo, fn ->
@@ -488,7 +488,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2023-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
       parent = self()
 
       mutation =
@@ -548,7 +548,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2022-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
 
       Sandbox.unboxed_run(Repo, fn ->
         insert_legacy_request!(
@@ -1453,26 +1453,27 @@ defmodule CodexPooler.Accounting.RollupsTest do
     """)
   end
 
-  defp cleanup_unboxed_pool!(pool_id, identity_id, rollup_date) do
+  # Deletes by primary key. `accounting_setup/1` gives every call its own price version, so
+  # matching on a literal version here would delete another fixture's row on a good day and
+  # leak this one on a bad one.
+  defp cleanup_unboxed_pool!(setup, rollup_date) do
     Sandbox.unboxed_run(Repo, fn ->
       Repo.delete_all(
         from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
       )
 
       Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date)
-      Repo.delete_all(from request in Request, where: request.pool_id == ^pool_id)
-      Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^pool_id)
+      Repo.delete_all(from request in Request, where: request.pool_id == ^setup.pool.id)
+      Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^setup.pool.id)
 
       Repo.delete_all(
         from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
-          where: identity.id == ^identity_id
+          where: identity.id == ^setup.identity.id
       )
 
       Repo.delete_all(
         from snapshot in CodexPooler.Catalog.PricingSnapshot,
-          where:
-            snapshot.model_identifier == "provider-gpt-accounting-mini" and
-              snapshot.price_version == "test-v1"
+          where: snapshot.id == ^setup.pricing.id
       )
     end)
   end

@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   import CodexPooler.AccountingTestSupport
+  import CodexPooler.UnboxedFixture
   import ExUnit.CaptureLog
 
   @actor_timeout 15_000
@@ -30,101 +31,85 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
   test "record_success takes the canonical identity lock before touching the assignment" do
     fixture = committed_routing_fixture!()
 
-    try do
-      %{fencing: fencing, routing: routing, held_relations: held_relations} =
-        run_schedule(fixture, :identity_first, fn ->
-          BridgeRing.record_success(fixture.plan, fixture.assignment, fixture.identity)
-        end)
+    %{fencing: fencing, routing: routing, held_relations: held_relations} =
+      run_schedule(fixture, :identity_first, fn ->
+        BridgeRing.record_success(fixture.plan, fixture.assignment, fixture.identity)
+      end)
 
-      assert fencing == :ok
-      assert routing == :ok
+    assert fencing == :ok
+    assert routing == :ok
 
-      refute "bridge_affinities" in held_relations
-      refute_assignment_locks(held_relations)
+    refute "bridge_affinities" in held_relations
+    refute_assignment_locks(held_relations)
 
-      assert [%BridgeAffinity{} = affinity] = pool_rows(BridgeAffinity, fixture)
-      assert affinity.pool_upstream_assignment_id == fixture.assignment.id
-      assert affinity.upstream_identity_id == fixture.identity.id
-    after
-      cleanup_committed_fixture!(fixture)
-    end
+    assert [%BridgeAffinity{} = affinity] = pool_rows(BridgeAffinity, fixture)
+    assert affinity.pool_upstream_assignment_id == fixture.assignment.id
+    assert affinity.upstream_identity_id == fixture.identity.id
   end
 
   test "record_failure takes the canonical identity lock before touching the assignment" do
     fixture = committed_routing_fixture!()
 
-    try do
-      %{fencing: fencing, routing: routing, held_relations: held_relations} =
-        run_schedule(fixture, :identity_first, fn ->
-          BridgeRing.record_failure(
-            fixture.plan,
-            fixture.assignment,
-            fixture.identity,
-            "upstream_5xx"
-          )
-        end)
+    %{fencing: fencing, routing: routing, held_relations: held_relations} =
+      run_schedule(fixture, :identity_first, fn ->
+        BridgeRing.record_failure(
+          fixture.plan,
+          fixture.assignment,
+          fixture.identity,
+          "upstream_5xx"
+        )
+      end)
 
-      assert fencing == :ok
-      assert routing == "upstream_5xx"
+    assert fencing == :ok
+    assert routing == "upstream_5xx"
 
-      refute "bridge_demotions" in held_relations
-      refute_assignment_locks(held_relations)
+    refute "bridge_demotions" in held_relations
+    refute_assignment_locks(held_relations)
 
-      assert [%BridgeDemotion{} = demotion] = pool_rows(BridgeDemotion, fixture)
-      assert demotion.pool_upstream_assignment_id == fixture.assignment.id
-      assert demotion.upstream_identity_id == fixture.identity.id
-    after
-      cleanup_committed_fixture!(fixture)
-    end
+    assert [%BridgeDemotion{} = demotion] = pool_rows(BridgeDemotion, fixture)
+    assert demotion.pool_upstream_assignment_id == fixture.assignment.id
+    assert demotion.upstream_identity_id == fixture.identity.id
   end
 
   test "circuit first-failure insert takes the canonical identity lock first" do
     fixture = committed_routing_fixture!()
 
-    try do
-      %{fencing: fencing, routing: routing, held_relations: held_relations} =
-        run_schedule(fixture, :identity_first, fn ->
-          CircuitState.record_failure(
-            fixture.auth,
-            fixture.model,
-            fixture.assignment,
-            "proxy_stream",
-            "upstream_5xx"
-          )
-        end)
+    %{fencing: fencing, routing: routing, held_relations: held_relations} =
+      run_schedule(fixture, :identity_first, fn ->
+        CircuitState.record_failure(
+          fixture.auth,
+          fixture.model,
+          fixture.assignment,
+          "proxy_stream",
+          "upstream_5xx"
+        )
+      end)
 
-      assert fencing == :ok
-      assert {:ok, %RoutingCircuitState{}} = routing
+    assert fencing == :ok
+    assert {:ok, %RoutingCircuitState{}} = routing
 
-      # latest_for_update legitimately read-locks the circuit table before the
-      # reference locks; the canonical contract only forbids holding any
-      # assignment lock while waiting for the identity row.
-      refute_assignment_locks(held_relations)
+    # latest_for_update legitimately read-locks the circuit table before the
+    # reference locks; the canonical contract only forbids holding any
+    # assignment lock while waiting for the identity row.
+    refute_assignment_locks(held_relations)
 
-      assert [%RoutingCircuitState{} = state] = pool_rows(RoutingCircuitState, fixture)
-      assert state.pool_upstream_assignment_id == fixture.assignment.id
-    after
-      cleanup_committed_fixture!(fixture)
-    end
+    assert [%RoutingCircuitState{} = state] = pool_rows(RoutingCircuitState, fixture)
+    assert state.pool_upstream_assignment_id == fixture.assignment.id
   end
 
   test "record_success converges without raising against an inverted assignment-first holder" do
     fixture = committed_routing_fixture!()
 
-    try do
-      %{fencing: fencing, routing: routing, held_relations: _held} =
-        run_schedule(fixture, :assignment_first, fn ->
-          BridgeRing.record_success(fixture.plan, fixture.assignment, fixture.identity)
-        end)
+    %{fencing: fencing, routing: routing, held_relations: _held} =
+      run_schedule(fixture, :assignment_first, fn ->
+        BridgeRing.record_success(fixture.plan, fixture.assignment, fixture.identity)
+      end)
 
-      assert routing == :ok
-      assert fencing in [:ok, {:deadlock, :deadlock_detected}]
+    assert routing == :ok
+    assert fencing in [:ok, {:deadlock, :deadlock_detected}]
 
-      assert [%BridgeAffinity{} = affinity] = pool_rows(BridgeAffinity, fixture)
-      assert affinity.pool_upstream_assignment_id == fixture.assignment.id
-    after
-      cleanup_committed_fixture!(fixture)
-    end
+    assert [%BridgeAffinity{} = affinity] = pool_rows(BridgeAffinity, fixture)
+    assert affinity.pool_upstream_assignment_id == fixture.assignment.id
   end
 
   test "deadlock retry barrier waits for the assignment holder without locking the identity" do
@@ -187,7 +172,6 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     after
       shutdown_task(holder_task)
       shutdown_task(Process.delete(waiter_holder))
-      cleanup_committed_fixture!(fixture)
     end
   end
 
@@ -451,18 +435,18 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     end
   end
 
+  # The cleanup is registered, never scoped. An assertion that fails inside a `run_unboxed/1`
+  # block raises in the linked task, whose exit signal kills the test process before any
+  # enclosing `after` can run; ExUnit's own teardown runs regardless of how the test died.
   defp committed_routing_fixture! do
+    fixture = build_committed_routing_fixture!()
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(fixture) end)
+    fixture
+  end
+
+  defp build_committed_routing_fixture! do
     run_unboxed(fn ->
       unique = System.unique_integer([:positive])
-
-      # Self-heal a fixed-version pricing row left over by an interrupted
-      # earlier run; accounting_setup inserts it with a unique constraint.
-      Repo.delete_all(
-        from pricing in CodexPooler.Catalog.PricingSnapshot,
-          where:
-            pricing.price_version == "test-v1" and
-              pricing.model_identifier == "provider-gpt-accounting-mini"
-      )
 
       setup =
         accounting_setup(%{
@@ -486,39 +470,29 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     end)
   end
 
-  defp cleanup_committed_fixture!(fixture) do
-    run_unboxed(fn ->
-      for schema <- [BridgeAffinity, BridgeDemotion, RoutingCircuitState] do
-        Repo.delete_all(from row in schema, where: row.pool_id == ^fixture.pool.id)
-      end
+  defp delete_committed_fixture!(fixture) do
+    for schema <- [BridgeAffinity, BridgeDemotion, RoutingCircuitState] do
+      Repo.delete_all(from row in schema, where: row.pool_id == ^fixture.pool.id)
+    end
 
-      Repo.delete_all(
-        from pool in CodexPooler.Pools.Pool,
-          where: pool.id == ^fixture.pool.id
-      )
+    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^fixture.pool.id)
 
-      Repo.delete_all(
-        from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
-          where: identity.id == ^fixture.identity.id
-      )
+    Repo.delete_all(
+      from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
+        where: identity.id == ^fixture.identity.id
+    )
 
-      Repo.delete_all(
-        from pricing in CodexPooler.Catalog.PricingSnapshot,
-          where: pricing.id == ^fixture.pricing.id
-      )
+    Repo.delete_all(
+      from pricing in CodexPooler.Catalog.PricingSnapshot,
+        where: pricing.id == ^fixture.pricing.id
+    )
 
-      :ok
-    end)
+    :ok
   end
 
   defp pool_rows(schema, fixture) do
     run_unboxed(fn ->
       Repo.all(from row in schema, where: row.pool_id == ^fixture.pool.id)
     end)
-  end
-
-  defp run_unboxed(operation) do
-    Task.async(fn -> Sandbox.unboxed_run(Repo, operation) end)
-    |> Task.await(@actor_timeout)
   end
 end

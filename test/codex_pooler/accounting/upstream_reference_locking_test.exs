@@ -19,6 +19,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
 
   import CodexPooler.AccountingTestSupport
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture
 
   @schedule_iterations 10
   @actor_timeout 15_000
@@ -887,7 +888,18 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
     end)
   end
 
+  # Both committed fixtures register their cleanup with ExUnit as well as running it inline.
+  # The inline call is what the exact-count assertions read; the registered one is the safety
+  # net, because an assertion that fails inside a `run_unboxed/1` block raises in the linked
+  # task and its exit signal kills the test process before any enclosing `after` can run. The
+  # cleanup deletes by primary key, so the registered pass finds nothing left and is a no-op.
   defp committed_schedule_fixture!(path, iteration) do
+    fixture = build_committed_schedule_fixture!(path, iteration)
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(fixture) end)
+    fixture
+  end
+
+  defp build_committed_schedule_fixture!(path, iteration) do
     run_unboxed(fn ->
       unique = System.unique_integer([:positive])
 
@@ -940,6 +952,12 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   end
 
   defp committed_membership_fixture! do
+    fixture = build_committed_membership_fixture!()
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(fixture) end)
+    fixture
+  end
+
+  defp build_committed_membership_fixture! do
     run_unboxed(fn ->
       unique = System.unique_integer([:positive])
 
@@ -966,28 +984,29 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   end
 
   defp cleanup_committed_fixture!(fixture) do
-    run_unboxed(fn ->
-      {pool_count, _} =
-        Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+    run_unboxed(fn -> delete_committed_fixture!(fixture) end)
+  end
 
-      {identity_count, _} =
-        Repo.delete_all(
-          from identity in UpstreamIdentity,
-            where: identity.id in ^fixture.identity_ids
-        )
+  defp delete_committed_fixture!(fixture) do
+    {pool_count, _} = Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
 
-      {pricing_count, _} =
-        Repo.delete_all(
-          from pricing in PricingSnapshot,
-            where: pricing.id == ^fixture.pricing.id
-        )
+    {identity_count, _} =
+      Repo.delete_all(
+        from identity in UpstreamIdentity,
+          where: identity.id in ^fixture.identity_ids
+      )
 
-      %{
-        identities: identity_count,
-        pools: pool_count,
-        pricing_snapshots: pricing_count
-      }
-    end)
+    {pricing_count, _} =
+      Repo.delete_all(
+        from pricing in PricingSnapshot,
+          where: pricing.id == ^fixture.pricing.id
+      )
+
+    %{
+      identities: identity_count,
+      pools: pool_count,
+      pricing_snapshots: pricing_count
+    }
   end
 
   defp reserve!(setup, correlation_id) do
@@ -1021,11 +1040,6 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   defp backend_pid! do
     %{rows: [[pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
     pid
-  end
-
-  defp run_unboxed(operation) do
-    Task.async(fn -> Sandbox.unboxed_run(Repo, operation) end)
-    |> Task.await(@actor_timeout)
   end
 
   defp await_actor!(task), do: Task.await(task, @actor_timeout)

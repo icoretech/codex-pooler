@@ -13,9 +13,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture, as: Fixture
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
 
   @peer_timeout 10_000
+  # Peer shutdown and the deregistrations that follow it are asynchronous, and this runs in
+  # `on_exit` under four partitions' scheduling pressure. Failure-detection budget, not a
+  # timing contract: a genuinely leaked peer never becomes absent and still fails here.
+  @peer_shutdown_budget_ms 15_000
   @source_commit "a589116bb733fb53c58520637ea70382c68e6bd3"
 
   setup_all do
@@ -236,8 +241,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
 
     on_exit(fn ->
       if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
-      refute peer_node in Node.list(:connected)
-      assert_peer_absent!(peer_name)
+      assert_peer_absent!(peer_name, peer_node)
     end)
 
     Process.unlink(peer_pid)
@@ -297,9 +301,25 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     refute_received {:external_network_call, _, _, _, _}
   end
 
-  defp assert_peer_absent!(peer_name) do
-    assert {:ok, names} = :erl_epmd.names()
-    refute Enum.any?(names, fn {name, _port} -> name == Atom.to_charlist(peer_name) end)
+  # Bounded rather than a single sample: `:peer.stop/1` returns before the node has left the
+  # connected list and before epmd has processed the closed registration, so asserting either
+  # immediately asserts a state that is only about to be true.
+  defp assert_peer_absent!(peer_name, peer_node \\ nil) do
+    case PeerRegistry.await_peer_absent(peer_name,
+           peer_node: peer_node,
+           budget_ms: @peer_shutdown_budget_ms
+         ) do
+      {:ok, _detail} ->
+        :ok
+
+      {:timeout, detail} ->
+        flunk("""
+        peer #{peer_name} was still visible #{detail.elapsed_ms}ms after :peer.stop/1, over the         #{detail.budget_ms}ms detection budget (#{detail.samples} samples).
+        still registered with epmd: #{detail.registered}
+        still in Node.list(:connected): #{detail.connected}
+        epmd names: #{inspect(detail.names)}
+        """)
+    end
   end
 
   defp owner_request(identity_id, opts) do
