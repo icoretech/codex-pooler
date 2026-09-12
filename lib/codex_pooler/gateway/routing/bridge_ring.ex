@@ -116,6 +116,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     prompt_cache_locality =
       prompt_cache_locality_context(auth, model, request_options, settings, affinity, candidates)
 
+    session_preference = codex_session_preference_context(request_options, candidates)
+
     ordered =
       strategy_order_unless_prompt_cache_locality(
         prompt_cache_locality,
@@ -127,7 +129,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       )
       |> apply_prompt_cache_locality(prompt_cache_locality)
       |> apply_affinity(affinity)
-      |> apply_codex_session_preference(request_options)
+      |> apply_codex_session_preference(session_preference)
       |> apply_quota_tier_and_demotions(demotions, model, route_state)
 
     ring_size = max(settings.bridge_ring_size || @default_ring_size, 1)
@@ -151,7 +153,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
           demotions,
           selected,
           prompt_cache_locality,
-          model_serving_mode_snapshot
+          model_serving_mode_snapshot,
+          session_preference
         ),
       selected_assignment_id: selected && elem(selected, 0).id
     }
@@ -449,39 +452,64 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     matched ++ rest
   end
 
-  defp apply_codex_session_preference(
-         candidates,
-         %RequestOptions{
-           continuity: %{codex_session: %CodexSession{pool_upstream_assignment_id: assignment_id}}
-         }
-       )
-       when is_binary(assignment_id) do
-    prefer_assignment(candidates, assignment_id)
+  # The preference has to be applied here and not only in pre-dispatch:
+  # `strategy_order/5` re-sorts the whole shortlist, so an ordering applied
+  # before planning never survives to the selected candidate. It stays a
+  # preference — quota tier and demotion ordering still run after it.
+  defp apply_codex_session_preference(candidates, %{
+         status: "applied",
+         assignment_id: assignment_id
+       }),
+       do: prefer_assignment(candidates, assignment_id)
+
+  defp apply_codex_session_preference(candidates, _preference), do: candidates
+
+  # Decided once, before ordering, so the request metadata reports the same
+  # decision the ring acted on instead of re-deriving it from the session.
+  # `status` records whether the wanted assignment was among the eligible
+  # candidates at all: `prefer_assignment/2` hoists nothing when it is absent,
+  # so without this a preference that found nothing would be indistinguishable
+  # from one that was honoured.
+  defp codex_session_preference_context(%RequestOptions{} = request_options, candidates) do
+    case codex_session_preference(request_options) do
+      {kind, assignment_id} ->
+        %{
+          kind: kind,
+          assignment_id: assignment_id,
+          status: preference_status(candidates, assignment_id)
+        }
+
+      nil ->
+        %{}
+    end
   end
 
-  # A session recreated after owner-lease expiry has no durable pin yet, so the
-  # clause above cannot see it; the replacement carries the closed session's
-  # assignment in memory instead. The preference has to be applied here and not
-  # only in pre-dispatch: `strategy_order/5` re-sorts the whole shortlist, so an
-  # ordering applied before planning never survives to the selected candidate.
-  # It stays a preference — quota tier and demotion ordering still run after it,
-  # and an assignment that is gone or ineligible is simply absent from the list.
-  defp apply_codex_session_preference(
-         candidates,
-         %RequestOptions{
-           continuity: %{
-             codex_session: %CodexSession{
-               pool_upstream_assignment_id: nil,
-               recreated_from_assignment_id: assignment_id
-             }
+  defp codex_session_preference(%RequestOptions{
+         continuity: %{codex_session: %CodexSession{pool_upstream_assignment_id: assignment_id}}
+       })
+       when is_binary(assignment_id),
+       do: {"pinned", assignment_id}
+
+  # A session recreated after owner-lease expiry has no durable pin yet; the
+  # replacement carries the closed session's assignment in memory instead.
+  defp codex_session_preference(%RequestOptions{
+         continuity: %{
+           codex_session: %CodexSession{
+             pool_upstream_assignment_id: nil,
+             recreated_from_assignment_id: assignment_id
            }
          }
-       )
-       when is_binary(assignment_id) do
-    prefer_assignment(candidates, assignment_id)
-  end
+       })
+       when is_binary(assignment_id),
+       do: {"recreated", assignment_id}
 
-  defp apply_codex_session_preference(candidates, %RequestOptions{}), do: candidates
+  defp codex_session_preference(%RequestOptions{}), do: nil
+
+  defp preference_status(candidates, assignment_id) do
+    if Enum.any?(candidates, fn {assignment, _identity} -> assignment.id == assignment_id end),
+      do: "applied",
+      else: "candidate_unavailable"
+  end
 
   defp prefer_assignment(candidates, assignment_id) do
     {matched, rest} =

@@ -1463,6 +1463,63 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
+  describe "session preference metadata" do
+    test "a pinned session records the preference it asked for" do
+      setup = routing_setup(3)
+      preferred = Enum.at(setup.assignments, 2)
+
+      plan =
+        plan_for(setup, "bridge_ring", "preference-pinned-key",
+          session_assignment_id: preferred.id
+        )
+
+      assert plan.request_metadata["session_preference_kind"] == "pinned"
+      assert plan.request_metadata["session_preference_status"] == "applied"
+      assert plan.selected_assignment_id == preferred.id
+    end
+
+    test "a recreated session records the closed session's account" do
+      setup = routing_setup(3)
+      preferred = Enum.at(setup.assignments, 1)
+
+      plan =
+        plan_for(setup, "bridge_ring", "preference-recreated-key",
+          recreated_from_assignment_id: preferred.id
+        )
+
+      # This is the shape that shipped as a no-op once and stayed invisible:
+      # a replacement session carries its predecessor's account in memory only,
+      # with no durable pin to read back.
+      assert plan.request_metadata["session_preference_kind"] == "recreated"
+      assert plan.request_metadata["session_preference_status"] == "applied"
+      assert plan.selected_assignment_id == preferred.id
+    end
+
+    test "a preference for an ineligible account is recorded as unavailable, not as applied" do
+      setup = routing_setup(3)
+      absent_assignment_id = Ecto.UUID.generate()
+
+      plan =
+        plan_for(setup, "bridge_ring", "preference-absent-key",
+          session_assignment_id: absent_assignment_id
+        )
+
+      # The distinction the whole key exists for: hoisting nothing must not read
+      # the same as being honoured.
+      assert plan.request_metadata["session_preference_kind"] == "pinned"
+      assert plan.request_metadata["session_preference_status"] == "candidate_unavailable"
+      refute plan.selected_assignment_id == absent_assignment_id
+    end
+
+    test "a turn with no session records no preference at all" do
+      setup = routing_setup(2)
+      plan = plan_for(setup, "bridge_ring", "preference-absent-session-key")
+
+      refute Map.has_key?(plan.request_metadata, "session_preference_kind")
+      refute Map.has_key?(plan.request_metadata, "session_preference_status")
+    end
+  end
+
   describe "record_failure/5 concurrency" do
     test "concurrent first failures for the same assignment leave one active demotion" do
       setup = routing_setup(2)
@@ -1572,6 +1629,20 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         {:ok, assignment_id} ->
           RequestOptions.put_continuity(request_options,
             codex_session: %CodexSession{pool_upstream_assignment_id: assignment_id}
+          )
+
+        :error ->
+          request_options
+      end
+
+    request_options =
+      case Keyword.fetch(opts, :recreated_from_assignment_id) do
+        {:ok, assignment_id} ->
+          RequestOptions.put_continuity(request_options,
+            codex_session: %CodexSession{
+              pool_upstream_assignment_id: nil,
+              recreated_from_assignment_id: assignment_id
+            }
           )
 
         :error ->

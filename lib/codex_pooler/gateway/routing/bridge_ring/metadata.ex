@@ -48,7 +48,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing.Metadata do
           BridgeRing.demotion_map(),
           BridgeRing.candidate() | nil,
           map(),
-          RequestOptions.Routing.model_serving_mode_snapshot() | nil
+          RequestOptions.Routing.model_serving_mode_snapshot() | nil,
+          map()
         ) :: map()
   def request_metadata(
         settings,
@@ -56,7 +57,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing.Metadata do
         demotions,
         selected,
         locality \\ %{},
-        model_serving_mode_snapshot \\ nil
+        model_serving_mode_snapshot \\ nil,
+        session_preference \\ %{}
       ) do
     base_metadata(%{
       strategy: settings.routing_strategy,
@@ -65,6 +67,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing.Metadata do
       demotions: demotions,
       locality: locality,
       model_serving_mode_snapshot: model_serving_mode_snapshot,
+      session_preference: session_preference,
       selected_assignment_id: selected && elem(selected, 0).id
     })
   end
@@ -86,6 +89,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing.Metadata do
       "fallback_reason" => fallback_reason(affinity),
       "demotion_reason" => first_demotion_reason(demotions)
     }
+    |> Map.merge(session_preference_metadata(Map.get(plan, :session_preference)))
     |> Map.merge(locality_metadata(locality))
     |> Map.merge(model_serving_mode_metadata(Map.get(plan, :model_serving_mode_snapshot)))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -120,6 +124,17 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing.Metadata do
   end
 
   defp locality_metadata(_locality), do: %{}
+
+  # A recreated or pinned session asks the ring for a specific account. Whether
+  # that was honoured is otherwise unreadable from the request row: the planned
+  # preference leaves no trace, and `selected_bridge_candidate_id` names the
+  # last candidate dispatched to rather than the planned head, so it cannot
+  # stand in for this.
+  defp session_preference_metadata(%{kind: kind, status: status}) do
+    %{"session_preference_kind" => kind, "session_preference_status" => status}
+  end
+
+  defp session_preference_metadata(_preference), do: %{}
 
   defp fallback_reason(%{enabled?: true, status: "miss", row: nil}), do: "affinity_not_found"
   defp fallback_reason(%{enabled?: true, status: "hit"}), do: nil
