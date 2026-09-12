@@ -262,13 +262,17 @@ When a saved edit changes upstream assignments for an active Pool, Codex Pooler 
 
 ### Sharing One Upstream Across Pools
 
-Assigning the same upstream account to more than one Pool is supported and is often what you want: it pools quota and gives each Pool fallback without a dedicated account. It has one consequence worth knowing before you use Pools as a boundary between groups who should not observe each other.
+Assigning the same upstream account to more than one Pool is supported and is usually what you want: it pools quota and gives each Pool fallback without a dedicated account.
 
-The provider's prompt-prefix cache is not scoped to the account that warmed it, and it is not scoped to your Pools. Measured against a provider in September 2026: content sent under one upstream account was served back as cached input tokens under a different account, across accounts with separate account ids, separate user ids and no shared workspace. Codex Pooler derives its provider session hint per Pool and per API key, so a hint-based cache hit cannot cross a Pool boundary — but the provider also matches on content alone, which nothing on this side namespaces.
+**Nobody can read anyone else's prompts.** Codex Pooler never stores prompts, and nothing described below gives any caller a way to retrieve, list or reconstruct content they do not already have. If you are evaluating whether this is safe to use, that is the answer.
 
-What that means in practice: if two Pools share an upstream account, a client of one Pool that sends a prompt prefix can observe a non-zero cached token count when that exact prefix was sent earlier by a client of the other Pool. It reveals no content and retrieves nothing; it is a confirmation signal that identical bytes were seen before by someone sharing the account.
+The detail worth knowing is about the provider's prompt-prefix cache, which exists to make repeated prefixes cheaper. That cache matches on content, and it is not partitioned by the account that filled it: measured against a provider in September 2026, content sent under one upstream account came back as cached input tokens under a different account. This is the provider's own behaviour and it applies to anyone sharing an account, with or without Codex Pooler in front of it.
 
-For a single team or operator this is an efficiency, not a risk, and no action is needed. If your Pools represent genuinely separate tenants who must not learn what the others send, give each tenant its own upstream accounts. No Codex Pooler setting removes this, because the cache lives at the provider.
+The only thing that behaviour exposes is a yes-or-no answer about bytes you already hold. If you send a prefix and the response reports cached input tokens, you learn that those exact bytes had been sent before by someone sharing the account. You had to possess them to send them, so you learn nothing about content you did not already have, and there is no way to go from a cache hit to anything you were not already holding.
+
+Where that could matter in practice is a shared artifact rather than someone's typing: if you already have a document, a system prompt or a code file, you could use this to test whether it had previously been sent through the same account. Guessing a colleague's prompt is not a realistic use of it — provider caches match long exact prefixes, so you would need the text verbatim first.
+
+For a single team or operator this is simply an efficiency and needs no action. If your Pools are separate customers or separate legal entities, and even that yes-or-no answer about a shared file is more than you want between them, give each its own upstream accounts. No Codex Pooler setting changes it, because the cache lives at the provider.
 
 ## API Keys Step
 
