@@ -479,14 +479,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     @tag :session_continuity_contention
     @tag timeout: 30_000
-    test "a bounded renewal behind a session holder waiting on the API key row names that wait" do
+    test "a bounded renewal behind a session holder waiting on the key-wide mutex names that wait" do
       fixture = unboxed_owner_session_fixture("bounded-renewal-api-key-chain", 1)
       api_key = fixture.auth.api_key
       parent = self()
       ref = make_ref()
 
-      # The API key row is shared by every session of the key; this holder takes
-      # it the way every runtime reservation, claim, and finalization does.
+      # The key-wide reservation mutex is shared by every session of the key;
+      # this holder takes it the way every runtime reservation does. The
+      # `api_keys` row itself is only read under the reader lock, so the wait
+      # this chain reports is the mutex, not the row.
       key_holder =
         Task.async(fn ->
           Sandbox.unboxed_run(Repo, fn ->
@@ -534,7 +536,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         assert_receive {:session_holder_locked, ^ref, session_holder_backend_pid}, 5_000
 
         assert observe_session_holder_wait!(session_holder_backend_pid, key_holder_backend_pid) ==
-                 "api_keys"
+                 "api_key_reservation_window"
 
         renewal =
           Task.async(fn ->
@@ -557,7 +559,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
         assert holder.pid == session_holder_backend_pid
 
-        assert %{state: "active", wait_event_type: "Lock", waiting_relation: "api_keys"} = holder
+        assert %{
+                 state: "active",
+                 wait_event_type: "Lock",
+                 waiting_relation: "api_key_reservation_window"
+               } = holder
+
         assert holder.query_fingerprint =~ ~r/\A[0-9a-f]{12}\z/
         assert is_integer(holder.transaction_age_ms) and holder.transaction_age_ms >= 0
 
@@ -1825,6 +1832,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline)
   end
 
+  # A waiter blocked on a row names its relation; one blocked on the key-wide
+  # reservation mutex names no relation at all, because an advisory lock has
+  # none.
+  defp blocked_lock_target!(query) do
+    case Regex.run(~r/FROM "(\w+)"/, query) do
+      [_match, relation] -> relation
+      nil -> advisory_lock_target!(query)
+    end
+  end
+
+  defp advisory_lock_target!(query) do
+    if query =~ "pg_advisory_xact_lock",
+      do: "api_key_reservation_window",
+      else: flunk("blocked renewal statement did not name a relation")
+  end
+
   defp do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline) do
     rows =
       Sandbox.unboxed_run(Repo, fn ->
@@ -1840,10 +1863,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     case rows do
       [[query]] ->
-        case Regex.run(~r/FROM "(\w+)"/, query) do
-          [_match, relation] -> relation
-          nil -> flunk("blocked renewal statement did not name a relation")
-        end
+        blocked_lock_target!(query)
 
       [] ->
         if System.monotonic_time(:millisecond) >= deadline do

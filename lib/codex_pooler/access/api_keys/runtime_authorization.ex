@@ -12,6 +12,8 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
   @revoked_status "revoked"
   @disabling_statuses [@paused_status, @revoked_status]
 
+  @reservation_window_lock_space "api_key_reservation_window"
+
   @type epoch :: non_neg_integer()
   @type authorization :: %{
           required(:api_key) => APIKey.t(),
@@ -35,8 +37,8 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
               required(:disabling_epoch) => epoch()
             }
 
-  # Row locks on `api_keys` come in two modes, and a transaction takes one mode
-  # per key.
+  # Locking a key for a runtime turn comes in three modes, and a transaction
+  # takes one mode per key.
   #
   # The reader lock (`FOR SHARE`: `lock_for_read/1`, `capture/1`,
   # `authorize_turn_for_read/2`) is a consistent read of `status` and
@@ -45,13 +47,23 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
   # row together and never block foreign-key `FOR KEY SHARE` checks, while a
   # status or epoch change waits for every reader still holding the row.
   #
-  # The writer lock (`FOR UPDATE`: `authorize_turn/2`,
-  # `prepare_status_transition/2`) belongs to a transaction that later writes
-  # the row, or that relies on the row to serialize a key-wide check-then-act,
-  # such as a reservation enforcing window limits summed over the whole key.
+  # The reservation mode (`authorize_turn/2`) needs both the consistent read and
+  # a key-wide mutex, because a reservation enforces window limits summed over
+  # the whole key while locking only the effective policy binding. It takes the
+  # reader lock for the read and a transaction-scoped advisory lock for the
+  # mutex, so same-key reservations still serialize with each other while every
+  # reader -- owner-lease renewal, catalog authorization, websocket claim,
+  # replay, finalization -- stops queueing behind them. The `api_keys` row
+  # itself must not be the mutex: a row lock is held to commit, so it would
+  # cover the whole reservation write set and make each reader wait for it.
+  #
+  # The writer lock (`FOR UPDATE`: `prepare_status_transition/2`) belongs to a
+  # transaction that later writes the row.
   #
   # Never take the writer lock, or write the row, after the reader lock in the
-  # same transaction: two readers upgrading their lock deadlock.
+  # same transaction: two readers upgrading their lock deadlock. Within one
+  # transaction the advisory mutex is taken before the row, so two reservations
+  # cannot order the two objects differently.
 
   @spec lock_for_read(Ecto.UUID.t() | nil) :: APIKey.t() | nil
   def lock_for_read(api_key_id) do
@@ -75,7 +87,8 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
 
     api_key_or_id
     |> api_key_id()
-    |> lock_api_key(:write)
+    |> lock_reservation_window()
+    |> lock_api_key(:read)
     |> turn_authorization(captured_epoch)
   end
 
@@ -135,6 +148,23 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
     do: disabled_disposition(api_key)
 
   defp turn_authorization(nil, _captured_epoch), do: missing_disposition()
+
+  # `pg_advisory_xact_lock/2` keeps this mutex in its own two-argument lock
+  # space, so it cannot collide with the single-argument advisory locks taken
+  # elsewhere, and PostgreSQL releases it at commit or rollback without a
+  # matching unlock. A key id that hashes to the same 32-bit value as another
+  # one only serializes two keys that did not have to serialize; it never
+  # admits a turn that the window limits would deny.
+  defp lock_reservation_window(nil), do: nil
+
+  defp lock_reservation_window(api_key_id) do
+    Repo.query!(
+      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+      [@reservation_window_lock_space, api_key_id]
+    )
+
+    api_key_id
+  end
 
   defp lock_api_key(nil, _mode), do: nil
 

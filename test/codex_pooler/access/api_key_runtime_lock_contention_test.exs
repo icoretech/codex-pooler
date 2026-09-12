@@ -73,6 +73,79 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
     end
   end
 
+  test "a runtime reader does not wait on a reservation holding the key-wide mutex", %{
+    fixture: fixture
+  } do
+    try do
+      holder = hold_reservation_lock!(fixture)
+
+      {backend, locked} =
+        run_without_lock_wait(fn -> Access.lock_api_key_for_read(fixture.api_key.id) end)
+
+      assert backend != holder.backend
+      assert %APIKey{id: api_key_id, status: "active"} = locked
+      assert api_key_id == fixture.api_key.id
+      assert release!(holder) == {:ok, :released}
+    after
+      shutdown_participants()
+    end
+  end
+
+  test "a foreign-key child insert does not wait on a reservation", %{fixture: fixture} do
+    try do
+      holder = hold_reservation_lock!(fixture)
+
+      {backend, session} = run_without_lock_wait(fn -> insert_dashboard_session!(fixture) end)
+
+      assert backend != holder.backend
+      assert %APIKeyDashboardSession{api_key_id: api_key_id} = session
+      assert api_key_id == fixture.api_key.id
+      assert release!(holder) == {:ok, :released}
+    after
+      shutdown_participants()
+    end
+  end
+
+  test "a second same-key reservation waits for the key-wide mutex", %{fixture: fixture} do
+    try do
+      holder = hold_reservation_lock!(fixture)
+
+      assert :lock_not_available =
+               expect_lock_wait(fn ->
+                 Access.authorize_api_key_runtime_turn(fixture.api_key.id, 0)
+               end)
+
+      assert release!(holder) == {:ok, :released}
+
+      # The mutex is released with the holder's transaction, so the next
+      # reservation of the same key authorizes without waiting.
+      {_backend, result} =
+        run_without_lock_wait(fn ->
+          Access.authorize_api_key_runtime_turn(fixture.api_key.id, 0)
+        end)
+
+      assert {:ok, %{runtime_revocation_epoch: 0}} = result
+    after
+      shutdown_participants()
+    end
+  end
+
+  test "a revocation waits for a reservation still holding the key", %{fixture: fixture} do
+    try do
+      holder = hold_reservation_lock!(fixture)
+      revocation = start_revocation!(fixture)
+
+      assert await_waiting_on!(revocation.backend, holder.backend) == "api_keys"
+      assert %APIKey{status: "active", runtime_revocation_epoch: 0} = committed_api_key(fixture)
+      assert release!(holder) == {:ok, :released}
+
+      assert {:ok, %APIKey{status: "revoked", runtime_revocation_epoch: 1}} =
+               Task.await(revocation.task, @detection_budget_ms)
+    after
+      shutdown_participants()
+    end
+  end
+
   test "a revocation waits for every reader holding the row and later authorizations are rejected",
        %{fixture: fixture} do
     try do
@@ -106,6 +179,58 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
     after
       shutdown_participants()
     end
+  end
+
+  defp hold_reservation_lock!(fixture) do
+    parent = self()
+    ref = make_ref()
+
+    task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn -> reservation_holder(parent, ref, fixture.api_key.id) end)
+      end)
+
+    track_participant(%{task: task, ref: ref})
+    assert_receive {:reservation_started, ^ref, backend}, @detection_budget_ms
+
+    receive do
+      {:reservation_holding, ^ref, authorization} ->
+        assert {:ok, %{runtime_revocation_epoch: 0}} = authorization
+        %{task: task, ref: ref, backend: backend}
+    after
+      @detection_budget_ms -> flunk("the reservation holder did not report its locks")
+    end
+  end
+
+  defp reservation_holder(parent, ref, api_key_id) do
+    Repo.transaction(fn ->
+      set_no_wait_lock_timeout!()
+      send(parent, {:reservation_started, ref, backend_pid!()})
+
+      send(
+        parent,
+        {:reservation_holding, ref, Access.authorize_api_key_runtime_turn(api_key_id, 0)}
+      )
+
+      receive do
+        {:release_participant, ^ref} -> :released
+      after
+        @detection_budget_ms -> raise "the reservation holder was not released"
+      end
+    end)
+  end
+
+  defp expect_lock_wait(fun) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.transaction(fn ->
+        set_no_wait_lock_timeout!()
+        fun.()
+        flunk("the statement did not wait for the key-wide reservation mutex")
+      end)
+    end)
+  rescue
+    error in Postgrex.Error ->
+      if lock_not_available?(error), do: :lock_not_available, else: reraise(error, __STACKTRACE__)
   end
 
   defp hold_reader_lock!(fixture) do

@@ -10,6 +10,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.LockWaitDiagnostics 
   # reduced to a fingerprint here and never returned. Both backend pids are
   # returned so operators can join the Pooler warning to PostgreSQL lock-wait
   # log lines, which name waiter and holder by pid.
+  #
+  # A blocker that is itself waiting is named by the relation it waits on, and
+  # when that wait is on no relation at all -- the key-wide reservation mutex is
+  # a transaction-scoped advisory lock -- by the mutex's own bounded label. A
+  # holder blocked on the reservation mutex would otherwise report no wait,
+  # which is the one case this diagnostic exists to explain.
 
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL
@@ -38,13 +44,25 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.LockWaitDiagnostics 
   (EXTRACT(EPOCH FROM clock_timestamp() - a.xact_start) * 1000)::bigint,
   a.application_name,
   a.query,
-  CASE WHEN a.wait_event_type = 'Lock' THEN (
-    SELECT c.relname
-    FROM pg_locks AS l
-    JOIN pg_class AS c ON c.oid = l.relation
-    WHERE l.pid = a.pid AND (l.locktype = 'tuple' OR NOT l.granted)
-    ORDER BY l.granted
-    LIMIT 1
+  CASE WHEN a.wait_event_type = 'Lock' THEN COALESCE(
+    (
+      SELECT c.relname
+      FROM pg_locks AS l
+      JOIN pg_class AS c ON c.oid = l.relation
+      WHERE l.pid = a.pid AND (l.locktype = 'tuple' OR NOT l.granted)
+      ORDER BY l.granted
+      LIMIT 1
+    ),
+    (
+      SELECT CASE
+               WHEN l.classid = hashtext('api_key_reservation_window')
+                 THEN 'api_key_reservation_window'
+               ELSE 'advisory'
+             END
+      FROM pg_locks AS l
+      WHERE l.pid = a.pid AND l.locktype = 'advisory' AND NOT l.granted
+      LIMIT 1
+    )
   ) END
   """
 

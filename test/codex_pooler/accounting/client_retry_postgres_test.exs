@@ -305,8 +305,11 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
         end
       end
 
-    assert Enum.map(schedules, & &1.total) == [336, 336, 336]
-    assert Enum.map(schedules, & &1.per_operation) == [21, 21, 21]
+    # Twenty-two statements per claim, the twenty-second being the key-wide
+    # reservation mutex `pg_advisory_xact_lock/2` that the reservation mode
+    # takes before it reads the key row.
+    assert Enum.map(schedules, & &1.total) == [352, 352, 352]
+    assert Enum.map(schedules, & &1.per_operation) == [22, 22, 22]
     assert Enum.map(schedules, & &1.operation_sources) |> Enum.uniq() |> length() == 1
   end
 

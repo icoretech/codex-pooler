@@ -962,14 +962,21 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
           event.for_update?
       end)
 
+    # The reservation authorizes the key under the reader lock and serializes
+    # its key-wide window check on the advisory mutex instead, so the writer
+    # lock must not appear on this path at all.
+    refute Enum.any?(events, fn event ->
+             event.source == "api_keys" and event.operation == "SELECT" and event.for_update?
+           end)
+
     api_key_lock_index =
       events
       |> Enum.with_index()
       |> Enum.filter(fn {event, _index} ->
-        event.source == "api_keys" and event.operation == "SELECT" and event.for_update?
+        event.source == "api_keys" and event.operation == "SELECT" and event.for_share?
       end)
       |> List.last()
-      |> then(fn {_, index} -> index end)
+      |> then(fn {_event, index} -> index end)
 
     assert is_integer(session_lock_index)
     assert is_integer(api_key_lock_index)

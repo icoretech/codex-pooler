@@ -736,10 +736,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp requested_model(payload, opts), do: attr(opts, :requested_model) || attr(payload, :model)
 
-  # Reservations keep the `api_keys` writer lock. Window limits are checked
-  # against usage summed over the whole key, while only the effective policy
-  # binding row is locked, so two same-key requests that resolve to different
-  # bindings (a model binding and the default one) serialize only on this row.
+  # Window limits are checked against usage summed over the whole key, while
+  # only the effective policy binding row is locked, so two same-key requests
+  # that resolve to different bindings (a model binding and the default one)
+  # need a key-wide mutex of their own. `authorize_api_key_runtime_turn/2`
+  # supplies it as an advisory lock and reads the key under the reader lock, so
+  # the mutex covers this transaction's whole write set without making every
+  # `api_keys` reader on the key wait for it to commit.
   defp authorize_runtime_turn!(api_key, captured_epoch) do
     case Access.authorize_api_key_runtime_turn(api_key, captured_epoch) do
       {:ok, %{api_key: authorized_api_key}} -> authorized_api_key
