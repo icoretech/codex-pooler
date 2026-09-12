@@ -14,7 +14,18 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   alias CodexPooler.Gateway.Persistence.SessionContinuity.LockWaitDiagnostics
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
+
+  @typedoc """
+  The VM that owns a session: its node name and the incarnation that minted it.
+
+  `boot_id` is `nil` only when the incarnation is genuinely unknown — an owner
+  named as a bare node string by a caller that is not that node. Unknown is
+  never treated as a match, so an unknown incarnation can neither claim a lease
+  nor be proved absent.
+  """
+  @type owner :: %{node_name: String.t(), boot_id: String.t() | nil}
 
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
   @type renewal_option :: {:lock_timeout_ms, pos_integer()}
@@ -25,7 +36,34 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   @lease_expired OwnerLeaseStatus.expired_status()
   @lease_released OwnerLeaseStatus.released_status()
 
-  @spec acquire!(CodexSession.t(), map(), RequestOptions.t(), String.t(), DateTime.t()) ::
+  @doc """
+  The VM this request options value names as the session owner.
+
+  With no explicit override the owner is this VM, node name and incarnation
+  together. An override naming this node carries this VM's incarnation, which
+  is the owner-forwarding takeover path taking the lease for itself. An
+  override naming another node names an incarnation nobody here can know, so it
+  stays `nil` rather than borrowing the local one — a fabricated incarnation
+  would let this VM claim a lease it does not own.
+  """
+  @spec owner_instance(RequestOptions.t()) :: owner()
+  def owner_instance(%RequestOptions{} = request_options) do
+    local = InstancePresence.local_identity()
+    boot_id = blank_to_nil(request_options.continuity.owner_instance_boot_id)
+
+    case blank_to_nil(request_options.continuity.owner_instance_id) do
+      nil ->
+        %{node_name: local.node_name, boot_id: local.boot_id}
+
+      node_name when node_name == local.node_name ->
+        %{node_name: node_name, boot_id: boot_id || local.boot_id}
+
+      node_name ->
+        %{node_name: node_name, boot_id: boot_id}
+    end
+  end
+
+  @spec acquire!(CodexSession.t(), map(), RequestOptions.t(), owner(), DateTime.t()) ::
           BridgeOwnerLease.t()
   def acquire!(%CodexSession{} = session, auth, %RequestOptions{} = opts, owner, now) do
     expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
@@ -39,18 +77,19 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     |> Repo.update_all(set: [status: @lease_expired, released_at: now, updated_at: now])
 
     case active_for_update(session.id) do
-      %BridgeOwnerLease{owner_instance_id: ^owner} = lease ->
-        lease
-        |> Ecto.Changeset.change(%{
-          pool_upstream_assignment_id: session.pool_upstream_assignment_id,
-          renewed_at: now,
-          expires_at: expires_at,
-          updated_at: now
-        })
-        |> Repo.update!()
-
       %BridgeOwnerLease{} = lease ->
-        lease
+        if own_lease?(lease, owner) do
+          lease
+          |> Ecto.Changeset.change(%{
+            pool_upstream_assignment_id: session.pool_upstream_assignment_id,
+            renewed_at: now,
+            expires_at: expires_at,
+            updated_at: now
+          })
+          |> Repo.update!()
+        else
+          lease
+        end
 
       nil ->
         %BridgeOwnerLease{}
@@ -59,7 +98,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
           pool_id: auth.pool.id,
           api_key_id: auth.api_key.id,
           pool_upstream_assignment_id: session.pool_upstream_assignment_id,
-          owner_instance_id: owner,
+          owner_instance_id: owner.node_name,
+          owner_instance_boot_id: owner.boot_id,
           lease_token: Ecto.UUID.generate(),
           status: @lease_active,
           acquired_at: now,
@@ -73,11 +113,33 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     end
   end
 
+  # Renewing an active lease is claiming to be the VM that holds it, so the
+  # claim has to name a VM. The node name alone is an address: it derives from
+  # the pod IP, so a container that restarts in place comes back under it, and
+  # matching on the name alone is exactly what let a successor renew the lease
+  # of the VM it replaced and keep a destroyed owner's session alive.
+  #
+  # The match is on the whole identity, so a live incarnation never matches a
+  # different one and never matches a lease that carries none. A restarted VM
+  # therefore falls through to the branch that hands back a lease it does not
+  # own, and its caller takes the ordinary owner-unavailable takeover, which
+  # releases that lease and mints a fresh one under the new incarnation.
+  #
+  # Two owners that both name no incarnation still match. That is the
+  # pre-incarnation world exactly as it was — an owner named only by node name,
+  # and a lease written before this change — preserved rather than broken,
+  # because nothing there can tell the two apart in either direction.
+  defp own_lease?(%BridgeOwnerLease{} = lease, owner) do
+    lease.owner_instance_id == owner.node_name and
+      lease.owner_instance_boot_id == owner.boot_id
+  end
+
   @spec persist_session!(CodexSession.t(), BridgeOwnerLease.t(), DateTime.t()) :: CodexSession.t()
   def persist_session!(%CodexSession{} = session, %BridgeOwnerLease{} = lease, now) do
     session
     |> Ecto.Changeset.change(%{
       owner_instance_id: lease.owner_instance_id,
+      owner_instance_boot_id: lease.owner_instance_boot_id,
       owner_lease_token: lease.lease_token,
       owner_lease_expires_at: lease.expires_at,
       last_heartbeat_at: now,
@@ -163,6 +225,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
         session
         |> Ecto.Changeset.change(%{
           owner_instance_id: renewed_lease.owner_instance_id,
+          owner_instance_boot_id: renewed_lease.owner_instance_boot_id,
           owner_lease_token: renewed_lease.lease_token,
           owner_lease_expires_at: expires_at,
           last_heartbeat_at: now,
@@ -218,7 +281,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
           {:ok, CodexSession.t()} | {:error, term()}
   def replace_unavailable(session_ref, %RequestOptions{} = opts) do
     now = now()
-    owner = owner_instance_id(opts)
+    owner = owner_instance(opts)
     expected_owner = expected_owner_snapshot(session_ref)
 
     Repo.transaction(fn ->
@@ -317,7 +380,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       pool_id: session.pool_id,
       api_key_id: session.api_key_id,
       pool_upstream_assignment_id: session.pool_upstream_assignment_id,
-      owner_instance_id: owner,
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       lease_token: Ecto.UUID.generate(),
       status: @lease_active,
       acquired_at: now,
@@ -451,12 +515,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       seconds when is_integer(seconds) and seconds > 0 -> seconds
       _value -> OperationalSettings.current().bridge_owner_lease_ttl_seconds
     end
-  end
-
-  defp owner_instance_id(%RequestOptions{} = request_options) do
-    request_options.continuity.owner_instance_id
-    |> blank_to_nil()
-    |> Kernel.||(Atom.to_string(node()))
   end
 
   defp normalize_metadata(metadata) when is_map(metadata), do: metadata

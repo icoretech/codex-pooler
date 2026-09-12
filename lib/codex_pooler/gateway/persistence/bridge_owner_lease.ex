@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Persistence.BridgeOwnerLease do
     field :api_key_id, :binary_id
     field :pool_upstream_assignment_id, :binary_id
     field :owner_instance_id, :string
+    field :owner_instance_boot_id, :string
     field :lease_token, :binary_id
     field :status, :string
     field :acquired_at, :utc_datetime_usec
@@ -38,6 +39,7 @@ defmodule CodexPooler.Gateway.Persistence.BridgeOwnerLease do
       :api_key_id,
       :pool_upstream_assignment_id,
       :owner_instance_id,
+      :owner_instance_boot_id,
       :lease_token,
       :status,
       :acquired_at,

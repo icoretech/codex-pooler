@@ -52,7 +52,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   def start_codex_session(auth, %RequestOptions{} = opts) do
     now = now()
     session_key = session_key(opts)
-    owner = owner_instance_id(opts)
+    owner = OwnerLease.owner_instance(opts)
 
     with :ok <- authorize_runtime_session(auth, opts) do
       Repo.transaction(fn ->
@@ -123,7 +123,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp start_codex_session_from_previous_response_id(auth, opts, previous_response_id) do
     now = now()
-    owner = owner_instance_id(opts)
+    owner = OwnerLease.owner_instance(opts)
 
     with :ok <- authorize_runtime_session(auth, opts) do
       Repo.transaction(fn ->
@@ -137,7 +137,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp start_codex_session_from_turn_state(auth, opts, turn_state) do
     now = now()
-    owner = owner_instance_id(opts)
+    owner = OwnerLease.owner_instance(opts)
 
     with :ok <- authorize_runtime_session(auth, opts) do
       Repo.transaction(fn ->
@@ -503,7 +503,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> Ecto.Changeset.change(%{
       api_key_id: auth.api_key.id,
       status: @session_active,
-      owner_instance_id: owner,
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       owner_lease_token: session.owner_lease_token || Ecto.UUID.generate(),
       owner_lease_expires_at: DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second),
       last_heartbeat_at: now,
@@ -521,7 +522,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       session_key: session_key,
       conversation_key: conversation_key(opts),
       status: @session_active,
-      owner_instance_id: owner,
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       owner_lease_token: Ecto.UUID.generate(),
       owner_lease_expires_at: DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second),
       last_heartbeat_at: now,
@@ -742,12 +744,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp conversation_key(%RequestOptions{} = request_options) do
     request_options.continuity.conversation_key |> blank_to_nil()
-  end
-
-  defp owner_instance_id(%RequestOptions{} = request_options) do
-    request_options.continuity.owner_instance_id
-    |> blank_to_nil()
-    |> Kernel.||(Atom.to_string(node()))
   end
 
   defp pool_upstream_assignment_id(%RequestOptions{} = request_options) do

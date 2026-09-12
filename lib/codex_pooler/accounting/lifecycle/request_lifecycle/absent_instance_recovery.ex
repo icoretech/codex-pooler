@@ -52,7 +52,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
     limit = Keyword.get(opts, :limit, 100)
 
     now
-    |> absent_instance_attempts(cutoff, limit)
+    |> absent_instance_attempts(cutoff, limit, opts)
     |> Enum.reduce_while({:ok, initial_summary()}, &recover(&1, &2, now, opts))
   end
 
@@ -66,13 +66,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   # The join is on the incarnation, not the node name: an attempt with no
   # recorded boot id — every attempt written before incarnations existed — names
   # no incarnation, matches no presence row, and stays with the six-hour sweep.
-  defp absent_instance_attempts(now, cutoff, limit) do
+  # The liveness guard is handed this pass's window, and it judges a lease by
+  # the VM holding it: a lease held by an incarnation already proved absent is
+  # not live work and cannot shelter the attempt behind it. A successor that
+  # restarted under its predecessor's node name used to renew exactly such a
+  # lease, and this rejection then skipped the orphan.
+  defp absent_instance_attempts(now, cutoff, limit, opts) do
     cutoff
     |> open_attempts_of_absent_incarnations(limit)
     |> still_holding_their_reservation()
     |> Repo.all()
     |> Enum.reject(fn {request, _attempt} ->
-      RuntimeCleanup.active_runtime_request?(request, now)
+      RuntimeCleanup.active_runtime_request?(request, now, opts)
     end)
   end
 

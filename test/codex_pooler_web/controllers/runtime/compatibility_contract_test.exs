@@ -2807,6 +2807,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  presence: "shared_postgres_instance_presence_row_per_incarnation",
                  in_place_restart: "successor_incarnation_never_refreshes_predecessor_row",
                  pre_incarnation_attempt: "left_to_stale_reservation_sweep",
+                 session_owner: "session_and_lease_owner_node_name_and_boot_id",
+                 session_owner_claim:
+                   "same_incarnation_only_successor_takes_owner_unavailable_takeover",
+                 owner_lease_liveness: "absent_incarnation_lease_is_not_live_work",
+                 unknown_owner_lease: "treated_as_live_and_left_to_stale_reservation_sweep",
+                 pre_incarnation_session: "node_name_only_match_preserved_and_never_recoverable",
                  liveness_window_seconds: 120,
                  live_instance: "never_finalized",
                  unknown_instance: "left_to_stale_reservation_sweep",

@@ -23,6 +23,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     :session_key,
     :conversation_key,
     :owner_instance_id,
+    :owner_instance_boot_id,
     :bridge_owner_lease_ttl_seconds,
     :reconnect_window_seconds,
     :codex_session,
@@ -44,6 +45,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
           session_key: String.t() | nil,
           conversation_key: String.t() | nil,
           owner_instance_id: String.t() | nil,
+          owner_instance_boot_id: String.t() | nil,
           bridge_owner_lease_ttl_seconds: pos_integer() | nil,
           reconnect_window_seconds: non_neg_integer() | nil,
           codex_session: term(),
@@ -68,6 +70,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       session_key: Map.get(opts, :session_key),
       conversation_key: Map.get(opts, :conversation_key),
       owner_instance_id: Map.get(opts, :owner_instance_id),
+      owner_instance_boot_id: Map.get(opts, :owner_instance_boot_id),
       bridge_owner_lease_ttl_seconds:
         Normalization.optional_positive_integer(Map.get(opts, :bridge_owner_lease_ttl_seconds)),
       reconnect_window_seconds:
