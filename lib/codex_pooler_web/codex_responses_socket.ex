@@ -2280,14 +2280,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:ok, :replacement_handoff, ^control_ref} ->
         log_reconnect_disposition(state, :replacement_handoff)
 
-        {:ok,
-         Map.put(state, :websocket_owner_pending_handoff, %{
-           prepared: prepared,
-           semantic_turn_key: semantic_turn_key,
-           control_ref: control_ref,
-           owner_turn_id: Map.get(state, :websocket_owner_reconnect_turn_pid),
-           outcome_logged?: false
-         })}
+        {:ok, put_pending_owner_handoff(state, prepared, semantic_turn_key, control_ref)}
 
       {:ok, :duplicate_replacement, existing_ref} ->
         case Map.get(state, :websocket_owner_pending_handoff) do
@@ -2298,6 +2291,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:error, reason} ->
         reject_owner_preflight(reason, state)
     end
+  end
+
+  # Same reason as the queue: the frame waits in socket state while the
+  # predecessor turn is cancelled, so its capability parks rather than expiring
+  # underneath it (findings#169).
+  defp put_pending_owner_handoff(state, prepared, semantic_turn_key, control_ref) do
+    _parked = WebsocketCodec.park_prepared_frame(prepared)
+
+    Map.put(state, :websocket_owner_pending_handoff, %{
+      prepared: prepared,
+      semantic_turn_key: semantic_turn_key,
+      control_ref: control_ref,
+      owner_turn_id: Map.get(state, :websocket_owner_reconnect_turn_pid),
+      outcome_logged?: false
+    })
   end
 
   defp reject_owner_preflight(reason, state) do
@@ -2733,7 +2741,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     )
   end
 
+  # The frame is now reachable only from socket state and waits for the active
+  # turn to drain, which routinely outlasts the capability's 30 s reclaim timer
+  # — turns of 70 to 125 s were measured on this installation. Parking refreshes
+  # that timer so the dequeue re-seal still verifies, and leaves abandonment to
+  # the capability's monitor on this socket (findings#169). Correctness still
+  # rests on the dequeue re-seal, which already classifies a capability that is
+  # gone, so a capability that has already died needs no separate answer here.
   defp queue_prepared_response(state, prepared) do
+    _parked = WebsocketCodec.park_prepared_frame(prepared)
+
     Map.update(
       state,
       :queued_response_payloads,

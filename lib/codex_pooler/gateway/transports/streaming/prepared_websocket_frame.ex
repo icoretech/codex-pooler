@@ -8,8 +8,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
   Its capability is owned by the process that prepared the frame and is
   addressable through its distributed pid. A proxy socket can therefore retain
   one pending frame across a remote-owner handoff without sending the frame or
-  capability through the data-only owner control protocol. Owner exit or the
-  bounded capability lifetime invalidates pending execution.
+  capability through the data-only owner control protocol. Owner exit
+  invalidates pending execution; so does the capability's reclaim timer, unless
+  the socket has parked the capability because the frame is legitimately waiting
+  in socket state.
   """
 
   alias __MODULE__.Capability

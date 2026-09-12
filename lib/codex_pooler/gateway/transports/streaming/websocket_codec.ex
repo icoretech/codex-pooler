@@ -311,6 +311,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def consume_prepared_frame(_prepared), do: {:error, :invalid}
 
+  @doc """
+  Marks a prepared frame as legitimately waiting in socket state.
+
+  A parked capability refreshes its reclaim timer instead of stopping, so a
+  frame queued behind an in-flight turn or held across an owner handoff still
+  verifies when it is finally dequeued (findings#169). It is reclaimed when the
+  process that sealed it exits.
+  """
+  @spec park_prepared_frame(PreparedWebsocketFrame.t()) :: :ok | {:error, :invalid}
+  def park_prepared_frame(%PreparedWebsocketFrame{provenance: %{capability: capability}}),
+    do: Capability.park(capability)
+
+  def park_prepared_frame(%PreparedWebsocketFrame{}), do: {:error, :invalid}
+
   @doc false
   @spec attach_native_compaction_admission(
           PreparedWebsocketFrame.t(),

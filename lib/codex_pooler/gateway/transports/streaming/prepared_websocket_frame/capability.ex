@@ -19,6 +19,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
     %__MODULE__{server: server, reference: reference}
   end
 
+  # `@timeout_ms` is a reclaim bound for a capability that is sealed and then
+  # never used again, not a freshness or replay bound. Nothing re-checks a
+  # frame's age; the post-consume replies deliberately return without a timeout
+  # so a second dispatch still answers `:consumed` rather than `:invalid`, which
+  # leaves the redeem window unbounded anyway; and no caller or test depends on
+  # a frame becoming invalid at any particular age.
+  #
+  # Parking says the frame is still reachable from socket state — queued behind
+  # an in-flight turn, or held across an owner handoff — so the timer refreshes
+  # instead of firing. Production turns of 70-125 s were measured on this
+  # installation, so without this a queued frame lost its capability while it
+  # waited and the re-seal at dequeue failed as though the signature were wrong
+  # (findings#169). Abandonment of a parked capability is detected by the owner
+  # monitor below: the sealing process holds the only reference to the frame, so
+  # when it goes away nothing can dispatch the frame again.
+  @spec park(t()) :: :ok | {:error, :invalid}
+  def park(%__MODULE__{server: server, reference: reference})
+      when is_pid(server) and is_reference(reference) do
+    GenServer.call(server, {:park, reference}, 1_000)
+  catch
+    :exit, _reason -> {:error, :invalid}
+  end
+
   @spec seal(t(), binary(), <<_::256>> | nil, :native_compaction | :native_replay | nil) :: :ok
   def seal(
         %__MODULE__{server: server, reference: reference},
@@ -103,6 +126,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
        reference: reference,
        frame_token: nil,
        consumed?: false,
+       parked?: false,
        runtime_binding_digest: nil,
        runtime_proof_kind: nil,
        runtime_proof_nonce: nil,
@@ -128,6 +152,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
     else
       {:reply, {:error, :invalid}, state, @timeout_ms}
     end
+  end
+
+  def handle_call({:park, reference}, _from, %{reference: reference} = state) do
+    {:reply, :ok, %{state | parked?: true}, @timeout_ms}
+  end
+
+  def handle_call({:park, _reference}, _from, state) do
+    {:reply, {:error, :invalid}, state, @timeout_ms}
   end
 
   def handle_call(
@@ -255,6 +287,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
       }) do
     {:stop, :normal, %{}}
   end
+
+  def handle_info(:timeout, %{parked?: true} = state), do: {:noreply, state, @timeout_ms}
 
   def handle_info(:timeout, state), do: {:stop, :normal, state}
 
