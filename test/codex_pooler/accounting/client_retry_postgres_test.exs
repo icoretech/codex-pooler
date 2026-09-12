@@ -610,6 +610,11 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       )
     )
 
+    # Stamped input for the predicate, not a claim that anything produces it
+    # here. The real writer is `Interruption.interrupt_direct_request/2` on a
+    # `%DirectCleanup{}` receipt, covered end to end in
+    # `test/codex_pooler_web/controllers/runtime/backend_codex_pre_attempt_drain_resend_test.exs`
+    # (icoretech/codex-pooler-findings#160, #170).
     Repo.update!(
       Ecto.Changeset.change(request,
         request_metadata:
@@ -618,6 +623,8 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
     )
   end
 
+  # Same stamping contract as `:pre_attempt_drain` above: the marker is input to
+  # `verified_claim_only_drain?/1`, and the producer lives in the drain suite.
   defp finalize_predecessor(_setup, predecessor, turn, now, :claim_only_drain) do
     Repo.delete!(turn)
 

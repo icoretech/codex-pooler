@@ -148,11 +148,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
   end
 
-  # The socket's own fallback when a drained response task has no direct
-  # cleanup context left: it builds its owner response options, stamps the
-  # drain reason, and finalizes through `interrupt_codex_turn`, which reaches
-  # `interrupt_turn!`'s no-active-attempt branch instead of the receipt path.
-  test "interrupt_turn route releases the reservation and marks an owner-forwarded pre-attempt drain" do
+  # The `interrupt_turn!` no-active-attempt branch given options that carry the
+  # owner triple.
+  #
+  # READ THIS BEFORE TREATING IT AS PRODUCER COVERAGE: no interrupt caller on
+  # this tree builds those options. `drain_opts/3` assembles them from
+  # `DownstreamSession.response_options/2`, a *dispatch* builder that no
+  # interrupt path uses; every real caller that can reach this branch
+  # (`WebsocketOwnerSession.Persistence.interrupt_options/2`,
+  # `DownstreamSession.put_lifecycle_recovery_opts/2`,
+  # `RuntimeCleanup.recover_expired_owner_session_locked/2`, the socket's own
+  # fallbacks) supplies at most a lease token, so the branch reports
+  # `refused_clause=no_owner_binding` and writes no marker. That is asserted
+  # directly below.
+  #
+  # The marker a client resend actually reads is written by the receipt path,
+  # `interrupt_direct_request/2`, and it is covered end to end -- real drain,
+  # real predicate, nothing stamped -- in
+  # `backend_codex_pre_attempt_drain_resend_test.exs`.
+  test "interrupt_turn route marks an owner-forwarded pre-attempt drain when given an owner triple" do
     {setup, upstream, state} = fixture()
     attach_commit_barrier(:reservation)
 
@@ -193,11 +207,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
     assert [request] = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
     assert ledger_kinds(request) == ["reservation"]
 
-    assert {:ok, %{interrupted_turn_count: 1}} =
-             Websocket.interrupt_codex_turn(
-               state.codex_session,
-               drain_opts(state, request, "owner_crashed")
-             )
+    logs =
+      capture_marker_logs(fn ->
+        assert {:ok, %{interrupted_turn_count: 1}} =
+                 Websocket.interrupt_codex_turn(
+                   state.codex_session,
+                   drain_opts(state, request, "owner_crashed")
+                 )
+      end)
+
+    # A refusal has to name itself. A silent no-op here is what let the marker
+    # stay unwritten for ~1,000,000 requests without anyone noticing.
+    assert logs =~ "websocket pre-attempt drain marker not written"
+    assert logs =~ "refused_clause=non_drain_reason"
+    assert logs =~ "request_id=#{request.id}"
 
     assert %{status: "failed", last_error_code: "owner_crashed", usage_status: "usage_unknown"} =
              reloaded = Repo.reload!(request)
@@ -229,8 +252,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
 
     assert is_nil(unbound.transport.websocket_owner.lease_token)
 
-    assert {:ok, %{interrupted_turn_count: 1}} =
-             Websocket.interrupt_codex_turn(state.codex_session, unbound)
+    logs =
+      capture_marker_logs(fn ->
+        assert {:ok, %{interrupted_turn_count: 1}} =
+                 Websocket.interrupt_codex_turn(state.codex_session, unbound)
+      end)
+
+    # This is the clause every real caller of this branch reports today, which
+    # is why it logs at :info while an ordinary non-drain interruption stays at
+    # :debug. Seeing it in production is how an operator learns that a drain
+    # reached this branch and could not be marked.
+    assert logs =~ "websocket pre-attempt drain marker not written"
+    assert logs =~ "refused_clause=no_owner_binding"
+    assert logs =~ "interrupt_reason=owner_drained"
 
     assert %{status: "failed", last_error_code: "owner_drained"} =
              reloaded = Repo.reload!(request)
@@ -273,6 +307,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
     |> DownstreamSession.response_options()
     |> RequestOptions.put_runtime_context(interrupt_reason: reason)
     |> RequestOptions.put_request_metadata(request_id: request.correlation_id)
+  end
+
+  # The suite runs at :warning. The marker gate's refusals are :info (a drain
+  # that could not be marked) and :debug (an ordinary non-drain interruption),
+  # so both need the module level lowered for this module only.
+  defp capture_marker_logs(fun) do
+    :ok = Logger.put_module_level(Interruption, :debug)
+    on_exit(fn -> Logger.delete_module_level(Interruption) end)
+    ExUnit.CaptureLog.capture_log(fun)
   end
 
   defp untagged_payload(setup) do

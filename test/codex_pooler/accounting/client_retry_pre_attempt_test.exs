@@ -1,4 +1,19 @@
 defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
+  # PREDICATE tests, not drain tests. `predecessor_fixture/1` below stamps
+  # `websocket_pre_attempt_drain` onto the request itself and then asserts that
+  # `ClientRetry` admits or refuses the resend. That is deliberate and correct
+  # input for a predicate -- the predicate's job is to decide, not to produce --
+  # and the `mutate/2` cases depend on being able to vary it freely.
+  #
+  # What it cannot do is notice that nothing *writes* the marker, which is
+  # exactly what happened: the key had never been set once in ~1,000,000
+  # production requests while this file was green
+  # (icoretech/codex-pooler-findings#160, #170).
+  #
+  # The PRODUCER -- a real drain writing the marker and the release, with the
+  # real predicate reading them back and admitting the resend -- is covered in
+  # `test/codex_pooler_web/controllers/runtime/backend_codex_pre_attempt_drain_resend_test.exs`.
+  # If this file is green and that one is not, the capability does not exist.
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountingTestSupport
@@ -287,6 +302,10 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
         )
       )
 
+    # Stamped input: production writes this marker from
+    # `Interruption.interrupt_direct_request/2` on a `%DirectCleanup{}` receipt,
+    # which needs a live socket and owner and so cannot run here. See the module
+    # comment for where the producer is covered.
     request =
       Repo.update!(
         Ecto.Changeset.change(request,

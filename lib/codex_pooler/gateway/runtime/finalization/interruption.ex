@@ -115,9 +115,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     end
   end
 
-  defp pre_attempt_owner_receipt_matches?(session, request, receipt),
-    do: pre_attempt_owner_clause(session, request, receipt) == :matched
-
   defp pre_attempt_owner_clause(
          session,
          request,
@@ -867,12 +864,62 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   # Dialyzer proves the caller always holds a locked `%CodexSession{}` here, so
   # there is no second clause: an unreachable fallback would only hide a future
   # caller that does not.
+  #
+  # This gate refuses far more often than it admits, and every refusal used to
+  # be silent, which is how the marker's absence stayed invisible for ~1,000,000
+  # requests. It now names the clause that refused, for the same reason
+  # `interrupt_direct_request/2`'s gate does: a gate that never matches has to
+  # be distinguishable from a gate that is never reached, from the logs rather
+  # than from row shapes.
+  #
+  # Measured on this tree, no caller that can reach this branch with a
+  # pre-attempt request supplies the owner triple, so `no_owner_binding` is the
+  # clause this branch reports. The marker that a client resend actually reads
+  # is written by `interrupt_direct_request/2` instead, from a `%DirectCleanup{}`
+  # receipt, which is the path a downstream-socket drain really takes.
   defp mark_verified_pre_attempt_drain(%CodexSession{} = session, request, opts, reason) do
     evidence = owner_drain_evidence(opts)
 
-    if pre_attempt_owner_receipt_matches?(session, request, evidence),
-      do: mark_pre_attempt_owner_drain(request, evidence, reason),
-      else: request
+    case pre_attempt_drain_marker_clause(session, request, evidence, reason) do
+      :matched ->
+        mark_pre_attempt_owner_drain(request, evidence, reason)
+
+      {:not_matched, clause} ->
+        log_pre_attempt_marker_not_matched(request, reason, clause)
+        request
+    end
+  end
+
+  # `owner_binding: nil` is split out from `pre_attempt_owner_clause/3` on
+  # purpose. That clause answers `:matched` for a request that never forwarded
+  # to an owner, which is correct for the receipt gate but says nothing about
+  # the marker; the marker needs a binding no matter what, so naming its absence
+  # here is what makes the outcome readable.
+  defp pre_attempt_drain_marker_clause(_session, _request, _evidence, reason)
+       when reason != "owner_drained",
+       do: {:not_matched, "non_drain_reason"}
+
+  defp pre_attempt_drain_marker_clause(_session, _request, %{owner_binding: nil}, _reason),
+    do: {:not_matched, "no_owner_binding"}
+
+  defp pre_attempt_drain_marker_clause(session, request, evidence, _reason),
+    do: pre_attempt_owner_clause(session, request, evidence)
+
+  # An interruption for any reason other than a drain refuses here on every
+  # pre-attempt turn, which is the ordinary case, so it stays at debug. Every
+  # other clause is a drain that could have been marked and was not.
+  defp log_pre_attempt_marker_not_matched(request, reason, clause) do
+    message =
+      "websocket pre-attempt drain marker not written " <>
+        "request_id=#{safe_log_value(Map.get(request, :id))} " <>
+        "interrupt_reason=#{safe_log_value(reason)} " <>
+        "refused_clause=#{safe_log_value(clause)}"
+
+    if clause == "non_drain_reason",
+      do: Logger.debug(message),
+      else: Logger.info(message)
+
+    :ok
   end
 
   defp owner_drain_evidence(%RequestOptions{
