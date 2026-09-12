@@ -1376,6 +1376,167 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
+  # The affinity row is one event record under one ordering key, so these assert
+  # the whole tuple -- assignment, identity, metadata, both timestamps -- rather
+  # than one field, and they drive `record_success/3` and `record_failure/5`
+  # rather than the upsert, because the ordering rule is only worth anything
+  # where the real success and failure paths reach it.
+  describe "affinity event ordering" do
+    test "the later completion of two overlapping turns owns the whole tuple" do
+      setup = routing_setup(2)
+      seed = "affinity-overlap-ordering-key"
+      [{early_assignment, early_identity}, {late_assignment, late_identity}] = setup.candidates
+
+      # Both turns plan before either finishes: one key, two turns in flight.
+      early_plan = plan_for(setup, "bridge_ring", seed)
+      late_plan = plan_for(setup, "bridge_ring", seed)
+
+      assert early_plan.affinity.status == "miss"
+      assert late_plan.affinity.status == "miss"
+
+      assert :ok = BridgeRing.record_success(early_plan, early_assignment, early_identity)
+      assert [%BridgeAffinity{} = after_early] = active_affinities(setup, seed)
+      assert after_early.pool_upstream_assignment_id == early_assignment.id
+
+      assert :ok = BridgeRing.record_success(late_plan, late_assignment, late_identity)
+
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.id == after_early.id
+      assert row.pool_upstream_assignment_id == late_assignment.id
+      assert row.upstream_identity_id == late_identity.id
+      assert row.metadata == %{"source" => "gateway_success"}
+      assert row.updated_at == row.last_hit_at
+      assert DateTime.compare(row.last_hit_at, after_early.last_hit_at) == :gt
+      assert is_nil(row.last_miss_at)
+    end
+
+    test "a completion older than the stored event moves no part of the tuple" do
+      setup = routing_setup(2)
+      seed = "affinity-stale-completion-key"
+
+      [{stored_assignment, stored_identity}, {stale_assignment, stale_identity}] =
+        setup.candidates
+
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 stored_assignment,
+                 stored_identity
+               )
+
+      assert [%BridgeAffinity{} = stored] = active_affinities(setup, seed)
+
+      # The clock model is each writer's own wall clock at the moment its
+      # outcome lands, so the out-of-order writer is a node whose clock runs
+      # ahead: its event is already stamped in this writer's future. Only the
+      # stored row is posed; what is asserted is what the real success path
+      # does to it afterwards.
+      skewed = DateTime.add(stored.updated_at, 5, :second)
+
+      assert {1, nil} =
+               BridgeAffinity
+               |> where([row], row.id == ^stored.id)
+               |> Repo.update_all(set: [last_hit_at: skewed, updated_at: skewed])
+
+      stale_plan = plan_for(setup, "bridge_ring", seed)
+      assert stale_plan.affinity.status == "hit"
+
+      assert :ok = BridgeRing.record_success(stale_plan, stale_assignment, stale_identity)
+
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.id == stored.id
+      assert row.pool_upstream_assignment_id == stored_assignment.id
+      assert row.upstream_identity_id == stored_identity.id
+      assert row.last_hit_at == skewed
+      assert row.updated_at == skewed
+      assert row.metadata == %{"source" => "gateway_success"}
+
+      # The hint the ring reads is the one the stale completion failed to move.
+      replanned = plan_for(setup, "bridge_ring", seed)
+      {promoted_assignment, _identity} = hd(replanned.candidates)
+
+      assert replanned.affinity.status == "hit"
+      assert replanned.affinity.row.pool_upstream_assignment_id == stored_assignment.id
+      assert promoted_assignment.id == stored_assignment.id
+    end
+
+    test "a failure older than the stored event moves no part of the tuple" do
+      setup = routing_setup(2)
+      seed = "affinity-stale-miss-key"
+
+      [{stored_assignment, stored_identity}, {stale_assignment, stale_identity}] =
+        setup.candidates
+
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 stored_assignment,
+                 stored_identity
+               )
+
+      assert [%BridgeAffinity{} = stored] = active_affinities(setup, seed)
+      skewed = DateTime.add(stored.updated_at, 5, :second)
+
+      assert {1, nil} =
+               BridgeAffinity
+               |> where([row], row.id == ^stored.id)
+               |> Repo.update_all(set: [last_miss_at: skewed, updated_at: skewed])
+
+      stale_plan = plan_for(setup, "bridge_ring", seed)
+      assert stale_plan.affinity.status == "hit"
+
+      assert "upstream_5xx" ==
+               BridgeRing.record_failure(
+                 stale_plan,
+                 stale_assignment,
+                 stale_identity,
+                 "upstream_5xx"
+               )
+
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.id == stored.id
+      assert row.last_miss_at == skewed
+      assert row.updated_at == skewed
+      assert row.last_hit_at == stored.last_hit_at
+      assert row.pool_upstream_assignment_id == stored_assignment.id
+      assert row.upstream_identity_id == stored_identity.id
+    end
+
+    # The positive half of the miss rule: fencing that refused everything would
+    # satisfy the stale case above and record nothing at all.
+    test "a failure newer than the stored event records the miss" do
+      setup = routing_setup(2)
+      seed = "affinity-ordered-miss-key"
+      [{assignment, identity} | _rest] = setup.candidates
+
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 assignment,
+                 identity
+               )
+
+      assert [%BridgeAffinity{} = stored] = active_affinities(setup, seed)
+      assert is_nil(stored.last_miss_at)
+
+      assert "upstream_5xx" ==
+               BridgeRing.record_failure(
+                 plan_for(setup, "bridge_ring", seed),
+                 assignment,
+                 identity,
+                 "upstream_5xx"
+               )
+
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.id == stored.id
+      assert row.last_miss_at == row.updated_at
+      assert DateTime.compare(row.last_miss_at, stored.updated_at) == :gt
+      assert row.last_hit_at == stored.last_hit_at
+      assert row.pool_upstream_assignment_id == assignment.id
+      assert row.upstream_identity_id == identity.id
+    end
+  end
+
   describe "record_overload/4" do
     test "writes an ordering-only demotion and leaves affinity alone" do
       setup = routing_setup(2)

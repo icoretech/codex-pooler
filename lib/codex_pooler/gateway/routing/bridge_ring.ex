@@ -692,52 +692,81 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   defp windowless_tier?(%Model{} = model, candidate, %RouteState{} = route_state),
     do: QuotaEligibility.windowless_candidate?(model, candidate, route_state)
 
+  # One affinity row is one event record: the assignment, the identity, the
+  # metadata and the timestamps all describe the same completed turn, so one
+  # ordering key governs the whole tuple. The key is `updated_at`, carrying the
+  # writer's own clock at the moment the outcome landed, and a writer whose
+  # event is older than the stored one applies nothing at all. Fencing only the
+  # timestamps — which is what `GREATEST` on `last_hit_at`/`updated_at` did —
+  # leaves the routing hint free to move backwards under a timestamp that
+  # belongs to a different turn, which is the split this rule removes.
+  #
+  # The key is completion time and not plan time because the row is already a
+  # completion record: `last_hit_at` is stamped when a success lands, its
+  # counterpart `last_miss_at` when a failure does, and `metadata.source` says
+  # `gateway_success`. "The latest completed outcome for this key" is therefore
+  # the meaning the existing columns carry, and it needs no new durable marker.
+  # Keying on plan time would mean persisting a plan-time column and redefining
+  # `last_hit_at` away from its name, which is more machinery than this deserves:
+  # `apply_affinity/2` only promotes the named assignment within an already
+  # eligible shortlist, so a stale hint costs ordering, never admission.
+  #
+  # `insert_all/3` rather than `insert!/2` because a fenced conflict clause
+  # updates no row when it refuses, and `Repo.insert!/2` raises
+  # `Ecto.StaleEntryError` on exactly that. Refusing is the fence working, and
+  # routing bookkeeping must never fail a turn whose work is already finalized.
   defp upsert_affinity!(plan, assignment, identity, now) do
     metadata = %{"source" => "gateway_success"}
 
     on_conflict =
       from affinity in BridgeAffinity,
+        where: affinity.updated_at <= fragment("EXCLUDED.updated_at"),
         update: [
           set: [
             pool_upstream_assignment_id: ^assignment.id,
             upstream_identity_id: ^identity.id,
-            last_hit_at:
-              fragment(
-                "GREATEST(COALESCE(?, EXCLUDED.last_hit_at), EXCLUDED.last_hit_at)",
-                affinity.last_hit_at
-              ),
+            last_hit_at: fragment("EXCLUDED.last_hit_at"),
             metadata: ^metadata,
-            updated_at: fragment("GREATEST(?, EXCLUDED.updated_at)", affinity.updated_at)
+            updated_at: fragment("EXCLUDED.updated_at")
           ]
         ]
 
-    %{
-      pool_id: plan_affinity_scope(plan, :pool_id),
-      api_key_id: plan_affinity_scope(plan, :api_key_id),
-      model_identifier: plan_affinity_scope(plan, :model_identifier),
-      affinity_kind: plan.affinity.kind,
-      affinity_key_hash: plan.affinity.key_hash,
-      pool_upstream_assignment_id: assignment.id,
-      upstream_identity_id: identity.id,
-      status: BridgeAffinity.active_status(),
-      last_hit_at: now,
-      metadata: metadata,
-      created_at: now,
-      updated_at: now
-    }
-    |> then(&struct(BridgeAffinity, &1))
-    |> Repo.insert!(
+    Repo.insert_all(
+      BridgeAffinity,
+      [
+        %{
+          pool_id: plan_affinity_scope(plan, :pool_id),
+          api_key_id: plan_affinity_scope(plan, :api_key_id),
+          model_identifier: plan_affinity_scope(plan, :model_identifier),
+          affinity_kind: plan.affinity.kind,
+          affinity_key_hash: plan.affinity.key_hash,
+          pool_upstream_assignment_id: assignment.id,
+          upstream_identity_id: identity.id,
+          status: BridgeAffinity.active_status(),
+          last_hit_at: now,
+          metadata: metadata,
+          created_at: now,
+          updated_at: now
+        }
+      ],
       on_conflict: on_conflict,
       conflict_target: @affinity_conflict_target
     )
   end
 
+  # The same single rule as the success upsert, because a miss is an event on the
+  # same row: `updated_at` is the row's event clock, so a failure older than the
+  # stored event writes nothing rather than dragging the row's timestamps back to
+  # its own moment. The comparison belongs in the statement, not in Elixir: the
+  # writer it has to order against may be on another node.
   defp mark_affinity_miss!(plan, now) do
     case plan.affinity.row do
       %BridgeAffinity{} = affinity ->
-        affinity
-        |> Ecto.Changeset.change(%{last_miss_at: now, updated_at: now})
-        |> Repo.update!()
+        BridgeAffinity
+        |> where([row], row.id == ^affinity.id and row.updated_at <= ^now)
+        |> Repo.update_all(set: [last_miss_at: now, updated_at: now])
+
+        :ok
 
       nil ->
         :ok
