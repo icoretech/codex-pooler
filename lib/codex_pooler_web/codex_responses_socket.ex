@@ -1216,9 +1216,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     if not Map.get(state, :public_turn_owner_complete?, false) and owner_liveness_error?(result) do
       reason = owner_liveness_error(result)
 
+      # The fifth abort-shaped drop site, and the last one that answered nothing
+      # (findings#183). The close it already decided on stays: the active turn
+      # is the owner's to settle and the socket must not fabricate a terminal
+      # for it. The turns still waiting in the queue are different — they were
+      # submitted by a client that is still holding a per-`stream_id` promise,
+      # and a close names the connection, not which of those turns died. The
+      # answers ride out ahead of the close through
+      # `flush_discarded_submissions/1`, which already has the stop clause.
       state =
         state
-        |> drop_queued_responses()
+        |> discard_queued_responses(reason)
         |> finish_public_turn()
 
       {:stop, :normal, Adapter.close_detail(reason), state}
@@ -2853,8 +2861,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # own, and `abort_public_turn/2` can run any number of times on one socket
   # because `finish_public_turn/1` clears `public_turn_aborted?` again — so
   # writing `:queue.new()` inline left one live capability per discarded frame
-  # for the socket's whole life (findings#172). Raw payloads can also sit in this
-  # queue; they are prepared at dequeue and hold no capability yet.
+  # for the socket's whole life (findings#172). The second `release_dropped_frame/1`
+  # clause covers a raw entry, which only tests can construct; such an entry is
+  # prepared at dequeue and holds no capability yet.
   defp drop_queued_responses(state) do
     state
     |> Map.get(:queued_response_payloads, :queue.new())
@@ -2886,7 +2895,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp discarded_submission_error(:owner_drained), do: :owner_drained
   defp discarded_submission_error(_reason), do: :owner_unavailable
 
-  # The queue is heterogeneous by type, and only one half of it can be answered.
+  # The queue holds prepared frames and nothing else — `queue_prepared_response/2`
+  # is its only writer — so the second clause below defends the shape rather
+  # than a reachable case (findings#183; #175's body claimed the queue was
+  # heterogeneous and that claim was wrong). The invariant is pinned by
+  # `CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest`, because a
+  # future writer that queued raw bytes would have them dropped unanswered here
+  # — the exact silence findings#175 removed for prepared frames.
+  #
   # A prepared frame carries its own request and public stream identity, so it
   # gets the same bounded owner error `reject_prepared_response/2` gives a frame
   # refused at dispatch — addressed to the stream the frame itself opened, not

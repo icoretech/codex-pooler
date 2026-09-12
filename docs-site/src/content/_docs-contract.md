@@ -391,6 +391,23 @@ The source map for this claim is
 `test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs`, and
 `test/codex_pooler_web/controllers/runtime/backend_codex_websocket/socket_lifecycle_test.exs`.
 
+## Websocket error classification
+
+Public docs may state that every error frame Codex Pooler itself authors on a
+websocket carries an `error.type` that classifies retryability from an
+enumerated code vocabulary rather than a default: owner-lifecycle and overload
+codes and any other server-side failure use `server_error`, while a replaced or
+stale downstream and genuine request rejections use `invalid_request_error`.
+Do not publish the internal owner-lifecycle code list, owner identifiers, lease
+tokens, or frame contents.
+
+The source map for this claim is
+`lib/codex_pooler/gateway/websocket/adapter.ex`,
+`lib/codex_pooler/gateway/transports/websocket/owner_error_vocabulary.ex`,
+`test/codex_pooler/gateway/websocket/adapter_test.exs`,
+`test/codex_pooler_web/codex_responses_socket_owner_liveness_discard_test.exs`,
+and `test/support/compatibility_matrix.ex`.
+
 ## Metrics and operator-session boundaries
 
 `/metrics` is outside the runtime firewall. Public operator docs may describe

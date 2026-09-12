@@ -119,6 +119,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
       assert terminal["status"] == 503
       assert terminal["error"]["code"] == "owner_unavailable"
       assert terminal["error"]["message"] == "websocket owner is unavailable"
+      # findings#184: an SDK branches on `type`, and `invalid_request_error` is
+      # the terminal do-not-retry class. A lifecycle 503 is server class.
+      assert terminal["error"]["type"] == "server_error"
     end
 
     # Metadata only: no prompt, no frame body, no raw identifiers.
@@ -270,6 +273,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
     assert terminal["type"] == "error"
     assert terminal["stream_id"] == @first_stream_id
     assert terminal["error"]["code"] == "owner_drained"
+    assert terminal["error"]["type"] == "server_error"
     refute payload =~ "synthetic"
 
     refute cleared_state.websocket_owner_pending_handoff

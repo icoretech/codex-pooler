@@ -79,7 +79,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert error_frame ==
              ~s({"error":{"code":"upstream_request_failed",) <>
                ~s("message":"upstream request failed","param":null,) <>
-               ~s("type":"invalid_request_error"},"status":502,"type":"error"})
+               ~s("type":"server_error"},"status":502,"type":"error"})
 
     # Exactly one authored frame: nothing else is queued for the client. The
     # chunk pattern must carry the task pid, which is the arity production

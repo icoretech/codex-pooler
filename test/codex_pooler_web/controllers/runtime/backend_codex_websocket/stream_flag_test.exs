@@ -188,7 +188,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StreamFlagTest do
              "type" => "error",
              "status" => 500,
              "error" => %{
-               "type" => "invalid_request_error",
+               # findings#184: a status-500 fail-closed is server class.
+               "type" => "server_error",
                "code" => "websocket_transport_required"
              }
            } = Adapter.websocket_error(reason)

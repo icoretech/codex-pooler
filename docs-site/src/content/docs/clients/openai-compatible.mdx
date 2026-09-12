@@ -422,6 +422,19 @@ not promise cross-ID concurrency or fairness. `previous_response_id` controls
 conversation lineage independently. REST `POST /v1/responses`, native backend
 WebSockets, Chat, compact, and batches do not accept this field.
 
+### Websocket error frame types
+
+Error frames that Codex Pooler itself authors on `GET /v1/responses` carry an
+`error.type` that says whether the failure is worth retrying. Server-side
+failures, including the ones raised while the server hands a turn between
+connections, use `server_error`; the same request can succeed on a retry.
+`invalid_request_error` is reserved for frames the client must change before
+retrying, and for a connection that its own newer replacement superseded.
+
+Branch on `error.type` for retry decisions and treat `error.code` as an open
+string, as described below. The HTTP status on the frame agrees with the type:
+a `5xx` frame is never typed `invalid_request_error`.
+
 ### Relayed terminal errors
 
 When the Codex backend returns a genuine terminal error, Codex Pooler preserves its trimmed `error.code` only when

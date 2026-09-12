@@ -643,7 +643,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
                  "status" => 500,
                  "error" => %{
                    "message" => "websocket response task failed",
-                   "type" => "invalid_request_error",
+                   # findings#184: a status-500 task failure is server class.
+                   "type" => "server_error",
                    "code" => "websocket_response_task_failed",
                    "param" => nil
                  }
@@ -706,7 +707,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
                  "status" => 502,
                  "error" => %{
                    "message" => "upstream request failed",
-                   "type" => "invalid_request_error",
+                   # findings#184: a 502 upstream failure is server class.
+                   "type" => "server_error",
                    "code" => "upstream_request_failed",
                    "param" => nil
                  }

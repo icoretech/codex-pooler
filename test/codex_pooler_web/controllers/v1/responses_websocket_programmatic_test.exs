@@ -2405,7 +2405,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "type" => "error",
                "status" => 502,
                "error" => %{
-                 "type" => "invalid_request_error",
+                 # findings#184: a 502 upstream compaction failure is server class.
+                 "type" => "server_error",
                  "code" => "invalid_compaction_response",
                  "message" =>
                    "upstream compact response did not include encrypted compaction content",
@@ -2688,7 +2689,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "type" => "error",
                "status" => 502,
                "error" => %{
-                 "type" => "invalid_request_error",
+                 # findings#184: a 502 is server class.
+                 "type" => "server_error",
                  "code" => "server_error",
                  "message" =>
                    "upstream request failed: stream interrupted before terminal response event",

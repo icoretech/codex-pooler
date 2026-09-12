@@ -1533,7 +1533,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  "status" => 502,
                  "stream_id" => "lane-owner-upstream",
                  "error" => %{
-                   "type" => "invalid_request_error",
+                   # findings#184: a 502 is a server-side failure, and typing it
+                   # `invalid_request_error` told an SDK never to retry it.
+                   "type" => "server_error",
                    "code" => "server_error",
                    "message" =>
                      "upstream request failed: stream interrupted before terminal response event",
@@ -2575,14 +2577,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   test "websocket error frames leave unrelated errors without recovery fields" do
     {_result, logs} =
       with_native_turn_log(:warning, fn ->
-        for reason <- [
-              %{
-                status: 503,
-                code: "session_assignment_unavailable",
-                message: "session unavailable"
-              },
-              %{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
-              %{status: 400, code: "invalid_request", message: "request invalid"}
+        # findings#184: the type follows the reason's own class now. A 503 with
+        # no session assignment is a server-side failure the client should
+        # retry; the two 400s are genuine client rejections and keep the
+        # terminal class.
+        for {reason, expected_type} <- [
+              {%{
+                 status: 503,
+                 code: "session_assignment_unavailable",
+                 message: "session unavailable"
+               }, "server_error"},
+              {%{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
+               "invalid_request_error"},
+              {%{status: 400, code: "invalid_request", message: "request invalid"},
+               "invalid_request_error"}
             ] do
           assert {:push, {:text, payload}, _state} =
                    CodexResponsesSocket.handle_info(
@@ -2594,7 +2602,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
           assert decoded["error"] == %{
                    "message" => reason.message,
-                   "type" => "invalid_request_error",
+                   "type" => expected_type,
                    "code" => reason.code,
                    "param" => nil
                  }
@@ -2635,7 +2643,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert decoded["status"] == 500
         assert decoded["error"]["message"] == "websocket request failed: non_atom_reason"
         assert decoded["error"]["code"] == "websocket_request_failed"
-        assert decoded["error"]["type"] == "invalid_request_error"
+        # findings#184: a status-500 gateway failure is server class.
+        assert decoded["error"]["type"] == "server_error"
 
         refute payload =~ "raw-idempotency-key-secret"
         refute payload =~ "raw websocket prompt"
