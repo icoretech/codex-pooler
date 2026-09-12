@@ -54,4 +54,25 @@ defmodule CodexPooler.Accounting.FailureResponseTest do
     assert reason =~ "token_redacted"
     refute reason =~ "secret-raw-value"
   end
+
+  test "two unnameable reasons that differ only past an inspect limit still get different tokens" do
+    # The fingerprint exists to keep two different unnameable reasons apart, so
+    # it has to hash the term and not a rendering of it. `inspect/2` with a
+    # `:limit` elides everything past the limit, so these two collapse to one
+    # string -- and would have collapsed to one token.
+    long = Enum.to_list(1..40)
+    other_long = Enum.to_list(1..25) ++ Enum.to_list(100..114)
+
+    assert inspect(long, limit: 25) == inspect(other_long, limit: 25)
+
+    first = FailureResponse.safe_failure_reason(long)
+    second = FailureResponse.safe_failure_reason(other_long)
+
+    assert first =~ ~r/^unnamed_[0-9a-f]{12}$/
+    assert second =~ ~r/^unnamed_[0-9a-f]{12}$/
+    refute first == second
+
+    # And the same reason keeps the same token, or the signal is noise.
+    assert FailureResponse.safe_failure_reason(long) == first
+  end
 end

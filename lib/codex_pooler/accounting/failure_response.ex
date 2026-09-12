@@ -56,7 +56,8 @@ defmodule CodexPooler.Accounting.FailureResponse do
   # finalization failure. A fingerprint discloses nothing -- the term is
   # hashed, never rendered -- while keeping two different unnameable reasons
   # two different tokens.
-  def safe_failure_reason(reason), do: "unnamed_" <> fingerprint(inspect(reason, limit: 25))
+  def safe_failure_reason(reason),
+    do: "unnamed_" <> fingerprint(:erlang.term_to_binary(reason, [:deterministic]))
 
   defp record_id(%{id: id}) when is_binary(id), do: id
   defp record_id(_record), do: nil
@@ -75,11 +76,17 @@ defmodule CodexPooler.Accounting.FailureResponse do
 
   @fingerprint_length 12
 
+  # The term is hashed, never its rendering. `inspect/2` with a `:limit` is not
+  # a usable input here: it elides past the limit, so two genuinely different
+  # reasons collapse to the same string and therefore the same token, which is
+  # the one property this fingerprint exists to provide.
+  # `String.slice/3` rather than `binary_part/3` matches the fingerprint helpers
+  # elsewhere in this application and cannot raise on a short input.
   defp fingerprint(value) do
     :sha256
     |> :crypto.hash(value)
     |> Base.encode16(case: :lower)
-    |> binary_part(0, @fingerprint_length)
+    |> String.slice(0, @fingerprint_length)
   end
 
   defp scrub_sensitive_reason_text(reason) do
