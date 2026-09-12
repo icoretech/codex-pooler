@@ -2787,13 +2787,29 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  deadline: "shared_absolute_existing_budget",
                  settlement: "stream_process_finalizes_once",
                  upstream_health: "neutral",
-                 unsettled_stream: "aborted_and_left_to_stale_reservation_sweep",
+                 unsettled_stream: "aborted_then_left_to_absent_instance_recovery",
                  summary_counters: [
                    "http_streams_seen",
                    "http_streams_completed",
                    "http_streams_aborted",
                    "http_streams_failed"
                  ]
+               },
+               absent_instance_recovery: %{
+                 applies_to:
+                   "open attempt whose owning instance stopped publishing presence, including an attempt still waiting for the first upstream byte that no drain can reach",
+                 accounting_error_code: "absent_instance_recovered",
+                 response_status_code: 499,
+                 turn_status: "interrupted",
+                 reservation: "released",
+                 owner: "attempt_owner_instance_id",
+                 presence: "shared_postgres_instance_presence_row",
+                 liveness_window_seconds: 120,
+                 live_instance: "never_finalized",
+                 unknown_instance: "left_to_stale_reservation_sweep",
+                 upstream_health: "neutral",
+                 runs_in: "runtime_state_cleanup_pass",
+                 final_backstop: "stale_reservation_sweep_at_six_hours"
                },
                precommit_drain: "fail_closed_without_resubmission",
                client_disconnect: "unchanged",

@@ -21,6 +21,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   }
 
   alias CodexPooler.Accounting.RequestLifecycle.{
+    AbsentInstanceRecovery,
     IdentitySnapshot,
     LedgerEntries,
     Recovery,
@@ -30,6 +31,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Events
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
@@ -145,6 +147,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   @spec recover_stale_reservations(DateTime.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def recover_stale_reservations(now \\ DateTime.utc_now(), opts \\ []) do
     Recovery.recover_stale_reservations(DateTime.truncate(now, :microsecond), opts)
+  end
+
+  @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
+          {:ok, AbsentInstanceRecovery.summary()} | {:error, term()}
+  def recover_absent_instance_attempts(now \\ DateTime.utc_now(), opts \\ []) do
+    AbsentInstanceRecovery.recover_absent_instance_attempts(
+      DateTime.truncate(now, :microsecond),
+      opts
+    )
   end
 
   @spec create_attempt(Request.t(), PoolUpstreamAssignment.t(), map()) ::
@@ -1086,6 +1097,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       model_id: request.model_id,
       upstream_model_id: (model && model.upstream_model_id) || request.requested_model,
       transport: request.transport,
+      # The dispatching instance owns this attempt until it settles. Recording
+      # it here, before any upstream byte arrives, is what lets another replica
+      # recover the row when this instance never comes back.
+      owner_instance_id: Map.get(attrs, :owner_instance_id, InstancePresence.local_instance_id()),
       status: Map.get(attrs, :status, "in_progress"),
       started_at: timestamp,
       retryable: Map.get(attrs, :retryable, false),

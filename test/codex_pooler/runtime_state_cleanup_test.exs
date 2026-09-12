@@ -1,8 +1,10 @@
 defmodule CodexPooler.RuntimeStateCleanupTest do
   use CodexPooler.DataCase, async: false
 
+  import CodexPooler.AccountingTestSupport
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
@@ -18,6 +20,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
   }
 
   alias CodexPooler.Jobs
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -465,6 +468,48 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
       updated_at: now
     })
     |> Repo.insert!()
+  end
+
+  test "cleanup recovers attempts owned by an instance that stopped reporting" do
+    setup = accounting_setup()
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    dispatched_at = DateTime.add(now, -10, :minute)
+    absent_instance = "codex_pooler@10.0.0.#{System.unique_integer([:positive])}"
+
+    {:ok, _presence} =
+      InstancePresence.record_heartbeat(absent_instance, DateTime.add(now, -10, :minute))
+
+    {:ok, reserved} =
+      Accounting.reserve(
+        setup.auth,
+        setup.model,
+        %{"model" => setup.model.exposed_model_id, "stream" => true, "max_output_tokens" => 10},
+        %{
+          correlation_id: "corr-cleanup-absent-instance",
+          now: dispatched_at,
+          transport: "http_sse"
+        }
+      )
+
+    {:ok, attempt} =
+      Accounting.create_attempt(reserved.request, setup.assignment, %{
+        now: dispatched_at,
+        owner_instance_id: absent_instance
+      })
+
+    assert {:ok, summary} = Jobs.cleanup_runtime_state(now)
+    assert summary.absent_instance_attempts_recovered == 1
+    assert is_integer(summary.instance_presence_rows_pruned)
+
+    assert %Request{status: "failed", last_error_code: "absent_instance_recovered"} =
+             Repo.get!(Request, reserved.request.id)
+
+    assert %Attempt{status: "failed", network_error_code: "absent_instance_recovered"} =
+             Repo.reload!(attempt)
+
+    assert ledger_entries_for_request(reserved.request.id)
+           |> Enum.map(& &1.entry_kind)
+           |> Enum.sort() == ["release", "reservation", "settlement"]
   end
 
   defp turn_fixture(session, request, attempt, now) do

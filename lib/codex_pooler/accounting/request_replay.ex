@@ -23,6 +23,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -1804,6 +1805,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
       model_id: eligible_attempt.model_id || request.model_id,
       upstream_model_id: eligible_attempt.upstream_model_id,
       transport: eligible_attempt.transport,
+      owner_instance_id: InstancePresence.local_instance_id(),
       status: "in_progress",
       started_at: now,
       retryable: false,
