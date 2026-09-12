@@ -126,6 +126,11 @@ defmodule CodexPooler.MixProject do
         "esbuild codex_pooler --minify",
         "phx.digest"
       ],
+      # Checked, never rewritten: a gate must not mutate the tree it judges.
+      # Drone runs this as its own step and a green local `mix quality` used to
+      # say nothing about it, so an unformatted line reached CI and failed the
+      # build after the whole suite had already passed locally.
+      "quality.format": ["format --check-formatted"],
       "quality.xref": [
         "compile --warnings-as-errors",
         "xref graph --format plain --label compile-connected --fail-above 0 --no-compile"
@@ -133,7 +138,13 @@ defmodule CodexPooler.MixProject do
       "quality.credo": ["credo --strict"],
       "quality.dialyzer": ["compile --warnings-as-errors", "dialyzer --no-compile"],
       "quality.security": ["sobelow --exit --threshold medium --skip"],
-      quality: ["quality.xref", "quality.credo", "quality.dialyzer", "quality.security"],
+      quality: [
+        "quality.format",
+        "quality.xref",
+        "quality.credo",
+        "quality.dialyzer",
+        "quality.security"
+      ],
       coverage: ["test --cover"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
