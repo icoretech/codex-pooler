@@ -861,16 +861,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp flush_discarded_submissions({:stop, reason, close_detail, messages, state}) do
-    case take_discarded_submissions(state) do
-      {[], state} ->
-        {:stop, reason, close_detail, messages, state}
-
-      {frames, state} ->
-        {:stop, reason, close_detail, List.wrap(messages) ++ frames, state}
-    end
-  end
-
   # The untouched state is returned verbatim when nothing was discarded: this
   # runs on every socket result, and rewriting the key unconditionally would
   # make every return differ from the state it was handed.

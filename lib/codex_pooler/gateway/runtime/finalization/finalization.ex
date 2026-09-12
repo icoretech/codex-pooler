@@ -760,8 +760,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   # client's request stops telling the client less about it. Only the bounded
   # enumeration travels; the surrounding message stays unrelayed and
   # unpersisted on every path.
+  # `supported_values_state` is part of `ValidationRejection.rejection()` and is
+  # carried here even though rendering never reads it: the type is what keeps
+  # the four outcomes distinguishable at rest, and a caller that omits the key
+  # is a caller that has not decided which of them it is looking at.
   defp full_failure_message(code, param, supported_values) do
-    %{code: code, param: param, supported_values: supported_values}
+    %{
+      code: code,
+      param: param,
+      supported_values: supported_values,
+      supported_values_state: nil
+    }
     |> ValidationRejection.error()
     |> Map.fetch!("message")
   end
