@@ -19,6 +19,9 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
   @rejection_param_max_bytes 160
   @rejection_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
+  @rejection_supported_values_states ~w(present none unparseable)
+  @rejection_supported_values_max 12
+  @rejection_supported_value_pattern ~r/\A[A-Za-z0-9_.-]+\z/
 
   @type surface :: :default | :admin
 
@@ -353,12 +356,49 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
       valid_rejection_param(metadata["rejection_error_param"])
     )
     |> maybe_put_valid_rejection_message(metadata)
+    |> maybe_put_valid_supported_values(metadata)
   end
 
   defp valid_rejection_metadata(_metadata), do: %{}
 
   defp maybe_put_valid_rejection(projection, _key, nil), do: projection
   defp maybe_put_valid_rejection(projection, key, value), do: Map.put(projection, key, value)
+
+  # The state and the list are projected separately on purpose: an operator must
+  # be able to tell a provider that named no alternatives from a list this
+  # parser refused, and both from a rejection the field never applied to
+  # (codex-pooler-findings#177). The values are re-validated against the same
+  # bounds the parser applied, so a hand-edited row cannot widen the surface.
+  defp maybe_put_valid_supported_values(
+         projection,
+         %{"rejection_supported_values_state" => state} = metadata
+       )
+       when state in @rejection_supported_values_states do
+    projection
+    |> Map.put(:rejection_supported_values_state, state)
+    |> maybe_put_valid_rejection(
+      :rejection_supported_values,
+      valid_supported_values(metadata["rejection_supported_values"])
+    )
+  end
+
+  defp maybe_put_valid_supported_values(projection, _metadata), do: projection
+
+  defp valid_supported_values(values) when is_list(values) do
+    valid = Enum.filter(values, &valid_supported_value?/1)
+
+    if valid != [] and length(valid) == length(values) and
+         length(valid) <= @rejection_supported_values_max,
+       do: valid,
+       else: nil
+  end
+
+  defp valid_supported_values(_values), do: nil
+
+  defp valid_supported_value?(value) when is_binary(value),
+    do: byte_size(value) in 1..32 and Regex.match?(@rejection_supported_value_pattern, value)
+
+  defp valid_supported_value?(_value), do: false
 
   defp valid_rejection_token(value) when is_binary(value) do
     if byte_size(value) in 1..@rejection_token_max_bytes and

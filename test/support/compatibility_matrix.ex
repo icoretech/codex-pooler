@@ -986,9 +986,10 @@ defmodule CodexPooler.CompatibilityMatrix do
           "param" => "tools.defer_loading",
           "type" => "invalid_request_error"
         },
-        client_error_message_source: :relayed_code_and_param,
+        client_error_message_source: :relayed_code_and_param_and_persisted_supported_values,
         client_error_message_matches_non_full_relay: true,
-        supported_values_suffix_relayed: false,
+        supported_values_suffix_relayed: true,
+        supported_values_source: :persisted_bounded_attempt_metadata,
         client_error_without_sanitized_rejection_type: %{
           "code" => "server_error",
           "message" => "upstream request failed",
@@ -1047,7 +1048,9 @@ defmodule CodexPooler.CompatibilityMatrix do
         "rejection_error_type",
         "rejection_error_param",
         "rejection_message_present",
-        "rejection_message_bytes"
+        "rejection_message_bytes",
+        "rejection_supported_values_state",
+        "rejection_supported_values"
       ],
       source: "private_stream_drain_then_materialized_body",
       projection: "failed_attempt_detail_only",
@@ -1079,8 +1082,13 @@ defmodule CodexPooler.CompatibilityMatrix do
         source: "strict_trailing_provider_list",
         token_pattern: "[A-Za-z0-9_.-]{1,32}",
         max_values: 12,
+        message_max_bytes: 2_048,
         rejected_or_earlier_quoted_values: "excluded",
-        unparseable: "omitted"
+        unparseable: "omitted",
+        persisted_as: "rejection_supported_values",
+        states: ~w(present none unparseable),
+        state_absent_when: "code_outside_value_oriented_pair_or_rejection_not_admitted",
+        relayed_under_explicit_full_override: true
       },
       chat_param: "client_field_for_adapter_renames_else_upstream_path",
       provider_message_forwarded: false,
@@ -1092,7 +1100,6 @@ defmodule CodexPooler.CompatibilityMatrix do
         :non_allowlisted_code,
         :non_invalid_request_error_type,
         :detail_body,
-        :explicit_full_override,
         :compact_routes,
         :model_unavailable,
         :misalignment_policy_violation,

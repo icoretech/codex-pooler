@@ -56,7 +56,8 @@ defmodule CodexPooler.Gateway.Contracts do
           optional(:public_validation_rejection) => %{
             required(:code) => String.t(),
             required(:param) => String.t() | nil,
-            required(:supported_values) => [String.t()] | nil
+            required(:supported_values) => [String.t()] | nil,
+            required(:supported_values_state) => String.t() | nil
           }
         }
   @type stream_callback :: (Plug.Conn.t() -> {:ok, Plug.Conn.t()} | {:error, gateway_error()})

@@ -1365,6 +1365,71 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
            )
   end
 
+  # The four supported-values outcomes must stay readable apart in the drawer:
+  # a parsed list, a provider that named none, a list this parser refused, and a
+  # rejection the field never applied to (codex-pooler-findings#177).
+  test "request log detail keeps the supported-values states distinct and revalidates the list" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-supported-values",
+        status: "failed",
+        correlation_id: "supported-values-detail"
+      })
+
+    metadata = [
+      %{
+        "rejection_supported_values_state" => "present",
+        "rejection_supported_values" => ~w(low medium high)
+      },
+      %{"rejection_supported_values_state" => "none"},
+      %{"rejection_supported_values_state" => "unparseable"},
+      %{},
+      # A row whose stored list no longer satisfies the parser's own bounds
+      # keeps its state and drops only the list.
+      %{
+        "rejection_supported_values_state" => "present",
+        "rejection_supported_values" => ["low", "a value with spaces"]
+      },
+      # An unrecognized state is not a state.
+      %{
+        "rejection_supported_values_state" => "probably",
+        "rejection_supported_values" => ~w(low)
+      }
+    ]
+
+    for {response_metadata, index} <- Enum.with_index(metadata, 1) do
+      attempt_fixture(request, assignment, %{
+        attempt_number: index,
+        status: "failed",
+        response_metadata: response_metadata
+      })
+    end
+
+    assert %{items: [log]} = Accounting.list_request_logs(pool)
+    [present, none, unparseable, absent, invalid_list, invalid_state] = log.debug.attempts
+
+    assert present.rejection_supported_values_state == "present"
+    assert present.rejection_supported_values == ~w(low medium high)
+
+    assert none.rejection_supported_values_state == "none"
+    refute Map.has_key?(none, :rejection_supported_values)
+
+    assert unparseable.rejection_supported_values_state == "unparseable"
+    refute Map.has_key?(unparseable, :rejection_supported_values)
+
+    refute Map.has_key?(absent, :rejection_supported_values_state)
+    refute Map.has_key?(absent, :rejection_supported_values)
+
+    assert invalid_list.rejection_supported_values_state == "present"
+    refute Map.has_key?(invalid_list, :rejection_supported_values)
+
+    refute Map.has_key?(invalid_state, :rejection_supported_values_state)
+    refute Map.has_key?(invalid_state, :rejection_supported_values)
+  end
+
   test "request log detail projects bounded peer close diagnostics only through transport failure" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)

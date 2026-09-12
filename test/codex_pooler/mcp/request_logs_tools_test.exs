@@ -1229,7 +1229,22 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
         "rejection_error_type" => "invalid_request_error",
         "rejection_error_param" => "input[0].content",
         "rejection_message_present" => true,
-        "rejection_message_bytes" => byte_size(raw_message)
+        "rejection_message_bytes" => byte_size(raw_message),
+        "rejection_supported_values_state" => "present",
+        "rejection_supported_values" => ~w(low medium high)
+      }
+    })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 2,
+      status: "failed",
+      response_metadata: %{
+        "rejection_error_code" => "invalid_request",
+        # A provider that named no alternatives, and a stored list that no
+        # longer satisfies the parser's bounds, must not read alike
+        # (codex-pooler-findings#177).
+        "rejection_supported_values_state" => "none",
+        "rejection_supported_values" => ["an invalid value"]
       }
     })
 
@@ -1241,12 +1256,16 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(result)
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert %{"item" => item} = result["structuredContent"]
-    assert [attempt] = item["debug"]["attempts"]
+    assert [attempt, none_attempt] = item["debug"]["attempts"]
     assert attempt["rejection_error_code"] == "invalid_request"
     assert attempt["rejection_error_type"] == "invalid_request_error"
     assert attempt["rejection_error_param"] == "input[0].content"
     assert attempt["rejection_message_present"] == true
     assert attempt["rejection_message_bytes"] == byte_size(raw_message)
+    assert attempt["rejection_supported_values_state"] == "present"
+    assert attempt["rejection_supported_values"] == ~w(low medium high)
+    assert none_attempt["rejection_supported_values_state"] == "none"
+    refute Map.has_key?(none_attempt, "rejection_supported_values")
     assert text =~ "rejection_error_code=invalid_request"
     assert text =~ "rejection_message_present=true"
     refute inspect(result) =~ raw_message

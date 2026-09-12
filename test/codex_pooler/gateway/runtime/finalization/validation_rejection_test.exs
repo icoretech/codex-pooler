@@ -39,7 +39,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
       assert rejection == %{
                code: code,
                param: "reasoning.effort",
-               supported_values: ~w(low medium high xhigh)
+               supported_values: ~w(low medium high xhigh),
+               supported_values_state: "present"
+             }
+
+      assert ValidationRejection.attempt_metadata(rejection) == %{
+               "rejection_supported_values" => ~w(low medium high xhigh),
+               "rejection_supported_values_state" => "present"
              }
 
       assert ValidationRejection.error(rejection) == %{
@@ -60,9 +66,101 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
 
       assert rejection.supported_values == nil
 
+      # A code that cannot carry a list records no state at all, which is a
+      # different fact from a provider that stated none.
+      assert rejection.supported_values_state == nil
+      assert ValidationRejection.attempt_metadata(rejection) == %{}
+
       assert ValidationRejection.error(rejection)["message"] ==
                "upstream rejected parameter reasoning.effort (#{code})"
     end
+  end
+
+  test "keeps a stated absence, a refused list, and an unreadable body distinct" do
+    options = request_options("/backend-api/codex/responses")
+
+    # A definitive negative: the message was read and named no alternatives.
+    none = fetched(options, "Unsupported value: 'none' is not supported with this model.")
+    assert none.supported_values == nil
+    assert none.supported_values_state == "none"
+
+    assert ValidationRejection.attempt_metadata(none) == %{
+             "rejection_supported_values_state" => "none"
+           }
+
+    # Refused by this parser's own grammar, so the list may well exist; saying
+    # "none" here would report a Pooler bound as a provider fact.
+    unparseable = fetched(options, "Supported values are: 'a value', 'another'.")
+    assert unparseable.supported_values == nil
+    assert unparseable.supported_values_state == "unparseable"
+
+    assert ValidationRejection.attempt_metadata(unparseable) == %{
+             "rejection_supported_values_state" => "unparseable"
+           }
+
+    # Over the message bound, with the marker present.
+    oversized = fetched(options, String.duplicate("x", 2_049) <> " Supported values are: 'low'.")
+    assert oversized.supported_values_state == "unparseable"
+
+    # Over the message bound, with no marker: still a stated absence.
+    long_without_marker = fetched(options, String.duplicate("x", 2_049))
+    assert long_without_marker.supported_values_state == "none"
+
+    # An error object with no message at all stated no list.
+    no_message =
+      ValidationRejection.fetch(
+        %Req.Response{
+          status: 400,
+          body:
+            CodexPooler.JSON.encode!(%{
+              "error" => %{"code" => "invalid_value", "type" => "invalid_request_error"}
+            })
+        },
+        options
+      )
+
+    assert no_message.supported_values_state == "none"
+
+    # A non-string message is a shape this parser cannot read, not an absence.
+    non_binary =
+      ValidationRejection.fetch(
+        %Req.Response{
+          status: 400,
+          body:
+            CodexPooler.JSON.encode!(%{
+              "error" => %{
+                "code" => "invalid_value",
+                "type" => "invalid_request_error",
+                "message" => 42
+              }
+            })
+        },
+        options
+      )
+
+    assert non_binary.supported_values_state == "unparseable"
+
+    for state <- ["none", "unparseable"] do
+      refute Map.has_key?(
+               ValidationRejection.attempt_metadata(%{
+                 code: "invalid_value",
+                 param: nil,
+                 supported_values: nil,
+                 supported_values_state: state
+               }),
+               "rejection_supported_values"
+             )
+    end
+
+    assert ValidationRejection.attempt_metadata(nil) == %{}
+    assert ValidationRejection.supported_values_codes() == ~w(unsupported_value invalid_value)
+  end
+
+  defp fetched(options, message) do
+    ValidationRejection.fetch(
+      rejection(400, "invalid_value", "reasoning.effort", "invalid_request_error", message),
+      options
+    )
   end
 
   test "error applies the param mapper and falls back on an invalid mapping" do

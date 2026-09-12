@@ -15,6 +15,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
   @provider_sentinel "private-provider-validation-sentinel"
   @prompt_sentinel "private-validation-prompt-sentinel"
 
+  @message_with_list "Unsupported value: '#{@provider_sentinel}' is not supported with this model. Supported values are: 'low', 'medium', and 'high'."
+  @message_without_list "Unsupported value: '#{@provider_sentinel}' is not supported with this model."
+  @message_with_unparseable_list "Unsupported value: '#{@provider_sentinel}' is not supported with this model. Supported values are: 'a value with spaces', 'another one'."
+
   test "native HTTP SSE 400 validation rejection relays bounded code, param, and an authored message",
        %{conn: conn} do
     upstream =
@@ -67,6 +71,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     assert attempt.response_metadata["rejection_error_code"] == "unsupported_value"
     assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
     assert attempt.response_metadata["rejection_error_param"] == "reasoning.effort"
+    assert attempt.response_metadata["rejection_supported_values"] == ~w(low medium high)
+    assert attempt.response_metadata["rejection_supported_values_state"] == "present"
     refute inspect({request, attempt}) =~ @provider_sentinel
     refute inspect({request, attempt}) =~ @prompt_sentinel
     assert Repo.aggregate(BridgeDemotion, :count) == 0
@@ -208,6 +214,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
 
     assert response.status == 400
 
+    # The sentence is built from the sanitized code and param this body already
+    # carries, so Full and the non-Full relay agree (codex-pooler-findings#173).
+    # The supported-values suffix used to be withheld here because it was read
+    # from the live provider body rather than from a persisted field
+    # (codex-pooler-findings#161). It is now parsed once, persisted as bounded
+    # attempt metadata, and rendered by the same constructor on both paths
+    # (codex-pooler-findings#177), so Full — the mode that does not rewrite the
+    # client's request — no longer tells the client less about it.
     assert CodexPooler.JSON.decode(response.resp_body) ==
              {:ok,
               %{
@@ -215,16 +229,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                   "type" => "invalid_request_error",
                   "code" => "unsupported_value",
                   "param" => "reasoning.effort",
-                  "message" => "upstream rejected parameter reasoning.effort (unsupported_value)"
+                  "message" =>
+                    "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
                 }
               }}
 
-    # The sentence is built from the sanitized code and param this body already
-    # carries, so Full and the non-Full relay agree (codex-pooler-findings#173).
-    # The supported-values suffix stays exclusive to the non-Full relay: it is
-    # derived from the provider message text, which #161 left unrelayed.
-    refute response.resp_body =~ "supported values"
+    # Only the bounded parsed enumeration crosses; the surrounding provider
+    # prose stays unrelayed and unpersisted on every path.
     refute response.resp_body =~ @provider_sentinel
+    refute response.resp_body =~ @prompt_sentinel
     FakeUpstream.verify!(upstream)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -234,8 +247,178 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     assert attempt.network_error_code == "upstream_status"
     assert attempt.response_metadata["rejection_error_code"] == "unsupported_value"
     assert attempt.response_metadata["rejection_error_param"] == "reasoning.effort"
+    assert attempt.response_metadata["rejection_supported_values"] == ~w(low medium high)
+    assert attempt.response_metadata["rejection_supported_values_state"] == "present"
+    refute inspect({request, attempt}) =~ @provider_sentinel
     assert Repo.aggregate(BridgeDemotion, :count) == 0
     assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
+  test "explicit Full override relays the supported values for a rejection carrying no param", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond: validation_rejection(400, "invalid_value", "input[0]; " <> @prompt_sentinel)
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+    response = post_native(conn, setup)
+
+    assert response.status == 400
+
+    assert CodexPooler.JSON.decode(response.resp_body) ==
+             {:ok,
+              %{
+                "error" => %{
+                  "type" => "invalid_request_error",
+                  "code" => "invalid_value",
+                  "param" => nil,
+                  "message" =>
+                    "upstream rejected the request (invalid_value); supported values: low, medium, high"
+                }
+              }}
+
+    refute response.resp_body =~ @prompt_sentinel
+    refute response.resp_body =~ @provider_sentinel
+    FakeUpstream.verify!(upstream)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    refute Map.has_key?(attempt.response_metadata, "rejection_error_param")
+    assert attempt.response_metadata["rejection_supported_values"] == ~w(low medium high)
+    assert attempt.response_metadata["rejection_supported_values_state"] == "present"
+  end
+
+  # A parsed list, a provider message that states no list, and a message whose
+  # list the bounded grammar refuses are three different facts. Collapsing them
+  # into one absent field is the defect pattern codex-pooler-findings#165 named,
+  # so each keeps its own persisted state and none of them invents a suffix.
+  test "supported-values state stays distinct across present, none, and unparseable messages", %{
+    conn: conn
+  } do
+    cases = [
+      {"none", @message_without_list, nil, "none",
+       "upstream rejected parameter reasoning.effort (unsupported_value)"},
+      {"unparseable", @message_with_unparseable_list, nil, "unparseable",
+       "upstream rejected parameter reasoning.effort (unsupported_value)"},
+      {"present", @message_with_list, ~w(low medium high), "present",
+       "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"}
+    ]
+
+    for full? <- [false, true], {label, message, values, state, expected} <- cases do
+      upstream =
+        start_upstream(
+          # provenance: synthetic_adversarial
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/backend-api/codex/responses",
+              respond: message_rejection(400, "unsupported_value", "reasoning.effort", message)
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      if full?, do: put_full_override!(setup)
+      response = post_native(conn, setup)
+
+      context = "#{label} full?=#{full?}"
+
+      assert response.status == 400, context
+      assert {:ok, %{"error" => error}} = CodexPooler.JSON.decode(response.resp_body)
+      assert error["message"] == expected, context
+      refute response.resp_body =~ @provider_sentinel, context
+      FakeUpstream.verify!(upstream)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      metadata = attempt.response_metadata
+
+      assert metadata["rejection_supported_values_state"] == state, context
+      assert Map.get(metadata, "rejection_supported_values") == values, context
+      assert Map.has_key?(metadata, "rejection_supported_values") == (values != nil), context
+      refute inspect(attempt) =~ @provider_sentinel, context
+    end
+  end
+
+  # A relayable code that can never carry a list must leave the field out
+  # entirely, which is a fourth state: not that the provider said nothing, but
+  # that the question does not apply.
+  test "a validation code outside the value-oriented pair persists no supported-values field", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond:
+              message_rejection(
+                400,
+                "missing_required_parameter",
+                "reasoning.effort",
+                @message_with_list
+              )
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    response = post_native(conn, setup)
+
+    assert response.status == 400
+
+    assert {:ok, %{"error" => %{"message" => message}}} =
+             CodexPooler.JSON.decode(response.resp_body)
+
+    assert message == "upstream rejected parameter reasoning.effort (missing_required_parameter)"
+    FakeUpstream.verify!(upstream)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    refute Map.has_key?(attempt.response_metadata, "rejection_supported_values")
+    refute Map.has_key?(attempt.response_metadata, "rejection_supported_values_state")
+  end
+
+  # 401/404 dominate the production `full_upstream_rejection` population and can
+  # carry no list at all, so the Full projection must not grow a field there.
+  test "a non-400 Full rejection persists no supported-values field", %{conn: conn} do
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond:
+              message_rejection(404, "unsupported_value", "reasoning.effort", @message_with_list)
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+    response = post_native(conn, setup)
+
+    assert response.status == 404
+    refute response.resp_body =~ "supported values"
+    FakeUpstream.verify!(upstream)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    refute Map.has_key?(attempt.response_metadata, "rejection_supported_values")
+    refute Map.has_key?(attempt.response_metadata, "rejection_supported_values_state")
   end
 
   test "explicit Full override relays the sanitized rejection type and param with a code fallback",
@@ -519,8 +702,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     error =
       %{
         "code" => code,
-        "message" =>
-          "Unsupported value: '#{@provider_sentinel}' is not supported with this model. Supported values are: 'low', 'medium', and 'high'.",
+        "message" => @message_with_list,
         "param" => param,
         "type" => type
       }
@@ -528,5 +710,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
       |> Map.new()
 
     {:json_error, status, %{"error" => error}}
+  end
+
+  defp message_rejection(status, code, param, message) do
+    {:json_error, status,
+     %{
+       "error" => %{
+         "code" => code,
+         "message" => message,
+         "param" => param,
+         "type" => "invalid_request_error"
+       }
+     }}
   end
 end

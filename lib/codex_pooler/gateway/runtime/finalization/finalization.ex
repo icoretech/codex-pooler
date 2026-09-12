@@ -512,13 +512,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
     accounting_message = Keyword.get(opts, :accounting_message, "upstream returned #{status}")
 
+    # Classified once, before settlement, so the persisted bounded
+    # supported-values fact and the message every projection renders come from
+    # the same parse of the same body rather than from two reads of it
+    # (codex-pooler-findings#177).
+    validation_rejection = ValidationRejection.fetch(response, request_options)
+
     attrs =
       SettlementAttrs.failure(
         context,
         status,
         error_code,
         accounting_message,
-        Metadata.response_metadata(response, error_code, request_options),
+        Map.merge(
+          Metadata.response_metadata(response, error_code, request_options),
+          ValidationRejection.attempt_metadata(validation_rejection)
+        ),
         latency_ms: elapsed_ms(context.started),
         usage: %{status: "usage_unknown", source: "upstream_status"}
       )
@@ -549,11 +558,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
             request_options,
             payload,
             error_code,
-            Keyword.put(
-              opts,
-              :validation_rejection,
-              ValidationRejection.fetch(response, request_options)
-            ),
+            Keyword.put(opts, :validation_rejection, validation_rejection),
             Metadata.rejection_error(response)
           )
 
@@ -640,7 +645,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         %{
           status: status,
           headers: headers,
-          body: full_failure_body(relayable_rejection_error),
+          body: full_failure_body(relayable_rejection_error, validation_rejection),
           public_input_file_upstream_404?: marker
         }
 
@@ -703,7 +708,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     if Metadata.rejection_metadata_status?(status), do: rejection_error, else: %{}
   end
 
-  defp full_failure_body(%{type: type} = rejection_error) when is_binary(type) do
+  defp full_failure_body(%{type: type} = rejection_error, validation_rejection)
+       when is_binary(type) do
     code = relayed_rejection_code(rejection_error)
 
     # `param` is set unconditionally: a rejection carrying a type but no param
@@ -716,12 +722,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         "type" => type,
         "code" => code,
         "param" => param,
-        "message" => full_failure_message(code, param)
+        "message" =>
+          full_failure_message(code, param, relayed_supported_values(validation_rejection))
       }
     }
   end
 
-  defp full_failure_body(_rejection_error), do: @canonical_full_failure_body
+  defp full_failure_body(_rejection_error, _validation_rejection),
+    do: @canonical_full_failure_body
+
+  # Present only when `ValidationRejection.fetch/2` admitted this rejection, so
+  # a 401, a 404, a compact route, an unrecognized code, and every rejection
+  # whose message stated no parseable list all relay the base sentence
+  # unchanged. Those dominate the observed Full rejection population.
+  defp relayed_supported_values(%{supported_values: [_value | _rest] = values}), do: values
+  defp relayed_supported_values(_validation_rejection), do: nil
 
   # Serving mode must not decide how much a client is told. The non-Full
   # mode-scoped branch already names the refused parameter, while Full used to
@@ -735,12 +750,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   # `ValidationRejection.error/1`, from the code and param this body already
   # carries as separate fields. Nothing new is disclosed: both tokens are
   # sanitized, persisted as attempt metadata, and already relayed above.
-  # `supported_values: nil` is deliberate and keeps the two paths apart in the
-  # one place they must stay apart: that suffix is derived from the provider's
-  # message text, which #161 left unrelayed and unpersisted, so it remains
-  # exclusive to the non-Full relay that reads the live response body.
-  defp full_failure_message(code, param) do
-    %{code: code, param: param, supported_values: nil}
+  #
+  # The supported-values suffix used to be withheld here
+  # (codex-pooler-findings#173) because it was read from the live provider body
+  # rather than from a persisted field, and #161 left provider prose unrelayed.
+  # It is now parsed once by the same bounded parser, persisted as attempt
+  # metadata next to the code and param, and rendered from that one classified
+  # fact (codex-pooler-findings#177) — so the mode that does *not* rewrite the
+  # client's request stops telling the client less about it. Only the bounded
+  # enumeration travels; the surrounding message stays unrelayed and
+  # unpersisted on every path.
+  defp full_failure_message(code, param, supported_values) do
+    %{code: code, param: param, supported_values: supported_values}
     |> ValidationRejection.error()
     |> Map.fetch!("message")
   end

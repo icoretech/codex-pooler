@@ -18,6 +18,9 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   @rejection_token_max_bytes 80
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
+  @rejection_supported_values_states ~w(present none unparseable)
+  @rejection_supported_values_max 12
+  @rejection_supported_value_max_bytes 32
 
   @list_debug_keys ~w(continuity failure attempt)
   @detail_debug_keys ~w(continuity terminal_state turn attempts)
@@ -191,6 +194,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         {"rejection_error_param", "rejection_error_param"},
         {"rejection_message_present", "rejection_message_present"},
         {"rejection_message_bytes", "rejection_message_bytes"},
+        {"rejection_supported_values_state", "rejection_supported_values_state"},
         {"compaction_bridge_applied", "compaction_bridge_applied"},
         {"compaction_result_transport", "compaction_result_transport"},
         {"metadata_summary", "metadata"}
@@ -380,7 +384,38 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       valid_rejection_param(metadata["rejection_error_param"])
     )
     |> maybe_put_valid_rejection_message(metadata)
+    |> maybe_put_valid_supported_values(metadata)
   end
+
+  # `state` and the list stay separate fields so a provider that named no
+  # alternatives, a list this parser refused, and a rejection the field never
+  # applied to remain three readable answers (codex-pooler-findings#177).
+  defp maybe_put_valid_supported_values(
+         metadata,
+         %{"rejection_supported_values_state" => state} = attempt
+       )
+       when state in @rejection_supported_values_states do
+    metadata
+    |> Map.put("rejection_supported_values_state", state)
+    |> maybe_put_value(
+      "rejection_supported_values",
+      valid_supported_values(attempt["rejection_supported_values"])
+    )
+  end
+
+  defp maybe_put_valid_supported_values(metadata, _attempt), do: metadata
+
+  defp valid_supported_values(values) when is_list(values) do
+    valid = Enum.filter(values, &valid_rejection_token/1)
+
+    if valid != [] and length(valid) == length(values) and
+         length(valid) <= @rejection_supported_values_max and
+         Enum.all?(valid, &(byte_size(&1) <= @rejection_supported_value_max_bytes)),
+       do: valid,
+       else: nil
+  end
+
+  defp valid_supported_values(_values), do: nil
 
   defp valid_rejection_token(value) when is_binary(value) do
     if byte_size(value) in 1..@rejection_token_max_bytes and
@@ -556,6 +591,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       rejection_error_param
       rejection_message_present
       rejection_message_bytes
+      rejection_supported_values
+      rejection_supported_values_state
     )
 
     attempt =

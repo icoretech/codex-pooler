@@ -830,9 +830,11 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "param" => "tools.defer_loading",
                  "type" => "invalid_request_error"
                },
-               client_error_message_source: :relayed_code_and_param,
+               client_error_message_source:
+                 :relayed_code_and_param_and_persisted_supported_values,
                client_error_message_matches_non_full_relay: true,
-               supported_values_suffix_relayed: false,
+               supported_values_suffix_relayed: true,
+               supported_values_source: :persisted_bounded_attempt_metadata,
                client_error_without_sanitized_rejection_type: %{
                  "code" => "server_error",
                  "message" => "upstream request failed",

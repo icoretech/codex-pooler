@@ -712,6 +712,8 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                rejection_error_param
                rejection_message_present
                rejection_message_bytes
+               rejection_supported_values_state
+               rejection_supported_values
              )
       assert fixture.invalid_shapes == "omitted"
       assert fixture.raw_error_message_or_body == "never_projected"
@@ -732,15 +734,19 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.source == CompatibilityMatrix.fixture!(:rejection_metadata).source
       assert fixture.relayed_fields == ~w(type code param message)
       assert fixture.message == "pooler_authored_from_code_and_param"
-      assert fixture.supported_values.codes == ~w(unsupported_value invalid_value)
+      assert fixture.supported_values.codes == ValidationRejection.supported_values_codes()
       assert fixture.supported_values.max_values == 12
+      assert fixture.supported_values.message_max_bytes == 2_048
       assert fixture.supported_values.rejected_or_earlier_quoted_values == "excluded"
+      assert fixture.supported_values.persisted_as == "rejection_supported_values"
+      assert fixture.supported_values.states == ~w(present none unparseable)
+      assert fixture.supported_values.relayed_under_explicit_full_override == true
       assert fixture.chat_param == "client_field_for_adapter_renames_else_upstream_path"
       assert fixture.provider_message_forwarded == false
       assert fixture.native_streaming_body == "native_json_error_envelope"
       assert fixture.native_materialized_body == "unchanged_passthrough"
       assert fixture.public_v1_body == "openai_error_object"
-      assert :explicit_full_override in fixture.unchanged_scopes
+      refute :explicit_full_override in fixture.unchanged_scopes
       assert :websocket_frames in fixture.unchanged_scopes
       assert fixture.accounting_error_code == "upstream_status"
       assert fixture.retry == false

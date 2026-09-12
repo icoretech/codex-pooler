@@ -387,6 +387,11 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
         "rejection_error_param" => string_property(),
         "rejection_message_present" => %{"type" => "boolean"},
         "rejection_message_bytes" => integer_property(),
+        "rejection_supported_values_state" => string_property(),
+        "rejection_supported_values" => %{
+          "type" => "array",
+          "items" => string_property()
+        },
         "transport_failure" => %{"type" => "object"}
       }
     }
