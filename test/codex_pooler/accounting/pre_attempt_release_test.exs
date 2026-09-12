@@ -17,7 +17,17 @@ defmodule CodexPooler.Accounting.PreAttemptReleaseTest do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, PreAttemptRelease, Request}
-  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    CodexSession,
+    CodexTurn,
+    SessionContinuity
+  }
+
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
+  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
 
   describe "six-hour sweep of an undispatched http_sse reservation" do
@@ -170,7 +180,72 @@ defmodule CodexPooler.Accounting.PreAttemptReleaseTest do
       assert PreAttemptRelease.phase("stale_sweep") == PreAttemptRelease.stale_sweep()
 
       assert Enum.sort(PreAttemptRelease.phases()) ==
-               Enum.sort(["routing_rejected", "stale_sweep", "unrecorded"])
+               Enum.sort([
+                 "routing_rejected",
+                 "stale_sweep",
+                 "task_exception",
+                 "turn_interrupted",
+                 "unrecorded"
+               ])
+    end
+  end
+
+  describe "an interrupted turn that never reached dispatch" do
+    # The interruption path is the bulk of pre-attempt releases (client
+    # disconnect, owner drain, expired-owner sweep), and it declared nothing
+    # until icoretech/codex-pooler-findings#187. Driven through the same
+    # public entry point the socket calls, not through a constructed release.
+    test "records the turn-interrupted boundary, not unrecorded" do
+      setup = accounting_setup()
+      claim = "pre-attempt-interrupt-#{System.unique_integer([:positive])}"
+
+      {:ok, session} =
+        Gateway.start_codex_session(setup.auth, %{
+          accepted_turn_state: "pre-attempt-interrupt-#{System.unique_integer([:positive])}"
+        })
+
+      assert {:ok, %{request: claimed}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: claim
+               })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "input" => []},
+                 %{
+                   endpoint: "/backend-api/codex/responses",
+                   transport: "websocket",
+                   correlation_id: claim,
+                   turn_claim: claimed
+                 }
+               )
+
+      options = RequestOptions.for_websocket(%{request_id: claim, reason: "client_disconnected"})
+      assert {:ok, turn} = SessionContinuity.start_codex_turn(session, reserved.request, options)
+
+      events = attach_pre_attempt_release_telemetry!()
+
+      assert {:ok, %{interrupted_turn_count: 1}} =
+               Interruption.interrupt_codex_turn(session, options)
+
+      assert attempt_count(reserved.request) == 0
+      assert [%LedgerEntry{attempt_id: nil} = release] = release_entries(reserved.request)
+      assert release.details["release_reason"] == "client_disconnected"
+
+      assert release.details[PreAttemptRelease.detail_key()] ==
+               PreAttemptRelease.turn_interrupted()
+
+      assert_receive {^events, %{count: 1},
+                      %{
+                        phase: "turn_interrupted",
+                        transport: "websocket",
+                        release_reason: "client_disconnected"
+                      }}
+
+      assert Repo.reload!(turn).status == "interrupted"
     end
   end
 

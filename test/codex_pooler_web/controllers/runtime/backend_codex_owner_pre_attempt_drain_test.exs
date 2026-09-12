@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, PreAttemptRelease, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
@@ -601,5 +601,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
     assert Decimal.equal?(release.settled_cost_micros, 0)
     assert release.details["release_reason"] == "owner_drained"
     assert release.details["reservation_source_event_id"] == reservation.source_event_id
+
+    assert release.details[PreAttemptRelease.detail_key()] ==
+             PreAttemptRelease.turn_interrupted()
   end
 end

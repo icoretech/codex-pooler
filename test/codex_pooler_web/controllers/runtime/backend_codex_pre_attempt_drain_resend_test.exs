@@ -21,7 +21,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPreAttemptDrainResendTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, ClientRetry, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, ClientRetry, LedgerEntry, PreAttemptRelease, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -99,6 +99,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPreAttemptDrainResendTest do
     assert release.details["release_reason"] == "owner_drained"
     assert release.usage_status == "usage_unknown"
     assert is_nil(release.attempt_id)
+
+    # The boundary, declared by the releasing path rather than inferred: the
+    # turn was live and was interrupted before any attempt existed. The resend
+    # predicate below now reads this too, so a release written with the same
+    # reason at some other boundary cannot pass for a drain
+    # (icoretech/codex-pooler-findings#187).
+    assert release.details[PreAttemptRelease.detail_key()] ==
+             PreAttemptRelease.turn_interrupted()
 
     # Consumer: the capability itself, through the entry point the resending
     # native websocket turn actually uses. `preflight_snapshot/4` is what

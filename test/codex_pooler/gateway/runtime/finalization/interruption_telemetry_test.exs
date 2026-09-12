@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountingTestSupport
+  import CodexPooler.UnboxedFixture
   import Ecto.Query
 
   alias CodexPooler.Accounting
@@ -19,233 +20,219 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for the ordered-operations tasks, not a behaviour timer.
   @task_timeout 15_000
 
   test "outermost active-attempt interruption emits once after commit and repeated interruption is silent" do
     fixture = committed_interruption_fixture!(:active_attempt)
 
-    try do
-      capture_outcomes(fn ->
-        result = run_unboxed(fn -> interrupt_turn(fixture) end)
+    capture_outcomes(fn ->
+      result = run_unboxed(fn -> interrupt_turn(fixture) end)
 
-        assert result == {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
+      assert result == {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
 
-        assert_receive {:stream_outcome,
-                        %{
-                          outcome: "interrupted",
-                          downstream_transport: "websocket",
-                          upstream_transport: "websocket"
-                        }}
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
 
-        assert committed_interruption_state(fixture) == %{
-                 request_status: "failed",
-                 attempt_status: "failed",
-                 turn_status: "interrupted",
-                 settlement_count: 1
-               }
+      assert committed_interruption_state(fixture) == %{
+               request_status: "failed",
+               attempt_status: "failed",
+               turn_status: "interrupted",
+               settlement_count: 1
+             }
 
-        assert run_unboxed(fn -> interrupt_turn(fixture) end) ==
-                 {:ok, %{interrupted_turn_count: 0, turn_authority: :selected}}
+      assert run_unboxed(fn -> interrupt_turn(fixture) end) ==
+               {:ok, %{interrupted_turn_count: 0, turn_authority: :selected}}
 
-        refute_received {:stream_outcome, _metadata}
-      end)
-    after
-      cleanup_committed_fixture!(fixture)
-    end
+      refute_received {:stream_outcome, _metadata}
+    end)
   end
 
   test "outermost no-attempt interruption emits unknown upstream after commit" do
     fixture = committed_interruption_fixture!(:without_attempt)
 
-    try do
-      capture_outcomes(fn ->
-        assert run_unboxed(fn -> interrupt_turn(fixture) end) ==
-                 {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
+    capture_outcomes(fn ->
+      assert run_unboxed(fn -> interrupt_turn(fixture) end) ==
+               {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
 
-        assert_receive {:stream_outcome,
-                        %{
-                          outcome: "interrupted",
-                          downstream_transport: "websocket",
-                          upstream_transport: "unknown"
-                        }}
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "websocket",
+                        upstream_transport: "unknown"
+                      }}
 
-        refute_received {:stream_outcome, _metadata}
-      end)
-    after
-      cleanup_committed_fixture!(fixture)
-    end
+      refute_received {:stream_outcome, _metadata}
+    end)
   end
 
   test "interruption-first and transport-finalizer-first orderings emit one total outcome each" do
     for ordering <- [:interruption_first, :transport_finalizer_first] do
       fixture = committed_interruption_fixture!(:active_attempt)
 
-      try do
-        capture_outcomes(fn ->
-          results =
-            case ordering do
-              :interruption_first ->
-                run_ordered_operations(
-                  fn -> interrupt_turn(fixture) end,
-                  fn -> transport_finalize(fixture) end
-                )
-
-              :transport_finalizer_first ->
-                run_ordered_operations(
-                  fn -> transport_finalize(fixture) end,
-                  fn -> interrupt_turn(fixture) end
-                )
-            end
-
-          assert Enum.count(results, &match?({:error, %{code: "client_disconnected"}}, &1)) == 1
-
-          expected_interruption_result =
-            case ordering do
-              :interruption_first ->
-                {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
-
-              :transport_finalizer_first ->
-                {:ok, %{interrupted_turn_count: 0, turn_authority: :selected}}
-            end
-
-          assert Enum.find(results, &match?({:ok, %{interrupted_turn_count: _}}, &1)) ==
-                   expected_interruption_result
-
-          assert_receive {:stream_outcome,
-                          %{
-                            outcome: "interrupted",
-                            downstream_transport: "websocket",
-                            upstream_transport: "websocket"
-                          }}
-
-          refute_received {:stream_outcome, _metadata}
-        end)
-      after
-        cleanup_committed_fixture!(fixture)
-      end
-    end
-  end
-
-  test "outermost accounting rollback emits one settlement failure and preserves exact tuple" do
-    fixture = committed_interruption_fixture!(:accounting_failure)
-
-    try do
       capture_outcomes(fn ->
-        result = run_unboxed(fn -> interrupt_turn(fixture) end)
+        results =
+          case ordering do
+            :interruption_first ->
+              run_ordered_operations(
+                fn -> interrupt_turn(fixture) end,
+                fn -> transport_finalize(fixture) end
+              )
 
-        assert {:error, {:interrupt_accounting_failed, %Ecto.NoResultsError{}}} = result
+            :transport_finalizer_first ->
+              run_ordered_operations(
+                fn -> transport_finalize(fixture) end,
+                fn -> interrupt_turn(fixture) end
+              )
+          end
+
+        assert Enum.count(results, &match?({:error, %{code: "client_disconnected"}}, &1)) == 1
+
+        expected_interruption_result =
+          case ordering do
+            :interruption_first ->
+              {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
+
+            :transport_finalizer_first ->
+              {:ok, %{interrupted_turn_count: 0, turn_authority: :selected}}
+          end
+
+        assert Enum.find(results, &match?({:ok, %{interrupted_turn_count: _}}, &1)) ==
+                 expected_interruption_result
 
         assert_receive {:stream_outcome,
                         %{
-                          outcome: "settlement_failed",
+                          outcome: "interrupted",
                           downstream_transport: "websocket",
                           upstream_transport: "websocket"
                         }}
 
         refute_received {:stream_outcome, _metadata}
       end)
-
-      assert committed_interruption_state(fixture) == %{
-               request_status: "in_progress",
-               attempt_status: "in_progress",
-               turn_status: "in_progress",
-               settlement_count: 0
-             }
-
-      assert run_unboxed(fn -> Repo.get!(CodexSession, fixture.session.id).status end) == "active"
-    after
-      cleanup_committed_fixture!(fixture)
     end
+  end
+
+  test "outermost accounting rollback emits one settlement failure and preserves exact tuple" do
+    fixture = committed_interruption_fixture!(:accounting_failure)
+
+    capture_outcomes(fn ->
+      result = run_unboxed(fn -> interrupt_turn(fixture) end)
+
+      assert {:error, {:interrupt_accounting_failed, %Ecto.NoResultsError{}}} = result
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "settlement_failed",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert committed_interruption_state(fixture) == %{
+             request_status: "in_progress",
+             attempt_status: "in_progress",
+             turn_status: "in_progress",
+             settlement_count: 0
+           }
+
+    assert run_unboxed(fn -> Repo.get!(CodexSession, fixture.session.id).status end) == "active"
   end
 
   test "caller-owned transaction commit and rollback emit zero outcomes permanently" do
     for outer_result <- [:commit, :rollback] do
       fixture = committed_interruption_fixture!(:active_attempt)
 
-      try do
-        capture_outcomes(fn ->
-          result =
-            run_unboxed(fn ->
-              Repo.transaction(fn ->
-                assert interrupt_turn(fixture) ==
-                         {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
+      capture_outcomes(fn ->
+        result =
+          run_unboxed(fn ->
+            Repo.transaction(fn ->
+              assert interrupt_turn(fixture) ==
+                       {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
 
-                case outer_result do
-                  :commit -> :committed
-                  :rollback -> Repo.rollback(:caller_rollback)
-                end
-              end)
+              case outer_result do
+                :commit -> :committed
+                :rollback -> Repo.rollback(:caller_rollback)
+              end
             end)
+          end)
 
-          expected_result =
-            case outer_result do
-              :commit -> {:ok, :committed}
-              :rollback -> {:error, :caller_rollback}
-            end
-
-          assert result == expected_result
-
-          refute_received {:stream_outcome, _metadata}
-        end)
-
-        state = committed_interruption_state(fixture)
-
-        expected_state =
+        expected_result =
           case outer_result do
-            :commit ->
-              %{
-                request_status: "failed",
-                attempt_status: "failed",
-                turn_status: "interrupted",
-                settlement_count: 1
-              }
-
-            :rollback ->
-              %{
-                request_status: "in_progress",
-                attempt_status: "in_progress",
-                turn_status: "in_progress",
-                settlement_count: 0
-              }
+            :commit -> {:ok, :committed}
+            :rollback -> {:error, :caller_rollback}
           end
 
-        assert state == expected_state
-      after
-        cleanup_committed_fixture!(fixture)
-      end
+        assert result == expected_result
+
+        refute_received {:stream_outcome, _metadata}
+      end)
+
+      state = committed_interruption_state(fixture)
+
+      expected_state =
+        case outer_result do
+          :commit ->
+            %{
+              request_status: "failed",
+              attempt_status: "failed",
+              turn_status: "interrupted",
+              settlement_count: 1
+            }
+
+          :rollback ->
+            %{
+              request_status: "in_progress",
+              attempt_status: "in_progress",
+              turn_status: "in_progress",
+              settlement_count: 0
+            }
+        end
+
+      assert state == expected_state
     end
   end
 
   test "caller-owned accounting rollback preserves the exact error and emits zero" do
     fixture = committed_interruption_fixture!(:accounting_failure)
 
-    try do
-      capture_outcomes(fn ->
-        result =
-          run_unboxed(fn ->
-            Repo.transaction(fn ->
-              result = interrupt_turn(fixture)
-              assert {:error, {:interrupt_accounting_failed, %Ecto.NoResultsError{}}} = result
-              :caller_callback_returned
-            end)
+    capture_outcomes(fn ->
+      result =
+        run_unboxed(fn ->
+          Repo.transaction(fn ->
+            result = interrupt_turn(fixture)
+            assert {:error, {:interrupt_accounting_failed, %Ecto.NoResultsError{}}} = result
+            :caller_callback_returned
           end)
+        end)
 
-        assert result == {:error, :rollback}
-        refute_received {:stream_outcome, _metadata}
-      end)
+      assert result == {:error, :rollback}
+      refute_received {:stream_outcome, _metadata}
+    end)
 
-      assert committed_interruption_state(fixture) == %{
-               request_status: "in_progress",
-               attempt_status: "in_progress",
-               turn_status: "in_progress",
-               settlement_count: 0
-             }
-    after
-      cleanup_committed_fixture!(fixture)
-    end
+    assert committed_interruption_state(fixture) == %{
+             request_status: "in_progress",
+             attempt_status: "in_progress",
+             turn_status: "in_progress",
+             settlement_count: 0
+           }
   end
 
+  # The cleanup is registered, never scoped. An assertion that fails inside a `run_unboxed/1`
+  # block raises in the linked task, whose exit signal kills the test process before any
+  # enclosing `after` can run; ExUnit's own teardown runs regardless of how the test died.
   defp committed_interruption_fixture!(mode) do
+    fixture = build_committed_interruption_fixture!(mode)
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(fixture) end)
+    fixture
+  end
+
+  defp build_committed_interruption_fixture!(mode) do
     run_unboxed(fn ->
       unique = System.unique_integer([:positive, :monotonic])
       setup = accounting_setup(%{account_label: "Interruption telemetry #{unique}"})
@@ -363,21 +350,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     end)
   end
 
-  defp cleanup_committed_fixture!(fixture) do
-    run_unboxed(fn ->
-      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+  defp delete_committed_fixture!(fixture) do
+    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
 
-      Repo.delete_all(
-        from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id
-      )
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
 
-      Repo.delete_all(
-        from pricing in CodexPooler.Catalog.PricingSnapshot,
-          where: pricing.id == ^fixture.pricing.id
-      )
+    Repo.delete_all(
+      from pricing in CodexPooler.Catalog.PricingSnapshot,
+        where: pricing.id == ^fixture.pricing.id
+    )
 
-      :ok
-    end)
+    :ok
   end
 
   defp capture_outcomes(fun) do
@@ -399,11 +382,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     after
       :telemetry.detach(handler_id)
     end
-  end
-
-  defp run_unboxed(fun) do
-    Task.async(fn -> Sandbox.unboxed_run(Repo, fun) end)
-    |> Task.await(@task_timeout)
   end
 
   defp run_ordered_operations(first_fun, second_fun) do

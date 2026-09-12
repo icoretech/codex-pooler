@@ -24,6 +24,7 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
     Attempt,
     ClientRetry,
     LedgerEntry,
+    PreAttemptRelease,
     Request,
     RequestClientRetryLink
   }
@@ -210,6 +211,7 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
           :visible,
           :attempt,
           :release,
+          :phase,
           :settlement,
           :expired,
           :future,
@@ -296,7 +298,8 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
           %{
             last_error_code: "owner_drained",
             usage_status: "usage_unknown",
-            response_status_code: 499
+            response_status_code: 499,
+            pre_attempt_phase: PreAttemptRelease.turn_interrupted()
           },
           completion_attrs
         )
@@ -417,6 +420,27 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
     Repo.delete_all(
       from entry in LedgerEntry,
         where: entry.request_id == ^fixture.request.id and entry.entry_kind == "release"
+    )
+
+    fixture
+  end
+
+  # `owner_drained` on its own no longer proves the boundary. A release that
+  # carries the reason but declares some other phase -- or declares none, as
+  # every pre-#187 interruption release did -- is not the drain this predicate
+  # is allowed to admit a successor for.
+  defp mutate(fixture, :phase) do
+    release = Repo.get_by!(LedgerEntry, request_id: fixture.request.id, entry_kind: "release")
+
+    Repo.update!(
+      Ecto.Changeset.change(release,
+        details:
+          Map.put(
+            release.details,
+            PreAttemptRelease.detail_key(),
+            PreAttemptRelease.unrecorded()
+          )
+      )
     )
 
     fixture

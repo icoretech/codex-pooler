@@ -4,7 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
   import CodexPooler.AccountingTestSupport
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, ClientRetry, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, ClientRetry, LedgerEntry, PreAttemptRelease, Request}
   alias CodexPooler.Gateway.Payloads.{RequestOptions, WebsocketTurnIdentity}
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.{RoutingCircuitState, SessionContinuity}
@@ -99,6 +99,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
 
     assert %CodexTurn{status: "failed", error_code: @reason, final_attempt_id: nil} =
              Repo.get!(CodexTurn, fixture.turn.id)
+
+    # Its own boundary, not the interruption one: nothing outside the turn
+    # went away, the process carrying it toward dispatch died inside the
+    # pre-attempt window (icoretech/codex-pooler-findings#187).
+    assert [%LedgerEntry{entry_kind: "release", attempt_id: nil} = release] =
+             Repo.all(
+               from e in LedgerEntry,
+                 where: e.request_id == ^fixture.request.id and e.entry_kind == "release"
+             )
+
+    assert release.details["release_reason"] == @reason
+
+    assert release.details[PreAttemptRelease.detail_key()] == PreAttemptRelease.task_exception()
   end
 
   test "the byte-identical resend is admitted as one successor after a task exception" do

@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestReplayEntitlement}
+  alias CodexPooler.Accounting.PreAttemptRelease
   alias CodexPooler.Accounting.RequestLogFacts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
@@ -275,7 +276,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         case Accounting.finalize_reservation_failure(request, %{
                last_error_code: reason,
                response_status_code: 499,
-               usage_status: "usage_unknown"
+               usage_status: "usage_unknown",
+               pre_attempt_phase: PreAttemptRelease.turn_interrupted()
              }) do
           {:ok, _} -> complete_interrupted_turn!(turn, nil, @turn_interrupted, reason, now())
           {:error, error} -> Repo.rollback(error)
@@ -351,7 +353,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         Accounting.finalize_reservation_failure(request, %{
           last_error_code: reason,
           response_status_code: @task_exception_status_code,
-          usage_status: "usage_unknown"
+          usage_status: "usage_unknown",
+          pre_attempt_phase: PreAttemptRelease.task_exception()
         })
         |> complete_task_exception_turn!(turn, nil, reason, now)
 
@@ -933,7 +936,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   # A turn interrupted before any attempt existed still holds whatever the
   # reservation reserved, so the release is written for every reason this
   # branch serves, not only for drains; only the resend marker above is
-  # drain-specific. A request that never reached the ledger (a claim rejected
+  # drain-specific. The declared phase is the same `turn_interrupted` the
+  # direct-receipt path writes, because the boundary is the same one: a live
+  # turn interrupted before any attempt existed. Which entry point ran is an
+  # accident of how the interruption arrived, and the reason it arrived for is
+  # already in `release_reason`.
+  #
+  # A request that never reached the ledger (a claim rejected
   # before reservation) has nothing to release and keeps the plain failure
   # write, because `finalize_reservation_failure/2` requires the reservation
   # row to exist.
@@ -943,7 +952,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
              last_error_code: reason,
              response_status_code: 499,
              usage_status: "usage_unknown",
-             now: now
+             now: now,
+             pre_attempt_phase: PreAttemptRelease.turn_interrupted()
            }) do
         {:ok, _released} ->
           :ok

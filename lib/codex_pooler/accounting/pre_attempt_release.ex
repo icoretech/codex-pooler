@@ -31,10 +31,12 @@ defmodule CodexPooler.Accounting.PreAttemptRelease do
   @detail_key "pre_attempt_phase"
 
   @routing_rejected "routing_rejected"
+  @task_exception "task_exception"
+  @turn_interrupted "turn_interrupted"
   @stale_sweep "stale_sweep"
   @unrecorded "unrecorded"
 
-  @phases [@routing_rejected, @stale_sweep, @unrecorded]
+  @phases [@routing_rejected, @task_exception, @turn_interrupted, @stale_sweep, @unrecorded]
 
   @telemetry_event [:codex_pooler, :accounting, :reservation, :pre_attempt_release]
 
@@ -55,6 +57,36 @@ defmodule CodexPooler.Accounting.PreAttemptRelease do
   """
   @spec routing_rejected() :: String.t()
   def routing_rejected, do: @routing_rejected
+
+  @doc """
+  The interruption path released a reserved turn that never reached dispatch.
+
+  The turn was live and the reservation healthy; something outside it went
+  away first — the client disconnected, the owner drained or crashed, its
+  lease expired, or a session-wide interrupt closed it. Every one of those is
+  the same boundary, and `release_reason` already names which: splitting them
+  here would only restate the reason in a second column, and would split on
+  which interruption entry point happened to run rather than on where the
+  reservation stopped being live.
+
+  Distinct from `task_exception/0`, which is this process losing the thread of
+  execution rather than something outside it going away: a rise in this phase
+  is client or node churn, and a rise in that one is a defect in our own
+  pre-dispatch path.
+  """
+  @spec turn_interrupted() :: String.t()
+  def turn_interrupted, do: @turn_interrupted
+
+  @doc """
+  The response task raised before it created an attempt.
+
+  Nothing outside the turn went away: the process carrying the reservation
+  toward dispatch died inside that window and finalized its own request on the
+  way out. Counted apart from `turn_interrupted/0` because the two ask for
+  different work — this one is a bug to find, not traffic to explain.
+  """
+  @spec task_exception() :: String.t()
+  def task_exception, do: @task_exception
 
   @doc """
   The six-hour backstop released a reservation no live path ever closed.

@@ -2501,7 +2501,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Committed post-consume transitions observed by scraped web nodes only. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory.",
+      "description": "Committed post-consume transitions observed by scraped web nodes only. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the saved-reset audit trail instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2553,7 +2553,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Best-effort web-node timing for committed transitions. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency.",
+      "description": "Best-effort web-node timing for committed transitions. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the saved-reset audit trail instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -2777,7 +2777,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. routing_rejected is a deliberate refusal before dispatch and is expected traffic. unrecorded is a live cleanup path that released the reservation without declaring its phase. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
+      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",

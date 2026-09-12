@@ -8,6 +8,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   alias CodexPooler.Accounting.{
     Attempt,
     LedgerEntry,
+    PreAttemptRelease,
     Request,
     RequestClientRetryLink,
     RequestReplayEntitlement
@@ -25,6 +26,8 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @failed_predecessor_prefix "codex-request-retry:"
   @retry_window_seconds 30
   @task_exception_code "owner_task_exception"
+  @pre_attempt_phase_key PreAttemptRelease.detail_key()
+  @turn_interrupted_phase PreAttemptRelease.turn_interrupted()
   @stream_error_code "upstream_stream_error"
   @compaction_retry_window_seconds 330
 
@@ -1157,6 +1160,16 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   defp verified_pre_attempt_drain?(_turn, _request), do: false
 
+  # The reason alone no longer carries the whole claim. `owner_drained` is a
+  # caller-chosen error code, and any future path that releases a reservation
+  # for that reason at a different boundary would have passed this predicate
+  # unread -- admitting a resend whose predecessor may still hold reserved
+  # budget, which is the one harm this gate exists to prevent. The bounded
+  # phase is what the releasing path *declares*, so requiring both means the
+  # entry has to agree with itself. It fails closed for exactly one cohort:
+  # a release written before icoretech/codex-pooler-findings#187 carries
+  # `unrecorded` and is refused, which costs a resend admitted during the
+  # deploy that lands it and nothing after.
   defp released_without_settlement?(request_id) do
     entries =
       Repo.all(
@@ -1172,7 +1185,10 @@ defmodule CodexPooler.Accounting.ClientRetry do
           entry_kind: "release",
           attempt_id: nil,
           settled_cost_micros: %Decimal{},
-          details: %{"release_reason" => "owner_drained"}
+          details: %{
+            "release_reason" => "owner_drained",
+            @pre_attempt_phase_key => @turn_interrupted_phase
+          }
         } = release,
         %LedgerEntry{entry_kind: "reservation", attempt_id: nil} = reservation
       ] ->
