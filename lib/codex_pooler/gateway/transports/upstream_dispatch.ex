@@ -1564,14 +1564,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   # source of the production key. Without a tenant scope or a usable key the
   # handshake sends nothing, exactly as on HTTP.
   #
-  # The provider pins the prompt cache to the replica `session-id` selects, so a
-  # turn whose owner socket had to reconnect still lands on the replica holding
-  # the warm prefix instead of starting cold (measured locally: cached/input
-  # 0.0 without the header and 0.9856 with it, four pairs per arm,
-  # codex-pooler-findings#133). Like every other handshake header except the
-  # routing hint it enters `UpstreamWebsocketSession.request_key/1`, so a later
-  # turn that changes or drops `prompt_cache_key` opens its own connection
-  # rather than riding one whose handshake carried another conversation's id.
+  # The header raises the chance that a turn on a fresh upstream connection
+  # lands on a replica still holding the warm prefix. It is a probability, not
+  # a guarantee, and the earlier local figures here (0.0 without, 0.9856 with)
+  # overstated it. Measured on production over 12 interleaved triples, each on
+  # a provably fresh connection with its own generated prefix: a stable derived
+  # id hit 7 of 9 turns, no `prompt_cache_key` at all hit 2 of 12, and a key
+  # present but changed between turns hit 1 of 12 (Fisher 0.0092 and 0.0022;
+  # changed-key versus no-key is p = 1.0, so it is the *stability* of the id
+  # that does the work, not the presence of a key). Every hit recovered exactly
+  # 11,008 of ~11,900 input tokens and every miss exactly zero, so the hit rate
+  # is the statistic and a mean ratio hides the behaviour. Hits also crossed
+  # upstream accounts in 5 of 7 cases, so the provider's cache is not scoped to
+  # the credential that warmed it. See codex-pooler-findings#133.
+  #
+  # Like every other handshake header except the routing hint it enters
+  # `UpstreamWebsocketSession.request_key/1`, so a later turn that changes or
+  # drops `prompt_cache_key` opens its own connection rather than riding one
+  # whose handshake carried another conversation's id.
   defp websocket_provider_session_headers(
          %RequestOptions{
            transport: %{upstream_endpoint: endpoint},
