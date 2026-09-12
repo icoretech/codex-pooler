@@ -17,7 +17,16 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
     on_exit(fn ->
       NativePreAttemptDrain.disarm()
       Sandbox.mode(Repo, :manual)
-      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+      # Restoring an unset key means deleting it, not writing `nil`. The
+      # runtime reads this through `Application.get_env/3` with a `false`
+      # default, so writing `nil` back does not restore "unset" -- it disables
+      # the default and every later test in the same partition gets `nil` where
+      # a boolean is required, which raises a `BadBooleanError` far away from
+      # here.
+      case previous do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
     end)
 
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
