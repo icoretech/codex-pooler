@@ -782,7 +782,9 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       {result, events} =
         capture_query_order(fn -> Service.prepare_replay_intent(auth, tampered) end)
 
-      assert {:error, %{status: 400, code: "invalid_request"}} = result
+      # Post-seal tampering is a gateway invariant breach, so it answers a
+      # logged 5xx rather than a client-blamed 400 (findings #168 item 2).
+      assert {:error, %{status: 500, code: "server_error"}} = result
       assert events == []
     end
 

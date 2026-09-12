@@ -758,7 +758,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   def prepare_replay_intent(_auth, _prepared),
-    do: {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+    do:
+      {:error,
+       log_prepared_frame_provenance_breach("replay_intent_shape", :unknown, nil, nil, nil)}
 
   defp validate_replay_prepared_frame(%PreparedWebsocketFrame{} = prepared) do
     case WebsocketCodec.validate_prepared_frame(prepared) do
@@ -770,8 +772,42 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
 
       {:error, :invalid} ->
-        {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+        {:error, prepared_frame_provenance_breach(prepared, "replay_frame_validation")}
     end
+  end
+
+  # A prepared frame is minted and verified milliseconds later in the same OS
+  # process, so a digest that stops verifying is a gateway invariant breach, not
+  # a malformed client request. The client-blamed `400 invalid_request` this
+  # replaces was also completely silent — findings#168 could only be traced
+  # from the client's local store, because none of the three emit sites logged
+  # and the rejection telemetry event is not registered. `request_id`,
+  # `codex_session_id`, `endpoint` and `variant` are not in the logger metadata
+  # allowlist in `config/config.exs`, so they travel inside the message.
+  defp prepared_frame_provenance_breach(%PreparedWebsocketFrame{} = prepared, stage) do
+    session = Map.get(prepared.request_options.continuity, :codex_session)
+    session_id = if is_struct(session, CodexSession), do: session.id
+
+    log_prepared_frame_provenance_breach(
+      stage,
+      prepared.variant,
+      prepared.request_options.request_metadata.request_id,
+      session_id,
+      prepared.endpoint
+    )
+  end
+
+  defp log_prepared_frame_provenance_breach(stage, variant, request_id, session_id, endpoint) do
+    Logger.error(fn ->
+      "prepared websocket frame provenance invalid " <>
+        "stage=#{stage} " <>
+        "frame_variant=#{variant} " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
+        "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>
+        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=websocket"
+    end)
+
+    error(500, "server_error", "prepared websocket frame provenance could not be verified")
   end
 
   defp replay_preflight_context(
@@ -1157,7 +1193,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
 
       {:error, :invalid} ->
-        {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+        {:error, prepared_frame_provenance_breach(prepared, "prepared_dispatch_consume")}
     end
   end
 

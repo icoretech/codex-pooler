@@ -550,6 +550,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     }
   end
 
+  # `request_options.native_compaction_reservation` is deliberately absent from
+  # both signed bases. It is socket-local scheduling state, not admission
+  # authority: the socket writes it to itself to remember "re-attempt this
+  # reservation once the active turn drains", its only reader re-runs
+  # `reserve_owner_capability/5` from scratch, and every authority-bearing part
+  # of it is already covered here (the turn metadata and phase are derived from
+  # the signed `payload` and `payload_context`; the control ref is a fresh
+  # `make_ref/0` used for trace correlation). The authority is
+  # `native_compaction_admission`, which the owner issues and which is bound
+  # into the capability through `runtime_admission_binding_digest/1` and redeemed
+  # at dispatch — that one stays signed. Signing the reservation instead broke
+  # the frame's own token, because the write happens after the seal and only the
+  # dequeue route unwinds it (findings#168).
   defp prepared_frame_digest(
          %PreparedWebsocketFrame{} = prepared,
          validation_claim,
@@ -575,7 +588,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       prepared.request_options.runtime.replay_lifecycle_binding,
       prepared.request_options.runtime.replay_generation,
       prepared.request_options.native_compaction_admission,
-      prepared.request_options.native_compaction_reservation,
       prepared.request_options.transport.websocket_delivery_mode,
       validation_claim,
       capability_server,
@@ -613,7 +625,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       request_options.transport.websocket_delivery_mode,
       request_options.payload_context,
       request_options.native_compaction_admission,
-      request_options.native_compaction_reservation,
+      # No `native_compaction_reservation` here either: no validation family
+      # reads it, so a deferral cannot change which validations were completed.
       RequestOptions.use_responses_lite?(request_options),
       RequestOptions.OpenAICompatibility.translated_responses_surface?(
         request_options.openai_compatibility

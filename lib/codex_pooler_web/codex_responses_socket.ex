@@ -1927,6 +1927,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           not Map.get(state, :websocket_owner_active_turn_reconnect?, false) ->
         {:ok, queue_prepared_response(state, prepared)}
 
+      owner_forwarded_socket?(state) and pending_native_compaction_deferral?(prepared) ->
+        reject_deferred_native_compaction(state)
+
       owner_forwarded_socket?(state) ->
         dispatch_owner_prepared_response(prepared, state)
 
@@ -1934,6 +1937,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:ok, start_or_queue_prepared_response(prepared, state)}
     end
   end
+
+  # The deferral means "the owner refused the compaction reservation; retry it
+  # once the active turn drains". Only the dequeue route honours that, so the
+  # owner-forwarded reconnect route — which must not queue, because it is
+  # reattaching to an owner with a live turn — has to answer instead of
+  # dispatching a turn whose reservation was never admitted. The retryable
+  # `503 owner_unavailable` it returns is the same public contract
+  # `start_deferred_or_tracked_response/2`'s own failure branch already
+  # returns for the identical condition; the two routes used to disagree, and
+  # this one answered `400 invalid_request` (findings#168).
+  defp reject_deferred_native_compaction(state) do
+    log_replay_rejection(state, :owner_unavailable, :native_compaction_deferral)
+    reject_prepared_response(owner_error(:owner_unavailable), state)
+  end
+
+  defp pending_native_compaction_deferral?(%PreparedWebsocketFrame{
+         request_options: %RequestOptions{native_compaction_reservation: %{}}
+       }),
+       do: true
+
+  defp pending_native_compaction_deferral?(%PreparedWebsocketFrame{}), do: false
 
   defp dispatch_owner_prepared_response(
          %PreparedWebsocketFrame{
@@ -2487,6 +2511,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp response_payload_requires_queue?(%PreparedWebsocketFrame{} = prepared, state) do
+    # A frame carrying a deferred compaction reservation has to be queued:
+    # `start_deferred_or_tracked_response/2` on the dequeue route is the only
+    # place that unwinds the deferral and re-attempts the reservation, so
+    # dispatching straight to a tracked task would run the turn with an
+    # admission the owner never granted (findings#168).
+    pending_native_compaction_deferral?(prepared) or
+      response_payload_blocked?(prepared, state)
+  end
+
+  defp response_payload_blocked?(%PreparedWebsocketFrame{} = prepared, state) do
     public_response_start_error_pending?(state) or
       (public_response_payload?(prepared, state) and public_turn_open?(state)) or
       (owner_forwarded_socket?(state) and active_response_task?(state)) or
@@ -2526,8 +2560,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       | request_options: %{prepared.request_options | native_compaction_reservation: nil}
     }
 
-    prepared = put_prepared_runtime_options(prepared, Adapter.response_options(state, true, nil))
+    case put_prepared_runtime_options(prepared, Adapter.response_options(state, true, nil)) do
+      {:ok, prepared} ->
+        reserve_and_start_deferred_response(prepared, metadata, phase, control_ref, state)
 
+      {:error, reason} ->
+        start_prepared_frame_breach_task(reason, prepared, state, "deferred_runtime_options")
+    end
+  end
+
+  defp start_deferred_or_tracked_response(prepared, state),
+    do: start_tracked_response_task(prepared, state)
+
+  defp reserve_and_start_deferred_response(prepared, metadata, phase, control_ref, state) do
     case reserve_owner_capability(prepared, metadata, phase, control_ref, state) do
       {:ok, prepared} ->
         start_tracked_response_task(prepared, state)
@@ -2536,9 +2581,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         start_owner_retarget_error_task(owner_error(reason), prepared, state)
     end
   end
-
-  defp start_deferred_or_tracked_response(prepared, state),
-    do: start_tracked_response_task(prepared, state)
 
   defp start_queued_response(%PreparedWebsocketFrame{} = prepared, state),
     do: start_deferred_or_tracked_response(prepared, state)
@@ -2698,6 +2740,58 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       :queue.from_list([prepared]),
       &:queue.in(prepared, &1)
     )
+  end
+
+  # A failed re-seal is always logged and always refuses the turn, instead of
+  # returning the original frame and silently losing the runtime options it was
+  # supposed to gain (findings#168).
+  defp start_prepared_frame_breach_task(reason, prepared, state, stage) do
+    log_prepared_frame_breach(reason, prepared, state, stage)
+
+    start_owner_retarget_error_task(
+      prepared_frame_reseal_error(reason, prepared),
+      prepared,
+      state
+    )
+  end
+
+  # `{:error, :invalid}` conflates "the signed digest no longer verifies" with
+  # "the capability process is gone" (findings#165), but the two are still
+  # separable here and deserve different answers. A frame whose digest still
+  # verifies lost its capability to the hard 30 s TTL while it waited behind an
+  # active turn: a transient owner-side condition the client should retry, and
+  # the retryable answer this route already gave before the re-seal result
+  # started travelling. Anything else is a gateway invariant breach and gets
+  # the logged 5xx.
+  defp prepared_frame_reseal_error(:invalid, %PreparedWebsocketFrame{} = prepared) do
+    if WebsocketCodec.valid_prepared_frame?(prepared),
+      do: owner_error(:owner_unavailable),
+      else: prepared_frame_breach_error()
+  end
+
+  defp prepared_frame_reseal_error(_reason, %PreparedWebsocketFrame{}),
+    do: prepared_frame_breach_error()
+
+  defp prepared_frame_breach_error do
+    %{
+      status: 500,
+      code: "server_error",
+      message: "prepared websocket frame provenance could not be verified",
+      param: nil
+    }
+  end
+
+  defp log_prepared_frame_breach(reason, %PreparedWebsocketFrame{} = prepared, state, stage) do
+    Logger.error(
+      "prepared websocket frame reseal failed " <>
+        "stage=#{stage} " <>
+        "reason_code=#{DiagnosticTaxonomy.reason_code(reason) || "unknown"} " <>
+        "frame_variant=#{prepared.variant} " <>
+        "route_class=proxy_websocket " <>
+        "codex_session_id=#{codex_session_id(state)}"
+    )
+
+    :ok
   end
 
   defp start_owner_retarget_error_task(reason, prepared, state) do
@@ -3638,8 +3732,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         direct_cleanup: Map.get(Map.get(state, :direct_cleanup_contexts, %{}), task_pid)
       )
 
-    prepared = put_prepared_runtime_options(prepared, opts)
+    case put_prepared_runtime_options(prepared, opts) do
+      {:ok, resealed} ->
+        run_guarded_prepared_response(parent, resealed, opts, state, task_pid)
 
+      {:error, reason} ->
+        log_prepared_frame_breach(reason, prepared, state, "response_task_runtime_options")
+        {:error, prepared_frame_reseal_error(reason, prepared)}
+    end
+  end
+
+  defp run_guarded_prepared_response(parent, prepared, opts, state, task_pid) do
     prepared = %{
       prepared
       | request_options:
@@ -3722,57 +3825,64 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     :ok
   end
 
+  # Both branches rewrite `continuity.codex_session`, which the frame's own
+  # digest covers through `prepared_session_authorization/1` (it signs
+  # `{id, pool_id, api_key_id, status}`), so both have to re-seal: the branch
+  # that skipped the re-seal poisoned the frame whenever the session it wrote
+  # differed from the one present at seal time, exactly as the deferred
+  # compaction reservation did. The re-seal result now travels instead of
+  # being swallowed — returning the original frame on `{:error, _}` kept a
+  # frame whose token no longer verified *and* silently dropped the runtime
+  # options this call exists to add, which is the one place that could have
+  # caught findings#168 early. `runtime.direct_cleanup`, applied by the caller
+  # after this, is deliberately outside the signed basis.
+  @spec put_prepared_runtime_options(PreparedWebsocketFrame.t(), RequestOptions.t()) ::
+          {:ok, PreparedWebsocketFrame.t()} | {:error, :consumed | :invalid}
   defp put_prepared_runtime_options(
          %PreparedWebsocketFrame{} = prepared,
          %RequestOptions{} = opts
        ) do
-    if is_nil(prepared.request_options.runtime.replay_authorization_binding) do
-      prepared_options = prepared.request_options
-      owner = opts.transport.websocket_owner
+    WebsocketCodec.reseal_runtime_frame(prepared, prepared_runtime_options(prepared, opts))
+  end
 
-      opts =
-        prepared_options
-        |> RequestOptions.put_continuity(
-          codex_session: opts.continuity.codex_session,
-          semantic_turn_key: prepared.semantic_turn_key,
-          turn_claim_key: prepared.turn_claim_key,
-          previous_response_id: prepared_options.continuity.previous_response_id,
-          accepted_turn_state: prepared_options.continuity.accepted_turn_state
-        )
-        |> RequestOptions.put_transport(
-          websocket_owner_forwarding_enabled?: owner.enabled?,
-          websocket_owner_session: owner.session,
-          websocket_owner_lease_token: owner.lease_token,
-          websocket_owner_downstream: owner.downstream,
-          websocket_owner_downstream_epoch: owner.downstream_epoch,
-          websocket_owner_proxy_instance_id: owner.proxy_instance_id,
-          websocket_owner_instance_id: owner.owner_instance_id,
-          websocket_owner_forwarder_opts: owner.forwarder_opts
-        )
+  defp prepared_runtime_options(
+         %PreparedWebsocketFrame{
+           request_options: %RequestOptions{runtime: %{replay_authorization_binding: nil}}
+         } = prepared,
+         %RequestOptions{} = opts
+       ) do
+    prepared_options = prepared.request_options
 
-      case WebsocketCodec.reseal_runtime_frame(prepared, opts) do
-        {:ok, resealed} -> resealed
-        {:error, _reason} -> prepared
-      end
-    else
-      owner = opts.transport.websocket_owner
+    prepared_options
+    |> RequestOptions.put_continuity(
+      codex_session: opts.continuity.codex_session,
+      semantic_turn_key: prepared.semantic_turn_key,
+      turn_claim_key: prepared.turn_claim_key,
+      previous_response_id: prepared_options.continuity.previous_response_id,
+      accepted_turn_state: prepared_options.continuity.accepted_turn_state
+    )
+    |> put_prepared_owner_transport(opts)
+  end
 
-      request_options =
-        prepared.request_options
-        |> RequestOptions.put_continuity(codex_session: opts.continuity.codex_session)
-        |> RequestOptions.put_transport(
-          websocket_owner_forwarding_enabled?: owner.enabled?,
-          websocket_owner_session: owner.session,
-          websocket_owner_lease_token: owner.lease_token,
-          websocket_owner_downstream: owner.downstream,
-          websocket_owner_downstream_epoch: owner.downstream_epoch,
-          websocket_owner_proxy_instance_id: owner.proxy_instance_id,
-          websocket_owner_instance_id: owner.owner_instance_id,
-          websocket_owner_forwarder_opts: owner.forwarder_opts
-        )
+  defp prepared_runtime_options(%PreparedWebsocketFrame{} = prepared, %RequestOptions{} = opts) do
+    prepared.request_options
+    |> RequestOptions.put_continuity(codex_session: opts.continuity.codex_session)
+    |> put_prepared_owner_transport(opts)
+  end
 
-      %{prepared | request_options: request_options}
-    end
+  defp put_prepared_owner_transport(%RequestOptions{} = request_options, %RequestOptions{} = opts) do
+    owner = opts.transport.websocket_owner
+
+    RequestOptions.put_transport(request_options,
+      websocket_owner_forwarding_enabled?: owner.enabled?,
+      websocket_owner_session: owner.session,
+      websocket_owner_lease_token: owner.lease_token,
+      websocket_owner_downstream: owner.downstream,
+      websocket_owner_downstream_epoch: owner.downstream_epoch,
+      websocket_owner_proxy_instance_id: owner.proxy_instance_id,
+      websocket_owner_instance_id: owner.owner_instance_id,
+      websocket_owner_forwarder_opts: owner.forwarder_opts
+    )
   end
 
   defp response_task_activity_kind({:owner_retarget_error, _reason}, _state),

@@ -32,7 +32,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   ]
   @reconnect_event_keys [:reconnect_disposition, :handoff_outcome]
   @reconnect_metadata_keys @metadata_keys ++ @reconnect_event_keys
-  @replay_rejection_stages ~w(owner_preflight replay_preflight)
+  @replay_rejection_stages ~w(owner_preflight replay_preflight native_compaction_deferral)
 
   @type event_metadata :: keyword() | map()
 

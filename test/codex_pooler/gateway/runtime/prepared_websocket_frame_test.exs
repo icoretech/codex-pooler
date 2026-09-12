@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
   use CodexPooler.DataCase, async: false
 
+  import ExUnit.CaptureLog, only: [with_log: 1]
+
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Service
@@ -21,7 +23,10 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
       request_options: request_options
     }
 
-    assert {:error, %{status: 400, code: "invalid_request"}} =
+    # A frame that cannot verify is a gateway invariant breach, not a malformed
+    # client request: it answers a logged 5xx rather than a client-blamed 400
+    # (findings #168 item 2).
+    assert {:error, %{status: 500, code: "server_error"}} =
              Service.execute_prepared_websocket_response(%{}, manually_assembled)
   end
 
@@ -180,6 +185,62 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     end
   end
 
+  # Findings #168. The socket writes `native_compaction_reservation` into a
+  # frame it has already sealed, and two of the three dispatch routes never
+  # unwind it, so the field has to stay outside the signed basis: it is
+  # socket-local scheduling state whose only reader re-runs the reservation
+  # from scratch. The authority it stands in for —
+  # `native_compaction_admission`, which the owner issues — stays signed. The
+  # real poisoning path is driven end to end in
+  # `CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest`.
+  test "a post-seal compaction deferral keeps the frame verifiable while its admission stays signed" do
+    payload = %{
+      "type" => "response.create",
+      "model" => "gpt-example",
+      "turn_id" => "deferred-reservation-turn",
+      "input" => []
+    }
+
+    session = %{
+      id: Ecto.UUID.generate(),
+      pool_id: Ecto.UUID.generate(),
+      api_key_id: Ecto.UUID.generate(),
+      status: "active"
+    }
+
+    opts =
+      RequestOptions.for_websocket(
+        %{request_id: "deferred-reservation", codex_session: session, api_key_runtime_epoch: 0},
+        payload
+      )
+
+    assert {:ok, prepared} =
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               opts,
+               fn _frame -> :ok end
+             )
+
+    assert :ok = WebsocketCodec.validate_prepared_frame(prepared)
+
+    deferred =
+      put_in(prepared.request_options.native_compaction_reservation, %{
+        metadata: :native_turn_metadata,
+        phase: :final,
+        control_ref: make_ref()
+      })
+
+    assert :ok = WebsocketCodec.validate_prepared_frame(deferred)
+
+    forged_admission =
+      put_in(prepared.request_options.native_compaction_admission, %{forged: true})
+
+    assert {:error, :invalid} = WebsocketCodec.validate_prepared_frame(forged_admission)
+
+    assert {:ok, nil} = WebsocketCodec.consume_prepared_frame(deferred)
+    assert {:error, :consumed} = WebsocketCodec.validate_prepared_frame(prepared)
+  end
+
   test "malformed non-capability provenance returns bounded invalid results" do
     payload = %{"generate" => false, "model" => "gpt-example"}
     opts = RequestOptions.for_websocket(%{request_id: "malformed-capability"}, payload)
@@ -197,8 +258,13 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     assert WebsocketCodec.validate_prepared_frame(malformed) == {:error, :invalid}
     assert WebsocketCodec.consume_prepared_frame(malformed) == {:error, :invalid}
 
-    assert {:error, %{status: 400, code: "invalid_request"}} =
-             Service.execute_prepared_websocket_response(%{}, malformed)
+    {result, log} =
+      with_log(fn -> Service.execute_prepared_websocket_response(%{}, malformed) end)
+
+    assert {:error, %{status: 500, code: "server_error"}} = result
+    assert log =~ "prepared websocket frame provenance invalid"
+    assert log =~ "stage=prepared_dispatch_consume"
+    refute log =~ "gpt-example"
   end
 
   @tag :replay_protocol_v2
@@ -308,7 +374,7 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
       | provenance: %{prepared.provenance | capability: Capability.issue()}
     }
 
-    assert {:error, %{status: 400, code: "invalid_request"}} =
+    assert {:error, %{status: 500, code: "server_error"}} =
              Service.execute_prepared_websocket_response(%{}, substituted)
   end
 

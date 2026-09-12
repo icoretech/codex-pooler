@@ -169,7 +169,9 @@ defmodule CodexPooler.Gateway.Runtime.ToolContinuationPreflightTest do
         request_claim_key: next.request_options.continuity.request_claim_key
       )
 
-    assert {:error, %{code: "invalid_request"}} =
+    # A forged claim key breaks the frame's own signature, which is a gateway
+    # invariant breach rather than a client request error (findings #168).
+    assert {:error, %{status: 500, code: "server_error"}} =
              Service.prepare_replay_intent(setup.auth, %{first | request_options: forged_options})
 
     assert Repo.aggregate(RequestClientRetryLink, :count) == 0
