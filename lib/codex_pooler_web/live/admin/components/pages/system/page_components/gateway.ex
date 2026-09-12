@@ -224,6 +224,25 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
         ]
       },
       %{
+        id: "token_refresh",
+        label: "Credential refresh",
+        description:
+          "Controls how early scheduled recovery refreshes upstream credentials that no traffic is exercising.",
+        form: gateway_form,
+        settings: [
+          gateway_setting(%{
+            id: "instance-settings-upstream-token-refresh-margin-seconds",
+            field: :upstream_token_refresh_margin_seconds,
+            label: "Proactive refresh margin (s)",
+            hint:
+              "Scheduled recovery refreshes an active account once its access token is this close to expiring, so an account with no traffic cannot age into required re-authentication. Accounts already inside the margin are retried on a bounded cooldown, not on every recovery pass.",
+            minimum: 3_600,
+            maximum: 1_209_600,
+            unit: "s"
+          })
+        ]
+      },
+      %{
         id: "continuity",
         label: "Continuity",
         description:

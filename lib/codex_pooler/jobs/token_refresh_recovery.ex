@@ -1,26 +1,50 @@
 defmodule CodexPooler.Jobs.TokenRefreshRecovery do
   @moduledoc """
   Selects upstream identities that are eligible for scheduled token-refresh recovery.
+
+  Two arms feed the same candidate list. The recovery arm picks up identities
+  whose lifecycle already records refresh work to finish: `refresh_due`,
+  `refreshing` with a stale claim, and `refresh_failed` past its cooldown. The
+  proactive arm picks up `active` identities whose access token is expired or
+  close to its deadline, because an identity with no traffic is never moved to
+  `refresh_due` by a request and would otherwise age until only a browser
+  re-authentication could recover it.
+
+  Both arms share the assignment/pool joins, the in-flight job and claim
+  guards, the eligibility-timestamp ordering, and the limit. Selection never
+  mutates an identity; the worker's row-locked refresh stays the only authority.
   """
 
   import Ecto.Query
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Auth.AccessTokenExpiry
+  alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
   alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
+  @active IdentityStatus.active_status()
   @refresh_due IdentityStatus.refresh_due_status()
   @refreshing IdentityStatus.refreshing_status()
   @refresh_failed IdentityStatus.refresh_failed_status()
-  @candidate_statuses [@refresh_due, @refreshing, @refresh_failed]
+  @candidate_statuses [@active, @refresh_due, @refreshing, @refresh_failed]
   @assignment_active AssignmentStatus.active_status()
   @pool_active "active"
   @incomplete_job_states ~w(available scheduled executing retryable)
   @default_limit 100
   @refresh_failed_cooldown_seconds 6 * 60 * 60
+  # A successful refresh that does not move the deadline, and a `:noop` result,
+  # both leave an identity inside the proactive margin, so without a cooldown
+  # the 15-minute scheduler would re-enqueue it on every pass. The window is
+  # anchored on the same `token_refresh` `finished_at` the `refresh_failed` arm
+  # reads and matches its 6 h cooldown: an attempt that did not move the
+  # deadline is a soft failure and deserves the same cadence. An identity that
+  # stays inside the margin therefore costs at most four attempts per day.
+  @proactive_cooldown_seconds 6 * 60 * 60
 
   @type opts :: keyword()
 
@@ -28,12 +52,13 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
   def list_candidates(opts \\ []) when is_list(opts) do
     now = normalize_now(Keyword.get(opts, :now))
     limit = normalize_limit(Keyword.get(opts, :limit))
+    margin_seconds = proactive_margin_seconds()
 
     opts
     |> candidate_query()
     |> Repo.all()
     |> Enum.reject(&fresh_token_refresh_in_progress?(&1, now))
-    |> Enum.flat_map(&with_eligibility_timestamp(&1, now))
+    |> Enum.flat_map(&with_eligibility_timestamp(&1, now, margin_seconds))
     |> Enum.sort_by(fn {identity, eligible_at} ->
       {DateTime.to_unix(eligible_at, :microsecond), identity.id}
     end)
@@ -61,9 +86,31 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
       select: identity
   end
 
+  # The proactive arm resolves the access-token deadline exactly the way every
+  # other consumer does, so a marker this app does not trust cannot create
+  # refresh traffic of its own.
   defp with_eligibility_timestamp(
          %UpstreamIdentity{status: status} = identity,
-         now
+         now,
+         margin_seconds
+       )
+       when status == @active do
+    evaluation =
+      identity.metadata
+      |> TokenRefreshMetadata.project_access_token_expiry()
+      |> AccessTokenExpiry.evaluate(now)
+
+    if proactive_refresh_due?(evaluation, now, margin_seconds) do
+      proactive_eligibility(identity, now)
+    else
+      []
+    end
+  end
+
+  defp with_eligibility_timestamp(
+         %UpstreamIdentity{status: status} = identity,
+         now,
+         _margin_seconds
        )
        when status == @refresh_due do
     [{identity, timestamp_or_now(identity.updated_at || identity.created_at, now)}]
@@ -76,7 +123,8 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
   # takeover stays the only recovery authority.
   defp with_eligibility_timestamp(
          %UpstreamIdentity{status: status} = identity,
-         now
+         now,
+         _margin_seconds
        )
        when status == @refreshing do
     reference_at =
@@ -90,7 +138,8 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
 
   defp with_eligibility_timestamp(
          %UpstreamIdentity{status: status} = identity,
-         now
+         now,
+         _margin_seconds
        )
        when status == @refresh_failed do
     reference_at =
@@ -106,6 +155,45 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
     else
       []
     end
+  end
+
+  # An expired access token is always due. A known deadline inside the
+  # operator-configured margin is due. An unknown resolution is never selected
+  # proactively: with no deadline there is nothing that could later stop the
+  # selection, so an unknown identity would be enqueued on every 15-minute
+  # pass for as long as it stayed active. Those identities are left to traffic,
+  # to the reconciliation pass that recovers a missing expiry marker, and to
+  # operator action.
+  defp proactive_refresh_due?(%{state: :expired}, _now, _margin_seconds), do: true
+
+  defp proactive_refresh_due?(
+         %{state: :known, deadline: %DateTime{} = deadline},
+         now,
+         margin_seconds
+       ) do
+    DateTime.diff(deadline, now, :second) <= margin_seconds
+  end
+
+  defp proactive_refresh_due?(_evaluation, _now, _margin_seconds), do: false
+
+  defp proactive_eligibility(%UpstreamIdentity{} = identity, now) do
+    reference_at =
+      identity.metadata
+      |> token_refresh_metadata()
+      |> metadata_datetime("finished_at")
+      |> Kernel.||(timestamp_or_now(identity.updated_at || identity.created_at, now))
+
+    eligible_at = DateTime.add(reference_at, @proactive_cooldown_seconds, :second)
+
+    if DateTime.compare(eligible_at, now) in [:lt, :eq] do
+      [{identity, eligible_at}]
+    else
+      []
+    end
+  end
+
+  defp proactive_margin_seconds do
+    OperationalSettings.current().upstream_token_refresh_margin_seconds
   end
 
   defp fresh_token_refresh_in_progress?(%UpstreamIdentity{} = identity, now) do

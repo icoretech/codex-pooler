@@ -155,6 +155,17 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
     refute Map.get(setting, :sensitive?, false)
   end
 
+  test "classifies the proactive token refresh margin as cached non-secret DB state" do
+    setting = Classification.fetch!(:upstream_token_refresh_margin)
+
+    assert setting.bucket == :db_runtime_cached
+    assert setting.group == :gateway
+    assert setting.env_names == []
+    assert setting.storage == :database
+    assert setting.reloadability == :cached
+    refute Map.get(setting, :sensitive?, false)
+  end
+
   test "classifies metrics bearer token as HMAC-only DB secret" do
     setting = Classification.fetch!(:metrics_bearer_token)
 

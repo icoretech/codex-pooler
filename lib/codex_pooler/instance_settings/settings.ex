@@ -27,6 +27,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
     :upstream_pool_timeout_ms,
     :upstream_receive_timeout_ms,
     :upstream_conn_max_idle_time_ms,
+    :upstream_token_refresh_margin_seconds,
     :expired_alias_ttl_seconds,
     :bridge_owner_lease_ttl_seconds,
     :bridge_owner_lease_renewal_seconds,
@@ -50,6 +51,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :upstream_pool_timeout_ms, :integer
       field :upstream_receive_timeout_ms, :integer
       field :upstream_conn_max_idle_time_ms, :integer
+      field :upstream_token_refresh_margin_seconds, :integer
       field :expired_alias_ttl_seconds, :integer
       field :bridge_owner_lease_ttl_seconds, :integer
       field :bridge_owner_lease_renewal_seconds, :integer
@@ -236,6 +238,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
       :upstream_conn_max_idle_time_ms,
+      :upstream_token_refresh_margin_seconds,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -255,6 +258,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
       :upstream_conn_max_idle_time_ms,
+      :upstream_token_refresh_margin_seconds,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -280,6 +284,15 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> validate_number(:upstream_conn_max_idle_time_ms,
       greater_than_or_equal_to: 1_000,
       less_than_or_equal_to: 3_600_000
+    )
+    # The lower bound keeps the proactive refresh margin far above the
+    # 15-minute recovery cadence, so a pass can still act before the deadline.
+    # The upper bound sits above the observed access-token lifetime, which lets
+    # an operator hold every idle identity permanently inside the margin, paced
+    # only by the recovery cooldown, without accepting an unbounded value.
+    |> validate_number(:upstream_token_refresh_margin_seconds,
+      greater_than_or_equal_to: 3_600,
+      less_than_or_equal_to: 1_209_600
     )
     |> validate_positive_integer(:expired_alias_ttl_seconds)
     |> validate_positive_integer(:bridge_owner_lease_ttl_seconds)

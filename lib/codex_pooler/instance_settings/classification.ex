@@ -313,6 +313,17 @@ defmodule CodexPooler.InstanceSettings.Classification do
         "Timeout and pooled-connection idle bound options are attached to each new upstream request."
     },
     %{
+      key: :upstream_token_refresh_margin,
+      bucket: :db_runtime_cached,
+      group: :gateway,
+      label: "Proactive token refresh margin",
+      env_names: [],
+      storage: :database,
+      reloadability: :cached,
+      notes:
+        "Scheduled token refresh recovery resolves this margin from cached instance settings when each pass runs; changes affect later passes, not in-flight refreshes."
+    },
+    %{
       key: :model_context_window_overrides,
       bucket: :db_runtime_live,
       group: :gateway,

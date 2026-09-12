@@ -1864,6 +1864,35 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
            )
   end
 
+  test "renders the proactive token refresh margin in the credential refresh group", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "tbody[data-runtime-limit-group='token_refresh'] #instance-settings-upstream-token-refresh-margin-seconds[name='instance_settings[gateway][upstream_token_refresh_margin_seconds]'][value='172800'][min='3600'][max='1209600']"
+           )
+
+    assert has_element?(
+             view,
+             "label[for='instance-settings-upstream-token-refresh-margin-seconds']",
+             "Proactive refresh margin (s)"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-hint-upstream-token-refresh-margin-seconds",
+             "cannot age into required re-authentication"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-unit-upstream-token-refresh-margin-seconds",
+             "s"
+           )
+  end
+
   test "validates, saves, audits, and reloads the upstream connection idle bound", %{
     conn: conn,
     user: user

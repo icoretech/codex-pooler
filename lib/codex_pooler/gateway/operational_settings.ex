@@ -20,6 +20,17 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   # through `InstanceSettings.Defaults` and must equal
   # `OutboundHTTP.default_conn_max_idle_time_ms/0`.
   @upstream_conn_max_idle_time_default_ms 45_000
+  # `upstream_token_refresh_margin_seconds` is how close an active upstream
+  # identity's access token may come to its deadline before scheduled recovery
+  # refreshes it proactively, instead of waiting for traffic to mark it
+  # refresh_due. Its selection semantics belong to
+  # `CodexPooler.Jobs.TokenRefreshRecovery`, which reads this snapshot. Observed
+  # Codex access tokens carry a `jwt_exp` deadline roughly 6-10 days out, so the
+  # 48 h default refreshes an idle identity about two days before it would
+  # expire: enough slack for several attempts at the recovery cooldown, while
+  # still leaving most of the token's life untouched. The struct default seeds
+  # the Instance Setting default through `InstanceSettings.Defaults`.
+  @upstream_token_refresh_margin_default_seconds 48 * 60 * 60
   @websocket_idle_timeout_default_ms 1_800_000
   @websocket_idle_timeout_min_ms 60_000
   @websocket_idle_timeout_max_ms 3_600_000
@@ -60,6 +71,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
     upstream_pool_timeout_ms: :timer.seconds(15),
     upstream_receive_timeout_ms: :timer.minutes(5),
     upstream_conn_max_idle_time_ms: @upstream_conn_max_idle_time_default_ms,
+    upstream_token_refresh_margin_seconds: @upstream_token_refresh_margin_default_seconds,
     websocket_idle_timeout_ms: @websocket_idle_timeout_default_ms,
     websocket_owner_idle_timeout_ms: @websocket_owner_idle_timeout_default_ms,
     model_context_window_overrides: %{}
@@ -104,6 +116,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
           upstream_pool_timeout_ms: pos_integer(),
           upstream_receive_timeout_ms: pos_integer(),
           upstream_conn_max_idle_time_ms: pos_integer(),
+          upstream_token_refresh_margin_seconds: pos_integer(),
           websocket_idle_timeout_ms: pos_integer(),
           websocket_owner_idle_timeout_ms: pos_integer(),
           model_context_window_overrides: %{String.t() => pos_integer()}
@@ -175,6 +188,8 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       upstream_pool_timeout_ms: settings.gateway.upstream_pool_timeout_ms,
       upstream_receive_timeout_ms: settings.gateway.upstream_receive_timeout_ms,
       upstream_conn_max_idle_time_ms: OutboundHTTP.conn_max_idle_time_ms(settings),
+      upstream_token_refresh_margin_seconds:
+        settings.gateway.upstream_token_refresh_margin_seconds,
       websocket_idle_timeout_ms:
         clamp_websocket_idle_timeout(settings.gateway.websocket_idle_timeout_ms),
       websocket_owner_idle_timeout_ms:

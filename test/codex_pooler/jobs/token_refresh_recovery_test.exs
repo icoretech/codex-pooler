@@ -5,6 +5,8 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.Auth.AccessTokenExpiry
+  alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   import CodexPooler.PoolerFixtures
@@ -289,6 +291,184 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
     end
   end
 
+  describe "proactive refresh of idle active identities" do
+    test "selects an active identity whose access token is inside the proactive margin" do
+      identity =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, 47, :hour),
+              finished_at: DateTime.add(@now, -7, :hour)
+            )
+        )
+
+      assert {:ok, %{inserted: [job], conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+
+      assert job.args["upstream_identity_id"] == identity.id
+      assert job.args["trigger_kind"] == "scheduled"
+    end
+
+    test "leaves an active identity outside the proactive margin alone" do
+      recovery_identity_fixture("active",
+        metadata:
+          refreshed_metadata(
+            deadline: DateTime.add(@now, 49, :hour),
+            finished_at: DateTime.add(@now, -7, :hour)
+          )
+      )
+
+      assert {:ok, %{inserted: [], conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+    end
+
+    test "selects an active identity whose access token already expired" do
+      identity =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, -1, :hour),
+              finished_at: DateTime.add(@now, -7, :hour)
+            )
+        )
+
+      assert {:ok, %{inserted: [job], conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+
+      assert job.args["upstream_identity_id"] == identity.id
+    end
+
+    test "never selects an active identity whose access token expiry is unknown" do
+      recovery_identity_fixture("active",
+        metadata:
+          TokenRefreshMetadata.build_succeeded(
+            %{},
+            AccessTokenExpiry.unknown(),
+            1,
+            "scheduled",
+            DateTime.add(@now, -7, :hour)
+          )
+      )
+
+      recovery_identity_fixture("active",
+        updated_at: DateTime.add(@now, -7, :hour),
+        metadata: %{}
+      )
+
+      recovery_identity_fixture("active",
+        updated_at: DateTime.add(@now, -7, :hour),
+        metadata: %{"token_refresh" => %{"status" => "succeeded"}}
+      )
+
+      assert {:ok, %{inserted: [], conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+    end
+
+    test "keeps proactive candidates on a cooldown anchored on their last refresh" do
+      recent =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, 12, :hour),
+              finished_at: DateTime.add(@now, -1, :hour)
+            )
+        )
+
+      cooled_down =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, 12, :hour),
+              finished_at: DateTime.add(@now, -7, :hour)
+            )
+        )
+
+      # A trusted marker whose refresh diagnostics lost finished_at falls back
+      # to the row timestamp, so the cooldown still bounds re-enqueues.
+      without_finished_at =
+        refreshed_metadata(
+          deadline: DateTime.add(@now, 12, :hour),
+          finished_at: DateTime.add(@now, -1, :hour)
+        )
+
+      missing_finished =
+        recovery_identity_fixture("active",
+          updated_at: DateTime.add(@now, -7, :hour),
+          metadata:
+            update_in(without_finished_at, ["token_refresh"], &Map.delete(&1, "finished_at"))
+        )
+
+      assert {:ok, %{inserted: jobs, conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+
+      assert jobs |> Enum.map(& &1.args["upstream_identity_id"]) |> Enum.sort() ==
+               Enum.sort([cooled_down.id, missing_finished.id])
+
+      refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == recent.id))
+    end
+
+    test "orders proactive candidates with recovery candidates in one eligibility order" do
+      due = recovery_identity_fixture("refresh_due", updated_at: DateTime.add(@now, -10, :minute))
+
+      proactive =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, 12, :hour),
+              finished_at: DateTime.add(@now, -8, :hour)
+            )
+        )
+
+      assert {:ok, %{inserted: jobs, conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+
+      assert Enum.map(jobs, & &1.args["upstream_identity_id"]) == [proactive.id, due.id]
+    end
+
+    test "excludes proactive candidates without an active assignment in an active pool" do
+      margin_metadata =
+        refreshed_metadata(
+          deadline: DateTime.add(@now, 12, :hour),
+          finished_at: DateTime.add(@now, -7, :hour)
+        )
+
+      recovery_identity_fixture("active", assignment?: false, metadata: margin_metadata)
+
+      recovery_identity_fixture("active",
+        assignment_status: "disabled",
+        metadata: margin_metadata
+      )
+
+      recovery_identity_fixture("active", pool_status: "disabled", metadata: margin_metadata)
+      included = recovery_identity_fixture("active", metadata: margin_metadata)
+
+      assert {:ok, %{inserted: [job], conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+
+      assert job.args["upstream_identity_id"] == included.id
+    end
+
+    test "does not insert a proactive job when an incomplete token refresh job exists" do
+      identity =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, 12, :hour),
+              finished_at: DateTime.add(@now, -7, :hour)
+            )
+        )
+
+      assert {:ok, blocker} = Jobs.enqueue_token_refresh(identity, trigger_kind: "manual")
+      refute blocker.conflict?
+
+      assert {:ok, %{inserted: [], conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+
+      assert [job] = all_enqueued(worker: TokenRefreshWorker)
+      assert job.id == blocker.id
+    end
+  end
+
   defp recovery_identity_fixture(status, opts \\ []) do
     pool = pool_fixture(%{status: Keyword.get(opts, :pool_status, "active")})
     metadata = Keyword.get(opts, :metadata, %{})
@@ -340,6 +520,16 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       updated_at: @now
     })
     |> Repo.update!()
+  end
+
+  defp refreshed_metadata(opts) do
+    TokenRefreshMetadata.build_succeeded(
+      %{},
+      AccessTokenExpiry.known(Keyword.fetch!(opts, :deadline), :jwt_exp),
+      1,
+      "scheduled",
+      Keyword.fetch!(opts, :finished_at)
+    )
   end
 
   defp failed_metadata(%DateTime{} = finished_at) do

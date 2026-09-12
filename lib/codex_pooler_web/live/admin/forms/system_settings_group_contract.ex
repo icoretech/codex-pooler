@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsGroupContract do
     "upstream" =>
       {"gateway",
        ~w(upstream_connect_timeout_ms upstream_pool_timeout_ms upstream_receive_timeout_ms upstream_conn_max_idle_time_ms)},
+    "token_refresh" => {"gateway", ~w(upstream_token_refresh_margin_seconds)},
     "continuity" =>
       {"gateway",
        ~w(expired_alias_ttl_seconds bridge_owner_lease_ttl_seconds bridge_owner_lease_renewal_seconds)},
