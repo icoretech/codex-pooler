@@ -83,6 +83,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
     response_context = %ResponseContext{context: context, response: response}
 
     case StreamRelay.run(state, response, %{
+           buffer_telemetry_opts: [request_options: context.request_options],
            finalize_success: fn body, state ->
              Finalization.finalize_stream_success(
                body,

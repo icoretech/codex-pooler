@@ -4511,6 +4511,20 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert telemetry_events != []
 
+    # A truncated retained body is only actionable if the metric says which
+    # transport and route class produced it; an HTTP SSE relay used to report
+    # both as "unknown" because only the websocket session passed its context.
+    assert Enum.any?(telemetry_events, fn {_measurements, metadata} ->
+             metadata == %{
+               buffer: "retained_body",
+               transport: "http_sse",
+               route_class: "proxy_stream",
+               endpoint: "/backend-api/codex/responses"
+             }
+           end),
+           "expected an attributed retained_body truncation, got: " <>
+             inspect(Enum.map(telemetry_events, &elem(&1, 1)))
+
     persisted =
       inspect({
         request.request_metadata,

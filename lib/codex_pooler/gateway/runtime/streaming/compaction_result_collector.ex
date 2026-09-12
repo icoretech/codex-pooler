@@ -165,8 +165,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
   defp compact_response(_collection), do: {:error, :missing_terminal}
 
-  defp handlers(response_context, finalization_callbacks) do
+  defp handlers(
+         %ResponseContext{context: %{request_options: request_options}} = response_context,
+         finalization_callbacks
+       ) do
     %{
+      buffer_telemetry_opts: [request_options: request_options],
       finalize_success: fn _body, state ->
         state = finalize_sse_state(state)
 

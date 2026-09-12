@@ -138,6 +138,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     )
     |> with_http_delivery_receipt(response_context)
     |> Map.merge(%{
+      buffer_telemetry_opts: buffer_telemetry_opts(response_context),
       write_chunk: http_stream_writer(response_context),
       write_keepalive: http_sse_keepalive_writer(response_context.response),
       before_finalize_failure: http_stream_terminal_failure_writer(response_context),
@@ -160,11 +161,19 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     # `before_finalize_success` keys prevents the HTTP synthetic terminal from
     # leaking onto the GET /v1/responses websocket. Do not add either key here.
     |> Map.merge(%{
+      buffer_telemetry_opts: buffer_telemetry_opts(response_context),
       keepalive_interval_ms: 0,
       write_keepalive: fn state -> {:ok, state} end,
       write_chunk: websocket_stream_writer(response_context, writer)
     })
   end
+
+  # The relay cannot name its own transport or route class; the request options
+  # already carry both, so hand them over and let `BufferTelemetry` derive the
+  # tags. Without this a truncated HTTP SSE body is recorded as
+  # transport/route_class "unknown" and cannot be attributed.
+  defp buffer_telemetry_opts(%ResponseContext{context: %{request_options: request_options}}),
+    do: [request_options: request_options]
 
   # `Finalization.Streaming` replaces the attempt's response metadata
   # wholesale, so the downstream delivery receipt is merged only after either

@@ -42,6 +42,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
                                                    before_finalize_failure_result()),
           optional(:before_finalize_success) => (relay_state() ->
                                                    before_finalize_success_result()),
+          optional(:buffer_telemetry_opts) => keyword(),
           optional(:keepalive_interval_ms) => non_neg_integer(),
           optional(:drain_token) => reference() | nil
         }
@@ -163,7 +164,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   defp reduce_stream_part({:data, data}, {:cont, state, chunks}, response, handlers) do
     state
     |> handlers.write_chunk.(data)
-    |> stream_write_result(state, chunks, data, response)
+    |> stream_write_result(state, chunks, data, response, handlers)
   end
 
   defp reduce_stream_part({:trailers, _trailers}, {:cont, state, chunks}, _response, _handlers),
@@ -172,12 +173,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   defp reduce_stream_part(:done, {:cont, state, chunks}, _response, _handlers),
     do: {:halt, {:done, state, chunks}}
 
-  defp stream_write_result({:ok, state}, _previous_state, chunks, data, _response),
-    do: {:cont, {:cont, state, append_stream_chunk(chunks, data)}}
+  defp stream_write_result({:ok, state}, _previous_state, chunks, data, _response, handlers),
+    do: {:cont, {:cont, state, append_stream_chunk(chunks, data, handlers)}}
 
-  defp stream_write_result({:retry_first_event, failure}, state, chunks, data, response) do
+  defp stream_write_result({:retry_first_event, failure}, state, chunks, data, response, handlers) do
     source_cancel(response)
-    {:halt, {:retry_first_event, state, append_stream_chunk(chunks, data), failure}}
+    {:halt, {:retry_first_event, state, append_stream_chunk(chunks, data, handlers), failure}}
   end
 
   defp stream_write_result(
@@ -185,26 +186,42 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
          _state,
          chunks,
          data,
-         response
+         response,
+         handlers
        ) do
     source_cancel(response)
     reason = {:terminal_stream_failure, failure}
-    {:halt, {:error, next_state, append_stream_chunk(chunks, data), reason}}
+    {:halt, {:error, next_state, append_stream_chunk(chunks, data, handlers), reason}}
   end
 
-  defp stream_write_result({:terminal_stream_failure, failure}, state, chunks, data, response) do
+  defp stream_write_result(
+         {:terminal_stream_failure, failure},
+         state,
+         chunks,
+         data,
+         response,
+         handlers
+       ) do
     source_cancel(response)
     reason = {:terminal_stream_failure, failure}
-    {:halt, {:error, state, append_stream_chunk(chunks, data), reason}}
+    {:halt, {:error, state, append_stream_chunk(chunks, data, handlers), reason}}
   end
 
-  defp stream_write_result({:error, reason}, state, chunks, _data, response) do
+  defp stream_write_result({:error, reason}, state, chunks, _data, response, _handlers) do
     source_cancel(response)
     {:halt, {:error, state, chunks, {:chunk, reason}}}
   end
 
-  defp append_stream_chunk(chunks, ""), do: chunks
-  defp append_stream_chunk(chunks, data), do: RetainedBody.append(chunks, data)
+  defp append_stream_chunk(chunks, "", _handlers), do: chunks
+
+  defp append_stream_chunk(chunks, data, handlers),
+    do: RetainedBody.append(chunks, data, buffer_telemetry_opts(handlers))
+
+  # A truncated retained body is only attributable once the metric says which
+  # transport and route class produced it. The relay learns both from the
+  # request options its caller already holds; a relay run without them keeps the
+  # previous untagged behaviour rather than inventing a tag.
+  defp buffer_telemetry_opts(handlers), do: Map.get(handlers, :buffer_telemetry_opts, [])
 
   defp finish_stream_parts({:cont, state, chunks}, response, handlers),
     do: stream_upstream(state, response, chunks, handlers)
@@ -238,10 +255,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
       callback when is_function(callback, 1) ->
         case callback.(state) do
           {:ok, state, data} ->
-            {:ok, state, append_stream_chunk(chunks, data)}
+            {:ok, state, append_stream_chunk(chunks, data, handlers)}
 
           {:failure, state, data, reason} ->
-            {:failure, state, append_stream_chunk(chunks, data), reason}
+            {:failure, state, append_stream_chunk(chunks, data, handlers), reason}
 
           _other ->
             {:ok, state, chunks}
@@ -257,13 +274,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
       callback when is_function(callback, 2) ->
         case callback.(state, reason) do
           {:success, state, data} ->
-            {:success, state, append_stream_chunk(chunks, data)}
+            {:success, state, append_stream_chunk(chunks, data, handlers)}
 
           {:failure, state, data, reason} ->
-            {:failure, state, append_stream_chunk(chunks, data), reason}
+            {:failure, state, append_stream_chunk(chunks, data, handlers), reason}
 
           {:ok, state, data} ->
-            {:failure, state, append_stream_chunk(chunks, data), reason}
+            {:failure, state, append_stream_chunk(chunks, data, handlers), reason}
 
           {:error, _write_reason} ->
             {:failure, state, chunks, reason}
