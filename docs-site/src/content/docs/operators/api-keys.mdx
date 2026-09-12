@@ -270,7 +270,7 @@ The current actions are:
     </tr>
     <tr>
       <td>Revoke</td>
-      <td>Marks the key revoked. Revoked keys cannot be edited or resumed.</td>
+      <td>Marks the key revoked. Revoked keys cannot be edited or resumed. Revocation stops new authentication at once; a request already running finishes. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
     <tr>
       <td>Delete</td>
@@ -288,6 +288,10 @@ For supported Responses WebSocket routes, pausing or revoking a Pool API key blo
 A durable fence checks the key's persisted status and revocation generation before later work is admitted. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work.
 
 Only work admitted before the disabling change won the durable ordering may drain and finish once. Queued and later frames do not start after pause or revoke takes effect.
+
+That drain has no deadline of its own. A request already running when the pause or revoke landed finishes under whatever timeout already governs it, and the connection closes when it ends, so the interval is the length of that one request rather than a separate bound you can configure. Everything else stops immediately: the key authenticates nothing new, later frames on an open connection are ignored rather than queued, and work already waiting behind the running request is discarded without being started.
+
+Draining rather than cutting is deliberate. Ending a response mid-stream would leave the client with a truncated answer and no terminal, and would leave its accounting unbalanced. If you are revoking a credential you believe is compromised and need certainty that nothing is still running, watch for the connection to close rather than assuming revocation alone ended it.
 
 Resuming a paused key makes it eligible for new authentication, but it does not reopen an existing socket that was closed or marked for closure. The client must establish a fresh WebSocket connection.
 
