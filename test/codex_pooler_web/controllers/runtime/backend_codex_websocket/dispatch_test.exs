@@ -698,7 +698,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DispatchTest do
 
     session = Repo.get!(CodexSession, session.id)
     assert session.owner_instance_id == "node-a"
-    assert session.pool_upstream_assignment_id == setup.assignment.id
+
+    # Both option forms are accepted — the call returns a turn, and the keyword
+    # form threaded `owner_instance_id` above. This used to also assert the
+    # session was pinned to the typed form's assignment, which was the defect:
+    # turn start recorded the account it was about to dispatch to, before any
+    # outcome existed, so a turn refused by every candidate left the session
+    # pinned to the last one it tried. The durable pin is written at terminal
+    # completion from the attempt that actually served.
+    assert is_nil(session.pool_upstream_assignment_id)
   end
 
   test "websocket generate false warmup completes locally without upstream dispatch" do
