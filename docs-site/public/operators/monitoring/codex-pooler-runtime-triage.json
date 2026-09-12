@@ -2715,6 +2715,58 @@
         "x": 12,
         "y": 138
       }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Affinity Stale Writes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Affinity writes refused by the updated_at fence, by pod, bounded operation, and affinity kind. The fence is correct and a low cluster-wide rate is ordinary reordering between nodes. A sustained rate concentrated on one pod is the symptom to act on: that replica's clock runs behind its peers, so it loses every affinity write it attempts and stops contributing prompt-cache steering while still serving traffic normally. Routing, retries, settlement, and accounting are unaffected; compare the pod's clock against its peers.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (pod, operation, affinity_kind) (rate(codex_pooler_gateway_routing_affinity_stale_write_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{pod}} {{operation}} {{affinity_kind}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 147
+      }
     }
   ]
 }

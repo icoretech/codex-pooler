@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.TelemetryTest do
   use ExUnit.Case, async: false
 
+  alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
@@ -603,6 +604,62 @@ defmodule CodexPoolerWeb.TelemetryTest do
 
     assert MapSet.size(transition_values) * MapSet.size(route_class_values) *
              MapSet.size(reason_class_values) == 840
+  end
+
+  test "exports fenced affinity writes with exact bounded tags and no node label" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.routing.affinity.stale_write.count")
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :gateway, :routing, :affinity, :stale_write],
+             measurement: :count,
+             tags: [:operation, :affinity_kind]
+           } = metric
+
+    assert %{operation: "success_upsert", affinity_kind: "request_correlation"} =
+             metric.tag_values.(%{
+               operation: :success_upsert,
+               affinity_kind: :request_correlation
+             })
+
+    assert %{operation: "miss_update", affinity_kind: "codex_session"} =
+             metric.tag_values.(%{operation: "miss_update", affinity_kind: "codex_session"})
+
+    assert %{operation: "unknown", affinity_kind: "unknown"} =
+             metric.tag_values.(%{operation: "insert_all", affinity_kind: "pool-4711"})
+
+    assert %{operation: "unknown", affinity_kind: "unknown"} =
+             metric.tag_values.(%{})
+  end
+
+  test "keeps the fenced-affinity label set bounded at 12 series per app pod" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.routing.affinity.stale_write.count")
+
+    operation_values =
+      AffinityTelemetry.operations()
+      |> Enum.map(&metric.tag_values.(%{operation: &1}).operation)
+      |> Kernel.++([metric.tag_values.(%{operation: "not_an_operation"}).operation])
+      |> MapSet.new()
+
+    affinity_kind_values =
+      AffinityTelemetry.affinity_kinds()
+      |> Enum.map(&metric.tag_values.(%{affinity_kind: &1}).affinity_kind)
+      |> Kernel.++([
+        metric.tag_values.(%{affinity_kind: nil}).affinity_kind,
+        metric.tag_values.(%{affinity_kind: "prompt_cache"}).affinity_kind
+      ])
+      |> MapSet.new()
+
+    assert operation_values == MapSet.new(AffinityTelemetry.operations() ++ ["unknown"])
+    assert affinity_kind_values == MapSet.new(AffinityTelemetry.affinity_kinds() ++ ["unknown"])
+
+    # `prompt_cache` names the locality seed, never `bridge_affinities.affinity_kind`.
+    assert metric.tag_values.(%{affinity_kind: "prompt_cache"}).affinity_kind == "unknown"
+
+    assert MapSet.size(operation_values) * MapSet.size(affinity_kind_values) == 12
   end
 
   test "exports admin request-log reload metrics with bounded tags" do

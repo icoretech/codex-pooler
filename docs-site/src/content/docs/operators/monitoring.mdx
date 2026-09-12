@@ -48,6 +48,7 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 8. Ecto query rate, queries per request, hot query sources by safe source and SQL command, unknown query rate, and DB queue p95
 9. routing circuit transition rate by transition, route class, and bounded reason class
 10. saved-reset post-consume convergence rate by bounded source and outcome, plus p95 timing from application to canonical evidence, canonical evidence to lifecycle finish, and application to lifecycle finish
+11. fenced affinity writes per pod by bounded operation and affinity kind
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
@@ -56,6 +57,14 @@ Admission saturation is local to each app pod. `codex_pooler_gateway_admission_r
 The new gateway metrics are bounded at the source. Stream outcomes are `succeeded`, `failed`, `settlement_failed`, or `interrupted`; invalid values become `unknown`. Their downstream and upstream transport labels are `http_sse`, `websocket`, or `unknown`, giving at most 45 series per app pod across five effective outcomes and two three-value transport vocabularies. `settlement_failed` is attempt-scoped, so concurrent failed terminal settlement attempts can each emit it. Websocket bridge fallbacks have at most 20 reason series per app pod, while precommit buffer overflow is a separate untagged counter. Together with the admission gauges and circuit additions, this work adds approximately 266 bounded time series per app pod.
 
 Oversized stream-buffer histogram observations saturate at 128 MiB for Prometheus export, so p95 remains finite. The runtime's raw telemetry event and stream-buffer behavior are unchanged.
+
+### Fenced affinity writes
+
+`codex_pooler_gateway_routing_affinity_stale_write_count` counts the affinity writes the routing fence refused. Both affinity writers order themselves on the row's `updated_at` event clock, so a writer whose event is older than the stored one applies nothing. That refusal is deliberate — routing bookkeeping must never fail a turn whose work is already finalized — and this counter is the only place it is visible. It is incremented only when the statement reports zero affected rows.
+
+Two bounded labels: `operation` is `success_upsert` or `miss_update`, and `affinity_kind` is `codex_session`, `idempotency_key`, or `request_correlation`. Unrecognized values become `unknown`, giving at most 12 series per app pod. No Pool, API-key, assignment, identity, session, request, or affinity-key value is exported, and **no node or instance name is in the payload**: per-replica attribution comes from the scrape target's `pod` label, which is what the dashboard panel groups by.
+
+A low rate spread across pods is ordinary reordering between two nodes finishing overlapping turns on one affinity key, and it costs nothing but the ordering hint for that key. The signal to act on is a sustained rate concentrated on **one pod**. That replica's clock runs behind its peers, so it loses every affinity write it attempts: it keeps serving traffic normally and simply stops contributing prompt-cache steering, invisibly. Compare that pod's clock against the others. Nothing about routing admission, retries, settlement, accounting, or durable metadata changes either way — affinity is an ordering hint within an already eligible shortlist, never an admission filter.
 
 ### Saved-reset post-consume convergence
 
@@ -266,6 +275,15 @@ histogram_quantile(0.95,
       job="codex-pooler-app"
     }[5m])
   )
+)
+```
+
+```text
+sum by (pod, operation, affinity_kind) (
+  rate(codex_pooler_gateway_routing_affinity_stale_write_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
 )
 ```
 

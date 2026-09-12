@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     SessionContinuity
   }
 
+  alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.{BridgeRing, CandidateEligibility, RoutePlanInput}
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Routing.SessionContinuity, as: RoutingSessionContinuity
@@ -1537,6 +1538,230 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
+  # The fence from #163 refuses by applying no row, and both writers returned
+  # `:ok` either way, so a replica whose clock ran backwards lost every affinity
+  # write it attempted and nothing recorded it. These cover the counter that
+  # makes the refusal visible, and — more importantly than the counter — that
+  # the refusal still cannot fail a turn whose work is already finalized.
+  describe "affinity stale-write signal" do
+    test "a fenced success upsert is counted and still returns :ok" do
+      setup = routing_setup(2)
+      seed = "affinity-stale-write-success-key"
+
+      [{stored_assignment, stored_identity}, {stale_assignment, stale_identity}] =
+        setup.candidates
+
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 stored_assignment,
+                 stored_identity
+               )
+
+      assert [%BridgeAffinity{} = stored] = active_affinities(setup, seed)
+      pose_event_clock_ahead(stored, last_hit_at: 5)
+
+      stale_plan = plan_for(setup, "bridge_ring", seed)
+      capture_stale_writes()
+
+      assert :ok = BridgeRing.record_success(stale_plan, stale_assignment, stale_identity)
+
+      assert_receive {:affinity_stale_write, _event, %{count: 1}, metadata}
+      assert metadata.operation == "success_upsert"
+      # Pinned to the kind the planner actually produced, so a new affinity kind
+      # that the telemetry vocabulary does not know fails here rather than
+      # silently exporting `unknown`.
+      assert metadata.affinity_kind == stale_plan.affinity.kind
+      assert metadata.affinity_kind in AffinityTelemetry.affinity_kinds()
+      refute Map.has_key?(metadata, :node)
+      refute_stale_write()
+
+      # Observability only: the row the fence protected is untouched.
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.id == stored.id
+      assert row.pool_upstream_assignment_id == stored_assignment.id
+    end
+
+    test "a fenced miss update is counted and still returns its reason code" do
+      setup = routing_setup(2)
+      seed = "affinity-stale-write-miss-key"
+
+      [{stored_assignment, stored_identity}, {stale_assignment, stale_identity}] =
+        setup.candidates
+
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 stored_assignment,
+                 stored_identity
+               )
+
+      assert [%BridgeAffinity{} = stored] = active_affinities(setup, seed)
+      pose_event_clock_ahead(stored, last_miss_at: 5)
+
+      stale_plan = plan_for(setup, "bridge_ring", seed)
+      assert stale_plan.affinity.status == "hit"
+      capture_stale_writes()
+
+      assert "upstream_5xx" ==
+               BridgeRing.record_failure(
+                 stale_plan,
+                 stale_assignment,
+                 stale_identity,
+                 "upstream_5xx"
+               )
+
+      assert_receive {:affinity_stale_write, _event, %{count: 1}, metadata}
+      assert metadata.operation == "miss_update"
+      assert metadata.affinity_kind == stale_plan.affinity.kind
+      assert metadata.affinity_kind in AffinityTelemetry.affinity_kinds()
+      refute_stale_write()
+    end
+
+    # Without this a counter wired to fire on every write would satisfy both
+    # cases above. It also fixes the meaning of the first write on a key: there
+    # is no stored event to be older than, so it is not a stale write.
+    test "an in-order write is not counted, and neither is the first write on a key" do
+      setup = routing_setup(2)
+      seed = "affinity-in-order-key"
+      [{assignment, identity} | _rest] = setup.candidates
+
+      capture_stale_writes()
+
+      # First success: an insert, with no stored event to be fenced against.
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 assignment,
+                 identity
+               )
+
+      refute_stale_write()
+
+      # First failure on a key with no row at all: nothing is written, and a
+      # write that never happened is not a refused one.
+      assert "upstream_5xx" ==
+               BridgeRing.record_failure(
+                 plan_for(setup, "bridge_ring", "affinity-in-order-rowless-key"),
+                 assignment,
+                 identity,
+                 "upstream_5xx"
+               )
+
+      refute_stale_write()
+
+      # A later success and a later failure on the stored key both apply.
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 assignment,
+                 identity
+               )
+
+      assert "upstream_5xx" ==
+               BridgeRing.record_failure(
+                 plan_for(setup, "bridge_ring", seed),
+                 assignment,
+                 identity,
+                 "upstream_5xx"
+               )
+
+      refute_stale_write()
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.last_miss_at == row.updated_at
+    end
+
+    # Two processes, one key, deliberately ordered event clocks: the writer
+    # whose clock runs ahead lands, the writer behind it is refused. Only the
+    # second is counted, which is what makes this a stale-write signal rather
+    # than a generic affinity miss.
+    test "only the writer behind the stored event is counted" do
+      setup = routing_setup(2)
+      seed = "affinity-two-writer-key"
+
+      [{ahead_assignment, ahead_identity}, {behind_assignment, behind_identity}] =
+        setup.candidates
+
+      ahead_plan = plan_for(setup, "bridge_ring", seed)
+      behind_plan = plan_for(setup, "bridge_ring", seed)
+
+      capture_stale_writes()
+
+      ahead =
+        Task.async(fn ->
+          :ok = BridgeRing.record_success(ahead_plan, ahead_assignment, ahead_identity)
+
+          # This writer's own clock is the one that runs ahead of its peer's.
+          [stored] = active_affinities(setup, seed)
+          pose_event_clock_ahead(stored, last_hit_at: 5)
+          stored.id
+        end)
+
+      stored_id = Task.await(ahead, 5_000)
+      refute_stale_write()
+
+      behind =
+        Task.async(fn ->
+          BridgeRing.record_success(behind_plan, behind_assignment, behind_identity)
+        end)
+
+      assert :ok = Task.await(behind, 5_000)
+
+      assert_receive {:affinity_stale_write, _event, %{count: 1}, metadata}
+      assert metadata.operation == "success_upsert"
+      assert metadata.affinity_kind == behind_plan.affinity.kind
+      refute_stale_write()
+
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.id == stored_id
+      assert row.pool_upstream_assignment_id == ahead_assignment.id
+    end
+
+    # The property that outranks the metric: the turn has already settled, so a
+    # broken handler must cost nothing.
+    test "a handler that raises does not fail the settled turn" do
+      setup = routing_setup(2)
+      seed = "affinity-raising-handler-key"
+
+      [{stored_assignment, stored_identity}, {stale_assignment, stale_identity}] =
+        setup.candidates
+
+      assert :ok =
+               BridgeRing.record_success(
+                 plan_for(setup, "bridge_ring", seed),
+                 stored_assignment,
+                 stored_identity
+               )
+
+      assert [%BridgeAffinity{} = stored] = active_affinities(setup, seed)
+      pose_event_clock_ahead(stored, last_hit_at: 5)
+
+      handler_id = "affinity-stale-write-raising-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          AffinityTelemetry.event(),
+          fn _event, _measurements, _metadata, _config ->
+            raise "handler exploded"
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      stale_plan = plan_for(setup, "bridge_ring", seed)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok =
+                 BridgeRing.record_success(stale_plan, stale_assignment, stale_identity)
+      end)
+
+      assert [%BridgeAffinity{} = row] = active_affinities(setup, seed)
+      assert row.pool_upstream_assignment_id == stored_assignment.id
+    end
+  end
+
   describe "record_overload/4" do
     test "writes an ordering-only demotion and leaves affinity alone" do
       setup = routing_setup(2)
@@ -2319,6 +2544,42 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
             demotion.pool_upstream_assignment_id == ^assignment.id,
         order_by: [asc: demotion.created_at]
     )
+  end
+
+  defp capture_stale_writes do
+    parent = self()
+    handler_id = "affinity-stale-write-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        AffinityTelemetry.event(),
+        fn event, measurements, metadata, _config ->
+          send(parent, {:affinity_stale_write, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    :ok
+  end
+
+  defp refute_stale_write do
+    refute_receive {:affinity_stale_write, _event, _measurements, _metadata}, 50
+  end
+
+  # Poses the stored row as the work of a peer whose clock runs ahead of this
+  # writer's. Only the stored row is posed; what the tests assert is what the
+  # real success and failure paths do to it afterwards.
+  defp pose_event_clock_ahead(%BridgeAffinity{} = affinity, [{column, seconds}]) do
+    skewed = DateTime.add(affinity.updated_at, seconds, :second)
+
+    {1, nil} =
+      BridgeAffinity
+      |> where([row], row.id == ^affinity.id)
+      |> Repo.update_all(set: [{column, skewed}, {:updated_at, skewed}])
+
+    skewed
   end
 
   defp run_concurrently(count, callback) do

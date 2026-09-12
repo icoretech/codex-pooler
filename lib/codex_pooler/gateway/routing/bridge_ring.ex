@@ -24,6 +24,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     RoutingCircuitState
   }
 
+  alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.BridgeRing.{Metadata, Status}
   alias CodexPooler.Gateway.Routing.CandidateEligibility.Quota, as: QuotaEligibility
   alias CodexPooler.Gateway.Routing.RoutePlanInput
@@ -752,6 +753,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       on_conflict: on_conflict,
       conflict_target: @affinity_conflict_target
     )
+    |> count_fenced_affinity_write("success_upsert", plan)
   end
 
   # The same single rule as the success upsert, because a miss is an event on the
@@ -765,13 +767,27 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
         BridgeAffinity
         |> where([row], row.id == ^affinity.id and row.updated_at <= ^now)
         |> Repo.update_all(set: [last_miss_at: now, updated_at: now])
-
-        :ok
+        |> count_fenced_affinity_write("miss_update", plan)
 
       nil ->
         :ok
     end
   end
+
+  # The fence refuses by applying no row, and the refusal is otherwise
+  # indistinguishable from an accepted write: both return `:ok`, because a stale
+  # affinity event must never fail a turn whose work is already finalized. The
+  # affected-row count the statement already produced is the only place the
+  # condition is visible, so it is read here rather than discarded. Counting is
+  # all that happens — no log line on a path that runs for every turn on a hot
+  # route, and no routing, retry, settlement or durable-metadata effect. See
+  # `AffinityTelemetry`, which also explains why the payload names no node.
+  defp count_fenced_affinity_write({0, _returning}, operation, plan) do
+    AffinityTelemetry.emit_stale_write(operation, plan.affinity.kind)
+    :ok
+  end
+
+  defp count_fenced_affinity_write(_result, _operation, _plan), do: :ok
 
   defp upsert_demotion!(plan, assignment, identity, reason_code, request_id, now) do
     do_upsert_demotion!(

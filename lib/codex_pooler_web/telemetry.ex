@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Telemetry do
   use Supervisor
   import Telemetry.Metrics
 
+  alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
@@ -38,6 +39,7 @@ defmodule CodexPoolerWeb.Telemetry do
           route_class: String.t(),
           reason_class: String.t()
         }
+  @type affinity_stale_write_tags :: %{operation: String.t(), affinity_kind: String.t()}
   @type bridge_fallback_tags :: %{reason: String.t()}
   @type saved_reset_convergence_tags :: %{source: String.t(), outcome: String.t()}
 
@@ -548,6 +550,14 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:transition, :route_class, :reason_class],
         tag_values: &circuit_transition_tag_values/1,
         description: "Routing circuit status transitions by bounded route and reason class."
+      ),
+      counter("codex_pooler.gateway.routing.affinity.stale_write.count",
+        event_name: [:codex_pooler, :gateway, :routing, :affinity, :stale_write],
+        measurement: :count,
+        tags: [:operation, :affinity_kind],
+        tag_values: &affinity_stale_write_tag_values/1,
+        description:
+          "Affinity writes the updated_at fence refused, by bounded operation and affinity kind."
       )
     ]
   end
@@ -789,6 +799,15 @@ defmodule CodexPoolerWeb.Telemetry do
       route_class: admin_stats_enum_value(metadata[:route_class], RouteClass.all()),
       reason_class:
         admin_stats_enum_value(metadata[:reason_class], CircuitTelemetry.reason_classes())
+    }
+  end
+
+  @spec affinity_stale_write_tag_values(map()) :: affinity_stale_write_tags()
+  defp affinity_stale_write_tag_values(metadata) do
+    %{
+      operation: admin_stats_enum_value(metadata[:operation], AffinityTelemetry.operations()),
+      affinity_kind:
+        admin_stats_enum_value(metadata[:affinity_kind], AffinityTelemetry.affinity_kinds())
     }
   end
 
