@@ -1045,10 +1045,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         Map.take(sentinels, [:message, :body])
       )
 
-    canonical_response? = canonical_full_failure_response?(response, 400)
+    relayed_response? =
+      response.status == 400 and
+        CodexPooler.JSON.decode(response.resp_body) ==
+          {:ok, relayed_full_failure_body(sentinels)}
 
     assert sentinels_absent?
-    assert canonical_response?
+    assert relayed_response?
   end
 
   @tag :sensitive_metadata_sanitization
@@ -1166,9 +1169,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> Plug.Conn.send_chunked(200)
 
     assert {:ok, stream_conn} = stream.(stream_conn)
-    assert CodexPooler.JSON.decode!(stream_conn.resp_body) == @canonical_full_failure_body
 
-    assert full_failure_sentinels_absent?([stream_conn.resp_body], sentinels)
+    # The Full projection relays only the sanitized rejection tokens the attempt
+    # already records; the provider message and body sentinels stay out.
+    assert CodexPooler.JSON.decode!(stream_conn.resp_body) ==
+             relayed_full_failure_body(sentinels)
+
+    assert full_failure_sentinels_absent?(
+             [stream_conn.resp_body],
+             Map.take(sentinels, [:message, :body])
+           )
+
     assert FakeUpstream.count(failing_upstream) == 1
     assert FakeUpstream.count(rejecting_upstream) == 1
   end
@@ -15574,6 +15585,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "param" => sentinels.param,
         "provider_body" => sentinels.body,
         "type" => "invalid_request_error"
+      }
+    }
+  end
+
+  defp relayed_full_failure_body(sentinels) do
+    %{
+      "error" => %{
+        "type" => "invalid_request_error",
+        "code" => sentinels.code,
+        "param" => sentinels.param,
+        "message" => "upstream request failed"
       }
     }
   end

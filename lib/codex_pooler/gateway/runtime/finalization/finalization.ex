@@ -32,13 +32,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
+  @canonical_full_failure_message "upstream request failed"
   @canonical_full_failure_body %{
     "error" => %{
       "code" => "server_error",
-      "message" => "upstream request failed",
+      "message" => @canonical_full_failure_message,
       "type" => "server_error"
     }
   }
+  @relayed_rejection_code_by_type %{"invalid_request_error" => "invalid_request"}
 
   @type callbacks :: %{
           required(:register_continuity) => (term(), term(), term() -> term()),
@@ -600,7 +602,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         request_options,
         error_code,
         opts,
-        marker
+        marker,
+        relayable_rejection_error(status, rejection_error)
       )
     end
   end
@@ -612,7 +615,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
          request_options,
          error_code,
          opts,
-         marker
+         marker,
+         relayable_rejection_error
        ) do
     validation_rejection = Keyword.get(opts, :validation_rejection)
 
@@ -636,7 +640,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         %{
           status: status,
           headers: headers,
-          body: @canonical_full_failure_body,
+          body: full_failure_body(relayable_rejection_error),
           public_input_file_upstream_404?: marker
         }
 
@@ -682,6 +686,49 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     |> Enum.reject(fn {name, _value} -> String.downcase(to_string(name)) == "content-type" end)
     |> then(&[{"content-type", "application/json"} | &1])
   end
+
+  # A non-429 4xx rejection already has its sanitized `type`, `code`, and
+  # `param` persisted as attempt metadata and projected into request logs, so
+  # relaying those bounded tokens to the client discloses nothing new. Keeping
+  # them back is actively wrong: the canonical body says `server_error`, which
+  # is in the retryable vocabulary, so an SDK retries a terminal
+  # `invalid_request_error` forever while Pooler has already classified it as
+  # `full_upstream_rejection`. Only the tokens travel. The provider message and
+  # body stay unpersisted and unrelayed, and the message stays server-owned.
+  #
+  # The relay window is exactly `Metadata.rejection_metadata_status?/1`. A 429
+  # and a 5xx persist no rejection metadata, so there is nothing sanitized to
+  # relay and their bodies stay byte-identical.
+  defp relayable_rejection_error(status, rejection_error) do
+    if Metadata.rejection_metadata_status?(status), do: rejection_error, else: %{}
+  end
+
+  defp full_failure_body(%{type: type} = rejection_error) when is_binary(type) do
+    %{
+      "error" => %{
+        "type" => type,
+        "code" => relayed_rejection_code(rejection_error),
+        "param" => Map.get(rejection_error, :param),
+        "message" => @canonical_full_failure_message
+      }
+    }
+  end
+
+  defp full_failure_body(_rejection_error), do: @canonical_full_failure_body
+
+  defp relayed_rejection_code(%{code: code}) when is_binary(code), do: code
+
+  # The observed `tools.defer_loading` rejection carried a type and a param but
+  # no code, so the client-visible `code` needs a defined fallback rather than
+  # the assumption that a provider always supplies one. `invalid_request_error`
+  # maps to `invalid_request`, which is the code Pooler already emits for its
+  # own pre-dispatch rejections of the same type (`OpenAICompatibility.Error`
+  # and `GatewayControllerHelpers.send_error/2`), so one client branch on
+  # `code` sees the same terminal value whoever rejected the request. Any other
+  # type reuses the type itself: it names the same already-sanitized fact
+  # instead of inventing a code the provider never used.
+  defp relayed_rejection_code(%{type: type}),
+    do: Map.get(@relayed_rejection_code_by_type, type, type)
 
   defp canonical_failure_body(%RequestOptions{
          payload_context: %{native_image_request?: true},

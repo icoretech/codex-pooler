@@ -202,7 +202,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :pool_model_serving_modes,
       contract:
-        "Auto, Lite, and Full belong to one Pool-model pair while clients keep one exposed model id and their existing Pool API key and configuration. Auto is the recommended literal-true catalog decision; a resolved mode is immutable for one HTTP request or websocket response.create turn across retry, failover, and owner forwarding. Backend catalog ETags, compact transformation, and bounded accounting metadata follow that snapshot. Public /v1/models, unsupported public compact, assignment eligibility, and Helm/environment configuration remain unchanged. Full is an advanced ordinary Responses override: a generic terminal HTTP failure returns one fixed server-owned error without provider fields, a non-rate-limit 4xx records the operator-visible full_upstream_rejection diagnostic without raw upstream text, a 429 records upstream_rate_limited, an ordinary 5xx remains upstream_status, and Pooler never silently downgrades. Auto, Lite, compact or unrelated routes, and established model-miss responses remain unchanged."
+        "Auto, Lite, and Full belong to one Pool-model pair while clients keep one exposed model id and their existing Pool API key and configuration. Auto is the recommended literal-true catalog decision; a resolved mode is immutable for one HTTP request or websocket response.create turn across retry, failover, and owner forwarding. Backend catalog ETags, compact transformation, and bounded accounting metadata follow that snapshot. Public /v1/models, unsupported public compact, assignment eligibility, and Helm/environment configuration remain unchanged. Full is an advanced ordinary Responses override: a terminal HTTP failure returns one server-owned message, relaying only the sanitized rejection type, code, and param already persisted as attempt metadata for the same non-429 4xx window, and the fixed server_error body when no sanitized type exists; a non-rate-limit 4xx records the operator-visible full_upstream_rejection diagnostic without raw upstream text, a 429 records upstream_rate_limited, an ordinary 5xx remains upstream_status, and Pooler never silently downgrades. Auto, Lite, compact or unrelated routes, and established model-miss responses remain unchanged."
     },
     %{
       slug: :backend_responses_envelope,
@@ -979,11 +979,22 @@ defmodule CodexPooler.CompatibilityMatrix do
         ordinary_5xx_error_code: "upstream_status",
         upstream_status_retained: true,
         client_error: %{
+          "code" => "invalid_request",
+          "message" => "upstream request failed",
+          "param" => "tools.defer_loading",
+          "type" => "invalid_request_error"
+        },
+        client_error_without_sanitized_rejection_type: %{
           "code" => "server_error",
           "message" => "upstream request failed",
           "type" => "server_error"
         },
-        provider_fields_forwarded: false,
+        relayed_sanitized_rejection_fields: [:type, :code, :param],
+        relayed_rejection_code_fallback_by_type: %{
+          "invalid_request_error" => "invalid_request"
+        },
+        relay_window: :rejection_metadata_status,
+        provider_message_forwarded: false,
         unchanged_client_response_scopes: [
           :auto,
           :lite,

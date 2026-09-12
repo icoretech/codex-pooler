@@ -823,11 +823,22 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                ordinary_5xx_error_code: "upstream_status",
                upstream_status_retained: true,
                client_error: %{
+                 "code" => "invalid_request",
+                 "message" => "upstream request failed",
+                 "param" => "tools.defer_loading",
+                 "type" => "invalid_request_error"
+               },
+               client_error_without_sanitized_rejection_type: %{
                  "code" => "server_error",
                  "message" => "upstream request failed",
                  "type" => "server_error"
                },
-               provider_fields_forwarded: false,
+               relayed_sanitized_rejection_fields: [:type, :code, :param],
+               relayed_rejection_code_fallback_by_type: %{
+                 "invalid_request_error" => "invalid_request"
+               },
+               relay_window: :rejection_metadata_status,
+               provider_message_forwarded: false,
                unchanged_client_response_scopes: [
                  :auto,
                  :lite,

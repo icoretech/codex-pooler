@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
   @provider_sentinel "private-provider-validation-sentinel"
@@ -149,6 +150,76 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
       refute response.resp_body =~ @provider_sentinel, label
       FakeUpstream.verify!(upstream)
     end
+  end
+
+  test "POST /v1/responses under an explicit Full override relays the rejection type and param",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        # provenance: observed codex-pooler-findings#161 live probe on an
+        # explicit Full override (status 400, invalid_request_error, param
+        # tools.defer_loading, no error code); message text synthetic.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond:
+              {:json_error, 400,
+               %{
+                 "error" => %{
+                   "message" => "Missing required parameter. #{@provider_sentinel}",
+                   "param" => "tools.defer_loading",
+                   "type" => "invalid_request_error"
+                 }
+               }}
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => @prompt_sentinel,
+        "stream" => true
+      })
+
+    # An SDK on the public surface must see a terminal type, not the retryable
+    # server_error vocabulary, for a rejection that will fail identically again.
+    assert json_response(response, 400) == %{
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request",
+               "param" => "tools.defer_loading",
+               "message" => "upstream request failed"
+             }
+           }
+
+    refute response.resp_body =~ @provider_sentinel
+    refute response.resp_body =~ @prompt_sentinel
+    FakeUpstream.verify!(upstream)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.last_error_code == "full_upstream_rejection"
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
+    assert attempt.response_metadata["rejection_error_param"] == "tools.defer_loading"
+  end
+
+  defp put_full_override!(setup) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    Repo.insert!(%ModelServingOverride{
+      pool_id: setup.pool.id,
+      exposed_model_id: setup.model.exposed_model_id,
+      mode: "full",
+      created_at: timestamp,
+      updated_at: timestamp
+    })
   end
 
   defp assert_failed_validation_accounting!(setup, expected_count) do

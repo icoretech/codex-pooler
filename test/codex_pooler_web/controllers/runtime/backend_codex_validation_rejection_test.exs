@@ -188,7 +188,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     end
   end
 
-  test "explicit Full override keeps the canonical failure for an allowlisted validation 400", %{
+  test "explicit Full override relays an allowlisted validation 400 with a generic message", %{
     conn: conn
   } do
     upstream =
@@ -213,14 +213,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
              {:ok,
               %{
                 "error" => %{
-                  "code" => "server_error",
-                  "message" => "upstream request failed",
-                  "type" => "server_error"
+                  "type" => "invalid_request_error",
+                  "code" => "unsupported_value",
+                  "param" => "reasoning.effort",
+                  "message" => "upstream request failed"
                 }
               }}
 
-    refute response.resp_body =~ "unsupported_value"
-    refute response.resp_body =~ "reasoning.effort"
+    # Full keeps the server-owned generic message: the supported-values
+    # extraction stays exclusive to the non-Full relay.
+    refute response.resp_body =~ "supported values"
     refute response.resp_body =~ @provider_sentinel
     FakeUpstream.verify!(upstream)
 
@@ -233,6 +235,249 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     assert attempt.response_metadata["rejection_error_param"] == "reasoning.effort"
     assert Repo.aggregate(BridgeDemotion, :count) == 0
     assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
+  test "explicit Full override relays the sanitized rejection type and param with a code fallback",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        # provenance: observed codex-pooler-findings#161 live probe on an explicit
+        # Full override (status 400, invalid_request_error, param
+        # tools.defer_loading, no error code, 79-byte provider message); the
+        # message text here is synthetic and stays unpersisted and unrelayed.
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: codeless_rejection(400, "tools.defer_loading")
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+    response = post_native(conn, setup)
+
+    assert response.status == 400
+
+    assert CodexPooler.JSON.decode(response.resp_body) ==
+             {:ok,
+              %{
+                "error" => %{
+                  "type" => "invalid_request_error",
+                  "code" => "invalid_request",
+                  "param" => "tools.defer_loading",
+                  "message" => "upstream request failed"
+                }
+              }}
+
+    refute response.resp_body =~ @provider_sentinel
+    refute response.resp_body =~ @prompt_sentinel
+    refute response.resp_body =~ "tool_search"
+    FakeUpstream.verify!(upstream)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 400
+    assert request.retry_count == 0
+    assert request.last_error_code == "full_upstream_rejection"
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
+    assert attempt.response_metadata["rejection_error_param"] == "tools.defer_loading"
+    refute Map.has_key?(attempt.response_metadata, "rejection_error_code")
+    assert attempt.response_metadata["rejection_message_present"] == true
+    refute inspect({request, attempt}) =~ @provider_sentinel
+    assert Repo.aggregate(BridgeDemotion, :count) == 0
+    assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
+  test "explicit Full override pins the code fallback vocabulary and keeps a typeless body generic",
+       %{conn: conn} do
+    # provenance: synthetic_adversarial. Pins the closed `type -> code` map so a
+    # future member cannot silently land as the generic constant: an unmapped
+    # type reuses the type itself, and only a rejection with no sanitized type
+    # at all keeps the server-owned canonical body.
+    cases = [
+      {%{"type" => "insufficient_quota", "param" => "tools.defer_loading"},
+       %{
+         "type" => "insufficient_quota",
+         "code" => "insufficient_quota",
+         "param" => "tools.defer_loading",
+         "message" => "upstream request failed"
+       }},
+      {%{"type" => "invalid_request_error"},
+       %{
+         "type" => "invalid_request_error",
+         "code" => "invalid_request",
+         "param" => nil,
+         "message" => "upstream request failed"
+       }},
+      {%{"param" => "tools.defer_loading"},
+       %{
+         "code" => "server_error",
+         "message" => "upstream request failed",
+         "type" => "server_error"
+       }}
+    ]
+
+    for {error, expected} <- cases do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/backend-api/codex/responses",
+              respond:
+                {:json_error, 400, %{"error" => Map.put(error, "message", @provider_sentinel)}}
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      put_full_override!(setup)
+      response = post_native(conn, setup)
+
+      assert response.status == 400, inspect(error)
+
+      assert CodexPooler.JSON.decode(response.resp_body) == {:ok, %{"error" => expected}},
+             inspect(error)
+
+      refute response.resp_body =~ @provider_sentinel, inspect(error)
+      FakeUpstream.verify!(upstream)
+    end
+  end
+
+  test "explicit Full override relays the provider rejection code on other non-429 4xx statuses",
+       %{conn: conn} do
+    # provenance: synthetic_adversarial (statuses invented to prove the relay
+    # window matches the persisted rejection-metadata window, not one status)
+    cases = [
+      {403, "unsupported_parameter", "tools.defer_loading"},
+      {413, "string_above_max_length", "input[0].content[0].text"},
+      {422, "invalid_value", "reasoning.effort"}
+    ]
+
+    for {status, code, param} <- cases do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/backend-api/codex/responses",
+              respond: validation_rejection(status, code, param)
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      put_full_override!(setup)
+      response = post_native(conn, setup)
+
+      assert response.status == status, "status #{status}"
+
+      assert CodexPooler.JSON.decode(response.resp_body) ==
+               {:ok,
+                %{
+                  "error" => %{
+                    "type" => "invalid_request_error",
+                    "code" => code,
+                    "param" => param,
+                    "message" => "upstream request failed"
+                  }
+                }},
+             "status #{status}"
+
+      refute response.resp_body =~ @provider_sentinel, "status #{status}"
+      FakeUpstream.verify!(upstream)
+    end
+  end
+
+  test "explicit Full override keeps the canonical failure outside the rejection-metadata window",
+       %{conn: conn} do
+    # provenance: synthetic_adversarial. 429 and 5xx are deliberately outside
+    # the persisted rejection-metadata window, so nothing sanitized exists to
+    # relay and the server-owned body must stay byte-identical.
+    for status <- [429, 500] do
+      upstream =
+        start_upstream(
+          FakeUpstream.repeat_last([validation_rejection(status, "invalid_value", "tools")])
+        )
+
+      setup = gateway_setup(upstream)
+      put_full_override!(setup)
+      response = post_native(conn, setup)
+
+      assert response.status == status, "status #{status}"
+
+      assert CodexPooler.JSON.decode(response.resp_body) ==
+               {:ok,
+                %{
+                  "error" => %{
+                    "code" => "server_error",
+                    "message" => "upstream request failed",
+                    "type" => "server_error"
+                  }
+                }},
+             "status #{status}"
+
+      refute response.resp_body =~ @provider_sentinel, "status #{status}"
+      refute response.resp_body =~ "invalid_value", "status #{status}"
+    end
+  end
+
+  test "explicit Full override leaves pre-dispatch Pooler rejections byte-identical", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"ok" => true}, 200))
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+
+    cases = [
+      {%{"tools" => "defer_loading"}, "tools", "tools must be an array"},
+      {%{"input" => @prompt_sentinel}, "input", "input must be an array"}
+    ]
+
+    for {overrides, param, message} <- cases do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/backend-api/codex/responses",
+          Map.merge(
+            %{
+              "model" => setup.model.exposed_model_id,
+              "input" => native_text_input(@prompt_sentinel),
+              "stream" => true
+            },
+            overrides
+          )
+        )
+
+      assert response.status == 400, param
+
+      assert CodexPooler.JSON.decode(response.resp_body) ==
+               {:ok,
+                %{
+                  "error" => %{
+                    "type" => "invalid_request_error",
+                    "code" => "invalid_request",
+                    "param" => param,
+                    "message" => message
+                  }
+                }},
+             param
+
+      refute response.resp_body =~ @prompt_sentinel, param
+    end
+
+    # A pre-dispatch rejection never reaches an upstream, so it never produces
+    # an attempt and never enters the serving-mode failure projection.
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   defp put_full_override!(setup) do
@@ -256,6 +501,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
       "input" => native_text_input(@prompt_sentinel),
       "stream" => true
     })
+  end
+
+  defp codeless_rejection(status, param) do
+    {:json_error, status,
+     %{
+       "error" => %{
+         "message" => "Missing required parameter: 'tools.tool_search'. #{@provider_sentinel}",
+         "param" => param,
+         "type" => "invalid_request_error"
+       }
+     }}
   end
 
   defp validation_rejection(status, code, param, type \\ "invalid_request_error") do

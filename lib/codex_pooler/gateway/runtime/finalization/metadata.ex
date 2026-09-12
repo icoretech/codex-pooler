@@ -131,8 +131,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   defp upstream_websocket_bridge_attempt_metadata(_opts), do: %{}
 
-  defp rejection_metadata(%Req.Response{} = response) do
-    if response.status in 400..499 and response.status != 429 do
+  @doc """
+  True for the statuses whose sanitized rejection code/type/param are recorded
+  as attempt metadata.
+
+  Callers that relay those bounded facts back to the client must gate on the
+  same predicate, so the relayed window can never drift away from the
+  persisted one.
+  """
+  @spec rejection_metadata_status?(term()) :: boolean()
+  def rejection_metadata_status?(status) when is_integer(status),
+    do: status in 400..499 and status != 429
+
+  def rejection_metadata_status?(_status), do: false
+
+  defp rejection_metadata(%Req.Response{status: status} = response) do
+    if rejection_metadata_status?(status) do
       response
       |> rejection_body()
       |> decode_rejection_metadata()
