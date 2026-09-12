@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Routing.RouteLifecycleTest do
       identity: identity,
       route_class: "proxy_websocket",
       route_plan: %{
+        planned_at: DateTime.utc_now(),
         affinity: %{
           enabled?: false,
           key_hash: nil,
@@ -51,7 +52,10 @@ defmodule CodexPooler.Gateway.Routing.RouteLifecycleTest do
     assert circuit.pool_upstream_assignment_id == selection.assignment.id
     assert demotion.status == "active"
 
-    assert :ok = RouteLifecycle.selection_success(auth, model, selection)
+    # The success that clears a health demotion is a turn that planned its route
+    # after the failure wrote it. `BridgeRing.record_success/3` fences on that,
+    # so reusing this turn's own selection would leave the row active.
+    assert :ok = RouteLifecycle.selection_success(auth, model, next_turn(selection))
     assert %{status: "closed", failure_count: 0, success_count: 1} = Repo.reload!(circuit)
     assert Repo.reload!(demotion).status == "resolved"
   end
@@ -105,9 +109,11 @@ defmodule CodexPooler.Gateway.Routing.RouteLifecycleTest do
     # unhealthy, so the terminal stays health-neutral and writes no circuit row.
     assert Repo.all(RoutingCircuitState) == []
 
-    # And the account comes back as soon as it works, without waiting out the window.
-    assert :ok = RouteLifecycle.selection_success(auth, model, selection)
-    assert Repo.reload!(demotion).status == "resolved"
+    # The window is the whole penalty. A later turn succeeding on the account is
+    # not proof that the capacity which refused the last one came back, so it
+    # does not cut a live overload window short; the window expires by itself.
+    assert :ok = RouteLifecycle.selection_success(auth, model, next_turn(selection))
+    assert Repo.reload!(demotion).status == "active"
   end
 
   test "neutral completion without a circuit does not create one", context do
@@ -153,4 +159,11 @@ defmodule CodexPooler.Gateway.Routing.RouteLifecycleTest do
              end) =~ "gateway route lifecycle side effect failed"
     end
   end
+
+  # The turn after this one: a fresh route plan, so its success may reason about
+  # the demotion state the previous turn left behind. The planning mark itself is
+  # produced by `BridgeRing.plan_route/1` in production and covered against the
+  # real planner in `CodexPooler.Gateway.Routing.BridgeRingTest`.
+  defp next_turn(%RoutingSelection{route_plan: route_plan} = selection),
+    do: %{selection | route_plan: Map.put(route_plan, :planned_at, DateTime.utc_now())}
 end

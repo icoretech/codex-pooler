@@ -1498,7 +1498,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       locality: %{},
       model_serving_mode_snapshot: RequestOptions.model_serving_mode_snapshot(options),
       request_metadata: routing_metadata,
-      selected_assignment_id: assignment.id
+      selected_assignment_id: assignment.id,
+      # A replay plans its single pinned route here, so this is its turn start
+      # for `BridgeRing.record_success/3`'s demotion-resolution fence.
+      planned_at: DateTime.utc_now()
     }
   end
 

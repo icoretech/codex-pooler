@@ -42,8 +42,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   # A first overload is a brief skip rather than a verdict: long enough to move
   # the next turn or two off the account, short enough that one cold prompt is
   # the worst it can cost. A second overload while the first window is still
-  # open is the repeat this exists to prevent, so it extends. A success clears
-  # the row outright, so an account that recovers returns immediately.
+  # open is the repeat this exists to prevent, so it extends. The window is the
+  # whole penalty: a success does not cut a live one short, so the steering
+  # lasts exactly as long as it says it does. See `resolve_demotions!/3`.
   @overload_demotion_seconds 20
   @overload_repeat_demotion_seconds 120
   @overload_reason_code "provider_overloaded"
@@ -77,7 +78,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
           locality: map(),
           model_serving_mode_snapshot: RequestOptions.Routing.model_serving_mode_snapshot() | nil,
           request_metadata: map(),
-          selected_assignment_id: Ecto.UUID.t() | nil
+          selected_assignment_id: Ecto.UUID.t() | nil,
+          planned_at: DateTime.t()
         }
   @type routing_status :: %{
           settings: RoutingSettings.t() | nil,
@@ -109,6 +111,10 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       )
       when is_list(candidates) do
     route_state = Map.get(input, :route_state)
+    # The turn's own start mark. One plan is built per turn, before dispatch, so
+    # this is the wall clock the turn's success may reason about: demotion state
+    # written after it is state this turn was never in a position to disprove.
+    planned_at = now()
     settings = routing_settings(auth, route_state)
     affinity = affinity_context(auth, model, route_plan_input, request_options, settings)
     demotions = active_demotions(auth, model, candidates)
@@ -156,7 +162,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
           model_serving_mode_snapshot,
           session_preference
         ),
-      selected_assignment_id: selected && elem(selected, 0).id
+      selected_assignment_id: selected && elem(selected, 0).id,
+      planned_at: planned_at
     }
   end
 
@@ -851,7 +858,51 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     )
   end
 
+  # What a success is allowed to clear, and why it is two different rules.
+  #
+  # The fence. A success may only resolve demotion evidence that already existed
+  # when its own turn planned its route. Without it a turn still in flight
+  # resolves rows written after it started: production saw a 109.8 s turn that
+  # started 61 s before the demotion it cleared, and a 71.1 s one that cleared a
+  # row created after its own start (icoretech/codex-pooler-findings#158). The
+  # mark is `updated_at`, not `created_at`, because the upsert extends a live
+  # window in place and only ever moves `updated_at` forward — an extension that
+  # postdates this turn is evidence this turn equally cannot speak to, and
+  # `updated_at >= created_at` always holds, so this also covers creation.
+  #
+  # The overload rule. A health demotion is a claim about this route: it was
+  # written because the route failed, so a success on it is direct
+  # counter-evidence and clearing it is what makes recovery immediate. A
+  # `provider_overloaded` row is a claim about the provider's capacity at one
+  # moment. One success says a request got served; it does not say the capacity
+  # that refused the previous one came back, because two turns differ in size,
+  # cache state and concurrency. The window is the entire penalty, it already
+  # expires by itself (20 s first, 120 s when the account refuses again while
+  # still being skipped), and the penalty is ordering inside the quota tier, so
+  # the account stays reachable throughout. Letting a success cut it short
+  # defeats the repeat window in the ordinary case, and the fence cannot help
+  # there: the overloaded account is still in the ring, so the next small turn
+  # on it legitimately begins after the demotion and succeeds seconds later,
+  # taking the 120 s that exists to break a flapping cascade with it.
+  #
+  # A lapsed overload window is still resolved, because there is nothing left to
+  # truncate: `active_demotions/3` and `active_overload_demotion?/3` both already
+  # ignore an expired window, so this changes no routing or escalation decision
+  # and keeps the operator-visible active demotion count honest.
   defp resolve_demotions!(plan, assignment, now) do
+    case Map.get(plan, :planned_at) do
+      %DateTime{} = planned_at ->
+        resolve_fenced_demotions!(plan, assignment, planned_at, now)
+
+      # A plan with no planning mark cannot establish the fence, so it resolves
+      # nothing. This is bookkeeping on an already-finalized turn; failing
+      # closed leaves the window to expire on its own, which is its normal end.
+      _missing ->
+        {0, nil}
+    end
+  end
+
+  defp resolve_fenced_demotions!(plan, assignment, planned_at, now) do
     active_status = BridgeDemotion.active_status()
     resolved_status = BridgeDemotion.resolved_status()
 
@@ -863,6 +914,12 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
         demotion.model_identifier == ^plan_affinity_scope(plan, :model_identifier) and
         demotion.pool_upstream_assignment_id == ^assignment.id and
         demotion.status == ^active_status
+    )
+    |> where(
+      [demotion],
+      (demotion.reason_code == ^@overload_reason_code and demotion.demoted_until <= ^now) or
+        ((demotion.reason_code != ^@overload_reason_code or is_nil(demotion.demoted_until)) and
+           demotion.updated_at < ^planned_at)
     )
     |> Repo.update_all(set: [status: resolved_status, updated_at: now])
   end

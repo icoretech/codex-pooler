@@ -1209,6 +1209,35 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert recovered_plan.selected_assignment_id == demoted_id
     end
 
+    # A success is only counter-evidence for the demotion state that existed
+    # when its own turn started. Production saw long turns clear rows written
+    # after they began, one of them 61 s after its own start, which would cut a
+    # 120 s repeat-overload window down to a fraction of its length
+    # (icoretech/codex-pooler-findings#158).
+    test "a success that began before a demotion existed leaves that demotion active" do
+      setup = routing_setup(2)
+      plan = plan_for(setup, "bridge_ring", "in-flight-success-key")
+      {assignment, identity} = hd(plan.candidates)
+
+      # One captured clock, taken after this turn planned its route, so the
+      # demotion below is demonstrably younger than the turn that succeeds.
+      after_planning = DateTime.utc_now()
+
+      demotion =
+        insert_demotion!(setup, assignment, identity, "upstream_5xx",
+          now: DateTime.add(after_planning, 1, :millisecond)
+        )
+
+      assert DateTime.compare(demotion.updated_at, after_planning) == :gt
+
+      assert :ok = BridgeRing.record_success(plan, assignment, identity)
+
+      assert [%BridgeDemotion{} = still_demoted] = active_demotions(setup, assignment)
+      assert still_demoted.id == demotion.id
+      assert still_demoted.status == "active"
+      assert still_demoted.demoted_until == demotion.demoted_until
+    end
+
     test "bridge_ring_size truncates candidates after strategy ordering affinity and demotion" do
       setup = routing_setup(4)
       seed = "ring-size-truncation-seed"
@@ -1399,15 +1428,56 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert DateTime.diff(demotion.demoted_until, demotion.created_at, :second) == 60
     end
 
-    test "a success clears the overload demotion" do
+    # An overload is a claim about the provider's capacity at one moment, not
+    # about this route's health, so one success is not counter-evidence for it.
+    # The window is the whole penalty and it expires on its own.
+    test "a success does not clear a live overload window" do
       setup = routing_setup(2)
-      plan = plan_for(setup, "bridge_ring", "overload-cleared-key")
+      plan = plan_for(setup, "bridge_ring", "overload-live-window-key")
       {assignment, identity} = hd(plan.candidates)
 
       assert "provider_overloaded" == BridgeRing.record_overload(plan, assignment, identity)
-      assert [%BridgeDemotion{}] = active_demotions(setup, assignment)
+      assert [%BridgeDemotion{} = overload] = active_demotions(setup, assignment)
 
-      BridgeRing.record_success(plan, assignment, identity)
+      # One captured clock: after the overload row exists and before the next
+      # turn plans, so that turn demonstrably begins after the demotion and the
+      # window is demonstrably still live when it succeeds. Only the overload
+      # rule can spare this row; the start fence cannot.
+      after_overload = DateTime.utc_now()
+      assert DateTime.compare(after_overload, overload.updated_at) == :gt
+      assert DateTime.compare(overload.demoted_until, after_overload) == :gt
+
+      later_plan = plan_for(setup, "bridge_ring", "overload-live-window-key")
+
+      assert :ok = BridgeRing.record_success(later_plan, assignment, identity)
+
+      assert [%BridgeDemotion{} = still_demoted] = active_demotions(setup, assignment)
+      assert still_demoted.id == overload.id
+      assert still_demoted.reason_code == "provider_overloaded"
+      assert still_demoted.demoted_until == overload.demoted_until
+    end
+
+    # Nothing is left to truncate once the window has lapsed: routing and repeat
+    # escalation both already ignore it, so resolving keeps the operator-visible
+    # active count honest at no behavioral cost.
+    test "a success clears an overload row whose window already lapsed" do
+      setup = routing_setup(2)
+      captured = DateTime.utc_now()
+      {assignment, identity} = hd(setup.candidates)
+
+      lapsed =
+        insert_demotion!(setup, assignment, identity, "provider_overloaded",
+          now: DateTime.add(captured, -60, :second),
+          demoted_until: DateTime.add(captured, -40, :second)
+        )
+
+      # The window lapsed before the captured clock, and the turn below plans
+      # after it, so the window is already over when the success lands.
+      assert DateTime.compare(lapsed.demoted_until, captured) == :lt
+
+      plan = plan_for(setup, "bridge_ring", "overload-lapsed-window-key")
+
+      assert :ok = BridgeRing.record_success(plan, assignment, identity)
 
       assert [] == active_demotions(setup, assignment)
       assert [%BridgeDemotion{status: "resolved"}] = all_demotions(setup, assignment)
