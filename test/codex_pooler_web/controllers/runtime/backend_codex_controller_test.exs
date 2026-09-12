@@ -1015,12 +1015,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "failed"
     assert request.response_status_code == 400
     assert request.retry_count == 0
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
     assert attempt.upstream_status_code == 400
-    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.network_error_code == "upstream_status"
 
     expected_mode_metadata = %{
       "model_serving_mode_configured" => "full",
@@ -1034,7 +1034,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
              expected_mode_metadata
 
-    assert [%{denial_reason: "full_upstream_rejection", response_status_code: 400} = request_log] =
+    assert [%{denial_reason: "upstream_status", response_status_code: 400} = request_log] =
              RequestLogs.list(setup.pool.id, limit: 10).items
 
     audit_events = Repo.all(from(e in AuditEvent))
@@ -1290,10 +1290,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
     assert request.retry_count == 0
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.network_error_code == "upstream_status"
   end
 
   @tag :sensitive_metadata_sanitization
@@ -15595,7 +15595,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "type" => "invalid_request_error",
         "code" => sentinels.code,
         "param" => sentinels.param,
-        "message" => "upstream request failed"
+        # Built from the relayed code and param, not from the provider message
+        # (codex-pooler-findings#173): Full and the non-Full relay use one
+        # constructor, so serving mode no longer decides what a client is told.
+        "message" => "upstream rejected parameter #{sentinels.param} (#{sentinels.code})"
       }
     }
   end

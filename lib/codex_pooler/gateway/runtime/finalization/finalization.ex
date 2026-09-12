@@ -692,8 +692,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   # relaying those bounded tokens to the client discloses nothing new. Keeping
   # them back is actively wrong: the canonical body says `server_error`, which
   # is in the retryable vocabulary, so an SDK retries a terminal
-  # `invalid_request_error` forever while Pooler has already classified it as
-  # `full_upstream_rejection`. Only the tokens travel. The provider message and
+  # `invalid_request_error` forever while Pooler has already settled the
+  # request as failed. Only the tokens travel. The provider message and
   # body stay unpersisted and unrelayed, and the message stays server-owned.
   #
   # The relay window is exactly `Metadata.rejection_metadata_status?/1`. A 429
@@ -704,17 +704,46 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   end
 
   defp full_failure_body(%{type: type} = rejection_error) when is_binary(type) do
+    code = relayed_rejection_code(rejection_error)
+
+    # `param` is set unconditionally: a rejection carrying a type but no param
+    # emits an explicit `"param": null`, which is what the provider's own error
+    # bodies do and what an OpenAI SDK expects to read.
+    param = Map.get(rejection_error, :param)
+
     %{
       "error" => %{
         "type" => type,
-        "code" => relayed_rejection_code(rejection_error),
-        "param" => Map.get(rejection_error, :param),
-        "message" => @canonical_full_failure_message
+        "code" => code,
+        "param" => param,
+        "message" => full_failure_message(code, param)
       }
     }
   end
 
   defp full_failure_body(_rejection_error), do: @canonical_full_failure_body
+
+  # Serving mode must not decide how much a client is told. The non-Full
+  # mode-scoped branch already names the refused parameter, while Full used to
+  # answer the same provider rejection with the canonical
+  # `upstream request failed` (codex-pooler-findings#173), so a
+  # client that moved between Pools saw its diagnostics change for reasons
+  # unrelated to its request — and the advanced override gave the *less*
+  # informative answer.
+  #
+  # Both paths now build the sentence with one constructor,
+  # `ValidationRejection.error/1`, from the code and param this body already
+  # carries as separate fields. Nothing new is disclosed: both tokens are
+  # sanitized, persisted as attempt metadata, and already relayed above.
+  # `supported_values: nil` is deliberate and keeps the two paths apart in the
+  # one place they must stay apart: that suffix is derived from the provider's
+  # message text, which #161 left unrelayed and unpersisted, so it remains
+  # exclusive to the non-Full relay that reads the live response body.
+  defp full_failure_message(code, param) do
+    %{code: code, param: param, supported_values: nil}
+    |> ValidationRejection.error()
+    |> Map.fetch!("message")
+  end
 
   defp relayed_rejection_code(%{code: code}) when is_binary(code), do: code
 

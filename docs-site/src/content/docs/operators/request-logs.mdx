@@ -203,7 +203,7 @@ When a request or attempt has a complete validated serving-mode snapshot, the de
 
 The Routing summary reads the request snapshot, while each attempt in the timeline reads that attempt's own persisted snapshot. The three rows are omitted for historical rows with absent or invalid mode metadata. They are never derived from request bodies, prompts, provider text, headers, credentials, or other payload data.
 
-An explicit Full override that receives an ordinary terminal upstream 4xx is classified as `full_upstream_rejection`; a `429` remains `upstream_rate_limited`, and an ordinary 5xx remains `upstream_status`. These classifications are independent of whether the drawer can show a serving-mode snapshot.
+Serving mode is not part of the error classification. An ordinary terminal upstream 4xx is classified as `upstream_status` whichever mode resolved, a `429` as `upstream_rate_limited`, and an ordinary 5xx as `upstream_status`. To find the requests a provider refused, filter on `upstream_status` with an upstream status code in the 4xx range other than `429`; that answer is complete across Auto, Lite, and Full. To narrow it to an explicit Full override, add the serving-mode snapshot rows above, which record `full`/`full`/`override` on the request and on each attempt. These classifications are independent of whether the drawer can show a serving-mode snapshot.
 
 ### Upstream Websocket Connection Details
 

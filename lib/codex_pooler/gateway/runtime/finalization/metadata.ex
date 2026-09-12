@@ -102,17 +102,41 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(metadata)
   end
 
+  @doc """
+  Classifies a terminal upstream status for accounting and request logs.
+
+  Serving mode is deliberately absent. A non-429 4xx under an explicit Full
+  override used to be classified `full_upstream_rejection` instead of
+  `upstream_status`, which made the same provider rejection carry two codes
+  depending on a Pool setting (codex-pooler-findings#173): an operator
+  filtering request logs on `full_upstream_rejection` silently missed every
+  non-Full provider rejection, because nothing in that name says it is
+  mode-scoped.
+
+  It was narrower still: `explicit_full_ordinary_responses?/1` also gates on
+  `ordinary_responses_route?/1`, so a Full-override rejection on the compact
+  route never earned the code either. Over 30 days on the icoretech
+  installation the code covered 62 of 496 non-429 4xx failures; the 434 it
+  missed were Full-mode compact rejections, not Lite ones.
+
+  The code encoded no fact of its own. `explicit_full_ordinary_responses?/1`
+  is true exactly when the serving-mode snapshot is
+  `{configured: "full", effective: "full", source: "override"}`, which
+  `RequestOptions.Routing.put_model_serving_mode/2` validates at set time and
+  `Accounting.Metadata` accepts verbatim, so whenever the code fired the
+  request and attempt already carried `model_serving_mode`,
+  `model_serving_mode_configured` and `model_serving_mode_source` under
+  `routing`. That is where mode belongs and where the request-log drawer
+  already reads it, independently of this code.
+
+  What operators actually query for — "the provider refused this request" — is
+  `upstream_status` plus a 4xx `upstream_status_code`, which is persisted on
+  the request, the attempt and the request-log fact. Recovering the old,
+  mode-scoped set costs one more clause on `routing` and is now explicit about
+  being mode-scoped.
+  """
   @spec upstream_status_error_code(integer(), RequestOptions.t() | term()) :: String.t()
   def upstream_status_error_code(429, %RequestOptions{}), do: "upstream_rate_limited"
-
-  def upstream_status_error_code(status, %RequestOptions{} = request_options)
-      when status >= 400 and status <= 499 do
-    if explicit_full_ordinary_responses?(request_options) do
-      "full_upstream_rejection"
-    else
-      "upstream_status"
-    end
-  end
 
   def upstream_status_error_code(_status, _request_options), do: "upstream_status"
 

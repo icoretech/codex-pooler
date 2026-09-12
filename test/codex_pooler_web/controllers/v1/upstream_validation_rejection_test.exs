@@ -152,6 +152,127 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
     end
   end
 
+  test "POST /v1/responses returns one rejection body whichever serving mode resolved", %{
+    conn: conn
+  } do
+    # provenance: observed codex-pooler-findings#173 live probe on icoretech
+    # production. One API key, one surface, one provider, one rejection
+    # (status 400, invalid_request_error, invalid_value, include[0]); the
+    # model's serving mode was the only variable, and the two arms disagreed
+    # on both the persisted error code and the client-visible message. The
+    # provider message text here is synthetic and carries no supported-values
+    # list, matching the observed rejection.
+    bodies =
+      for mode <- [:lite, :full] do
+        upstream =
+          start_upstream(
+            FakeUpstream.strict_sequence([
+              FakeUpstream.expect_request(
+                method: "POST",
+                path: "/backend-api/codex/responses",
+                respond: listless_rejection(400, "invalid_value", "include[0]")
+              )
+            ])
+          )
+
+        setup = gateway_setup(upstream)
+        if mode == :full, do: put_full_override!(setup)
+
+        response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => @prompt_sentinel,
+            "stream" => true
+          })
+
+        assert json_response(response, 400) == %{
+                 "error" => %{
+                   "type" => "invalid_request_error",
+                   "code" => "invalid_value",
+                   "param" => "include[0]",
+                   "message" => "upstream rejected parameter include[0] (invalid_value)"
+                 }
+               },
+               "mode #{mode}"
+
+        refute response.resp_body =~ @provider_sentinel, "mode #{mode}"
+        refute response.resp_body =~ @prompt_sentinel, "mode #{mode}"
+        FakeUpstream.verify!(upstream)
+
+        assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+        assert request.response_status_code == 400, "mode #{mode}"
+        assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+        assert attempt.response_metadata["rejection_error_code"] == "invalid_value",
+               "mode #{mode}"
+
+        assert attempt.response_metadata["rejection_error_param"] == "include[0]", "mode #{mode}"
+
+        json_response(response, 400)
+      end
+
+    assert [lite_body, full_body] = bodies
+    assert lite_body == full_body
+  end
+
+  test "POST /v1/responses under a Full override names the request when the rejection has no param",
+       %{conn: conn} do
+    # provenance: synthetic_adversarial, from the codex-pooler-findings#173
+    # scope note. `full_failure_body/1` emits an explicit `"param": null` for a
+    # rejection carrying a type but no param; the branch had never been driven
+    # on the public /v1 surface.
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond:
+              {:json_error, 400,
+               %{
+                 "error" => %{
+                   "message" => "Missing required parameter. #{@provider_sentinel}",
+                   "type" => "invalid_request_error"
+                 }
+               }}
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => @prompt_sentinel,
+        "stream" => true
+      })
+
+    assert json_response(response, 400) == %{
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request",
+               "param" => nil,
+               "message" => "upstream rejected the request (invalid_request)"
+             }
+           }
+
+    refute response.resp_body =~ @provider_sentinel
+    refute response.resp_body =~ @prompt_sentinel
+    FakeUpstream.verify!(upstream)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
+    refute Map.has_key?(attempt.response_metadata, "rejection_error_param")
+  end
+
   test "POST /v1/responses under an explicit Full override relays the rejection type and param",
        %{conn: conn} do
     upstream =
@@ -195,7 +316,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
                "type" => "invalid_request_error",
                "code" => "invalid_request",
                "param" => "tools.defer_loading",
-               "message" => "upstream request failed"
+               "message" => "upstream rejected parameter tools.defer_loading (invalid_request)"
              }
            }
 
@@ -204,7 +325,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
     FakeUpstream.verify!(upstream)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
     assert attempt.response_metadata["rejection_error_param"] == "tools.defer_loading"
@@ -242,6 +363,21 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
 
     assert Repo.aggregate(BridgeDemotion, :count) == 0
     assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
+  # A rejection whose provider message carries no `Supported values are: …`
+  # list, so neither path can append a suffix and the two bodies are
+  # comparable field for field.
+  defp listless_rejection(status, code, param) do
+    {:json_error, status,
+     %{
+       "error" => %{
+         "code" => code,
+         "message" => "Invalid value: '#{@provider_sentinel}'.",
+         "param" => param,
+         "type" => "invalid_request_error"
+       }
+     }}
   end
 
   defp validation_rejection(status, code, param, type \\ "invalid_request_error") do

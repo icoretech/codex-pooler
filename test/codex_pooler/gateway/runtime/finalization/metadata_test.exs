@@ -54,7 +54,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     assert Metadata.request_metadata(true_options) == %{}
   end
 
-  test "classifies only resolved Full ordinary Responses HTTP rejections" do
+  test "classifies an upstream status without reference to the serving mode" do
     ordinary_endpoints = [
       "/backend-api/codex/responses",
       "/backend-api/codex/v1/responses",
@@ -73,8 +73,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
           source: "override"
         )
 
-      assert Metadata.upstream_status_error_code(400, options) ==
-               "full_upstream_rejection"
+      # An explicit Full override no longer earns its own code: the same
+      # provider rejection is classified the same way whatever mode resolved
+      # (codex-pooler-findings#173), and the mode itself stays in the routing
+      # metadata this attempt already carries.
+      assert Metadata.upstream_status_error_code(400, options) == "upstream_status"
 
       assert Metadata.upstream_status_error_code(429, options) ==
                "upstream_rate_limited"
@@ -686,7 +689,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
 
     detail_metadata = fn status, detail ->
       %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"detail" => detail})}
-      |> Metadata.response_metadata("full_upstream_rejection", %{})
+      |> Metadata.response_metadata("upstream_status", %{})
     end
 
     stream_metadata = detail_metadata.(400, stream_detail)

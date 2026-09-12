@@ -817,17 +817,22 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              }
 
       assert fixture.full_rejection_diagnostic == %{
-               error_code: "full_upstream_rejection",
+               error_code: "upstream_status",
                applies_to: :explicit_full_ordinary_responses_http_non_rate_limit_4xx_rejection,
+               error_code_varies_by_serving_mode: false,
+               serving_mode_diagnostic_source: :request_and_attempt_routing_metadata,
                rate_limit_error_code: "upstream_rate_limited",
                ordinary_5xx_error_code: "upstream_status",
                upstream_status_retained: true,
                client_error: %{
                  "code" => "invalid_request",
-                 "message" => "upstream request failed",
+                 "message" => "upstream rejected parameter tools.defer_loading (invalid_request)",
                  "param" => "tools.defer_loading",
                  "type" => "invalid_request_error"
                },
+               client_error_message_source: :relayed_code_and_param,
+               client_error_message_matches_non_full_relay: true,
+               supported_values_suffix_relayed: false,
                client_error_without_sanitized_rejection_type: %{
                  "code" => "server_error",
                  "message" => "upstream request failed",

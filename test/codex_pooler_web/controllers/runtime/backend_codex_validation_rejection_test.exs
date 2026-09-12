@@ -188,9 +188,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     end
   end
 
-  test "explicit Full override relays an allowlisted validation 400 with a generic message", %{
-    conn: conn
-  } do
+  test "explicit Full override relays an allowlisted validation 400 with the same message as Lite",
+       %{conn: conn} do
     upstream =
       start_upstream(
         # provenance: synthetic_adversarial
@@ -216,21 +215,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                   "type" => "invalid_request_error",
                   "code" => "unsupported_value",
                   "param" => "reasoning.effort",
-                  "message" => "upstream request failed"
+                  "message" => "upstream rejected parameter reasoning.effort (unsupported_value)"
                 }
               }}
 
-    # Full keeps the server-owned generic message: the supported-values
-    # extraction stays exclusive to the non-Full relay.
+    # The sentence is built from the sanitized code and param this body already
+    # carries, so Full and the non-Full relay agree (codex-pooler-findings#173).
+    # The supported-values suffix stays exclusive to the non-Full relay: it is
+    # derived from the provider message text, which #161 left unrelayed.
     refute response.resp_body =~ "supported values"
     refute response.resp_body =~ @provider_sentinel
     FakeUpstream.verify!(upstream)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
     assert request.retry_count == 0
-    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.network_error_code == "upstream_status"
     assert attempt.response_metadata["rejection_error_code"] == "unsupported_value"
     assert attempt.response_metadata["rejection_error_param"] == "reasoning.effort"
     assert Repo.aggregate(BridgeDemotion, :count) == 0
@@ -268,7 +269,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                   "type" => "invalid_request_error",
                   "code" => "invalid_request",
                   "param" => "tools.defer_loading",
-                  "message" => "upstream request failed"
+                  "message" => "upstream rejected parameter tools.defer_loading (invalid_request)"
                 }
               }}
 
@@ -282,9 +283,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     assert request.status == "failed"
     assert request.response_status_code == 400
     assert request.retry_count == 0
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
     assert attempt.status == "failed"
-    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.network_error_code == "upstream_status"
     assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
     assert attempt.response_metadata["rejection_error_param"] == "tools.defer_loading"
     refute Map.has_key?(attempt.response_metadata, "rejection_error_code")
@@ -306,14 +307,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
          "type" => "insufficient_quota",
          "code" => "insufficient_quota",
          "param" => "tools.defer_loading",
-         "message" => "upstream request failed"
+         "message" => "upstream rejected parameter tools.defer_loading (insufficient_quota)"
        }},
       {%{"type" => "invalid_request_error"},
        %{
          "type" => "invalid_request_error",
          "code" => "invalid_request",
          "param" => nil,
-         "message" => "upstream request failed"
+         "message" => "upstream rejected the request (invalid_request)"
        }},
       {%{"param" => "tools.defer_loading"},
        %{
@@ -385,7 +386,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                     "type" => "invalid_request_error",
                     "code" => code,
                     "param" => param,
-                    "message" => "upstream request failed"
+                    "message" => "upstream rejected parameter #{param} (#{code})"
                   }
                 }},
              "status #{status}"

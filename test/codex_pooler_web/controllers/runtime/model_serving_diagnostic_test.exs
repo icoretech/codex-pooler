@@ -73,7 +73,7 @@ defmodule CodexPoolerWeb.Runtime.ModelServingDiagnosticTest do
     assert request.status == "failed"
     assert request.response_status_code == 400
     assert request.retry_count == 0
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
 
     expected_mode_metadata = %{
       "model_serving_mode_configured" => "full",
@@ -87,14 +87,14 @@ defmodule CodexPoolerWeb.Runtime.ModelServingDiagnosticTest do
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
     assert attempt.upstream_status_code == 400
-    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.network_error_code == "upstream_status"
     assert attempt.error_message == "upstream returned 400"
-    assert attempt.response_metadata["error_kind"] == "full_upstream_rejection"
+    assert attempt.response_metadata["error_kind"] == "upstream_status"
 
     assert Map.take(attempt.response_metadata["routing"], @mode_metadata_keys) ==
              expected_mode_metadata
 
-    assert [%{denial_reason: "full_upstream_rejection", response_status_code: 400} = log] =
+    assert [%{denial_reason: "upstream_status", response_status_code: 400} = log] =
              RequestLogs.list(setup.pool.id, limit: 10).items
 
     refute inspect(request.request_metadata) =~ untrusted_error_text

@@ -202,7 +202,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :pool_model_serving_modes,
       contract:
-        "Auto, Lite, and Full belong to one Pool-model pair while clients keep one exposed model id and their existing Pool API key and configuration. Auto is the recommended literal-true catalog decision; a resolved mode is immutable for one HTTP request or websocket response.create turn across retry, failover, and owner forwarding. Backend catalog ETags, compact transformation, and bounded accounting metadata follow that snapshot. Public /v1/models, unsupported public compact, assignment eligibility, and Helm/environment configuration remain unchanged. Full is an advanced ordinary Responses override: a terminal HTTP failure returns one server-owned message, relaying only the sanitized rejection type, code, and param already persisted as attempt metadata for the same non-429 4xx window, and the fixed server_error body when no sanitized type exists; a non-rate-limit 4xx records the operator-visible full_upstream_rejection diagnostic without raw upstream text, a 429 records upstream_rate_limited, an ordinary 5xx remains upstream_status, and Pooler never silently downgrades. Auto, Lite, compact or unrelated routes, and established model-miss responses remain unchanged."
+        "Auto, Lite, and Full belong to one Pool-model pair while clients keep one exposed model id and their existing Pool API key and configuration. Auto is the recommended literal-true catalog decision; a resolved mode is immutable for one HTTP request or websocket response.create turn across retry, failover, and owner forwarding. Backend catalog ETags, compact transformation, and bounded accounting metadata follow that snapshot. Public /v1/models, unsupported public compact, assignment eligibility, and Helm/environment configuration remain unchanged. Full is an advanced ordinary Responses override: a terminal HTTP failure returns a server-owned message, relaying only the sanitized rejection type, code, and param already persisted as attempt metadata for the same non-429 4xx window, and the fixed server_error body when no sanitized type exists. That message names the relayed param and code with the same constructor the non-Full relay uses, so serving mode does not decide how much a client is told, while the provider-message-derived supported-values suffix stays exclusive to the non-Full relay; a non-rate-limit 4xx records upstream_status without raw upstream text, exactly as the same rejection does under Auto or Lite, because the resolved serving mode is carried by the routing metadata on the request and the attempt and is never encoded in the error code; a 429 records upstream_rate_limited, an ordinary 5xx remains upstream_status, and Pooler never silently downgrades. Auto, Lite, compact or unrelated routes, and established model-miss responses remain unchanged."
     },
     %{
       slug: :backend_responses_envelope,
@@ -973,17 +973,22 @@ defmodule CodexPooler.CompatibilityMatrix do
         helm_value: false
       },
       full_rejection_diagnostic: %{
-        error_code: "full_upstream_rejection",
+        error_code: "upstream_status",
         applies_to: :explicit_full_ordinary_responses_http_non_rate_limit_4xx_rejection,
+        error_code_varies_by_serving_mode: false,
+        serving_mode_diagnostic_source: :request_and_attempt_routing_metadata,
         rate_limit_error_code: "upstream_rate_limited",
         ordinary_5xx_error_code: "upstream_status",
         upstream_status_retained: true,
         client_error: %{
           "code" => "invalid_request",
-          "message" => "upstream request failed",
+          "message" => "upstream rejected parameter tools.defer_loading (invalid_request)",
           "param" => "tools.defer_loading",
           "type" => "invalid_request_error"
         },
+        client_error_message_source: :relayed_code_and_param,
+        client_error_message_matches_non_full_relay: true,
+        supported_values_suffix_relayed: false,
         client_error_without_sanitized_rejection_type: %{
           "code" => "server_error",
           "message" => "upstream request failed",
