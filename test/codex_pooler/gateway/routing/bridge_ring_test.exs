@@ -1386,7 +1386,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       plan = plan_for(setup, "bridge_ring", "overload-after-failure-key")
       {assignment, identity} = hd(plan.candidates)
 
-      assert "upstream_5xx" == BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx")
+      assert "upstream_5xx" ==
+               BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx")
+
       assert "provider_overloaded" == BridgeRing.record_overload(plan, assignment, identity)
 
       # One row: both write the same conflict target. The overload is a first
