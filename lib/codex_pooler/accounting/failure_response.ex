@@ -49,7 +49,14 @@ defmodule CodexPooler.Accounting.FailureResponse do
     do: reason |> Atom.to_string() |> safe_reason_token()
 
   def safe_failure_reason(reason) when is_binary(reason), do: safe_reason_token(reason)
-  def safe_failure_reason(_reason), do: "unknown"
+  # findings#165: a sanitizer bounds a value, it never erases it. A term this
+  # module cannot name is still a term that was there, and answering it with
+  # the same `"unknown"` that means "there was no reason" makes the two
+  # indistinguishable in the one log line an operator reads after a
+  # finalization failure. A fingerprint discloses nothing -- the term is
+  # hashed, never rendered -- while keeping two different unnameable reasons
+  # two different tokens.
+  def safe_failure_reason(reason), do: "unnamed_" <> fingerprint(inspect(reason, limit: 25))
 
   defp record_id(%{id: id}) when is_binary(id), do: id
   defp record_id(_record), do: nil
@@ -61,9 +68,18 @@ defmodule CodexPooler.Accounting.FailureResponse do
     |> String.trim("_")
     |> truncate_reason_token()
     |> case do
-      "" -> "unknown"
+      "" -> "unnamed_" <> fingerprint(reason)
       token -> token
     end
+  end
+
+  @fingerprint_length 12
+
+  defp fingerprint(value) do
+    :sha256
+    |> :crypto.hash(value)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, @fingerprint_length)
   end
 
   defp scrub_sensitive_reason_text(reason) do

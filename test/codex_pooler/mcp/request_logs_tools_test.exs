@@ -1525,13 +1525,13 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert %{"status" => "ok", "item" => item} = result["structuredContent"]
     assert [attempt_debug] = item["debug"]["attempts"]
 
+    # The attempt records no `stream_text_frame_count`, so the visibility keys
+    # are absent rather than fabricated (findings#165).
     assert attempt_debug["transport_failure"] == %{
              "reason_class" => "upstream_stream_interrupted",
              "reason" => "closed_before_terminal",
              "phase" => "upstream_close",
-             "pre_visible_output" => false,
-             "terminal_seen" => false,
-             "text_frame_count" => 1
+             "terminal_seen" => false
            }
 
     assert text =~ "1 request log returned"

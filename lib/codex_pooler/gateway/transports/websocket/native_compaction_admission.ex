@@ -240,13 +240,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
     end
 
     defp admit_first_compact_result(request, result, lifecycle, metadata) do
-      with {:ok, request_id} <- Ecto.UUID.cast(request.request_id),
-           {:ok, attempt_id} <- Ecto.UUID.cast(request.attempt_id),
-           {:ok, %{"model" => model}} when is_binary(model) <-
-             CodexPooler.JSON.decode(request.payload),
+      with {:ok, request_id} <- cast_identifier(request.request_id, "request_id"),
+           {:ok, attempt_id} <- cast_identifier(request.attempt_id, "attempt_id"),
+           {:ok, model} <- payload_model(request.payload),
            {:ok, %{compaction_item: item}} <-
              CompactionResultCollector.collect_websocket_body(result.body),
-           {:ok, serving_mode} <- mode(request.effective_serving_mode),
+           {:ok, serving_mode} <- serving_mode(request.effective_serving_mode),
            binding = %Binding{
              semantic_turn_key: metadata.semantic_turn_key,
              window_digest: metadata.window_id_digest,
@@ -275,8 +274,53 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
         {:provider_failure, %{} = failure} ->
           reject("provider_terminal", provider_reason_code(failure))
 
-        _invalid ->
-          reject("admission_precondition", "unclassified")
+        {:error, {:precondition, reason_code}} ->
+          reject("admission_precondition", reason_code)
+
+        {:error, reason} when is_atom(reason) ->
+          reject("admission_precondition", DiagnosticTaxonomy.identifier(reason))
+      end
+    end
+
+    # findings#165: every admission precondition is already known at the point
+    # it fails, so the `with` must not collapse four distinct causes into one
+    # constant. `reason_code=unclassified` told an operator only that the turn
+    # was rejected somewhere in this chain -- the single thing they could
+    # already see -- while the cause was discarded. Each step now names itself
+    # from a closed vocabulary (`precondition_reason_codes/0`, pinned by a
+    # test), and the binding step passes through the bounded atom
+    # `ordinary_success/1` already returns. No content, payload byte, or
+    # provider identifier enters any of these tokens.
+    @precondition_reason_codes ~w(
+      request_id
+      attempt_id
+      payload_decode
+      payload_model
+      serving_mode
+    )
+
+    @spec precondition_reason_codes() :: [String.t()]
+    def precondition_reason_codes, do: @precondition_reason_codes
+
+    defp cast_identifier(value, field) do
+      case Ecto.UUID.cast(value) do
+        {:ok, id} -> {:ok, id}
+        :error -> {:error, {:precondition, field}}
+      end
+    end
+
+    defp payload_model(payload) do
+      case CodexPooler.JSON.decode(payload) do
+        {:ok, %{"model" => model}} when is_binary(model) -> {:ok, model}
+        {:ok, %{}} -> {:error, {:precondition, "payload_model"}}
+        _undecodable -> {:error, {:precondition, "payload_decode"}}
+      end
+    end
+
+    defp serving_mode(effective_serving_mode) do
+      case mode(effective_serving_mode) do
+        {:ok, serving_mode} -> {:ok, serving_mode}
+        :error -> {:error, {:precondition, "serving_mode"}}
       end
     end
 

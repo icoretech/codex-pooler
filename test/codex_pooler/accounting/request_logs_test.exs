@@ -2471,13 +2471,13 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
     assert [attempt_debug] = log.debug.attempts
 
+    # No `stream_text_frame_count` was recorded, so the projection reports
+    # neither a count nor a visibility verdict (findings#165).
     assert attempt_debug.transport_failure == %{
              reason_class: "upstream_stream_interrupted",
              reason: "closed_before_terminal",
              phase: "upstream_close",
-             pre_visible_output: false,
-             terminal_seen: false,
-             text_frame_count: 1
+             terminal_seen: false
            }
 
     refute inspect(log.debug) =~ "session-http-sse-interrupted"
@@ -2568,6 +2568,75 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     refute debug =~ "Bearer sk-privacy-transport-sentinel"
   end
 
+  # findings#165: a sanitizer bounds a value, it never erases it, and it never
+  # invents one. `stream_text_frame_count` is absent on the large majority of
+  # production `stream_interrupted` attempts, and the projection used to answer
+  # that absence with a fabricated count of 1 -- which then derived
+  # `pre_visible_output: false`, the claim that the client had already seen
+  # output. A reader cannot tell that fabrication from a measured single frame,
+  # and it is the opposite of the modal truth: among attempts whose count is
+  # actually recorded, `text_frame_count: 0` with `pre_visible_output: true` is
+  # the single largest bucket. Absent must stay absent.
+  test "request log debug projection distinguishes an unrecorded stream frame count from a measured one" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-debug-stream-visibility",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_sse",
+        status: "failed",
+        correlation_id: "debug-stream-visibility",
+        response_status_code: 200,
+        request_metadata: %{"codex_session_id" => "session-stream-visibility"}
+      })
+      |> Ecto.Changeset.change(last_error_code: "upstream_stream_error")
+      |> Repo.update!()
+
+    stream_family_attempt(request, assignment, 1, "client_disconnected", %{})
+
+    stream_family_attempt(request, assignment, 2, "client_disconnected", %{
+      "stream_text_frame_count" => 0
+    })
+
+    stream_family_attempt(request, assignment, 3, "client_disconnected", %{
+      "stream_text_frame_count" => 4
+    })
+
+    stream_family_attempt(request, assignment, 4, "client_disconnected", %{
+      "stream_text_frame_count" => "not-a-count"
+    })
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+    by_number = Map.new(log.debug.attempts, &{&1.attempt_number, &1.transport_failure})
+
+    # Unrecorded: both derived keys are absent, not defaulted.
+    refute Map.has_key?(by_number[1], :text_frame_count)
+    refute Map.has_key?(by_number[1], :pre_visible_output)
+
+    assert by_number[1] == %{
+             reason_class: "downstream_client_disconnect",
+             reason: "client_disconnected",
+             phase: "send_payload",
+             terminal_seen: false
+           }
+
+    # Measured zero: the client saw nothing, and the projection says so.
+    assert by_number[2][:text_frame_count] == 0
+    assert by_number[2][:pre_visible_output] == true
+
+    # Measured positive: the client had already seen output.
+    assert by_number[3][:text_frame_count] == 4
+    assert by_number[3][:pre_visible_output] == false
+
+    # Present but unusable is treated as unrecorded, never as a count of 1.
+    refute Map.has_key?(by_number[4], :text_frame_count)
+    refute Map.has_key?(by_number[4], :pre_visible_output)
+
+    refute inspect(log.debug) =~ "session-stream-visibility"
+  end
+
   test "request log debug projection classifies supported stream interruption families" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)
@@ -2602,36 +2671,28 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
              reason_class: "downstream_client_disconnect",
              reason: "client_disconnected",
              phase: "send_payload",
-             pre_visible_output: false,
-             terminal_seen: false,
-             text_frame_count: 1
+             terminal_seen: false
            }
 
     assert attempts_by_number[2] == %{
              reason_class: "upstream_terminal_failure",
              reason: "server_error",
              phase: "receive",
-             pre_visible_output: false,
-             terminal_seen: true,
-             text_frame_count: 1
+             terminal_seen: true
            }
 
     assert attempts_by_number[3] == %{
              reason_class: "upstream_stream_idle_timeout",
              reason: "idle_timeout",
              phase: "receive_timeout",
-             pre_visible_output: false,
-             terminal_seen: false,
-             text_frame_count: 1
+             terminal_seen: false
            }
 
     assert attempts_by_number[4] == %{
              reason_class: "stream_interrupted",
              reason: "interrupted",
              phase: "receive",
-             pre_visible_output: false,
-             terminal_seen: false,
-             text_frame_count: 1
+             terminal_seen: false
            }
 
     refute inspect(log.debug) =~ "session-stream-families"

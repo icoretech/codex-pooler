@@ -121,20 +121,26 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
     Map.get(metadata, "stream_error_code") || Map.get(metadata, "upstream_error_code")
   end
 
-  defp pre_visible_output?(metadata), do: stream_text_frame_count(metadata) == 0
+  # `pre_visible_output` is derived, never assumed: it answers "had the client
+  # seen anything yet", and the only witness is the recorded frame count. When
+  # that count was never recorded the honest projection is absence, so both
+  # keys drop out of the attempt row (findings#165). The previous default
+  # invented a count of 1 and therefore `pre_visible_output: false` -- "the
+  # client had already seen output" -- for every attempt whose count was
+  # missing, which a reader cannot tell from a measured single frame and which
+  # is the opposite of the modal truth among attempts that do record it.
+  defp pre_visible_output?(metadata) do
+    case stream_text_frame_count(metadata) do
+      count when is_integer(count) -> count == 0
+      nil -> nil
+    end
+  end
 
   defp stream_text_frame_count(metadata) do
     metadata
     |> Map.get("stream_text_frame_count")
     |> non_negative_integer()
-    |> case do
-      count when is_integer(count) -> count
-      nil -> default_stream_text_frame_count(metadata)
-    end
   end
-
-  defp default_stream_text_frame_count(%{"error_kind" => "stream_interrupted"}), do: 1
-  defp default_stream_text_frame_count(_metadata), do: 0
 
   defp safe_transport_failure(transport_failure) when is_map(transport_failure) do
     %{}
