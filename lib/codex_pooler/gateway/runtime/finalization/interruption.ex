@@ -821,21 +821,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     end
   end
 
-  defp preserve_succeeded_turn(turn, now) do
-    case turn do
-      %CodexTurn{} = turn ->
-        request = request_for_update(turn.request_id)
-        attempt = latest_attempt_for_update(turn.request_id)
+  # The turn is always present here: `resolve_interrupt_turn/3` builds an
+  # interruption context only when it has named one, and a session with nothing
+  # in flight returns its authority before reaching this
+  # (icoretech/codex-pooler-findings#179).
+  defp preserve_succeeded_turn(%CodexTurn{} = turn, now) do
+    request = request_for_update(turn.request_id)
+    attempt = latest_attempt_for_update(turn.request_id)
 
-        if request_completed_successfully?(request, attempt) do
-          complete_interrupted_turn!(turn, attempt, @turn_succeeded, nil, now)
-          :preserved
-        else
-          :continue
-        end
-
-      nil ->
-        :continue
+    if request_completed_successfully?(request, attempt) do
+      complete_interrupted_turn!(turn, attempt, @turn_succeeded, nil, now)
+      :preserved
+    else
+      :continue
     end
   end
 
