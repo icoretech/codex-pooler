@@ -32,7 +32,9 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   ]
   @reconnect_event_keys [:reconnect_disposition, :handoff_outcome]
   @reconnect_metadata_keys @metadata_keys ++ @reconnect_event_keys
-  @replay_rejection_stages ~w(owner_preflight replay_preflight native_compaction_deferral)
+  # `discarded_submission` is the stage for a queued or parked frame the socket
+  # threw away without ever dispatching it (findings#175).
+  @replay_rejection_stages ~w(owner_preflight replay_preflight native_compaction_deferral discarded_submission)
 
   @type event_metadata :: keyword() | map()
 

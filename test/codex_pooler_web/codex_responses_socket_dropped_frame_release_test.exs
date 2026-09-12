@@ -74,8 +74,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDroppedFrameReleaseTest do
     monitor = Process.monitor(capability_server)
 
     # The real abort: the owner this socket forwards to goes away while a public
-    # turn is open. The socket survives it and keeps serving.
-    assert {:ok, aborted_state} =
+    # turn is open. The socket survives it and keeps serving. The push is the
+    # dropped turn's own answer to its client, which findings#175 added alongside
+    # this release; this test owns the release half.
+    assert {:push, [{:text, _answer}], aborted_state} =
              CodexResponsesSocket.handle_info(
                {:DOWN, queued_state.websocket_owner_monitor, :process, owner, :shutdown},
                queued_state
@@ -131,7 +133,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDroppedFrameReleaseTest do
     capability_server = prepared.provenance.capability.server
     monitor = Process.monitor(capability_server)
 
-    assert {:ok, cleared_state} =
+    # The push is findings#175's answer for the cleared frame; the release below
+    # is what this test owns.
+    assert {:push, [{:text, _answer}], cleared_state} =
              CodexResponsesSocket.handle_info(
                {:DOWN, handoff_state.websocket_owner_monitor, :process, owner, :shutdown},
                handoff_state

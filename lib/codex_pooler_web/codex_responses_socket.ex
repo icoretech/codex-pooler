@@ -305,9 +305,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
+    outcome = owner_monitor_handoff_outcome(reason)
+
     state =
       state
-      |> clear_pending_owner_handoff(owner_monitor_handoff_outcome(reason), cancel?: false)
+      |> clear_pending_owner_handoff(outcome,
+        cancel?: false,
+        answer: discarded_submission_error(outcome)
+      )
       |> maybe_abort_public_owner_turn(:owner_monitor_down)
 
     case Adapter.handle_monitor_down(state, pid, reason) do
@@ -637,6 +642,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:native_owner_terminal_delivered?, false)
     |> Map.put(:downstream_delivery_evidence, %{})
     |> Map.put(:websocket_owner_pending_handoff, nil)
+    |> Map.put(:discarded_submission_terminals, [])
   end
 
   defp initialize_revocation_state(state) do
@@ -821,7 +827,61 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     Map.put(state, :firewall_applied_version, max(previous_version, current_version))
   end
 
-  defp close_if_revoked_idle({:ok, state}) do
+  # Every `handle_in/2` and `handle_info/2` return already funnels through here,
+  # which makes it the one boundary where a discard that happened deep inside a
+  # `state -> state` pipeline can still reach the wire (findings#175). Answers
+  # accumulate in socket state precisely because `abort_public_turn/2` and
+  # `clear_pending_owner_handoff/3` cannot return a push from where they run.
+  defp close_if_revoked_idle(result) do
+    result
+    |> flush_discarded_submissions()
+    |> close_revoked_socket_result()
+  end
+
+  defp flush_discarded_submissions({:ok, state}) do
+    case take_discarded_submissions(state) do
+      {[], state} -> {:ok, state}
+      {frames, state} -> {:push, frames, state}
+    end
+  end
+
+  defp flush_discarded_submissions({:push, messages, state}) do
+    case take_discarded_submissions(state) do
+      {[], state} -> {:push, messages, state}
+      {frames, state} -> {:push, List.wrap(messages) ++ frames, state}
+    end
+  end
+
+  # The answers ride out ahead of a close the site already decided on, so a
+  # discarded frame keeps its terminal even when the socket is going away.
+  defp flush_discarded_submissions({:stop, reason, close_detail, state}) do
+    case take_discarded_submissions(state) do
+      {[], state} -> {:stop, reason, close_detail, state}
+      {frames, state} -> {:stop, reason, close_detail, frames, state}
+    end
+  end
+
+  defp flush_discarded_submissions({:stop, reason, close_detail, messages, state}) do
+    case take_discarded_submissions(state) do
+      {[], state} ->
+        {:stop, reason, close_detail, messages, state}
+
+      {frames, state} ->
+        {:stop, reason, close_detail, List.wrap(messages) ++ frames, state}
+    end
+  end
+
+  # The untouched state is returned verbatim when nothing was discarded: this
+  # runs on every socket result, and rewriting the key unconditionally would
+  # make every return differ from the state it was handed.
+  defp take_discarded_submissions(state) do
+    case Map.get(state, :discarded_submission_terminals, []) do
+      [] -> {[], state}
+      frames -> {frames, Map.put(state, :discarded_submission_terminals, [])}
+    end
+  end
+
+  defp close_revoked_socket_result({:ok, state}) do
     if close_revoked_socket?(state) do
       {:stop, :normal, revocation_close_detail(state), mark_revocation_closed(state)}
     else
@@ -829,7 +889,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp close_if_revoked_idle({:push, messages, state}) do
+  defp close_revoked_socket_result({:push, messages, state}) do
     if close_revoked_socket?(state) do
       {:stop, :normal, revocation_close_detail(state), List.wrap(messages),
        mark_revocation_closed(state)}
@@ -838,11 +898,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp close_if_revoked_idle({:stop, reason, close_detail, state}) do
+  defp close_revoked_socket_result({:stop, reason, close_detail, state}) do
     if close_revoked_socket?(state) do
       {:stop, :normal, revocation_close_detail(state), mark_revocation_closed(state)}
     else
       {:stop, reason, close_detail, state}
+    end
+  end
+
+  defp close_revoked_socket_result({:stop, reason, close_detail, messages, state}) do
+    if close_revoked_socket?(state) do
+      {:stop, :normal, revocation_close_detail(state), List.wrap(messages),
+       mark_revocation_closed(state)}
+    else
+      {:stop, reason, close_detail, messages, state}
     end
   end
 
@@ -1301,7 +1370,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.put(:public_turn_aborted?, true)
     |> Map.put(:public_turn_output_committed?, false)
-    |> drop_queued_responses()
+    |> discard_queued_responses(reason)
     |> clear_public_response_context()
     |> cancel_tracked_response_tasks(reason)
   end
@@ -2442,21 +2511,34 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     reject_prepared_response(owner_error(reason), state)
   end
 
+  # `:answer` is what makes this the sibling of `fail_pending_owner_handoff/2`
+  # rather than a silent discard (findings#175). The parked frame is a turn a
+  # client submitted and is still waiting on, so every caller that leaves the
+  # socket alive has to name the owner error the client gets back. The callers
+  # that omit it are the two that cannot answer: `terminate/2`, where the socket
+  # is already gone, and the revocation paths, whose contract is a 1008 close
+  # after pre-admitted work drains (findings#176).
   defp clear_pending_owner_handoff(state, outcome, opts \\ []) do
     case Map.get(state, :websocket_owner_pending_handoff) do
-      %{semantic_turn_key: semantic_turn_key, control_ref: control_ref} ->
+      %{semantic_turn_key: semantic_turn_key, control_ref: control_ref, prepared: prepared} ->
         if Keyword.get(opts, :cancel?, true) do
           _result = Adapter.cancel_reconnect(state, semantic_turn_key, control_ref)
         end
 
         state
         |> log_pending_handoff_outcome(outcome)
+        |> maybe_answer_cleared_handoff(prepared, Keyword.get(opts, :answer))
         |> drop_pending_owner_handoff()
 
       _missing ->
         state
     end
   end
+
+  defp maybe_answer_cleared_handoff(state, _prepared, nil), do: state
+
+  defp maybe_answer_cleared_handoff(state, prepared, reason),
+    do: answer_discarded_submission(state, prepared, reason)
 
   # The handoff holds a prepared frame in socket state the same way the queue
   # does, and parks its capability for the same reason (findings#169). Both
@@ -2791,6 +2873,90 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     Map.put(state, :queued_response_payloads, :queue.new())
   end
+
+  # Releasing the capability fixed the server's half of the discard
+  # (findings#172); this is the client's half. A queued frame was submitted by a
+  # client that is still waiting for it, and the abort routes that drop it leave
+  # the socket open, so without an answer here the turn is thrown away in
+  # silence and only a client-side timeout ever ends the wait (findings#175).
+  # The answer goes *alongside* the release, not instead of it. Revocation
+  # keeps calling `drop_queued_responses/1` directly: it drops queued work and
+  # closes with 1008 once pre-admitted work drains, which is its own contract
+  # (findings#176).
+  defp discard_queued_responses(state, reason) do
+    error = discarded_submission_error(reason)
+
+    state
+    |> Map.get(:queued_response_payloads, :queue.new())
+    |> :queue.to_list()
+    |> Enum.reduce(state, &answer_discarded_submission(&2, &1, error))
+    |> drop_queued_responses()
+  end
+
+  defp discarded_submission_error(:owner_drained), do: :owner_drained
+  defp discarded_submission_error(_reason), do: :owner_unavailable
+
+  # The queue is heterogeneous by type, and only one half of it can be answered.
+  # A prepared frame carries its own request and public stream identity, so it
+  # gets the same bounded owner error `reject_prepared_response/2` gives a frame
+  # refused at dispatch — addressed to the stream the frame itself opened, not
+  # to whichever turn happened to be active when the discard ran.
+  #
+  # A raw payload is only parsed at dequeue, so it has no turn identity at all:
+  # a terminal for one would invent a request that never reached reservation or
+  # accounting, and it cannot even be addressed to a stream. Its loss is
+  # recorded on the connection instead, through the same metadata-only line,
+  # and the connection-level failure the client sees is whatever the abort site
+  # itself already produces. Note that no production path can put a raw payload
+  # in this queue today — `queue_prepared_response/2` is its only writer and it
+  # writes prepared frames — so this clause defends the shape rather than a
+  # reachable case, and it must not invent a close the drain contract forbids.
+  defp answer_discarded_submission(state, %PreparedWebsocketFrame{} = prepared, reason) do
+    error = owner_error(reason)
+
+    :telemetry.execute([:codex_pooler, :gateway, :native_compaction, :rejection], %{count: 1}, %{
+      reason: DiagnosticTaxonomy.identifier(error)
+    })
+
+    log_replay_rejection(state, reason, :discarded_submission)
+
+    payload =
+      error
+      |> Adapter.websocket_error()
+      |> maybe_put_public_stream_id(discarded_submission_stream_id(prepared))
+      |> CodexPooler.JSON.encode!()
+
+    _trace =
+      NativeCompactionTrace.emit_full(:downstream_websocket_frame_sent, %{
+        direction: :pooler_to_downstream,
+        socket_pid: self(),
+        frame_json: decode_trace_frame(payload),
+        frame_text: payload,
+        outcome: :error,
+        branch: :discarded_submission
+      })
+
+    Map.update(
+      state,
+      :discarded_submission_terminals,
+      [{:text, payload}],
+      &(&1 ++ [{:text, payload}])
+    )
+  end
+
+  defp answer_discarded_submission(state, _raw_payload, reason) do
+    log_replay_rejection(state, reason, :discarded_submission)
+    state
+  end
+
+  defp discarded_submission_stream_id(%PreparedWebsocketFrame{
+         variant: :public_response_create,
+         request_options: %RequestOptions{extra: extra}
+       })
+       when is_map(extra),
+       do: Map.get(extra, :socket_public_stream_id)
+
+  defp discarded_submission_stream_id(_prepared), do: nil
 
   defp release_dropped_frame(%PreparedWebsocketFrame{} = prepared) do
     _released = WebsocketCodec.release_prepared_frame(prepared)
