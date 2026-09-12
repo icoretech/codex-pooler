@@ -89,5 +89,49 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedFrameCapabilityLifeti
     assert {:error, :invalid} = Capability.validate(capability, token)
   end
 
+  # Findings #172: parking has no expiry of its own, so the capability of a
+  # frame that is dropped rather than dispatched needs a way back.
+  test "releasing a parked capability reclaims it at the drop" do
+    capability = Capability.issue()
+    token = frame_token()
+    assert :ok = Capability.seal(capability, token)
+    assert :ok = Capability.park(capability)
+
+    monitor = Process.monitor(capability.server)
+    assert :ok = Capability.release(capability)
+
+    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, 1_000
+
+    # Indistinguishable from the timeout reclaim above, which is what keeps a
+    # late dispatch a retryable owner condition rather than a forged frame.
+    assert {:error, :invalid} = Capability.validate(capability, token)
+  end
+
+  test "a consumed capability refuses release so a second dispatch still answers consumed" do
+    capability = Capability.issue()
+    token = frame_token()
+    assert :ok = Capability.seal(capability, token)
+    assert {:ok, nil} = Capability.consume_for_dispatch(capability, token)
+
+    monitor = Process.monitor(capability.server)
+    assert {:error, :consumed} = Capability.release(capability)
+
+    refute_receive {:DOWN, ^monitor, :process, _server, _reason}, @absence_budget_ms
+    assert {:error, :consumed} = Capability.validate(capability, token)
+  end
+
+  test "release is bound to the capability's own reference" do
+    capability = Capability.issue()
+    token = frame_token()
+    assert :ok = Capability.seal(capability, token)
+    assert :ok = Capability.park(capability)
+
+    monitor = Process.monitor(capability.server)
+    assert {:error, :invalid} = Capability.release(%{capability | reference: make_ref()})
+
+    refute_receive {:DOWN, ^monitor, :process, _server, _reason}, @absence_budget_ms
+    assert :ok = Capability.validate(capability, token)
+  end
+
   defp frame_token, do: "prepared-frame-token-#{System.unique_integer([:positive])}"
 end

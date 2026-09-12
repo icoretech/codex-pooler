@@ -733,7 +733,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> clear_pending_owner_handoff(:submission_expired)
     |> put_firewall_watermark(applied_version)
     |> Map.put(:firewall_revoked?, true)
-    |> Map.put(:queued_response_payloads, :queue.new())
+    |> drop_queued_responses()
   end
 
   defp handle_api_key_event(_payload, %{api_key_revoked?: true} = state), do: {:ok, state}
@@ -813,7 +813,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> clear_pending_owner_handoff(:submission_expired)
     |> Map.put(:api_key_revoked?, true)
     |> Map.put(:api_key_disabling_epoch, disabling_epoch)
-    |> Map.put(:queued_response_payloads, :queue.new())
+    |> drop_queued_responses()
   end
 
   defp put_firewall_watermark(state, current_version) do
@@ -1159,7 +1159,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
       state =
         state
-        |> Map.put(:queued_response_payloads, :queue.new())
+        |> drop_queued_responses()
         |> finish_public_turn()
 
       {:stop, :normal, Adapter.close_detail(reason), state}
@@ -1301,7 +1301,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.put(:public_turn_aborted?, true)
     |> Map.put(:public_turn_output_committed?, false)
-    |> Map.put(:queued_response_payloads, :queue.new())
+    |> drop_queued_responses()
     |> clear_public_response_context()
     |> cancel_tracked_response_tasks(reason)
   end
@@ -2437,7 +2437,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> log_pending_handoff_outcome(outcome)
-      |> Map.put(:websocket_owner_pending_handoff, nil)
+      |> drop_pending_owner_handoff()
 
     reject_prepared_response(owner_error(reason), state)
   end
@@ -2451,11 +2451,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
         state
         |> log_pending_handoff_outcome(outcome)
-        |> Map.put(:websocket_owner_pending_handoff, nil)
+        |> drop_pending_owner_handoff()
 
       _missing ->
         state
     end
+  end
+
+  # The handoff holds a prepared frame in socket state the same way the queue
+  # does, and parks its capability for the same reason (findings#169). Both
+  # paths that discard it — the handoff failing, and the socket clearing it on
+  # owner loss or revocation — leave the socket alive, so the capability needs
+  # the same release the queue drop performs (findings#172).
+  # `ready_pending_owner_handoff/1` is deliberately not routed here: it hands the
+  # frame to a tracked task, which consumes the capability.
+  defp drop_pending_owner_handoff(state) do
+    case Map.get(state, :websocket_owner_pending_handoff) do
+      %{prepared: prepared} -> release_dropped_frame(prepared)
+      _missing -> :ok
+    end
+
+    Map.put(state, :websocket_owner_pending_handoff, nil)
   end
 
   defp log_pending_handoff_outcome(state, outcome) do
@@ -2758,6 +2774,30 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       &:queue.in(prepared, &1)
     )
   end
+
+  # Every path that discards the queue funnels through here, so a frame that is
+  # dropped rather than dispatched gives its capability back at the drop.
+  # Queueing parks the capability (findings#169), parking has no expiry of its
+  # own, and `abort_public_turn/2` can run any number of times on one socket
+  # because `finish_public_turn/1` clears `public_turn_aborted?` again — so
+  # writing `:queue.new()` inline left one live capability per discarded frame
+  # for the socket's whole life (findings#172). Raw payloads can also sit in this
+  # queue; they are prepared at dequeue and hold no capability yet.
+  defp drop_queued_responses(state) do
+    state
+    |> Map.get(:queued_response_payloads, :queue.new())
+    |> :queue.to_list()
+    |> Enum.each(&release_dropped_frame/1)
+
+    Map.put(state, :queued_response_payloads, :queue.new())
+  end
+
+  defp release_dropped_frame(%PreparedWebsocketFrame{} = prepared) do
+    _released = WebsocketCodec.release_prepared_frame(prepared)
+    :ok
+  end
+
+  defp release_dropped_frame(_payload), do: :ok
 
   # A failed re-seal is always logged and always refuses the turn, instead of
   # returning the original frame and silently losing the runtime options it was

@@ -42,6 +42,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
     :exit, _reason -> {:error, :invalid}
   end
 
+  # The counterpart to `park/1`. Parking suppresses the reclaim timer for as
+  # long as the frame is reachable from socket state; a frame the socket
+  # discards instead of dispatching is not reachable any more, and nothing
+  # re-arms that timer, so its capability would otherwise live until the sealing
+  # process exits (findings#172). Releasing reclaims it at the drop, which is
+  # the same terminal state the timer produced before parking existed, so a
+  # released capability still classifies as "gone" rather than "forged".
+  #
+  # A consumed capability is refused: it deliberately outlives dispatch so a
+  # second dispatch answers `:consumed` instead of `:invalid`, and it is the
+  # process that redeems the runtime admission proof issued at dispatch.
+  @spec release(t()) :: :ok | {:error, :consumed | :invalid}
+  def release(%__MODULE__{server: server, reference: reference})
+      when is_pid(server) and is_reference(reference) do
+    GenServer.call(server, {:release, reference}, 1_000)
+  catch
+    :exit, _reason -> {:error, :invalid}
+  end
+
   @spec seal(t(), binary(), <<_::256>> | nil, :native_compaction | :native_replay | nil) :: :ok
   def seal(
         %__MODULE__{server: server, reference: reference},
@@ -159,6 +178,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
   end
 
   def handle_call({:park, _reference}, _from, state) do
+    {:reply, {:error, :invalid}, state, @timeout_ms}
+  end
+
+  def handle_call({:release, reference}, _from, %{reference: reference, consumed?: false} = state) do
+    {:stop, :normal, :ok, state}
+  end
+
+  def handle_call({:release, reference}, _from, %{reference: reference, consumed?: true} = state) do
+    {:reply, {:error, :consumed}, state}
+  end
+
+  def handle_call({:release, _reference}, _from, state) do
     {:reply, {:error, :invalid}, state, @timeout_ms}
   end
 

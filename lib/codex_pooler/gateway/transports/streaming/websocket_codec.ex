@@ -325,6 +325,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def park_prepared_frame(%PreparedWebsocketFrame{}), do: {:error, :invalid}
 
+  @doc """
+  Reclaims the capability of a prepared frame the socket will never dispatch.
+
+  Parking suppresses the capability's reclaim timer for as long as the frame is
+  reachable from socket state (findings#169), and nothing re-arms it, so a frame
+  the socket discards would otherwise keep its capability until the socket exits
+  (findings#172). Releasing produces the same terminal state the timer produced
+  before parking existed: the frame's digest still verifies while its capability
+  is gone, which stays a retryable owner condition rather than a breach
+  (findings#168). A consumed capability is left alone; it deliberately outlives
+  dispatch.
+  """
+  @spec release_prepared_frame(PreparedWebsocketFrame.t()) ::
+          :ok | {:error, :consumed | :invalid}
+  def release_prepared_frame(%PreparedWebsocketFrame{provenance: %{capability: capability}}),
+    do: Capability.release(capability)
+
+  def release_prepared_frame(%PreparedWebsocketFrame{}), do: {:error, :invalid}
+
   @doc false
   @spec attach_native_compaction_admission(
           PreparedWebsocketFrame.t(),
