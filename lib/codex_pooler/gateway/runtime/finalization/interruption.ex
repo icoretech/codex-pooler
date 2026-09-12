@@ -68,12 +68,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       request = request_for_update(receipt.request_id)
 
-      if direct_receipt_matches?(session, request, receipt) and
-           request.status in ["accepted", "in_progress"] and
-           not replacement_turn_active?(receipt.session_id, receipt.request_id) and
-           pre_attempt_owner_receipt_matches?(session, request, receipt) do
-        request = mark_pre_attempt_owner_drain(request, receipt, reason)
-        interrupt_direct_locked(session, request, reason)
+      case direct_interrupt_clause(session, request, receipt) do
+        :matched ->
+          request = mark_pre_attempt_owner_drain(request, receipt, reason)
+          interrupt_direct_locked(session, request, reason)
+
+        {:not_matched, clause} ->
+          log_direct_interrupt_not_matched(receipt, reason, clause)
       end
     end)
     |> case do
@@ -89,7 +90,35 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp direct_receipt_matches?(_session, _request, _receipt), do: false
 
-  defp pre_attempt_owner_receipt_matches?(
+  # The admission gate is expressed one named clause at a time so a gate that
+  # never matches says which check refused instead of returning a silent
+  # `:ok`. Every clause name is a fixed internal token, never row content.
+  defp direct_interrupt_clause(session, request, receipt) do
+    cond do
+      is_nil(session) ->
+        {:not_matched, "missing_session"}
+
+      is_nil(request) ->
+        {:not_matched, "missing_request"}
+
+      not direct_receipt_matches?(session, request, receipt) ->
+        {:not_matched, "receipt_identity"}
+
+      request.status not in ["accepted", "in_progress"] ->
+        {:not_matched, "request_already_terminal"}
+
+      replacement_turn_active?(receipt.session_id, receipt.request_id) ->
+        {:not_matched, "replacement_turn_active"}
+
+      true ->
+        pre_attempt_owner_clause(session, request, receipt)
+    end
+  end
+
+  defp pre_attempt_owner_receipt_matches?(session, request, receipt),
+    do: pre_attempt_owner_clause(session, request, receipt) == :matched
+
+  defp pre_attempt_owner_clause(
          session,
          request,
          %{
@@ -103,18 +132,88 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
        when is_binary(owner) and is_binary(token) and is_integer(epoch) and epoch > 0 do
     metadata = Map.get(request.request_metadata, "websocket_owner_forwarding", %{})
 
-    session.owner_lease_token == token and
-      session.owner_instance_id == owner and
-      current_owner_lease?(session.owner_lease_expires_at) and
-      metadata["owner_instance_id"] == owner and
-      metadata["downstream_epoch"] == epoch and
-      admitted_attempt_matches?(latest_attempt_for_update(request.id), receipt)
+    # Split only to keep each group under the complexity bound. The order is
+    # load-bearing: the session row is the cheapest check, the forwarding
+    # metadata needs no query either, and the attempt lookup is last because it
+    # is the only clause that touches the database.
+    with :matched <- session_owner_clause(session, owner, token),
+         :matched <- owner_forwarding_clause(metadata, owner, epoch) do
+      admitted_attempt_clause(request, receipt)
+    end
   end
 
-  defp pre_attempt_owner_receipt_matches?(_session, request, receipt),
-    do:
-      is_nil(Map.get(receipt, :owner_binding)) and
-        not Map.has_key?(request.request_metadata, "websocket_owner_forwarding")
+  defp pre_attempt_owner_clause(_session, request, receipt) do
+    cond do
+      not is_nil(Map.get(receipt, :owner_binding)) ->
+        {:not_matched, "owner_binding_malformed"}
+
+      Map.has_key?(request.request_metadata, "websocket_owner_forwarding") ->
+        {:not_matched, "owner_forwarded_request_without_binding"}
+
+      true ->
+        :matched
+    end
+  end
+
+  defp session_owner_clause(session, owner, token) do
+    cond do
+      session.owner_lease_token != token ->
+        {:not_matched, "session_owner_lease_token"}
+
+      session.owner_instance_id != owner ->
+        {:not_matched, "session_owner_instance_id"}
+
+      not current_owner_lease?(session.owner_lease_expires_at) ->
+        {:not_matched, "owner_lease_expired"}
+
+      true ->
+        :matched
+    end
+  end
+
+  defp owner_forwarding_clause(metadata, owner, epoch) do
+    cond do
+      metadata["owner_instance_id"] != owner -> {:not_matched, "metadata_owner_instance_id"}
+      metadata["downstream_epoch"] != epoch -> {:not_matched, "metadata_downstream_epoch"}
+      true -> :matched
+    end
+  end
+
+  defp admitted_attempt_clause(request, receipt) do
+    if admitted_attempt_matches?(latest_attempt_for_update(request.id), receipt),
+      do: :matched,
+      else: {:not_matched, "admitted_attempt"}
+  end
+
+  # Ordinary lifecycle outcomes (the turn already finished, or another turn
+  # replaced it) are the common case on every socket teardown and stay at
+  # debug. A refused provenance clause is the interesting one: it is what
+  # distinguishes "never called" from "called and rejected", and which check
+  # rejected. The clause name and the interrupt reason are fixed internal
+  # vocabularies and the correlators are trusted ids, so the whole line is
+  # bounded sanitized cleartext in the message rather than in logger metadata,
+  # which allowlists none of these keys.
+  @routine_not_matched_clauses [
+    "missing_session",
+    "missing_request",
+    "request_already_terminal",
+    "replacement_turn_active"
+  ]
+
+  defp log_direct_interrupt_not_matched(receipt, reason, clause) do
+    message =
+      "websocket direct interrupt gate not matched " <>
+        "codex_session_id=#{safe_log_value(Map.get(receipt, :session_id))} " <>
+        "request_id=#{safe_log_value(Map.get(receipt, :request_id))} " <>
+        "interrupt_reason=#{safe_log_value(reason)} " <>
+        "refused_clause=#{safe_log_value(clause)}"
+
+    if clause in @routine_not_matched_clauses,
+      do: Logger.debug(message),
+      else: Logger.info(message)
+
+    :ok
+  end
 
   defp current_owner_lease?(%DateTime{} = expiry), do: DateTime.compare(expiry, now()) == :gt
   defp current_owner_lease?(_expiry), do: false
@@ -572,7 +671,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       interrupted_outcomes =
         in_progress_turns
-        |> Enum.map(&interrupt_turn!(&1, opts, reason, now, caller_owned_transaction?))
+        |> Enum.map(&interrupt_turn!(session, &1, opts, reason, now, caller_owned_transaction?))
         |> Enum.reject(&is_nil/1)
 
       session
@@ -639,7 +738,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       :continue ->
         {interrupted_count, interrupted_outcomes} =
-          interrupt_selected_turn(turn, opts, reason, now, caller_owned_transaction?)
+          interrupt_selected_turn(session, turn, opts, reason, now, caller_owned_transaction?)
 
         session
         |> Ecto.Changeset.change(%{
@@ -675,20 +774,28 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   end
 
   defp interrupt_selected_turn(
+         session,
          %CodexTurn{status: @turn_in_progress} = turn,
          opts,
          reason,
          now,
          caller_owned_transaction?
        ) do
-    marker = interrupt_turn!(turn, opts, reason, now, caller_owned_transaction?)
+    marker = interrupt_turn!(session, turn, opts, reason, now, caller_owned_transaction?)
     {1, if(marker, do: [marker], else: [])}
   end
 
-  defp interrupt_selected_turn(_turn, _opts, _reason, _now, _caller_owned_transaction?),
-    do: {0, []}
+  defp interrupt_selected_turn(
+         _session,
+         _turn,
+         _opts,
+         _reason,
+         _now,
+         _caller_owned_transaction?
+       ),
+       do: {0, []}
 
-  defp interrupt_turn!(%CodexTurn{} = turn, opts, reason, now, caller_owned_transaction?) do
+  defp interrupt_turn!(session, %CodexTurn{} = turn, opts, reason, now, caller_owned_transaction?) do
     request = request_for_update(turn.request_id)
     attempt = latest_attempt_for_update(turn.request_id)
 
@@ -711,15 +818,28 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         marker
 
       request && request.status in ["accepted", "in_progress"] ->
-        request
-        |> Ecto.Changeset.change(%{
-          status: "failed",
-          usage_status: "usage_unknown",
-          completed_at: now,
-          response_status_code: 499,
-          last_error_code: reason
-        })
-        |> Repo.update!()
+        # The resend marker and the release of the reservation this drain
+        # leaves behind are written here, together, inside the transaction
+        # that already holds the session, turn, and request locks. They are
+        # never allowed to land on separate paths: the whole reason a client
+        # resend may be admitted after a drain is that no attempt row exists
+        # under this request lock, so nothing reached the provider and no
+        # double bill is possible. `ClientRetry.verified_pre_attempt_drain?`
+        # reads the marker and `released_without_settlement?` reads the
+        # release, so a marker that could outlive a missing release would
+        # admit a resend whose predecessor still holds reserved budget, and
+        # a release without the marker leaves the recovery inert. Only this
+        # single locked write makes the missing attempt row authoritative for
+        # both halves at once.
+        request = mark_verified_pre_attempt_drain(session, request, opts, reason)
+
+        release_unattempted_request!(
+          request,
+          opts,
+          reason,
+          now,
+          caller_owned_transaction?
+        )
 
         complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
         interruption_marker("interrupted", opts, "unknown")
@@ -734,6 +854,80 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         )
 
         nil
+    end
+  end
+
+  # The terminating owner carries its own instance id, lease token, and
+  # downstream epoch in the interrupt options. That triple is the same
+  # out-of-band evidence a `%DirectCleanup{}` receipt carries, and supplying it
+  # from the caller rather than from the session row is what keeps the marker's
+  # provenance check from degrading into comparing the database against itself.
+  # A finalization route with no owner lease of its own (a socket that never
+  # forwarded to an owner) produces no binding and therefore no marker.
+  # Dialyzer proves the caller always holds a locked `%CodexSession{}` here, so
+  # there is no second clause: an unreachable fallback would only hide a future
+  # caller that does not.
+  defp mark_verified_pre_attempt_drain(%CodexSession{} = session, request, opts, reason) do
+    evidence = owner_drain_evidence(opts)
+
+    if pre_attempt_owner_receipt_matches?(session, request, evidence),
+      do: mark_pre_attempt_owner_drain(request, evidence, reason),
+      else: request
+  end
+
+  defp owner_drain_evidence(%RequestOptions{
+         transport: %{
+           websocket_owner: %{
+             owner_instance_id: owner,
+             lease_token: token,
+             downstream_epoch: epoch
+           }
+         }
+       })
+       when is_binary(owner) and is_binary(token) and is_integer(epoch) and epoch > 0,
+       do: %{
+         owner_binding: %{
+           owner_instance_id: owner,
+           owner_lease_token: token,
+           downstream_epoch: epoch
+         }
+       }
+
+  defp owner_drain_evidence(%RequestOptions{}), do: %{owner_binding: nil}
+
+  # A turn interrupted before any attempt existed still holds whatever the
+  # reservation reserved, so the release is written for every reason this
+  # branch serves, not only for drains; only the resend marker above is
+  # drain-specific. A request that never reached the ledger (a claim rejected
+  # before reservation) has nothing to release and keeps the plain failure
+  # write, because `finalize_reservation_failure/2` requires the reservation
+  # row to exist.
+  defp release_unattempted_request!(request, opts, reason, now, caller_owned_transaction?) do
+    if Accounting.reservation_outstanding?(request) do
+      case Accounting.finalize_reservation_failure(request, %{
+             last_error_code: reason,
+             response_status_code: 499,
+             usage_status: "usage_unknown",
+             now: now
+           }) do
+        {:ok, _released} ->
+          :ok
+
+        {:error, error} ->
+          rollback_interrupted_accounting(error, opts, nil, caller_owned_transaction?)
+      end
+    else
+      request
+      |> Ecto.Changeset.change(%{
+        status: "failed",
+        usage_status: "usage_unknown",
+        completed_at: now,
+        response_status_code: 499,
+        last_error_code: reason
+      })
+      |> Repo.update!()
+
+      :ok
     end
   end
 
@@ -769,7 +963,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     Repo.rollback(
       public_error: {:interrupt_accounting_failed, error},
       interrupted_outcomes: [
-        interruption_marker("settlement_failed", opts, bounded_transport(attempt.transport))
+        interruption_marker(
+          "settlement_failed",
+          opts,
+          bounded_transport(attempt && attempt.transport)
+        )
       ]
     )
   end
@@ -936,6 +1134,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       sanitized -> sanitized
     end
   end
+
+  defp safe_log_value(_value), do: "unknown"
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
