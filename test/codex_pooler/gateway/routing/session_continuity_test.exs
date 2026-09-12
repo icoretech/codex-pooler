@@ -593,6 +593,134 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
     end
   end
 
+  describe "recreated session assignment preference" do
+    test "soft-prefers the previous assignment of a lease-expiry recreation" do
+      setup = active_pinned_assignment_setup()
+      session = recreated_session_fixture(setup, setup.pinned.assignment)
+      opts = streaming_request_options_with_session(session)
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      assert SessionContinuity.hard_pin_metadata(opts, model) == nil
+
+      assert {:ok, filtered} =
+               SessionContinuity.filter_codex_session_assignment(
+                 [setup.other_candidate, setup.pinned_candidate],
+                 opts,
+                 model
+               )
+
+      assert candidate_assignment_ids(filtered) == [
+               setup.pinned.assignment.id,
+               setup.other.assignment.id
+             ]
+    end
+
+    test "falls through to ordinary ordering when the previous assignment is absent" do
+      setup = active_pinned_assignment_setup()
+      session = recreated_session_fixture(setup, setup.pinned.assignment)
+      opts = streaming_request_options_with_session(session)
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      assert {:ok, [other_candidate]} =
+               SessionContinuity.filter_codex_session_assignment(
+                 [setup.other_candidate],
+                 opts,
+                 model
+               )
+
+      assert other_candidate == setup.other_candidate
+    end
+
+    test "a hard pin outranks the recreation preference" do
+      setup = active_pinned_assignment_setup()
+      session = recreated_session_fixture(setup, setup.pinned.assignment)
+
+      opts =
+        session
+        |> streaming_request_options_with_session()
+        |> RequestOptions.put_continuity(
+          previous_response_id: "resp_recreation_#{System.unique_integer([:positive])}"
+        )
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      assert SessionContinuity.hard_pin_metadata(opts, model) == %{
+               "pin_mode" => "hard",
+               "pin_reason" => "previous_response_id"
+             }
+
+      assert {:ok, filtered} =
+               SessionContinuity.filter_codex_session_assignment(
+                 [setup.other_candidate, setup.pinned_candidate],
+                 opts,
+                 model
+               )
+
+      assert candidate_assignment_ids(filtered) == [
+               setup.other.assignment.id,
+               setup.pinned.assignment.id
+             ]
+    end
+
+    test "a session that was never recreated keeps ordinary ordering" do
+      setup = active_pinned_assignment_setup()
+
+      session =
+        setup
+        |> codex_session_fixture(setup.pinned.assignment)
+        |> Ecto.Changeset.change(pool_upstream_assignment_id: nil)
+        |> Repo.update!()
+
+      opts = streaming_request_options_with_session(session)
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      assert {:ok, filtered} =
+               SessionContinuity.filter_codex_session_assignment(
+                 [setup.other_candidate, setup.pinned_candidate],
+                 opts,
+                 model
+               )
+
+      assert candidate_assignment_ids(filtered) == [
+               setup.other.assignment.id,
+               setup.pinned.assignment.id
+             ]
+    end
+
+    test "an ineligible previous assignment is excluded before the preference can order it" do
+      setup = pinned_assignment_setup()
+      api_key = active_api_key_fixture(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
+      session = recreated_session_fixture(setup, setup.pinned.assignment, api_key.api_key)
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      payload = %{
+        "model" => model.exposed_model_id,
+        "input" => native_text_input("hello"),
+        "stream" => true
+      }
+
+      opts =
+        %{api_key_policy: auth.api_key}
+        |> RequestOptions.build(@endpoint, payload)
+        |> RequestOptions.put_continuity(codex_session: session)
+
+      assert {:ok, %{candidates: candidates}} =
+               PreDispatch.prepare(auth, @endpoint, payload, opts, model)
+
+      assert candidate_assignment_ids(candidates) == [setup.other.assignment.id]
+    end
+  end
+
   describe "PreDispatch.prepare/5" do
     test "previous_response_id alias can recover the pinned reauth classification without a live owner lease" do
       setup = pinned_assignment_setup()
@@ -780,6 +908,16 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       updated_at: now
     }
     |> Repo.insert!()
+  end
+
+  # A session recreated after owner-lease expiry: no assignment of its own, and
+  # the closed session's assignment carried only on the struct.
+  defp recreated_session_fixture(setup, %PoolUpstreamAssignment{} = previous, api_key \\ nil) do
+    setup
+    |> codex_session_fixture(previous, api_key)
+    |> Ecto.Changeset.change(pool_upstream_assignment_id: nil)
+    |> Repo.update!()
+    |> Map.put(:recreated_from_assignment_id, previous.id)
   end
 
   defp native_text_input(text) do

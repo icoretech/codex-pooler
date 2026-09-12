@@ -444,24 +444,33 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp upsert_session_for_start!(auth, opts, session_key, owner, now) do
-    existing_session = existing_session_for_start!(auth, opts, session_key, now)
-
-    case existing_session do
-      %CodexSession{} = session ->
+    case existing_session_for_start!(auth, opts, session_key, now) do
+      {%CodexSession{} = session, _preferred_assignment_id} ->
         update_existing_session!(session, auth, opts, owner, now)
 
-      nil ->
+      {nil, preferred_assignment_id} ->
         maybe_test_block_before_session_insert()
-        insert_new_session!(auth, opts, session_key, owner, now)
+        insert_new_session!(auth, opts, session_key, owner, now, preferred_assignment_id)
     end
   end
 
+  # Returns the session to reuse, if any, together with the assignment the
+  # replacement should softly prefer when there is nothing to reuse. The
+  # preference is produced by the same transaction and row locks that close the
+  # lease-expired sessions, so the assignment cannot change underneath the
+  # insert that follows.
   defp existing_session_for_start!(auth, opts, session_key, now) do
     resolved_session = Aliases.resolved_session_for_update(auth, opts, session_key, now)
 
-    if is_nil(resolved_session) do
-      ExpiredSessions.close_for_key!(auth.pool.id, session_key, now)
-    end
+    preferred_assignment_id =
+      if is_nil(resolved_session) do
+        ExpiredSessions.close_for_key!(
+          auth.pool.id,
+          auth.api_key.id,
+          session_key,
+          now
+        ).preferred_assignment_id
+      end
 
     reject_blocked_authenticated_owner_attach!(auth, opts, session_key, now, resolved_session)
 
@@ -471,7 +480,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       Repo.rollback(:owner_unavailable)
     end
 
-    existing_session
+    {existing_session, preferred_assignment_id}
   end
 
   defp reject_blocked_authenticated_owner_attach!(auth, opts, session_key, now, nil) do
@@ -505,7 +514,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> Repo.update!()
   end
 
-  defp insert_new_session!(auth, opts, session_key, owner, now) do
+  defp insert_new_session!(auth, opts, session_key, owner, now, preferred_assignment_id) do
     attrs = %{
       pool_id: auth.pool.id,
       api_key_id: auth.api_key.id,
@@ -525,12 +534,24 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> Repo.insert(mode: :savepoint)
     |> case do
       {:ok, %CodexSession{} = session} ->
-        session
+        put_recreation_preference(session, preferred_assignment_id)
 
       {:error, %Ecto.Changeset{} = changeset} ->
         recover_session_start_conflict!(changeset, auth, opts, session_key, owner, now)
     end
   end
+
+  # Carries the closed session's assignment on the replacement struct only, for
+  # the request that recreated it. Nothing is persisted: writing it to
+  # `pool_upstream_assignment_id` would make routing filter on it, and on a
+  # websocket turn it could even escalate to a hard pin. The conflict-recovery
+  # path deliberately does not receive it, because a recovered session already
+  # carries its own assignment.
+  defp put_recreation_preference(%CodexSession{} = session, assignment_id)
+       when is_binary(assignment_id),
+       do: %{session | recreated_from_assignment_id: assignment_id}
+
+  defp put_recreation_preference(%CodexSession{} = session, _assignment_id), do: session
 
   defp session_start_changeset(%CodexSession{} = session, attrs) do
     session

@@ -764,6 +764,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         Repo.transaction(fn ->
           ExpiredSessions.close_for_key!(
             fixture.auth.pool.id,
+            fixture.auth.api_key.id,
             fixture.session_key,
             fixture.boundary_now
           )
@@ -802,7 +803,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       send(task_a.pid, {:session_continuity_release_frozen, ref})
 
-      assert {:ok, {:ok, {1, nil}}} = Task.await(task_a, 10_000)
+      assert {:ok, {:ok, %{closed_count: 1, preferred_assignment_id: nil}}} =
+               Task.await(task_a, 10_000)
+
       assert {:ok, %CodexSession{status: "interrupted"}} = Task.await(task_b, 10_000)
 
       send(observer.pid, {:session_continuity_stop_observer, ref})
@@ -814,11 +817,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       assert_frozen_replacement_state!(fixture)
 
-      assert {:ok, {1, nil}} =
+      assert {:ok, %{closed_count: 1, preferred_assignment_id: nil}} =
                Sandbox.unboxed_run(Repo, fn ->
                  Repo.transaction(fn ->
                    ExpiredSessions.close_for_key!(
                      fixture.auth.pool.id,
+                     fixture.auth.api_key.id,
                      fixture.session_key,
                      DateTime.add(fixture.boundary_now, 10, :second)
                    )

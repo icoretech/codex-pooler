@@ -22,6 +22,18 @@ defmodule CodexPooler.Gateway.Persistence.CodexSession do
     field :closed_at, :utc_datetime_usec
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
+
+    # Soft routing preference carried only by the struct returned from the
+    # recreation that computed it: the assignment of the session that was just
+    # closed for this same (pool, api key, session key) because its owner lease
+    # had expired. It is deliberately virtual. Nothing is persisted, so a later
+    # request that loads this row reads nil, which is what keeps the preference
+    # a one-shot hint for the recreating request instead of durable state.
+    #
+    # It is never written to `pool_upstream_assignment_id`: that column is the
+    # durable pin that routing may filter on, and binding it before dispatch
+    # would turn a preference into a filter.
+    field :recreated_from_assignment_id, :binary_id, virtual: true
   end
 
   @spec statuses() :: [status()]

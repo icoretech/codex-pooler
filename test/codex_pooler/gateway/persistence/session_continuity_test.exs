@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     SessionContinuity
   }
 
-  alias CodexPooler.Gateway.Persistence.SessionContinuity.{Aliases, OwnerWitness}
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.{Aliases, ExpiredSessions, OwnerWitness}
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
@@ -1207,6 +1207,188 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
              active_lease!(stale_session.id)
 
     assert active_lease_id == before_lease.id
+  end
+
+  describe "lease-expiry recreation assignment preference" do
+    test "replacement session prefers the closed session's assignment without persisting it" do
+      auth = auth_fixture()
+      %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+      session_key = "recreation-preferred-#{System.unique_integer([:positive])}"
+
+      expired_session = expired_assigned_session!(auth, session_key, assignment)
+
+      assert {:ok, %CodexSession{} = replacement} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-replacement"
+               })
+
+      refute replacement.id == expired_session.id
+      assert replacement.recreated_from_assignment_id == assignment.id
+      assert is_nil(replacement.pool_upstream_assignment_id)
+      assert %CodexSession{status: "closed"} = Repo.get!(CodexSession, expired_session.id)
+
+      reloaded = Repo.get!(CodexSession, replacement.id)
+      assert is_nil(reloaded.recreated_from_assignment_id)
+      assert is_nil(reloaded.pool_upstream_assignment_id)
+    end
+
+    test "a first-ever session for a key carries no preference" do
+      auth = auth_fixture()
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: "recreation-first-#{System.unique_integer([:positive])}",
+                 owner_instance_id: "node-a"
+               })
+
+      assert is_nil(session.recreated_from_assignment_id)
+    end
+
+    test "an expired session with no bound assignment donates nothing" do
+      auth = auth_fixture()
+      session_key = "recreation-unassigned-#{System.unique_integer([:positive])}"
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-a"
+               })
+
+      expire_owner_lease!(session.id)
+
+      assert {:ok, %CodexSession{} = replacement} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-b"
+               })
+
+      refute replacement.id == session.id
+      assert is_nil(replacement.recreated_from_assignment_id)
+    end
+
+    test "a live session is reused and carries no recreation preference" do
+      auth = auth_fixture()
+      %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+      session_key = "recreation-live-#{System.unique_integer([:positive])}"
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-a"
+               })
+
+      session
+      |> Ecto.Changeset.change(%{pool_upstream_assignment_id: assignment.id})
+      |> Repo.update!()
+
+      assert {:ok, %CodexSession{} = reused} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-b"
+               })
+
+      assert reused.id == session.id
+      assert reused.pool_upstream_assignment_id == assignment.id
+      assert is_nil(reused.recreated_from_assignment_id)
+    end
+
+    test "another api key's expired session never donates its assignment" do
+      auth = auth_fixture()
+      %{api_key: other_api_key} = active_api_key_fixture(auth.pool)
+      other_auth = %{pool: auth.pool, api_key: other_api_key}
+      %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+      session_key = "recreation-other-key-#{System.unique_integer([:positive])}"
+
+      expired_assigned_session!(other_auth, session_key, assignment)
+
+      assert {:ok, %CodexSession{} = replacement} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-b"
+               })
+
+      assert is_nil(replacement.recreated_from_assignment_id)
+    end
+
+    # The partial unique index codex_sessions_pool_session_key_uq admits only
+    # one reconnectable session per (pool_id, lower(session_key)), so a
+    # multi-row database fixture cannot be built. The selection rule is
+    # therefore proven as a pure function.
+    test "picks the most recently active expired session regardless of input order" do
+      api_key_id = Ecto.UUID.generate()
+      freshest_assignment_id = Ecto.UUID.generate()
+
+      snapshots = [
+        expired_snapshot(api_key_id, Ecto.UUID.generate(), heartbeat_shift_seconds: -600),
+        expired_snapshot(api_key_id, freshest_assignment_id, heartbeat_shift_seconds: -5),
+        expired_snapshot(api_key_id, Ecto.UUID.generate(), heartbeat_shift_seconds: -60)
+      ]
+
+      assert ExpiredSessions.preferred_assignment_id(snapshots, api_key_id) ==
+               freshest_assignment_id
+
+      assert ExpiredSessions.preferred_assignment_id(Enum.reverse(snapshots), api_key_id) ==
+               freshest_assignment_id
+    end
+
+    test "ranks a missing heartbeat last and ignores rows that cannot donate" do
+      api_key_id = Ecto.UUID.generate()
+      heartbeat_assignment_id = Ecto.UUID.generate()
+
+      snapshots = [
+        expired_snapshot(api_key_id, Ecto.UUID.generate(),
+          heartbeat_shift_seconds: nil,
+          updated_shift_seconds: 600
+        ),
+        expired_snapshot(api_key_id, heartbeat_assignment_id, heartbeat_shift_seconds: -600),
+        expired_snapshot(api_key_id, nil, heartbeat_shift_seconds: 0),
+        expired_snapshot(Ecto.UUID.generate(), Ecto.UUID.generate(), heartbeat_shift_seconds: 0)
+      ]
+
+      assert ExpiredSessions.preferred_assignment_id(snapshots, api_key_id) ==
+               heartbeat_assignment_id
+    end
+
+    test "returns no preference when nothing belongs to the api key" do
+      api_key_id = Ecto.UUID.generate()
+
+      snapshots = [
+        expired_snapshot(Ecto.UUID.generate(), Ecto.UUID.generate(), heartbeat_shift_seconds: 0)
+      ]
+
+      assert is_nil(ExpiredSessions.preferred_assignment_id(snapshots, api_key_id))
+      assert is_nil(ExpiredSessions.preferred_assignment_id([], api_key_id))
+    end
+  end
+
+  defp expired_assigned_session!(auth, session_key, assignment) do
+    assert {:ok, %CodexSession{} = session} =
+             Gateway.start_codex_session(auth, %{
+               session_key: session_key,
+               owner_instance_id: "node-expired"
+             })
+
+    session
+    |> Ecto.Changeset.change(%{pool_upstream_assignment_id: assignment.id})
+    |> Repo.update!()
+
+    expire_owner_lease!(session.id)
+    Repo.get!(CodexSession, session.id)
+  end
+
+  defp expired_snapshot(api_key_id, assignment_id, opts) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    heartbeat_shift = Keyword.get(opts, :heartbeat_shift_seconds)
+
+    %{
+      id: Ecto.UUID.generate(),
+      api_key_id: api_key_id,
+      pool_upstream_assignment_id: assignment_id,
+      last_heartbeat_at: heartbeat_shift && DateTime.add(now, heartbeat_shift, :second),
+      updated_at: DateTime.add(now, Keyword.get(opts, :updated_shift_seconds, 0), :second),
+      created_at: now
+    }
   end
 
   defp unboxed_auth_fixture! do
