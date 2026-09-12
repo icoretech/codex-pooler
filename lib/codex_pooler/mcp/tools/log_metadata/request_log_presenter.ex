@@ -184,6 +184,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         {"upstream", "upstream", required: true},
         {"upstream_error_code", "upstream_error_code"},
         {"stream_terminal_type", "stream_terminal_type"},
+        {"compaction_invalid_reason", "compaction_invalid_reason"},
         {"upstream_error_param", "upstream_error_param"},
         {"rejection_error_code", "rejection_error_code"},
         {"rejection_error_type", "rejection_error_type"},
@@ -312,6 +313,10 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         |> maybe_put_value(
           "stream_terminal_type",
           valid_terminal_identifier(attempt["stream_terminal_type"])
+        )
+        |> maybe_put_value(
+          "compaction_invalid_reason",
+          valid_terminal_identifier(attempt["compaction_invalid_reason"])
         )
         |> maybe_put_value(
           "upstream_error_param",
@@ -563,6 +568,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       attempt
       |> put_or_delete_terminal_identifier("upstream_error_code")
       |> put_or_delete_terminal_identifier("stream_terminal_type")
+      |> put_or_delete_terminal_identifier("compaction_invalid_reason")
 
     attempt
     |> Map.drop(rejection_keys)

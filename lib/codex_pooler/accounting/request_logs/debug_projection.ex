@@ -304,6 +304,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     projection
     |> maybe_put_terminal_identifier(:upstream_error_code, metadata)
     |> maybe_put_terminal_identifier(:stream_terminal_type, metadata)
+    |> maybe_put_terminal_identifier(:compaction_invalid_reason, metadata)
     |> maybe_put_terminal_param(metadata)
   end
 

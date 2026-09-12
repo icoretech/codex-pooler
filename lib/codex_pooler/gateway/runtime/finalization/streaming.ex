@@ -590,6 +590,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     metadata
     |> maybe_put_compaction_terminal_code(diagnostic_upstream_code)
     |> maybe_put_compaction_terminal_type(failure.event_type)
+    |> maybe_put_compaction_invalid_reason(failure)
     |> Map.delete("upstream_error_param")
     |> Metadata.maybe_put_upstream_error_param(%{
       upstream_error_param: UpstreamErrorParam.sanitize(failure.upstream_error_param)
@@ -600,8 +601,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp non_first_event_terminal_attempt_metadata(metadata, failure, code) do
     metadata
     |> Metadata.maybe_put_upstream_error_param(failure)
+    |> maybe_put_compaction_invalid_reason(failure)
     |> terminal_failure_attempt_metadata(code)
   end
+
+  # The compact collector's own rejection diagnosis. It is the only field that
+  # separates the six collector failure modes once the attempt row is settled,
+  # so it is persisted as a bounded sanitized identifier from the collector's
+  # closed vocabulary.
+  defp maybe_put_compaction_invalid_reason(metadata, %{compaction_invalid_reason: reason}) do
+    case DiagnosticTaxonomy.identifier(reason) do
+      code when is_binary(code) -> Map.put(metadata, "compaction_invalid_reason", code)
+      nil -> metadata
+    end
+  end
+
+  defp maybe_put_compaction_invalid_reason(metadata, _failure), do: metadata
 
   defp maybe_put_compaction_terminal_code(metadata, diagnostic_upstream_code) do
     case DiagnosticTaxonomy.identifier(diagnostic_upstream_code) do

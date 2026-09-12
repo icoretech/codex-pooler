@@ -233,6 +233,91 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
     refute log =~ "reason_code=missing_terminal"
   end
 
+  test "the collector reason vocabulary is closed and unlisted terms degrade to the generic value" do
+    assert CompactionResultCollector.invalid_reason_codes() ==
+             ~w(
+               compaction_result_too_large
+               duplicate_compaction
+               invalid_after_provider_failure
+               invalid_compaction
+               missing_terminal
+               provider_failure
+             )
+
+    for code <- CompactionResultCollector.invalid_reason_codes() do
+      atom = String.to_existing_atom(code)
+      assert CompactionResultCollector.invalid_reason_code(atom) == code
+
+      assert CompactionResultCollector.invalid_reason_code({atom, :ignored, :ignored, "absent"}) ==
+               code
+    end
+
+    # A collector reason that is not in the closed list must not reach a log
+    # line or attempt metadata as itself.
+    for unlisted <- [
+          :missing_compaction,
+          :some_future_collector_reason,
+          {:some_future_tuple_reason, %{}},
+          "raw provider text with spaces",
+          nil,
+          %{code: "server_error"},
+          123
+        ] do
+      assert CompactionResultCollector.invalid_reason_code(unlisted) == "invalid_compaction"
+    end
+  end
+
+  test "tuple collector reasons stay distinguishable in the sanitized decision log" do
+    provider =
+      provider_failure_event("response.failed", "server_error", "input", "private-provider-text")
+
+    unrelated =
+      "event: response.output_text.delta\n" <>
+        "data: #{CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "x"})}\n\n"
+
+    # A provider terminal followed by a further block in the same batch is an
+    # `invalid_after_provider_failure`; the witness code still leads the log, so
+    # the collector reason is what the attempt metadata must keep apart.
+    log =
+      capture_log([level: :warning], fn ->
+        assert {:error, %{compaction_invalid_reason: "invalid_after_provider_failure"}} =
+                 CompactionResultCollector.collect_websocket_body(
+                   websocket_body([provider]) <> unrelated
+                 )
+      end)
+
+    assert log =~ "source_stage=collector_invalid"
+    assert log =~ "reason_code=server_error"
+  end
+
+  test "collector rejections carry their reason on the internal gateway error map" do
+    cases = [
+      {"missing_terminal", websocket_body([item_event("compaction", "one")])},
+      {"invalid_compaction", websocket_body([item_event("compaction", " "), completed_event()])},
+      {"duplicate_compaction",
+       websocket_body([
+         item_event("compaction", "one"),
+         item_event("compaction", "two"),
+         completed_event()
+       ])},
+      {"compaction_result_too_large",
+       CollectedBody.empty()
+       |> CollectedBody.append(:binary.copy("x", CollectedBody.max_bytes() + 1))
+       |> CollectedBody.read()}
+    ]
+
+    for {expected_reason, body} <- cases do
+      capture_log([level: :warning], fn ->
+        assert {:error,
+                %{
+                  status: 502,
+                  code: "invalid_compaction_response",
+                  compaction_invalid_reason: ^expected_reason
+                }} = CompactionResultCollector.collect_websocket_body(body)
+      end)
+    end
+  end
+
   defp event_count(log, message), do: length(String.split(log, message)) - 1
 
   defp provider_failure_status(code, upstream_code)

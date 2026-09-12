@@ -193,8 +193,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
   defmodule FirstCompactResult do
     @moduledoc false
 
+    require Logger
+
     alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
     alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
+    alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
     alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
 
     @enforce_keys [
@@ -219,13 +222,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
           }
 
     @spec from_collection(map(), map(), map()) :: {:ok, t()} | :error
+    # A request that is not a collect-full-history compaction is not a rejection:
+    # it is every ordinary turn. It must stay silent, so eligibility is decided
+    # before the admission steps whose failures are worth a diagnostic.
     def from_collection(request, result, lifecycle) do
-      with %{
-             websocket_delivery_mode: :collect_full_history,
-             native_compaction_metadata:
-               %NativeCodexTurnMetadata{request_kind: :compaction} = metadata
-           } <- request,
-           {:ok, request_id} <- Ecto.UUID.cast(request.request_id),
+      case request do
+        %{
+          websocket_delivery_mode: :collect_full_history,
+          native_compaction_metadata:
+            %NativeCodexTurnMetadata{request_kind: :compaction} = metadata
+        } ->
+          admit_first_compact_result(request, result, lifecycle, metadata)
+
+        _ineligible ->
+          :error
+      end
+    end
+
+    defp admit_first_compact_result(request, result, lifecycle, metadata) do
+      with {:ok, request_id} <- Ecto.UUID.cast(request.request_id),
            {:ok, attempt_id} <- Ecto.UUID.cast(request.attempt_id),
            {:ok, %{"model" => model}} when is_binary(model) <-
              CodexPooler.JSON.decode(request.payload),
@@ -254,9 +269,40 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
            item_digest: NativeCodexTurnMetadata.compaction_item_digest(item)
          }}
       else
-        _invalid -> :error
+        {:error, %{compaction_invalid_reason: reason_code}} ->
+          reject("collector_invalid", reason_code)
+
+        {:provider_failure, %{} = failure} ->
+          reject("provider_terminal", provider_reason_code(failure))
+
+        _invalid ->
+          reject("admission_precondition", "unclassified")
       end
     end
+
+    # The admission `with` collapses every rejection into `:error`. Naming the
+    # stage and the bounded sanitized reason keeps a first-compact rejection as
+    # diagnosable as the collector's own decision log; only allowlisted
+    # identifiers or fingerprints are rendered.
+    defp reject(stage, reason_code) do
+      Logger.warning(fn ->
+        "native compact admission rejected " <>
+          "source_stage=first_compact_result " <>
+          "stage=#{stage} " <>
+          "code=invalid_compaction_response " <>
+          "reason_code=#{reason_code}"
+      end)
+
+      :error
+    end
+
+    # A collector provider failure always carries `code`, and `upstream_code`
+    # only when the provider named one, so these two clauses are total over it.
+    defp provider_reason_code(%{upstream_code: code}) when is_binary(code),
+      do: DiagnosticTaxonomy.identifier(code)
+
+    defp provider_reason_code(%{code: code}) when is_binary(code),
+      do: DiagnosticTaxonomy.identifier(code)
 
     @spec model_digest(binary()) :: <<_::256>>
     def model_digest(model), do: :crypto.hash(:sha256, ["native_compact_model:v1", 0, model])

@@ -51,6 +51,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         mono: true
       ),
       detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-compaction-invalid-reason",
+        "Compaction rejection reason",
+        Map.get(attempt, :compaction_invalid_reason),
+        mono: true
+      ),
+      detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-upstream-error-param",
         "Upstream error parameter",
         Map.get(attempt, :upstream_error_param),

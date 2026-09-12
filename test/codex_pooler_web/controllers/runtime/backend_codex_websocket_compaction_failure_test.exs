@@ -163,6 +163,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert "sha256_" <> digest = attempt.response_metadata["upstream_error_code"]
     assert byte_size(digest) == 12
     assert attempt.response_metadata["stream_terminal_type"] == "response.failed"
+
+    # A provider terminal is recorded through the provider diagnostics, not as a
+    # collector rejection reason.
+    refute Map.has_key?(attempt.response_metadata, "compaction_invalid_reason")
+
     refute inspect({result, attempt}) =~ source_code
     refute inspect({result, attempt}) =~ @raw_sentinel
   end
@@ -190,6 +195,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
       diagnostics: {nil, nil, nil},
       health: :failed
     )
+
+    attempt = Repo.get_by!(Attempt, pool_upstream_assignment_id: result.selected_assignment.id)
+    assert attempt.response_metadata["compaction_invalid_reason"] == "invalid_compaction"
   end
 
   test "V2 plain pre-terminal interruption stays health-neutral and never retries" do

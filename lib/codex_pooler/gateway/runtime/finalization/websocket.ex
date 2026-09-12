@@ -221,7 +221,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
           Map.get(finalization, :websocket_frame_headers, %{}),
           Map.get(finalization, :upstream_websocket_connection)
         )
-        |> collected_compaction_diagnostics(finalization),
+        |> collected_compaction_diagnostics(finalization)
+        |> maybe_put_compaction_invalid_reason(error),
         started: finalization.started,
         before_finalize: fn ->
           SideEffects.observe_websocket_response(context, finalization)
@@ -261,6 +262,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   end
 
   defp collected_compaction_diagnostics(metadata, _finalization), do: metadata
+
+  # The collector's own rejection diagnosis travels on the internal gateway
+  # error map; persisting it keeps the six collector failure modes separable
+  # after the logs age out. Public error renderers project a fixed field set,
+  # so the key never reaches a wire payload.
+  defp maybe_put_compaction_invalid_reason(metadata, %{compaction_invalid_reason: reason}) do
+    case DiagnosticTaxonomy.identifier(reason) do
+      code when is_binary(code) -> Map.put(metadata, "compaction_invalid_reason", code)
+      nil -> metadata
+    end
+  end
+
+  defp maybe_put_compaction_invalid_reason(metadata, _error), do: metadata
 
   defp native_full_history_compaction?(%RequestOptions{
          payload_context: %{

@@ -938,7 +938,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert terminal_failure_diagnostics.contract =~ "raw provider messages, bodies, and frames"
 
       assert CompatibilityMatrix.fixture!(:terminal_failure_diagnostics) == %{
-               fields: ~w(upstream_error_code stream_terminal_type upstream_error_param),
+               fields:
+                 ~w(upstream_error_code stream_terminal_type compaction_invalid_reason upstream_error_param),
                projection: "failed_and_retryable_failed_attempt_detail_only",
                readable_identifier: "strict_ascii_80_bytes_or_less_cleartext",
                malformed_identifier: "sha256_12",

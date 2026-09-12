@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+  alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
@@ -1732,6 +1733,92 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute persisted =~ malformed_param
   end
 
+  test "V2 compaction records each collector rejection reason distinctly on attempt metadata", %{
+    conn: conn
+  } do
+    raw_sentinel = "synthetic-collector-reason-private-material"
+
+    item_block = fn content ->
+      sse_block("response.output_item.done", %{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => content}
+      })
+    end
+
+    completed_block =
+      sse_block("response.completed", %{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_collector_reason", "status" => "completed", "output" => []}
+      })
+
+    provider_failure_block =
+      sse_block("response.failed", %{
+        "type" => "response.failed",
+        "response" => %{
+          "status" => "failed",
+          "error" => %{"code" => "server_error", "param" => "input", "message" => raw_sentinel}
+        }
+      })
+
+    unrelated_block =
+      sse_block("response.output_text.delta", %{
+        "type" => "response.output_text.delta",
+        "delta" => raw_sentinel
+      })
+
+    overflow_block =
+      sse_block(nil, %{"type" => CollectedBody.overflow_event_type(), "reason" => raw_sentinel})
+
+    cases = [
+      {"missing_terminal", [item_block.("collector-missing-terminal")]},
+      {"invalid_compaction", [item_block.("   "), completed_block]},
+      {"duplicate_compaction", [item_block.("first"), item_block.("second"), completed_block]},
+      {"compaction_result_too_large", [overflow_block]},
+      {"provider_failure", [provider_failure_block]},
+      {"invalid_after_provider_failure", [provider_failure_block <> unrelated_block]}
+    ]
+
+    recorded =
+      for {expected_reason, chunks} <- cases do
+        upstream = start_upstream({:sse, chunks})
+        setup = gateway_setup(upstream, compact?: true)
+
+        response =
+          conn
+          |> auth(setup)
+          |> post(
+            "/backend-api/codex/responses",
+            v2_compaction_payload(setup, "collector reason #{expected_reason}")
+          )
+
+        assert %{"error" => %{"code" => "invalid_compaction_response"} = error} =
+                 json_response(response, 502),
+               expected_reason
+
+        # The reason is internal: the public error body keeps exactly its four
+        # fields, so no collector diagnosis reaches the wire.
+        assert Map.keys(error) |> Enum.sort() == ~w(code message param type), expected_reason
+        assert error["message"] == "upstream compact stream was invalid"
+        refute response.resp_body =~ raw_sentinel, expected_reason
+
+        assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+        assert request.endpoint == "/backend-api/codex/responses/compact"
+        assert request.status == "failed", expected_reason
+        assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+        assert attempt.network_error_code == "invalid_compaction_response", expected_reason
+
+        assert attempt.response_metadata["compaction_invalid_reason"] == expected_reason,
+               "#{expected_reason} recorded #{inspect(attempt.response_metadata["compaction_invalid_reason"])}"
+
+        refute inspect({request, attempt}) =~ raw_sentinel, expected_reason
+
+        attempt.response_metadata["compaction_invalid_reason"]
+      end
+
+    assert Enum.sort(recorded) == Enum.sort(Enum.map(cases, &elem(&1, 0)))
+    assert Enum.uniq(recorded) == recorded
+  end
+
   @tag :prompt_cache_adaptation
   test "compaction trigger bridge records only prompt cache downgrade metadata", %{conn: conn} do
     for {label, prompt_cache_options} <- [
@@ -2498,11 +2585,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
              attempt.network_error_code,
              attempt.response_metadata["upstream_error_code"],
              attempt.response_metadata["stream_terminal_type"],
-             attempt.response_metadata["upstream_error_param"]
+             attempt.response_metadata["upstream_error_param"],
+             attempt.response_metadata["compaction_invalid_reason"]
            } ==
              {"failed", "invalid_compaction_response", "failed", "invalid_compaction_response",
               elem(expected_diagnostics, 0), elem(expected_diagnostics, 1),
-              elem(expected_diagnostics, 2)}
+              elem(expected_diagnostics, 2), "provider_failure"}
 
     %{attempt: attempt, request: request, response: response, settlement: settlement}
   end
@@ -2515,6 +2603,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :normal}, 1_000
     end)
   end
+
+  defp sse_block(nil, payload), do: "data: #{CodexPooler.JSON.encode!(payload)}\n\n"
+
+  defp sse_block(event, payload),
+    do: "event: #{event}\ndata: #{CodexPooler.JSON.encode!(payload)}\n\n"
 
   defp compaction_trigger, do: %{"type" => "compaction_trigger"}
 
