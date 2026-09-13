@@ -11,12 +11,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest do
      per-turn answers ride out ahead of it, exactly as
      `flush_discarded_submissions/1` already arranges for every other stop.
 
-  2. `start_queued_response/2` keeps its raw-binary clause, and this is the
-     invariant test findings#175's scope note asked for: everything that enters
-     `:queued_response_payloads` through the real submission path is a
-     `%PreparedWebsocketFrame{}`. If a future writer queues raw bytes, those
-     entries silently go unanswered on every discard — the exact defect #175
-     removed for prepared frames — and this fails instead.
+  2. This is the invariant test findings#175's scope note asked for: an
+     owner-forwarded public submission reaches `queue_prepared_response/2`, the
+     only function that adds queue entries, with a `%PreparedWebsocketFrame{}`.
+     It pins that shared writer on this one path. On the other existing writer
+     paths the shape is enforced by struct-only function heads, and since
+     findings#192 the dequeue and discard paths carry no clause for any other
+     shape, so a foreign entry raises there rather than failing here.
 
   Both start where a request starts, a real text frame at `handle_in/2`, and
   abort through a real socket message. The only stand-in is the external
@@ -36,8 +37,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
 
-  # A process exit that has already been decided; it is immediate when it happens.
-  @reclaim_budget_ms 1_000
+  # Failure-detection budget for a process exit that has already been decided. It
+  # is immediate when it happens, so a green run never waits on it; the headroom is
+  # for a loaded partitioned run.
+  @reclaim_budget_ms 15_000
 
   @first_stream_id "liveness-discard-first"
   @second_stream_id "liveness-discard-second"
@@ -189,10 +192,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest do
     entries = :queue.to_list(queued_state.queued_response_payloads)
     assert length(entries) == 3
 
-    # The invariant: `queue_prepared_response/2` is the only writer, so nothing
-    # but a prepared frame can be waiting here. A raw entry would be dropped
-    # unanswered by `discard_queued_responses/2` — it has no turn identity to
-    # address — which is the silence findings#175 removed.
+    # The invariant for this path: an owner-forwarded public submission reaches
+    # `queue_prepared_response/2`, the only function that adds queue entries, with
+    # a prepared frame. A raw entry has no turn identity to address, and neither
+    # the dequeue nor the discard path has a clause for one any more
+    # (findings#192).
     for entry <- entries do
       assert %PreparedWebsocketFrame{variant: :public_response_create} = entry
       assert is_pid(entry.provenance.capability.server)
@@ -237,7 +241,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest do
       queued_response_payloads: :queue.new(),
       public_response_task_pid: active_turn,
       public_response_stream_id: @active_stream_id,
-      public_response_start_error_ref: nil,
       public_responses_websocket_state: nil,
       public_turn_task_done?: false,
       public_turn_owner_complete?: false,

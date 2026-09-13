@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Admission
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
@@ -33,6 +34,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   @cache_version 1
   @revocation_close {1008, "client IP is no longer allowed"}
   @api_key_revocation_close {1008, "api key is no longer active"}
+
+  # Failure-detection budget for a process exit that has already been decided when
+  # it is asserted (a released capability, or an owner told to stop), so a green
+  # run never waits on it.
+  @capability_release_budget_ms 15_000
 
   test "matching newer API-key event closes once without firewall telemetry or content leakage" do
     api_key_id = Ecto.UUID.generate()
@@ -168,15 +174,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   end
 
   test "revocation drops queued work while an admitted turn drains final bytes before close" do
-    api_key_id = Ecto.UUID.generate()
-    pool_id = Ecto.UUID.generate()
+    # A real key: submitting a frame refreshes authorization against the row, and
+    # this drain should not rest on how an unknown key happens to be treated.
+    setup = active_api_key_fixture()
+    api_key_id = setup.api_key.id
+    pool_id = setup.pool.id
     task_pid = self()
 
-    state =
-      api_key_socket_state(api_key_id, pool_id, 2, %{
-        tasks: MapSet.new([task_pid]),
-        queued_response_payloads: :queue.from_list(["queued-secret-content"])
-      })
+    state = api_key_socket_state(api_key_id, pool_id, 0, %{tasks: MapSet.new([task_pid])})
+
+    {state, queued} =
+      submit_queued!(state, native_continuation_payload("queued-secret-content"))
+
+    # Present while queued, so the leakage refute after the close is not vacuous.
+    assert inspect(state) =~ "queued-secret-content"
+    capability = monitor_capability(queued)
 
     event = api_key_event(api_key_id, pool_id, "revoked", 3)
 
@@ -184,6 +196,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert revoked_state.api_key_revoked?
     refute revoked_state.api_key_close_sent?
     assert :queue.is_empty(revoked_state.queued_response_payloads)
+    assert_capability_released!(capability)
 
     final_frame = ~s({"type":"response.done","response":{"id":"resp_final_safe"}})
 
@@ -310,10 +323,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     denied = firewall_settings(original, 2, ["203.0.113.10"])
     :ok = publish_cache_snapshot(denied)
 
-    state =
-      firewall_socket_state(7, %{
-        queued_response_payloads: :queue.from_list(["queued payload"])
-      })
+    # Idle, so nothing can be queued: dispatch only queues behind an active task
+    # or an open public turn, and the socket drains the queue as each of those
+    # clears. The busy revocation tests below drop real queued submissions
+    # (findings#192).
+    state = firewall_socket_state(7)
 
     telemetry_id = attach_firewall_telemetry()
     on_exit(fn -> :telemetry.detach(telemetry_id) end)
@@ -328,7 +342,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert revoked_state.firewall_revoked?
     assert revoked_state.firewall_close_sent?
     assert MapSet.size(revoked_state.tasks) == 0
-    assert :queue.is_empty(revoked_state.queued_response_payloads)
 
     assert_receive {:firewall_denied, measurements, metadata}
     assert measurements == %{count: 1}
@@ -424,11 +437,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
     :ok = publish_cache_snapshot(denied)
 
-    state =
-      firewall_socket_state(original.lock_version, %{
-        tasks: MapSet.new([self()]),
-        queued_response_payloads: :queue.from_list(["queued payload"])
-      })
+    state = firewall_socket_state(original.lock_version, %{tasks: MapSet.new([self()])})
+    {state, queued} = submit_queued!(state, native_continuation_payload("queued payload"))
+    capability = monitor_capability(queued)
 
     assert {:ok, revoked_state} =
              CodexResponsesSocket.handle_info(applied_message(denied.lock_version), state)
@@ -436,6 +447,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert revoked_state.firewall_revoked?
     refute revoked_state.firewall_close_sent?
     assert :queue.is_empty(revoked_state.queued_response_payloads)
+    assert_capability_released!(capability)
 
     error = %{status: 500, code: :upstream_failed, message: "safe failure", param: nil}
 
@@ -467,9 +479,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         firewall_revoked?: false,
         firewall_close_sent?: false,
         public_response_stream_id: "lane-revoked",
-        queued_response_payloads:
-          :queue.from_list([public_create_payload("lane-dropped", "dropped")])
+        auth: nil
       })
+
+    {state, queued} = submit_queued!(state, public_create_payload("lane-dropped", "dropped"))
+    assert queued.request_options.extra.socket_public_stream_id == "lane-dropped"
+    assert state.public_response_stream_id == "lane-revoked"
+    capability = monitor_capability(queued)
 
     assert {:ok, revoked_state} =
              CodexResponsesSocket.handle_info(applied_message(denied.lock_version), state)
@@ -477,6 +493,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert revoked_state.firewall_revoked?
     assert revoked_state.public_response_stream_id == "lane-revoked"
     assert :queue.is_empty(revoked_state.queued_response_payloads)
+    assert_capability_released!(capability)
 
     error = %{status: 502, code: :upstream_failed, message: "safe failure", param: nil}
 
@@ -489,6 +506,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  )
 
         assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-revoked"
+        # Revocation answers only the admitted turn and closes (findings#176).
+        refute payload =~ "lane-dropped"
         assert closed_state.public_response_stream_id == nil
         assert closed_state.public_responses_websocket_state == nil
         assert closed_state.firewall_close_sent?
@@ -512,12 +531,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     state =
       firewall_socket_state(original.lock_version, %{
         tasks: MapSet.new([task_pid]),
-        task_monitors: %{task_pid => monitor},
-        queued_response_payloads: :queue.from_list(["queued payload"])
+        task_monitors: %{task_pid => monitor}
       })
+
+    {state, queued} = submit_queued!(state, native_continuation_payload("queued payload"))
+    capability = monitor_capability(queued)
 
     assert {:ok, revoked_state} =
              CodexResponsesSocket.handle_info(applied_message(denied.lock_version), state)
+
+    assert :queue.is_empty(revoked_state.queued_response_payloads)
+    assert_capability_released!(capability)
 
     assert {:stop, :normal, @revocation_close, closed_state} =
              CodexResponsesSocket.handle_info(
@@ -673,7 +697,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     refute payload =~ "invalid/id"
     assert MapSet.size(settled_state.tasks) == 0
     assert settled_state.public_response_task_pid == nil
-    assert settled_state.public_response_start_error_ref == nil
   end
 
   test "queued public creates keep stream ids isolated and start in FIFO order" do
@@ -894,13 +917,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     state =
       public_turn_state(task_pid, %{
+        auth: nil,
         websocket_owner_downstream: %{
           pid: self(),
           epoch: 1,
           correlation_id: "corr-red-owner-barrier"
-        },
-        queued_response_payloads: :queue.from_list([{:owner_retarget_error, :owner_unavailable}])
+        }
       })
+
+    # Turn two is a real submission. This site used to queue a bare
+    # `{:owner_retarget_error, :owner_unavailable}`, a response task's job
+    # argument that was never a queue entry; the barrier kept it from being
+    # dequeued, so a broken barrier crashed at dequeue instead of failing below.
+    {state, queued} =
+      submit_queued!(state, public_create_payload("lane-red-owner-barrier", "queued"))
 
     assert {:ok, next_state} =
              CodexResponsesSocket.handle_info({:codex_response_done, task_pid, :ok}, state)
@@ -908,7 +938,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert Map.get(next_state, :public_turn_task_done?) == true
     assert Map.get(next_state, :public_turn_owner_complete?) == false
     assert MapSet.size(next_state.tasks) == 0
-    assert :queue.len(next_state.queued_response_payloads) == 1
+    # The barrier holds turn two exactly as it was submitted: not started, not dropped.
+    assert [^queued] = :queue.to_list(next_state.queued_response_payloads)
+    assert Process.alive?(queued.provenance.capability.server)
   end
 
   test "owner socket local completion closes the turn without an owner complete frame" do
@@ -973,9 +1005,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
           epoch: epoch,
           correlation_id: correlation_id,
           active_turn_reconnect?: false
-        },
-        queued_response_payloads: :queue.from_list([queued_payload])
+        }
       })
+
+    {state, _queued} = submit_queued!(state, queued_payload)
 
     assert {:ok, waiting_state} =
              CodexResponsesSocket.handle_info(
@@ -1643,6 +1676,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
       state =
         public_turn_state(task_pid, %{
+          auth: nil,
           public_response_stream_id: "lane-abort",
           task_monitors: %{task_pid => monitor},
           websocket_owner_downstream: %{
@@ -1650,9 +1684,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
             epoch: 12,
             correlation_id: "corr-abort",
             active_turn_reconnect?: false
-          },
-          queued_response_payloads: :queue.from_list([~s({"type":"response.create"})])
+          }
         })
+
+      {state, queued} =
+        submit_queued!(state, public_create_payload("lane-abort-queued", "queued"))
+
+      capability = monitor_capability(queued)
 
       state =
         if owner_complete_first? do
@@ -1668,12 +1706,22 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
           state
         end
 
-      assert {:stop, :normal, {1011, "websocket response task failed"}, aborted_state} =
+      assert {:stop, :normal, {1011, "websocket response task failed"}, [{:text, answer}],
+              aborted_state} =
                CodexResponsesSocket.handle_info(
                  {:DOWN, monitor, :process, task_pid, :shutdown},
                  state
                )
 
+      # The queued turn the abort discards is answered on its own stream ahead of
+      # the close (findings#175), and its capability is given back (findings#172).
+      assert %{
+               "status" => 503,
+               "stream_id" => "lane-abort-queued",
+               "error" => %{"code" => "owner_unavailable"}
+             } = CodexPooler.JSON.decode!(answer)
+
+      assert_capability_released!(capability)
       assert aborted_state.public_turn_aborted?
       assert aborted_state.public_response_stream_id == nil
       assert aborted_state.public_responses_websocket_state == nil
@@ -1694,15 +1742,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     state =
       public_turn_state(task_pid, %{
+        auth: nil,
         public_response_stream_id: "lane-drain",
         websocket_owner_downstream: %{
           pid: self(),
           epoch: 15,
           correlation_id: "corr-drain",
           active_turn_reconnect?: false
-        },
-        queued_response_payloads: :queue.from_list([~s({"type":"response.create"})])
+        }
       })
+
+    {state, queued} = submit_queued!(state, public_create_payload("lane-drain-queued", "queued"))
+    capability = monitor_capability(queued)
 
     assert {:ok, safe_payload} =
              WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
@@ -1712,11 +1763,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     {_done_state, logs} =
       with_native_turn_log(:info, fn ->
-        assert {:push, {:text, payload}, aborted_state} =
+        assert {:push, [{:text, payload}, {:text, answer}], aborted_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
         assert CodexPooler.JSON.decode!(payload)["error"]["code"] == "owner_drained"
         assert CodexPooler.JSON.decode!(payload)["stream_id"] == "lane-drain"
+
+        # The drain error answers the active turn; the queued turn it discards gets
+        # its own answer, on its own stream (findings#175).
+        assert %{
+                 "status" => 503,
+                 "stream_id" => "lane-drain-queued",
+                 "error" => %{"code" => "owner_drained"}
+               } = CodexPooler.JSON.decode!(answer)
+
+        assert_capability_released!(capability)
         assert aborted_state.public_turn_aborted?
         assert aborted_state.public_response_stream_id == nil
         assert aborted_state.public_responses_websocket_state == nil
@@ -1940,7 +2001,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       response_task_activities: %{task_pid => activity_token},
       response_task_results_ready: MapSet.new(),
       response_task_terminals_accepted: MapSet.new(),
-      queued_response_payloads: :queue.from_list(["queued-final-turn"]),
+      queued_response_payloads: :queue.new(),
       websocket_owner_downstream: %{
         pid: self(),
         epoch: 24,
@@ -1949,6 +2010,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       },
       native_turn_output_task_pids: MapSet.new()
     }
+
+    # A native socket accepts only an array `input`; the bare string this site
+    # used to place in the queue could never have been prepared, let alone queued.
+    {state, queued} =
+      submit_queued!(
+        state,
+        ~s({"type":"response.create","model":"gpt-test","input":[{"role":"user","content":"queued-final-turn"}]})
+      )
 
     terminal = ~s({"type":"response.completed","response":{"id":"resp_compact_terminal"}})
 
@@ -1968,7 +2037,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     refute_received {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
     assert owner_complete_state.tasks == MapSet.new([task_pid])
-    assert :queue.len(owner_complete_state.queued_response_payloads) == 1
+    assert [^queued] = :queue.to_list(owner_complete_state.queued_response_payloads)
 
     assert {:ok, finalized_state} =
              CodexResponsesSocket.handle_info(
@@ -1979,7 +2048,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
     assert finalized_state.tasks == MapSet.new([task_pid])
-    assert :queue.len(finalized_state.queued_response_payloads) == 1
+    assert [^queued] = :queue.to_list(finalized_state.queued_response_payloads)
   end
 
   test "local native owner releases a finalized terminal without forwarded owner completion" do
@@ -2423,11 +2492,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
             correlation_id: "corr-drain-down",
             active_turn_reconnect?: false
           },
-          queued_response_payloads:
-            :queue.from_list([
-              ~s({"type":"response.create","model":"gpt-test","input":"must-not-start"})
-            ])
+          auth: nil
         })
+
+      {state, queued} =
+        submit_queued!(state, public_create_payload("lane-drain-down-queued", "must-not-start"))
+
+      capability = monitor_capability(queued)
 
       assert {:ok, safe_payload} =
                WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
@@ -2441,10 +2512,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
       {final_signal_state, native_turn_logs} =
         with_native_turn_log(:info, fn ->
-          assert {:push, {:text, error_payload}, aborted_state} =
+          assert {:push, [{:text, error_payload}, {:text, answer}], aborted_state} =
                    CodexResponsesSocket.handle_info(drain_frame, state)
 
           assert CodexPooler.JSON.decode!(error_payload)["error"]["code"] == "owner_drained"
+
+          assert %{
+                   "status" => 503,
+                   "stream_id" => "lane-drain-down-queued",
+                   "error" => %{"code" => "owner_drained"}
+                 } = CodexPooler.JSON.decode!(answer)
+
+          assert_capability_released!(capability)
           assert aborted_state.public_turn_aborted?
           assert aborted_state.websocket_owner_drain_observed?
           assert :queue.len(aborted_state.queued_response_payloads) == 0
@@ -2493,7 +2572,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       assert_native_turn_logs(native_turn_logs, 1, "owner_drained")
 
       send(owner_pid, :stop)
-      assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :normal}
+
+      assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :normal},
+                     @capability_release_budget_ms
 
       {handle_result, warning_logs} =
         ExUnit.CaptureLog.with_log([level: :warning], fn ->
@@ -2888,7 +2969,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         queued_response_payloads: :queue.new(),
         public_response_task_pid: nil,
         public_response_stream_id: nil,
-        public_response_start_error_ref: nil,
         public_responses_websocket_state: nil,
         public_turn_task_done?: false,
         public_turn_owner_complete?: false,
@@ -2952,7 +3032,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         queued_response_payloads: :queue.new(),
         public_response_task_pid: task_pid,
         public_response_stream_id: nil,
-        public_response_start_error_ref: nil,
         public_responses_websocket_state: nil,
         public_turn_task_done?: false,
         public_turn_owner_complete?: false,
@@ -2978,7 +3057,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         queued_response_payloads: :queue.new(),
         public_response_task_pid: nil,
         public_response_stream_id: nil,
-        public_response_start_error_ref: nil,
         public_responses_websocket_state: nil,
         public_turn_task_done?: false,
         public_turn_owner_complete?: false,
@@ -3001,6 +3079,55 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       if is_binary(stream_id), do: Map.put(payload, "stream_id", stream_id), else: payload
     end)
     |> CodexPooler.JSON.encode!()
+  end
+
+  # `queue_prepared_response/2` is the only function that adds queue entries and a
+  # real submission is the only way to reach it, so these tests queue work that way
+  # instead of placing entries in socket state (findings#192). An auth-less socket
+  # is enough for queue shape: preparing and queueing a frame reads `auth` only
+  # through the nil-tolerant API-key epoch capture, and the reads that need a real
+  # principal (compaction reservation, replay intent, the response run) are not on
+  # the paths these submissions take before they wait in the queue.
+  defp submit_queued!(state, payload) do
+    queued_before = :queue.len(state.queued_response_payloads)
+
+    assert {:ok, queued_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+    # Queued, not started: a frame that dispatched instead would add a task.
+    assert queued_state.tasks == state.tasks
+    assert :queue.len(queued_state.queued_response_payloads) == queued_before + 1
+
+    assert %PreparedWebsocketFrame{} =
+             queued = :queue.get_r(queued_state.queued_response_payloads)
+
+    {queued_state, queued}
+  end
+
+  # A tool-result continuation is continuity-ordered, so a native socket queues it
+  # behind the active task instead of starting it alongside.
+  defp native_continuation_payload(output) do
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.create",
+      "model" => "gpt-test",
+      "previous_response_id" => "resp_fixture_anchor",
+      "input" => [
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_fixture_queued",
+          "output" => output
+        }
+      ]
+    })
+  end
+
+  defp monitor_capability(%PreparedWebsocketFrame{} = prepared) do
+    server = prepared.provenance.capability.server
+    {server, Process.monitor(server)}
+  end
+
+  defp assert_capability_released!({server, monitor}) do
+    assert_receive {:DOWN, ^monitor, :process, ^server, :normal}, @capability_release_budget_ms
   end
 
   defp firewall_socket_state(applied_version, overrides \\ %{}) do
@@ -3080,6 +3207,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
   defp with_native_turn_log(level, fun) when level in [:info, :warning] and is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: level)
 
     try do

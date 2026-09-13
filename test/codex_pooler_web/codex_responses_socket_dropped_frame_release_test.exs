@@ -35,8 +35,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDroppedFrameReleaseTest do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
 
-  # A process exit that has already been decided; it is immediate when it happens.
-  @reclaim_budget_ms 1_000
+  # A process exit that has already been decided. It is immediate on a quiet
+  # machine; the budget is the shutdown-detection one test/AGENTS.md sets, so a
+  # loaded run is not mistaken for a leak.
+  @reclaim_budget_ms 15_000
 
   setup do
     setup = accounting_setup()
@@ -169,7 +171,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDroppedFrameReleaseTest do
       queued_response_payloads: :queue.new(),
       public_response_task_pid: active_turn,
       public_response_stream_id: "stream-dropped-frame-release",
-      public_response_start_error_ref: nil,
       public_responses_websocket_state: nil,
       public_turn_task_done?: false,
       public_turn_owner_complete?: false,

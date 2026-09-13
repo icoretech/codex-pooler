@@ -9,14 +9,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
   This is the client-visible half of the same discard findings#172 fixed on the
   server side. The capability release stays; the answer goes alongside it.
 
-  The queue is heterogeneous and only one half of it can be answered. A prepared
-  frame carries the `stream_id` its client sent, so it gets a bounded owner error
-  addressed to that stream. A raw payload is only parsed at dequeue and has no
-  turn identity, so answering it would invent a request that never reached
-  reservation or accounting. It is dropped and recorded on the connection, and
-  the connection-level failure the client sees is whatever the abort site itself
-  already produces — the drain contract that keeps the socket serving after an
-  abort is not the raw entry's to override.
+  Only prepared frames can be answered, and only prepared frames can be queued:
+  `queue_prepared_response/2` is the only function that adds queue entries
+  (findings#192). A frame carries the `stream_id` its client sent, so it gets a
+  bounded owner error addressed to that stream. A submission the socket refuses
+  at `handle_in/2` is answered there and leaves nothing in socket state, so the
+  discard has nothing of it to answer, and the abort — which keeps the socket
+  serving — does not become a close.
 
   Both scenarios start where a request starts — a real text frame at
   `handle_in/2` — and abort through a real socket message: the owner process
@@ -32,12 +31,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
 
-  # A process exit that has already been decided; it is immediate when it happens.
-  @reclaim_budget_ms 1_000
+  # Failure-detection budget for a process exit that has already been decided. It
+  # is immediate when it happens, so a green run never waits on it; the headroom is
+  # for a loaded partitioned run.
+  @reclaim_budget_ms 15_000
 
   # The client picks these, and the socket never sees them again until it has to
   # answer the turn they belong to. A terminal carrying one could not have been
@@ -45,7 +47,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
   @first_stream_id "discarded-first"
   @second_stream_id "discarded-second"
   @active_stream_id "discarded-active-turn"
-  @raw_marker "raw-never-parsed"
+  @refused_marker "refused-never-queued"
 
   setup do
     setup = accounting_setup()
@@ -154,7 +156,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
     end
   end
 
-  test "a raw queued payload is never answered as if it were an accounted turn", %{
+  test "a refused submission leaves no socket state, so the discard answers only queued turns", %{
     auth: auth,
     session: session,
     model: model
@@ -173,28 +175,42 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
                state
              )
 
+    # The reachable form of bytes that never became an accounted turn: the socket
+    # parses the frame, refuses it, and answers it on the spot, so nothing enters
+    # the queue. That is why the queue needs no clause for anything but a prepared
+    # frame (findings#192). The marker sits in the refused stream id, which the
+    # refusal itself never echoes.
+    assert {:push, {:text, refusal}, state} =
+             CodexResponsesSocket.handle_in(
+               {turn_frame(model, "#{@refused_marker}/not-a-stream-id"), [opcode: :text]},
+               state
+             )
+
+    assert %{"status" => 400, "error" => %{"param" => "stream_id"}} =
+             CodexPooler.JSON.decode!(refusal)
+
+    refute refusal =~ @refused_marker
+
+    # What the refusal proves, checked where it happens: no queue entry, no pending
+    # discard answer, and no copy of the refused frame anywhere in socket state.
+    # The queued turn's stream id is the positive control that the inspected state
+    # reaches into queue entries at all.
+    assert [%PreparedWebsocketFrame{}] = :queue.to_list(state.queued_response_payloads)
+    assert Map.get(state, :discarded_submission_terminals, []) == []
+
+    inspected_state = inspect(state, limit: :infinity, printable_limit: :infinity)
+    assert inspected_state =~ @first_stream_id
+    refute inspected_state =~ @refused_marker
+
     assert {:ok, queued_state} =
              CodexResponsesSocket.handle_in(
                {turn_frame(model, @second_stream_id), [opcode: :text]},
                state
              )
 
-    # `queue_prepared_response/2` is the only writer of this queue today and it
-    # only ever writes prepared frames, so the raw entry `start_queued_response/2`
-    # still accepts cannot be produced through `handle_in/2`. It is placed here
-    # directly, the way the findings#172 regression assembles a pending-handoff
-    # record the preflight cannot reach, because the whole point of the answer is
-    # that it must not treat queue bytes as an accounted turn.
-    raw_payload = turn_frame(model, @raw_marker)
-
-    queued_state =
-      Map.update!(
-        queued_state,
-        :queued_response_payloads,
-        &:queue.in(raw_payload, &1)
-      )
-
-    assert 3 == :queue.len(queued_state.queued_response_payloads)
+    # Three submissions, two queue entries: the refused one never reached it.
+    assert [%PreparedWebsocketFrame{}, %PreparedWebsocketFrame{}] =
+             :queue.to_list(queued_state.queued_response_payloads)
 
     assert {:push, frames, aborted_state} =
              CodexResponsesSocket.handle_info(
@@ -202,9 +218,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
                queued_state
              )
 
-    # Three queue entries, two terminals: the raw bytes changed nothing that was
-    # sent. The socket also stays open, which is the drain contract the raw entry
-    # must not be allowed to override.
+    # One terminal per queued turn. The socket also stays open: the abort's drain
+    # contract is not a submission's to override.
     assert [{:text, first_payload}, {:text, second_payload}] = frames
 
     assert Enum.map(frames, fn {:text, payload} ->
@@ -213,12 +228,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
 
     assert CodexPooler.JSON.decode!(first_payload)["error"]["code"] == "owner_unavailable"
     assert CodexPooler.JSON.decode!(second_payload)["error"]["code"] == "owner_unavailable"
-
-    # The raw payload was parked in the queue with a marker that would have to
-    # appear somewhere if it had been parsed into a turn and answered.
-    for {:text, payload} <- frames do
-      refute payload =~ @raw_marker
-    end
 
     assert :queue.is_empty(aborted_state.queued_response_payloads)
     assert aborted_state.tasks == MapSet.new([active_turn])
@@ -304,7 +313,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
       queued_response_payloads: :queue.new(),
       public_response_task_pid: active_turn,
       public_response_stream_id: @active_stream_id,
-      public_response_start_error_ref: nil,
       public_responses_websocket_state: nil,
       public_turn_task_done?: false,
       public_turn_owner_complete?: false,

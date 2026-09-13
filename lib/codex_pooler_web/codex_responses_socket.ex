@@ -288,22 +288,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> close_if_revoked_idle()
   end
 
-  def handle_info({:public_response_start_error, ref, reason}, state)
-      when is_reference(ref) do
-    if Map.get(state, :public_response_start_error_ref) == ref do
-      payload = encode_public_error(reason, state)
-
-      state =
-        state
-        |> Map.put(:public_response_start_error_ref, nil)
-        |> maybe_start_queued_response_task()
-
-      close_if_revoked_idle({:push, {:text, payload}, state})
-    else
-      {:ok, state}
-    end
-  end
-
   def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
     outcome = owner_monitor_handoff_outcome(reason)
 
@@ -623,7 +607,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:queued_response_payloads, :queue.new())
     |> Map.put(:public_response_task_pid, nil)
     |> Map.put(:public_response_stream_id, nil)
-    |> Map.put(:public_response_start_error_ref, nil)
     |> Map.put(:public_responses_websocket_state, nil)
     |> Map.put(:public_turn_task_done?, false)
     |> Map.put(:public_turn_owner_complete?, false)
@@ -2625,21 +2608,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp response_payload_blocked?(%PreparedWebsocketFrame{} = prepared, state) do
-    public_response_start_error_pending?(state) or
-      (public_response_payload?(prepared, state) and public_turn_open?(state)) or
+    (public_response_payload?(prepared, state) and public_turn_open?(state)) or
       (owner_forwarded_socket?(state) and active_response_task?(state)) or
       (active_response_task?(state) and continuity_ordered_prepared?(prepared))
   end
 
   defp maybe_start_queued_response_task(state) do
     if Map.get(state, :firewall_revoked?, false) or active_response_task?(state) or
-         public_turn_open?(state) or public_response_start_error_pending?(state) do
+         public_turn_open?(state) do
       state
     else
+      # `queue_prepared_response/2` is the only function that adds queue entries
+      # and it adds prepared frames, so the match is the queue's type rather than
+      # a filter. A raw-binary clause used to re-parse bytes here. Production
+      # queued raw payloads until queueing moved to prepared frames; after that
+      # only tests placed them, and the clause threw away the rejection push it
+      # got back, so an entry refused at dequeue would have gone unanswered. A
+      # foreign entry now raises instead (findings#192).
       case Map.get(state, :queued_response_payloads, :queue.new()) |> :queue.out() do
-        {{:value, prepared}, queue} ->
+        {{:value, %PreparedWebsocketFrame{} = prepared}, queue} ->
           state = Map.put(state, :queued_response_payloads, queue)
-          start_queued_response(prepared, state)
+          start_deferred_or_tracked_response(prepared, state)
 
         {:empty, _queue} ->
           state
@@ -2683,16 +2672,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
       {:error, reason} ->
         start_owner_retarget_error_task(owner_error(reason), prepared, state)
-    end
-  end
-
-  defp start_queued_response(%PreparedWebsocketFrame{} = prepared, state),
-    do: start_deferred_or_tracked_response(prepared, state)
-
-  defp start_queued_response(payload, state) when is_binary(payload) do
-    case prepare_and_dispatch_response(payload, state) do
-      {:ok, state} -> state
-      {:push, _frame, state} -> state
     end
   end
 
@@ -2861,9 +2840,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # own, and `abort_public_turn/2` can run any number of times on one socket
   # because `finish_public_turn/1` clears `public_turn_aborted?` again — so
   # writing `:queue.new()` inline left one live capability per discarded frame
-  # for the socket's whole life (findings#172). The second `release_dropped_frame/1`
-  # clause covers a raw entry, which only tests can construct; such an entry is
-  # prepared at dequeue and holds no capability yet.
+  # for the socket's whole life (findings#172). Every entry is a prepared frame
+  # holding a capability reference to give back. That is not a promise of a live
+  # parked capability: `queue_prepared_response/2` ignores the parking result and
+  # the capability may already be dead, in which case the release returns
+  # `{:error, :invalid}` and is ignored the same way.
   defp drop_queued_responses(state) do
     state
     |> Map.get(:queued_response_payloads, :queue.new())
@@ -2895,28 +2876,32 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp discarded_submission_error(:owner_drained), do: :owner_drained
   defp discarded_submission_error(_reason), do: :owner_unavailable
 
-  # The queue holds prepared frames and nothing else — `queue_prepared_response/2`
-  # is its only writer — so the second clause below defends the shape rather
-  # than a reachable case (findings#183; #175's body claimed the queue was
-  # heterogeneous and that claim was wrong). The invariant is pinned by
-  # `CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest`, because a
-  # future writer that queued raw bytes would have them dropped unanswered here
-  # — the exact silence findings#175 removed for prepared frames.
-  #
   # A prepared frame carries its own request and public stream identity, so it
   # gets the same bounded owner error `reject_prepared_response/2` gives a frame
   # refused at dispatch — addressed to the stream the frame itself opened, not
   # to whichever turn happened to be active when the discard ran.
   #
-  # A raw payload is only parsed at dequeue, so it has no turn identity at all:
-  # a terminal for one would invent a request that never reached reservation or
-  # accounting, and it cannot even be addressed to a stream. Its loss is
-  # recorded on the connection instead, through the same metadata-only line,
-  # and the connection-level failure the client sees is whatever the abort site
-  # itself already produces. Note that no production path can put a raw payload
-  # in this queue today — `queue_prepared_response/2` is its only writer and it
-  # writes prepared frames — so this clause defends the shape rather than a
-  # reachable case, and it must not invent a close the drain contract forbids.
+  # There is deliberately no clause for any other entry. `queue_prepared_response/2`
+  # is the only function that adds queue entries, and `put_pending_owner_handoff/4`
+  # is the only function that creates a handoff record; later writes to that
+  # record only bind `owner_turn_id` or clear it. Both take prepared frames, so a
+  # raw clause here would defend a shape nothing produces — and one did, until
+  # findings#192, where it was the reason three analyses read the queue as
+  # heterogeneous. A foreign entry now raises instead of being dropped unanswered,
+  # the silence findings#175 removed.
+  #
+  # On the pending-handoff path that raise also lands in `terminate/2`, which
+  # clears the handoff before any of its other cleanup: `release_dropped_frame/1`
+  # raises ahead of the response-task, websocket-session and upstream cleanup
+  # that follows, so a future second writer of the handoff record has to be
+  # reviewed with that cost in mind.
+  #
+  # `CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest` pins the shared
+  # writer for owner-forwarded public submissions (findings#183). On the other
+  # existing writer paths the shape is enforced by struct-only function heads:
+  # `dispatch_prepared_response/2`, `dispatch_owner_prepared_response/2`, and
+  # `response_payload_requires_queue?/2` ahead of every
+  # `start_or_queue_prepared_response/2` call. A new writer gets neither.
   defp answer_discarded_submission(state, %PreparedWebsocketFrame{} = prepared, reason) do
     error = owner_error(reason)
 
@@ -2950,11 +2935,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     )
   end
 
-  defp answer_discarded_submission(state, _raw_payload, reason) do
-    log_replay_rejection(state, reason, :discarded_submission)
-    state
-  end
-
   defp discarded_submission_stream_id(%PreparedWebsocketFrame{
          variant: :public_response_create,
          request_options: %RequestOptions{extra: extra}
@@ -2968,8 +2948,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     _released = WebsocketCodec.release_prepared_frame(prepared)
     :ok
   end
-
-  defp release_dropped_frame(_payload), do: :ok
 
   # A failed re-seal is always logged and always refuses the turn, instead of
   # returning the original frame and silently losing the runtime options it was
@@ -3094,10 +3072,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp public_turn_open?(state), do: is_pid(Map.get(state, :public_response_task_pid))
-
-  defp public_response_start_error_pending?(state) do
-    is_reference(Map.get(state, :public_response_start_error_ref))
-  end
 
   defp track_response_task(state, pid, monitor) when is_pid(pid) and is_reference(monitor) do
     state

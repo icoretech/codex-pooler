@@ -206,7 +206,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
       queued_response_payloads: :queue.new(),
       public_response_task_pid: nil,
       public_response_stream_id: nil,
-      public_response_start_error_ref: nil,
       public_responses_websocket_state: nil,
       public_turn_task_done?: false,
       public_turn_owner_complete?: false,
