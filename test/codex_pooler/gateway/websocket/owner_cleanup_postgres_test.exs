@@ -206,7 +206,7 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanupPostgresTest do
 
       on_exit(fn ->
         Sandbox.unboxed_run(Repo, fn ->
-          Repo.delete!(setup.pool)
+          CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
           Repo.delete!(setup.identity)
           Repo.delete!(setup.pricing)
         end)

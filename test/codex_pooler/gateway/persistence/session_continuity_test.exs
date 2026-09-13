@@ -24,7 +24,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   setup tags do
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     if tags[:session_start_race] do
       Application.put_env(
@@ -50,7 +50,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     end
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)

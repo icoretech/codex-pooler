@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   }
 
   @registry WebsocketOwnerSession.Registry
+  @timeout_env "CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS"
   @default_timeout_ms 50_000
   @drain_poll_interval_ms 200
   @owner_call_timeout_ms OwnerDefaults.owner_call_timeout_ms()
@@ -91,7 +92,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   @spec drain_for_shutdown() :: summary()
   def drain_for_shutdown do
-    timeout_ms = configured_timeout_ms()
+    timeout_ms = shutdown_timeout_ms()
 
     call_drain(
       [],
@@ -103,9 +104,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   @spec configured_timeout_ms() :: pos_integer()
   def configured_timeout_ms do
-    "CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS"
+    @timeout_env
     |> System.get_env()
     |> parse_timeout_ms()
+  end
+
+  # A release sets the shutdown budget through the environment or takes the default. Only the test
+  # configuration sets `:shutdown_timeout_ms`, and only while the environment variable is unset:
+  # `mix codex_pooler.test` stops the application before dropping a run-scoped database, and an
+  # owner a test leaked must not hold that exit for the release budget.
+  defp shutdown_timeout_ms do
+    configured =
+      :codex_pooler
+      |> Application.get_env(__MODULE__, [])
+      |> Keyword.get(:shutdown_timeout_ms)
+
+    case {System.get_env(@timeout_env), configured} do
+      {nil, timeout_ms} when is_integer(timeout_ms) and timeout_ms > 0 -> timeout_ms
+      _environment_or_default -> configured_timeout_ms()
+    end
   end
 
   @impl GenServer

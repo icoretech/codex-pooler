@@ -1458,13 +1458,8 @@ defmodule CodexPooler.Accounting.RollupsTest do
   # leak this one on a bad one.
   defp cleanup_unboxed_pool!(setup, rollup_date) do
     Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(
-        from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
-      )
-
-      Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date)
       Repo.delete_all(from request in Request, where: request.pool_id == ^setup.pool.id)
-      Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^setup.pool.id)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
 
       Repo.delete_all(
         from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
@@ -1474,6 +1469,14 @@ defmodule CodexPooler.Accounting.RollupsTest do
       Repo.delete_all(
         from snapshot in CodexPooler.Catalog.PricingSnapshot,
           where: snapshot.id == ^setup.pricing.id
+      )
+
+      # Last: deleting the day's requests and ledger rows invalidates its coverage again, which
+      # writes the coverage row back for the date.
+      Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date)
+
+      Repo.delete_all(
+        from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
       )
     end)
   end

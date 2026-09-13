@@ -8,14 +8,13 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
   alias CodexPooler.Gateway.Routing.{CircuitHealth, CircuitState}
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
   setup do
-    old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    old_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -30,7 +29,6 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     update_circuit_settings(%{"circuit_open_seconds" => 60, "circuit_half_open_probe_limit" => 1})
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, old_config)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -1278,8 +1276,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
   end
 
   defp cleanup_fixture(pool_id, upstream_identity_ids) do
-    pool = Repo.get(Pool, pool_id)
-    if pool, do: Repo.delete!(pool)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id])
 
     Repo.delete_all(
       from identity in UpstreamIdentity,

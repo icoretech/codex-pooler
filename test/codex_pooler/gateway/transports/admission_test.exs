@@ -16,7 +16,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
   end
 
   setup do
-    old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    old_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
     Admission.reset_for_test()
 
     Application.put_env(
@@ -33,7 +33,6 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
 
     on_exit(fn ->
       Admission.reset_for_test()
-      Application.put_env(:codex_pooler, OperationalSettings, old_config)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)

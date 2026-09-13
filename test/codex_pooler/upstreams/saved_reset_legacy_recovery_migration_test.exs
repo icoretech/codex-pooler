@@ -9,6 +9,7 @@ end
 
 defmodule CodexPooler.Upstreams.SavedResetLegacyRecoveryMigrationTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import ExUnit.CaptureLog, only: [with_log: 1]
 

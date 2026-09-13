@@ -1,5 +1,6 @@
 defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionRemoteTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
 

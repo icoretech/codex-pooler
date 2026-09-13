@@ -438,6 +438,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         )
       )
 
+    # Read before the keys go: the fixture owner is only recorded as their creator.
+    owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([pool_id])
+
     Repo.delete_all(
       from(entry in LedgerEntry,
         where: entry.pool_id == ^pool_id or entry.request_id in ^request_ids
@@ -505,7 +508,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       from(settings in CodexPooler.Pools.RoutingSettings, where: settings.pool_id == ^pool_id)
     )
 
-    Repo.delete_all(from(pool in CodexPooler.Pools.Pool, where: pool.id == ^pool_id))
+    CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id], owner_ids)
   end
 
   def gateway_setup(upstream, opts \\ []) do

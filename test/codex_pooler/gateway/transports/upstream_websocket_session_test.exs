@@ -5239,7 +5239,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   defp with_short_keepalive(opts \\ []) do
-    original_env = Application.get_env(:codex_pooler, UpstreamWebsocketSession, [])
+    original_env = CodexPooler.TestAppEnv.restore_on_exit(UpstreamWebsocketSession)
 
     settings =
       Keyword.merge(
@@ -5255,10 +5255,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       UpstreamWebsocketSession,
       Keyword.merge(original_env, settings)
     )
-
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, UpstreamWebsocketSession, original_env)
-    end)
   end
 
   defp start_raw_websocket_peer(opts \\ []) do

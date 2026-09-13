@@ -196,7 +196,7 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   end
 
   defp setup_trusted_proxies(trusted_proxies) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -205,8 +205,6 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
       |> Keyword.put(:settings, %OperationalSettings{trusted_proxies: trusted_proxies})
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp collect_repo_query_events(fun) when is_function(fun, 0) do

@@ -168,21 +168,25 @@ defmodule CodexPooler.InstanceSettingsTest do
   end
 
   setup do
-    previous = Application.get_env(:codex_pooler, InstanceSettings, [])
-    previous_cache = Application.get_env(:codex_pooler, Cache, [])
+    # `nil` when absent, so `restore_application_env/2` deletes the key instead of writing `[]`.
+    # The env restores stay ahead of the cache reset, as before: the cache reads `InstanceSettings`
+    # when it reloads and `Cache` when it restarts.
+    previous = Application.get_env(:codex_pooler, InstanceSettings)
+    previous_cache = Application.get_env(:codex_pooler, Cache)
     previous_test_timer = Application.get_env(:codex_pooler, TestTimer)
     previous_scripted_repo = Application.get_env(:codex_pooler, ScriptedRepo)
-    Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
-    Repo.delete_all(Settings)
-    InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, InstanceSettings, previous)
+      restore_application_env(InstanceSettings, previous)
       restore_application_env(Cache, previous_cache)
       InstanceSettings.reset_cache_for_test()
       restore_application_env(TestTimer, previous_test_timer)
       restore_application_env(ScriptedRepo, previous_scripted_repo)
     end)
+
+    Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous || [], :repo))
+    Repo.delete_all(Settings)
+    InstanceSettings.reset_cache_for_test()
 
     :ok
   end
@@ -797,7 +801,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "primed current/0 reads do not require a synchronous cache process call" do
     expected = InstanceSettings.current()
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       assert InstanceSettings.current() == expected
@@ -937,7 +941,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert InstanceSettings.current().lock_version == settings.lock_version
 
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       assert InstanceSettings.current().lock_version == settings.lock_version
@@ -951,7 +955,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert :ok = InstanceSettings.reset_cache_for_test()
 
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       assert InstanceSettings.current().source == :fallback_defaults
@@ -1037,7 +1041,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   @tag :failure_modes
   test "current/0 returns fallback defaults before the cache process starts" do
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       settings = InstanceSettings.current()
@@ -1222,6 +1226,14 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert InstanceSettings.current().lock_version == database_settings.lock_version
     :ok = Cache.subscribe_applied()
     flush_applied_events()
+
+    # Also on_exit, where it runs before the sandbox teardown restores the cache through this
+    # process: the ExUnit timeout kills the test before the restart below, and every later test
+    # in the run would find the cache stopped.
+    on_exit(fn ->
+      if is_nil(Process.whereis(Cache)),
+        do: Supervisor.restart_child(CodexPooler.Supervisor, Cache)
+    end)
 
     assert :ok = Supervisor.terminate_child(CodexPooler.Supervisor, Cache)
     :persistent_term.erase({Cache, :current})
@@ -1620,6 +1632,17 @@ defmodule CodexPooler.InstanceSettingsTest do
     after
       0 -> :ok
     end
+  end
+
+  # Also on_exit: the ExUnit timeout or a linked crash kills the test before its `after` re-registers
+  # the cache, and every later test in the run would find the cache process without its name.
+  defp hide_cache_name_until_exit!(cache) do
+    on_exit(fn ->
+      if is_pid(cache) and Process.alive?(cache) and is_nil(Process.whereis(Cache)),
+        do: Process.register(cache, Cache)
+    end)
+
+    Process.unregister(Cache)
   end
 
   defp restore_application_env(module, nil), do: Application.delete_env(:codex_pooler, module)

@@ -410,6 +410,18 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
 
   @spec configure_rollout_drain_server(GenServer.server()) :: :ok
   def configure_rollout_drain_server(drain_name) do
+    # Replaces the whole RolloutDrain config, `config/test.exs`'s shutdown bound included, so it is
+    # put back when the test exits; the stopped harness name must never reach the drain that runs
+    # when the test VM stops.
+    previous = Application.fetch_env(:codex_pooler, RolloutDrain)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      case previous do
+        {:ok, config} -> Application.put_env(:codex_pooler, RolloutDrain, config)
+        :error -> Application.delete_env(:codex_pooler, RolloutDrain)
+      end
+    end)
+
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
   end
 

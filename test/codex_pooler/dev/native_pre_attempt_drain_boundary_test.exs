@@ -1,5 +1,6 @@
 defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   alias CodexPooler.{Access, FakeUpstream, Repo}
@@ -34,7 +35,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
-        Repo.delete!(setup.pool)
+        CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
         Repo.delete!(setup.identity)
         Repo.delete!(setup.pricing)
       end)

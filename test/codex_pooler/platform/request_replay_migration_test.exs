@@ -1,5 +1,6 @@
 defmodule CodexPooler.RequestReplayMigrationTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox

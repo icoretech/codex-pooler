@@ -1,5 +1,6 @@
 defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
   import Ecto.Query
   import CodexPooler.AccountsFixtures, only: [committed_bootstrap_owner_fixture!: 0]
   import CodexPooler.RequestReplayFixtures

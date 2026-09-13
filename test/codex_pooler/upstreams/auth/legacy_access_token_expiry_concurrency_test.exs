@@ -1,5 +1,6 @@
 defmodule CodexPooler.Upstreams.Auth.LegacyAccessTokenExpiryConcurrencyTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures

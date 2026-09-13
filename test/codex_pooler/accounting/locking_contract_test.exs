@@ -5,7 +5,6 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Catalog.PricingSnapshot
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL
@@ -854,8 +853,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   defp cleanup_committed_membership_fixture!(fixture) do
     result =
       run_unboxed(fn ->
-        {pool_count, _} =
-          Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+        pool_count = CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
         identity_ids = [fixture.identity.id, fixture.alternate_identity.id]
 

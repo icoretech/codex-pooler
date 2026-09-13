@@ -1,5 +1,6 @@
 defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import CodexPooler.AccountingTestSupport
@@ -494,7 +495,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
   end
 
   defp cleanup_fixture(fixture) do
-    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id])
 
     Repo.delete_all(
       from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,

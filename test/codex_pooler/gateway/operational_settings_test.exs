@@ -10,8 +10,8 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
   alias CodexPooler.InstanceSettings.{Cache, Settings}
 
   setup do
-    previous_instance_settings = Application.get_env(:codex_pooler, InstanceSettings, [])
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_instance_settings = CodexPooler.TestAppEnv.restore_on_exit(InstanceSettings)
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -31,8 +31,6 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, InstanceSettings, previous_instance_settings)
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
       InstanceSettings.reset_cache_for_test()
     end)
 
@@ -488,29 +486,46 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     env_name = OperationalSettings.websocket_owner_forwarding_env_name()
     previous = System.get_env(env_name)
 
+    restore = fn ->
+      if is_nil(previous),
+        do: System.delete_env(env_name),
+        else: System.put_env(env_name, previous)
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
+
     if is_nil(value), do: System.delete_env(env_name), else: System.put_env(env_name, value)
 
     try do
       fun.()
     after
-      if is_nil(previous),
-        do: System.delete_env(env_name),
-        else: System.put_env(env_name, previous)
+      restore.()
     end
   end
 
   defp with_websocket_owner_forwarding_app_env(value, fun) do
-    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    previous = Application.fetch_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    restore = fn ->
+      case previous do
+        {:ok, value} ->
+          Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+
+        :error ->
+          Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
 
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
 
     try do
       fun.()
     after
-      case previous do
-        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
-        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
-      end
+      restore.()
     end
   end
 

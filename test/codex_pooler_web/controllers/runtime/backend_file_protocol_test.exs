@@ -14,7 +14,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
 
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
-    old_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+    CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 64,
@@ -26,10 +26,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
       finalize_retry_interval_ms: 0
     )
 
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, Files, old_config)
-      Application.put_env(:codex_pooler, FileBridge, old_bridge_config)
-    end)
+    on_exit(fn -> Application.put_env(:codex_pooler, Files, old_config) end)
 
     :ok
   end

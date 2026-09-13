@@ -28,12 +28,22 @@ defmodule CodexPooler.InstanceSettingsSandboxLifecycleTest do
   end
 
   test "sandbox teardown drains reconciliation even when the published settings are unchanged" do
-    previous_settings = Application.get_env(:codex_pooler, InstanceSettings, [])
+    previous_settings = Application.fetch_env(:codex_pooler, InstanceSettings)
     previous_cache = Cache.snapshot_for_test()
     owner = Sandbox.start_owner!(Repo, shared: true)
     cache = Process.whereis(Cache)
     parent = self()
     owner_monitor = Process.monitor(owner)
+
+    # Also on_exit: the ExUnit timeout kills the test before `after` runs, leaving the cache reading
+    # through BlockingRepo for a test process that is gone and the sandbox owner still checked out.
+    on_exit(fn ->
+      send(cache, :release_cache_connection)
+      restore_instance_settings_env(previous_settings)
+      Application.delete_env(:codex_pooler, BlockingRepo)
+      Cache.restore_for_test(previous_cache)
+      if Process.alive?(owner), do: Sandbox.stop_owner(owner)
+    end)
 
     try do
       :ok = Cache.put_for_test(InstanceSettings.ensure_singleton!())
@@ -78,7 +88,7 @@ defmodule CodexPooler.InstanceSettingsSandboxLifecycleTest do
       refute Process.alive?(owner)
     after
       send(cache, :release_cache_connection)
-      Application.put_env(:codex_pooler, InstanceSettings, previous_settings)
+      restore_instance_settings_env(previous_settings)
       Application.delete_env(:codex_pooler, BlockingRepo)
       Cache.restore_for_test(previous_cache)
       if Process.alive?(owner), do: Sandbox.stop_owner(owner)
@@ -115,6 +125,12 @@ defmodule CodexPooler.InstanceSettingsSandboxLifecycleTest do
       if Process.alive?(owner), do: Sandbox.stop_owner(owner)
     end
   end
+
+  defp restore_instance_settings_env({:ok, value}),
+    do: Application.put_env(:codex_pooler, InstanceSettings, value)
+
+  defp restore_instance_settings_env(:error),
+    do: Application.delete_env(:codex_pooler, InstanceSettings)
 
   defp await_teardown_call(teardown, cache, owner) do
     receive do

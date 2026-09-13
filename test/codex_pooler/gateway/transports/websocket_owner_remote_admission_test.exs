@@ -1,5 +1,6 @@
 defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
 
@@ -67,7 +68,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
-        Repo.delete!(fixture.pool)
+        CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
         Repo.delete!(fixture.identity)
         Repo.delete!(fixture.pricing)
         refute Repo.get(CodexSession, session.id)

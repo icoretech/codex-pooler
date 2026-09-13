@@ -11,9 +11,9 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
   alias CodexPooler.Status.FeedClient
 
   setup do
-    previous_instance_settings = Application.get_env(:codex_pooler, InstanceSettings, [])
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
-    previous_outbound_http = Application.get_env(:codex_pooler, OutboundHTTP, [])
+    previous_instance_settings = CodexPooler.TestAppEnv.restore_on_exit(InstanceSettings)
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
+    CodexPooler.TestAppEnv.restore_on_exit(OutboundHTTP)
 
     Application.put_env(
       :codex_pooler,
@@ -35,9 +35,6 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
     InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, InstanceSettings, previous_instance_settings)
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
-      Application.put_env(:codex_pooler, OutboundHTTP, previous_outbound_http)
       InstanceSettings.reset_cache_for_test()
     end)
 

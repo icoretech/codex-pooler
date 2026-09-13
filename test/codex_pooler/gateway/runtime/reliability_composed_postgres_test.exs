@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.ReliabilityComposedPostgresTest do
   use CodexPooler.DataCase, async: false
 
+  import CodexPooler.AccountsFixtures, only: [committed_bootstrap_owner_fixture!: 0]
+
   alias CodexPooler.{Access, Accounting, FakeUpstream, Repo, Upstreams}
   alias CodexPooler.Accounting.{Attempt, Request, RequestClientRetryLink}
   alias CodexPooler.ReliabilityComposedFixture, as: Fixture
@@ -14,10 +16,11 @@ defmodule CodexPooler.Gateway.Runtime.ReliabilityComposedPostgresTest do
 
   test "composed cleanup removes its pricing while preserving another fixture" do
     {:ok, fake} = FakeUpstream.start_link({:json, 200, %{"code" => "reset"}})
+    %{user: owner} = committed_bootstrap_owner_fixture!()
 
     Sandbox.unboxed_run(Repo, fn ->
-      fixture = Fixture.fixture!(fake)
-      other = Fixture.fixture!(fake)
+      fixture = Fixture.fixture!(fake, owner)
+      other = Fixture.fixture!(fake, owner)
       on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> Fixture.cleanup!(other) end) end)
       Fixture.cleanup!(fixture)
       refute Repo.get(CodexPooler.Catalog.PricingSnapshot, fixture.pricing.id)
@@ -29,7 +32,8 @@ defmodule CodexPooler.Gateway.Runtime.ReliabilityComposedPostgresTest do
 
   test "capacity, credential lifecycle and retry authorization converge after their shared writer commits" do
     {:ok, fake} = FakeUpstream.start_link({:json, 200, %{"code" => "reset"}})
-    setup = Sandbox.unboxed_run(Repo, fn -> Fixture.fixture!(fake) end)
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+    setup = Sandbox.unboxed_run(Repo, fn -> Fixture.fixture!(fake, owner) end)
     on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> Fixture.cleanup!(setup) end) end)
     predecessor = Sandbox.unboxed_run(Repo, fn -> Fixture.predecessor!(setup) end)
     old_credential_epoch = setup.sibling.metadata["credential_epoch"]

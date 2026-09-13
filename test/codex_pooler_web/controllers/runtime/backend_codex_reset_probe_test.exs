@@ -601,7 +601,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
   end
 
   defp setup_runtime_settings_override(%OperationalSettings{} = settings) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -610,7 +610,5 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
       |> Keyword.put(:settings, settings)
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 end

@@ -24,7 +24,6 @@ defmodule CodexPooler.CommittedFixtureCleanupProbe do
   import CodexPooler.UnboxedFixture
 
   alias CodexPooler.Catalog.PricingSnapshot
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   test "scoped cleanup" do
@@ -69,7 +68,7 @@ defmodule CodexPooler.CommittedFixtureCleanupProbe do
   # identity counts then fail in files that have nothing to do with this one -- which is the
   # very defect this probe exists to demonstrate.
   defp delete_fixture!(setup) do
-    Repo.delete_all(from pool in Pool, where: pool.id == ^setup.pool.id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
     Repo.delete_all(from pricing in PricingSnapshot, where: pricing.id == ^setup.pricing.id)
     Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^setup.identity.id)
     :ok

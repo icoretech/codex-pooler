@@ -125,6 +125,17 @@ defmodule CodexPooler.Platform.DNSClusterResolverTest do
   defp with_pod_ip(value, fun) do
     previous = System.get_env("POD_IP")
 
+    restore = fn ->
+      if previous do
+        System.put_env("POD_IP", previous)
+      else
+        System.delete_env("POD_IP")
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
+
     if value do
       System.put_env("POD_IP", value)
     else
@@ -134,11 +145,7 @@ defmodule CodexPooler.Platform.DNSClusterResolverTest do
     try do
       fun.()
     after
-      if previous do
-        System.put_env("POD_IP", previous)
-      else
-        System.delete_env("POD_IP")
-      end
+      restore.()
     end
   end
 end

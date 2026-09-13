@@ -15,7 +15,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Websocket, as: Gateway
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
@@ -351,7 +350,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   end
 
   defp delete_committed_fixture!(fixture) do
-    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
     Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
 

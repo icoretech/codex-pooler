@@ -25,6 +25,61 @@ defmodule CodexPooler.PoolerFixtures do
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  @doc """
+  Deletes committed Pools and what a Pool delete leaves behind, on the calling connection.
+
+  Deleting a Pool cascades to its API keys, sessions, requests, models and assignments. It only
+  clears `audit_events.pool_id`, never removes the `oban_jobs` enqueued for the Pool, and leaves the
+  instance owner `api_key_fixture/2` commits when the instance has none. This also deletes the audit
+  rows naming the Pools, the jobs whose args name them, and, through
+  `CodexPooler.AccountsFixtures.delete_unreferenced_fixture_owners!/1`, a fixture owner no remaining
+  row references, with the `api_key.create` audit rows it authored.
+
+  A caller that deletes the Pools' API keys itself first passes the `owner_ids` it read with
+  `api_key_creator_ids/1` beforehand. Returns the number of Pools deleted. Upstream identities,
+  their secrets and pricing snapshots stay the caller's to remove.
+  """
+  @spec delete_committed_pools!([Ecto.UUID.t()], [Ecto.UUID.t()] | nil) :: non_neg_integer()
+  def delete_committed_pools!(pool_ids, owner_ids \\ nil) when is_list(pool_ids) do
+    owner_ids = owner_ids || api_key_creator_ids(pool_ids)
+    dumped_pool_ids = Enum.map(pool_ids, &Ecto.UUID.dump!/1)
+
+    assignment_ids =
+      Repo.all(
+        from assignment in PoolUpstreamAssignment,
+          where: assignment.pool_id in ^pool_ids,
+          select: assignment.id
+      )
+
+    Repo.delete_all(from event in "audit_events", where: event.pool_id in ^dumped_pool_ids)
+
+    # Some workers name only the assignment, such as a saved-reset redemption.
+    Repo.delete_all(
+      from job in Oban.Job,
+        where:
+          fragment("?->>'pool_id'", job.args) in type(^pool_ids, {:array, :string}) or
+            fragment("?->>'pool_upstream_assignment_id'", job.args) in type(
+              ^assignment_ids,
+              {:array, :string}
+            )
+    )
+
+    {pool_count, _pools} = Repo.delete_all(from pool in Pool, where: pool.id in ^pool_ids)
+    CodexPooler.AccountsFixtures.delete_unreferenced_fixture_owners!(owner_ids)
+    pool_count
+  end
+
+  @doc "The users who created the API keys of `pool_ids`; a fixture owner is among them."
+  @spec api_key_creator_ids([Ecto.UUID.t()]) :: [Ecto.UUID.t()]
+  def api_key_creator_ids(pool_ids) when is_list(pool_ids) do
+    Repo.all(
+      from key in Access.APIKey,
+        where: key.pool_id in ^pool_ids and not is_nil(key.created_by_user_id),
+        distinct: true,
+        select: key.created_by_user_id
+    )
+  end
+
   def pool_fixture(attrs \\ %{}) do
     now = now()
     slug = Map.get(attrs, :slug, "pool-#{unique_suffix()}")

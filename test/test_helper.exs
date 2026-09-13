@@ -41,4 +41,8 @@ settings = CodexPooler.InstanceSettings.ensure_singleton!()
     CodexPooler.InstanceSettings.Cache.snapshot_for_test()
   )
 
+# Fails any guarded test that leaves committed rows behind. Started after the harness's own
+# committed row above, so that row is part of the baseline every test is compared with.
+:ok = CodexPooler.CommittedWriteGuard.start!()
+
 Ecto.Adapters.SQL.Sandbox.mode(CodexPooler.Repo, :manual)

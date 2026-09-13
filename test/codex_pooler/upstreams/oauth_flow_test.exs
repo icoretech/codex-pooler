@@ -275,7 +275,7 @@ defmodule CodexPooler.Upstreams.OAuthFlowTest do
     end
 
     test "start_browser_oauth requires pool operate capability before writing a flow" do
-      %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+      %{user: owner} = bootstrap_owner_fixture()
       %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
       admin_scope = Scope.for_user(admin)
       pool = pool_fixture()
@@ -470,7 +470,7 @@ defmodule CodexPooler.Upstreams.OAuthFlowTest do
     test "cancel_oauth_flow enforces flow pool authorization" do
       owner_scope = fixture_owner_scope()
       pool = pool_fixture()
-      %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+      %{user: owner} = bootstrap_owner_fixture()
       %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
       admin_scope = Scope.for_user(admin)
 
@@ -664,12 +664,12 @@ defmodule CodexPooler.Upstreams.OAuthFlowTest do
   end
 
   defp fixture_owner_scope do
-    %{user: user} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    %{user: user} = bootstrap_owner_fixture()
     Scope.for_user(user, ["instance_owner"])
   end
 
   defp fixture_unassigned_admin_scope do
-    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    %{user: owner} = bootstrap_owner_fixture()
     %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
     Scope.for_user(admin)
   end

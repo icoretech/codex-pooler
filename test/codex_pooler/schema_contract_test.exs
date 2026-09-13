@@ -1373,9 +1373,7 @@ defmodule CodexPooler.SchemaContractTest do
 
   @tag :replay_schema
   test "replay HMAC contracts use configured shared crypto and fail closed" do
-    previous = Application.get_env(:codex_pooler, CodexPooler.Upstreams, [])
-
-    on_exit(fn -> Application.put_env(:codex_pooler, CodexPooler.Upstreams, previous) end)
+    previous = CodexPooler.TestAppEnv.restore_on_exit(CodexPooler.Upstreams)
 
     key = :binary.copy(<<7>>, 32)
 

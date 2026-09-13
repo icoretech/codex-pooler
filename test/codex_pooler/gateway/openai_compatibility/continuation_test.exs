@@ -25,7 +25,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
 
   setup do
     old_files_config = Application.get_env(:codex_pooler, Files, [])
-    old_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+    CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 256,
@@ -37,10 +37,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       finalize_retry_interval_ms: 0
     )
 
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, Files, old_files_config)
-      Application.put_env(:codex_pooler, FileBridge, old_bridge_config)
-    end)
+    on_exit(fn -> Application.put_env(:codex_pooler, Files, old_files_config) end)
 
     :ok
   end

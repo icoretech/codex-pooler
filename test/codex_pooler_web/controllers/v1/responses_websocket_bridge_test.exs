@@ -99,15 +99,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp set_upstream_receive_timeout!(timeout_ms) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
     settings = %{OperationalSettings.current() | upstream_receive_timeout_ms: timeout_ms}
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: settings,
       use_instance_settings?: false
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp set_bridge_preflight_timeout!(timeout_ms) do

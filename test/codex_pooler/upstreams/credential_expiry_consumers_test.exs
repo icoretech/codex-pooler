@@ -362,7 +362,8 @@ defmodule CodexPooler.Upstreams.CredentialExpiryConsumersTest do
   end
 
   defp lifecycle_fixture(metadata) do
-    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    # Tests build several lifecycles, and the singleton admits one owner: every call gets that one.
+    %{user: owner} = bootstrap_owner_fixture()
     scope = Scope.for_user(owner, ["instance_owner"])
     pool = pool_fixture()
     identity = active_upstream_identity_fixture(metadata: metadata)

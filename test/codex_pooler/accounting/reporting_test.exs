@@ -5,7 +5,6 @@ defmodule CodexPooler.Accounting.ReportingTest do
 
   alias CodexPooler.Accounting.{DailyRollup, DailyRollupCoverage, Reporting, Rollups}
   alias CodexPooler.Admin.Stats.Aggregates
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -893,7 +892,7 @@ defmodule CodexPooler.Accounting.ReportingTest do
 
   defp cleanup_atomic_snapshot_fixture!(pool_id, identity_id, dates) do
     Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(from pool in Pool, where: pool.id == ^pool_id)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id])
 
       Repo.delete_all(
         from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,

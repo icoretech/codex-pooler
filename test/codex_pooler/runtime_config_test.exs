@@ -131,15 +131,22 @@ defmodule CodexPooler.RuntimeConfigTest do
   defp with_env(env, fun) do
     previous = Map.new(env, fn {key, _value} -> {key, System.get_env(key)} end)
 
+    restore = fn ->
+      Enum.each(previous, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
+
     Enum.each(env, fn {key, value} -> System.put_env(key, value) end)
 
     try do
       fun.()
     after
-      Enum.each(previous, fn
-        {key, nil} -> System.delete_env(key)
-        {key, value} -> System.put_env(key, value)
-      end)
+      restore.()
     end
   end
 end

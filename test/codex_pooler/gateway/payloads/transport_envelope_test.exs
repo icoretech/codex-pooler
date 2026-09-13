@@ -846,15 +846,22 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   defp with_operational_settings(%OperationalSettings{} = settings, fun) do
     previous = Application.fetch_env(:codex_pooler, OperationalSettings)
+
+    restore = fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:codex_pooler, OperationalSettings, value)
+        :error -> Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
     Application.put_env(:codex_pooler, OperationalSettings, settings: settings)
 
     try do
       fun.()
     after
-      case previous do
-        {:ok, value} -> Application.put_env(:codex_pooler, OperationalSettings, value)
-        :error -> Application.delete_env(:codex_pooler, OperationalSettings)
-      end
+      restore.()
     end
   end
 

@@ -25,7 +25,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
   @circuit_transition_event [:codex_pooler, :gateway, :routing, :circuit, :transition]
 
   setup do
-    old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    old_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -40,7 +40,6 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
     update_circuit_settings(%{"circuit_open_seconds" => 60, "circuit_half_open_probe_limit" => 1})
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, old_config)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -593,8 +592,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
 
   defp cleanup_fixture!(fixture) do
     Sandbox.unboxed_run(Repo, fn ->
-      pool = Repo.get(Pool, fixture.auth.pool.id)
-      if pool, do: Repo.delete!(pool)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.auth.pool.id])
 
       Repo.delete_all(
         from identity in UpstreamIdentity,

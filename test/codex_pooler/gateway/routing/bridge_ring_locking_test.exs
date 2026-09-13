@@ -475,7 +475,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
       Repo.delete_all(from row in schema, where: row.pool_id == ^fixture.pool.id)
     end
 
-    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^fixture.pool.id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
     Repo.delete_all(
       from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,

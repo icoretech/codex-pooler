@@ -1,5 +1,6 @@
 defmodule CodexPooler.Dev.NativeCompletionDrainTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
   import Plug.Test
   import Plug.Conn
   import CodexPoolerWeb.Runtime.AnchoredOwnerDrainSupport

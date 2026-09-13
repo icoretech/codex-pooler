@@ -22,7 +22,6 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   alias CodexPooler.Gateway.Routing.SessionContinuity, as: RoutingSessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -2630,8 +2629,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   end
 
   defp cleanup_fixture(pool_id, upstream_identity_ids) do
-    pool = Repo.get(Pool, pool_id)
-    if pool, do: Repo.delete!(pool)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id])
 
     Repo.delete_all(
       from identity in UpstreamIdentity,

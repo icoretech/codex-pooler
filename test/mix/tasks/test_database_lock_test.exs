@@ -1,5 +1,6 @@
 defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   alias CodexPooler.MixTasks.TestDatabaseLock
   alias CodexPooler.Repo
@@ -185,6 +186,15 @@ defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
     previous_namespace = System.get_env("CODEX_POOLER_TEST_RUN_NAMESPACE")
     previous_partition = System.get_env("MIX_TEST_PARTITION")
 
+    restore = fn ->
+      restore_env("CODEX_POOLER_TEST_RUN_NAMESPACE", previous_namespace)
+      restore_env("MIX_TEST_PARTITION", previous_partition)
+    end
+
+    # Also on_exit: the ExUnit timeout kills the test before `after` runs, and every later run
+    # of the config reader in this VM would resolve the namespaced database.
+    on_exit(restore)
+
     System.put_env("CODEX_POOLER_TEST_RUN_NAMESPACE", namespace)
     System.put_env("MIX_TEST_PARTITION", Integer.to_string(partition))
 
@@ -192,8 +202,7 @@ defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
       config = Config.Reader.read!("config/test.exs", env: :test)
       config[:codex_pooler][CodexPooler.Repo][:database]
     after
-      restore_env("CODEX_POOLER_TEST_RUN_NAMESPACE", previous_namespace)
-      restore_env("MIX_TEST_PARTITION", previous_partition)
+      restore.()
     end
   end
 

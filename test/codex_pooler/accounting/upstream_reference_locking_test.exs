@@ -8,7 +8,6 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry}
   alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Catalog.PricingSnapshot
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
 
@@ -994,7 +993,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   end
 
   defp delete_committed_fixture!(fixture) do
-    {pool_count, _} = Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+    pool_count = CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
     {identity_count, _} =
       Repo.delete_all(

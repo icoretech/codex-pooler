@@ -12,9 +12,9 @@ defmodule CodexPooler.CommittedFixtureCleanupTest do
   signal kills the untrapped test process before any enclosing `after` can run.
   """
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   alias CodexPooler.Catalog.PricingSnapshot
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
@@ -111,7 +111,7 @@ defmodule CodexPooler.CommittedFixtureCleanupTest do
     identity_ids = Enum.map(fixtures, & &1["identity_id"])
 
     Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(from pool in Pool, where: pool.id in ^pool_ids)
+      CodexPooler.PoolerFixtures.delete_committed_pools!(pool_ids)
       Repo.delete_all(from pricing in PricingSnapshot, where: pricing.id in ^pricing_ids)
       Repo.delete_all(from identity in UpstreamIdentity, where: identity.id in ^identity_ids)
     end)

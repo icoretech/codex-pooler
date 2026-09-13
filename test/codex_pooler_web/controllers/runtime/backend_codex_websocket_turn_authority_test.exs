@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnAuthorityTest do
   # the test, and only in the case whose claim is that the exact correlation id
   # still works.
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
@@ -192,6 +193,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnAuthorityTest do
   # The suite runs at :warning; the selector-refusal line is an :info the
   # production default level does emit, so raise it for this module only.
   defp with_interruption_info(fun) do
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(fn -> Logger.delete_module_level(Interruption) end)
     :ok = Logger.put_module_level(Interruption, :info)
 
     try do
@@ -219,7 +222,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnAuthorityTest do
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
-        Repo.delete!(setup.pool)
+        CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
         Repo.delete!(setup.identity)
         Repo.delete!(setup.pricing)
       end)

@@ -365,6 +365,10 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
 
       previous = Application.fetch_env!(:codex_pooler, CodexPoolerWeb.Endpoint)
 
+      # Also on_exit: the ExUnit timeout kills the test before `after` runs, and every later
+      # replay digest in the run would then fail closed without the endpoint secret.
+      on_exit(fn -> Application.put_env(:codex_pooler, CodexPoolerWeb.Endpoint, previous) end)
+
       Application.put_env(
         :codex_pooler,
         CodexPoolerWeb.Endpoint,

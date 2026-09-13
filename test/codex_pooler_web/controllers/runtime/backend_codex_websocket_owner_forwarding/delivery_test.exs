@@ -478,6 +478,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DeliveryTe
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     previous = Application.fetch_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(fn ->
+      case previous do
+        :error ->
+          Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+        {:ok, value} ->
+          Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
     parent = self()
 

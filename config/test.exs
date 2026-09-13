@@ -90,6 +90,14 @@ config :codex_pooler, CodexPoolerWeb.Endpoint,
   secret_key_base: "0W/ugDYhzDkRIy8rN1FLggPbDBZ7R1yROeLZfr3kArhi78yT+0Cm/5fqIk5ES3dm",
   server: false
 
+# `mix codex_pooler.test` stops the application before it drops a run-scoped database, and
+# stopping runs the websocket rollout drain. Without this, a websocket owner a test leaked holds
+# that exit for the release budget of 50 s. The drain's deadline margin collapses any budget this
+# short to its floor, so a leaked turn is aborted at once; the release environment variable still
+# takes precedence.
+config :codex_pooler, CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
+  shutdown_timeout_ms: 1_000
+
 config :codex_pooler, CodexPooler.Mailer, adapter: Swoosh.Adapters.Test
 config :codex_pooler, dev_features_build_enabled: true
 

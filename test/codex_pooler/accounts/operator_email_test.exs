@@ -8,15 +8,12 @@ defmodule CodexPooler.Accounts.OperatorEmailTest do
   alias CodexPooler.InstanceSettings.Settings
 
   setup do
-    previous = Application.get_env(:codex_pooler, InstanceSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(InstanceSettings)
     Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
     Repo.delete_all(Settings)
     InstanceSettings.reset_cache_for_test()
 
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, InstanceSettings, previous)
-      InstanceSettings.reset_cache_for_test()
-    end)
+    on_exit(fn -> InstanceSettings.reset_cache_for_test() end)
 
     :ok
   end

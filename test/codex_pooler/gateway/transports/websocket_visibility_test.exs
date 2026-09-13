@@ -16,7 +16,6 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Gateway.Websocket
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -475,7 +474,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
             where: entitlement.request_id == ^fixture.request.id
         )
 
-        Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+        CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
         Repo.delete_all(
           from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id

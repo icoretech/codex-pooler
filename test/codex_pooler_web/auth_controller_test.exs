@@ -633,7 +633,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
   defp setup_trusted_proxies(trusted_proxies) do
     settings = %OperationalSettings{trusted_proxies: trusted_proxies}
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -642,8 +642,6 @@ defmodule CodexPoolerWeb.AuthControllerTest do
       |> Keyword.put(:settings, settings)
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp extracted_page_title(html) do

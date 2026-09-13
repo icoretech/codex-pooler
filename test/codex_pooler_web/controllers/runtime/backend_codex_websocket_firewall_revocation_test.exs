@@ -565,6 +565,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       false ->
         ensure_epmd_started!()
         previous_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
+        # Also on_exit: the ExUnit timeout kills the test before its peer cleanup is registered.
+        on_exit(fn -> restore_partition_guard(previous_partition_guard) end)
 
         distribution = %{
           node_started?: true,

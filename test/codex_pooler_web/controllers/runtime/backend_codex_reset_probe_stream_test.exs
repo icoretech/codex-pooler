@@ -418,7 +418,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
   end
 
   defp setup_runtime_timeout(timeout_ms) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -427,8 +427,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
       |> Keyword.put(:settings, %OperationalSettings{upstream_receive_timeout_ms: timeout_ms})
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp expire_reset_probe!(%UpstreamIdentity{} = identity) do

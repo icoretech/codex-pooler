@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
   """
 
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import ExUnit.Assertions
@@ -597,6 +598,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
       false ->
         ensure_epmd_started!()
         previous_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
+        # Also on_exit: a failure before the peer's cleanup is registered leaves the guard off.
+        on_exit(fn -> restore_partition_guard(previous_partition_guard) end)
         Application.put_env(:kernel, :prevent_overlapping_partitions, false)
 
         node_name =

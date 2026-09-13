@@ -408,7 +408,8 @@ defmodule CodexPooler.Jobs.AlertDeliveryJobTest do
   end
 
   defp alert_delivery_fixture(opts \\ []) do
-    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    # Tests build several deliveries, and the singleton admits one owner: every call gets that one.
+    %{user: owner} = bootstrap_owner_fixture()
     scope = Scope.for_user(owner, ["instance_owner"])
     channel_type = Keyword.get(opts, :channel_type, :email)
 

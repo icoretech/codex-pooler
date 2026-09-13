@@ -633,7 +633,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     # assertions elsewhere in the file keep an empty baseline.
     pool_id = setup.pool.id
     identity_id = setup.identity.id
-    on_exit(fn -> purge_committed_pool_rows!(pool_id, identity_id) end)
+    pricing_id = setup.pricing.id
+    on_exit(fn -> purge_committed_pool_rows!(pool_id, identity_id, pricing_id) end)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
@@ -846,7 +847,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
   end
 
   # Removes every row an auto-mode test committed for its Pool, children first.
-  defp purge_committed_pool_rows!(pool_id, identity_id) do
+  defp purge_committed_pool_rows!(pool_id, identity_id, pricing_id) do
     Sandbox.unboxed_run(Repo, fn ->
       request_ids = Repo.all(from(r in Request, where: r.pool_id == ^pool_id, select: r.id))
       session_ids = Repo.all(from(s in CodexSession, where: s.pool_id == ^pool_id, select: s.id))
@@ -867,6 +868,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
       Repo.delete_all(from(f in RequestLogFact, where: f.request_id in ^request_ids))
       Repo.delete_all(from(r in Request, where: r.pool_id == ^pool_id))
       Repo.delete_all(from(s in CodexSession, where: s.pool_id == ^pool_id))
+      # Read before the keys go: the fixture owner is only recorded as their creator.
+      owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([pool_id])
       Repo.delete_all(from(k in APIKey, where: k.pool_id == ^pool_id))
 
       Repo.delete_all(
@@ -875,7 +878,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
         )
       )
 
-      Repo.delete_all(from(p in CodexPooler.Pools.Pool, where: p.id == ^pool_id))
+      CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id], owner_ids)
 
       Repo.delete_all(
         from(s in CodexPooler.Upstreams.Schemas.EncryptedSecret,
@@ -884,6 +887,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
       )
 
       Repo.delete_all(from(i in UpstreamIdentity, where: i.id == ^identity_id))
+      Repo.delete_all(from(p in CodexPooler.Catalog.PricingSnapshot, where: p.id == ^pricing_id))
     end)
 
     :ok

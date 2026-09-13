@@ -33,15 +33,13 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   end
 
   setup do
-    previous = Application.get_env(:codex_pooler, InstanceSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(InstanceSettings)
     previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings)
     Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
     Repo.delete_all(Settings)
     InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, InstanceSettings, previous)
-
       if previous_operational_settings do
         Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
       else

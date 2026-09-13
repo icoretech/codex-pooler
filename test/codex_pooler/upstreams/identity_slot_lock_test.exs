@@ -1,5 +1,6 @@
 defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import CodexPooler.PoolerFixtures
   import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]

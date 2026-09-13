@@ -140,6 +140,16 @@ defmodule CodexPooler.TestRuntimeDatabaseConfigTest do
   defp with_env(values, fun) when is_map(values) do
     previous = Map.new(values, fn {key, _value} -> {key, System.get_env(key)} end)
 
+    restore = fn ->
+      Enum.each(previous, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
+
     Enum.each(values, fn
       {key, nil} -> System.delete_env(key)
       {key, value} -> System.put_env(key, value)
@@ -148,10 +158,7 @@ defmodule CodexPooler.TestRuntimeDatabaseConfigTest do
     try do
       fun.()
     after
-      Enum.each(previous, fn
-        {key, nil} -> System.delete_env(key)
-        {key, value} -> System.put_env(key, value)
-      end)
+      restore.()
     end
   end
 end

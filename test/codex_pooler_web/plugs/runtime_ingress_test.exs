@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   setup do
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -51,7 +51,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -1600,7 +1599,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   defp setup_runtime_ingress_override(%OperationalSettings{} = settings) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -1609,12 +1608,18 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       |> Keyword.put(:settings, settings)
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp with_cache_unregistered(fun) when is_function(fun, 0) do
     cache = Process.whereis(Cache)
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs, and
+    # every later test in the run would find the cache process without its name.
+    on_exit(fn ->
+      if is_pid(cache) and Process.alive?(cache) and is_nil(Process.whereis(Cache)),
+        do: Process.register(cache, Cache)
+    end)
+
     Process.unregister(Cache)
 
     try do

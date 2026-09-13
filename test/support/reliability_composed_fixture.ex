@@ -12,10 +12,12 @@ defmodule CodexPooler.ReliabilityComposedFixture do
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
-  def fixture!(fake) do
+  # `owner` comes from `AccountsFixtures.committed_bootstrap_owner_fixture!/1`, called from the test
+  # process before this commits anything: this fixture runs outside the sandbox, and an owner it
+  # bootstrapped itself would outlive the test.
+  def fixture!(fake, %CodexPooler.Accounts.User{} = owner) do
     setup = gateway_setup(fake)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    %{user: owner} = CodexPooler.AccountsFixtures.bootstrap_owner_fixture()
     sibling = active_upstream_assignment_fixture(setup.pool, %{})
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -177,7 +179,7 @@ defmodule CodexPooler.ReliabilityComposedFixture do
   end
 
   def cleanup!(setup) do
-    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^setup.pool.id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
 
     Repo.delete_all(
       from i in UpstreamIdentity, where: i.id in ^[setup.identity.id, setup.sibling.id]

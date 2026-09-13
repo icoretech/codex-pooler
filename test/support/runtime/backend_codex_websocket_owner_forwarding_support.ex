@@ -1418,7 +1418,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   def with_proxy_websocket_bulkhead(queue_limit, queue_timeout_ms, fun)
       when is_integer(queue_limit) and queue_limit >= 0 and is_integer(queue_timeout_ms) and
              queue_timeout_ms > 0 and is_function(fun, 0) do
-    previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
+    previous_settings = Application.fetch_env(:codex_pooler, OperationalSettings)
+
+    restore = fn ->
+      Admission.reset_for_test()
+
+      case previous_settings do
+        {:ok, value} -> Application.put_env(:codex_pooler, OperationalSettings, value)
+        :error -> Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: %OperationalSettings{
@@ -1439,12 +1451,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     try do
       fun.()
     after
-      Admission.reset_for_test()
-
-      case previous_settings do
-        nil -> Application.delete_env(:codex_pooler, OperationalSettings)
-        value -> Application.put_env(:codex_pooler, OperationalSettings, value)
-      end
+      restore.()
     end
   end
 

@@ -7956,20 +7956,23 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp cleanup_committed_transient_fixture!(pool_id, identity_ids) do
     Sandbox.unboxed_run(Repo, fn ->
+      owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([pool_id])
       delete_pool_if_present!(pool_id)
 
       Repo.delete_all(
         from identity in UpstreamIdentity,
           where: identity.id in ^identity_ids
       )
+
+      # The identities can still name the fixture owner as their creator when the Pool goes, so
+      # the owner is only unreferenced once they are gone too.
+      CodexPooler.AccountsFixtures.delete_unreferenced_fixture_owners!(owner_ids)
     end)
   end
 
   defp delete_pool_if_present!(pool_id) do
-    case Repo.get(Pool, pool_id) do
-      %Pool{} = pool -> Repo.delete!(pool)
-      nil -> :ok
-    end
+    CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id])
+    :ok
   end
 
   defp handle_probe_completion_lock(metadata, parent, barrier) do
@@ -8556,14 +8559,16 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp cleanup_committed_post_consume_finalizer_fixture!(fixture) do
     assert %{identities: 1, pools: 1} ==
              run_unboxed(fn ->
+               owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([fixture.pool_id])
+
                {identity_count, _rows} =
                  Repo.delete_all(
                    from identity in UpstreamIdentity,
                      where: identity.id == ^fixture.identity_id
                  )
 
-               {pool_count, _rows} =
-                 Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+               pool_count =
+                 CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id], owner_ids)
 
                %{identities: identity_count, pools: pool_count}
              end)

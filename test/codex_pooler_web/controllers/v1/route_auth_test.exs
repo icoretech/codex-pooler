@@ -734,6 +734,14 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     File.mkdir_p!(tmp_root)
 
     previous_upload_term = :persistent_term.get(Plug.Upload)
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs, and
+    # every later upload in the run would target the directory this test removes.
+    on_exit(fn ->
+      :persistent_term.put(Plug.Upload, previous_upload_term)
+      File.rm_rf!(tmp_root)
+    end)
+
     :persistent_term.put(Plug.Upload, {[tmp_root], "test-upload-suffix"})
     :ets.delete(Plug.Upload.Dir, self())
     :ets.delete(Plug.Upload.Path, self())

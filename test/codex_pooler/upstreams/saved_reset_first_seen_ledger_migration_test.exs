@@ -11,6 +11,7 @@ end
 
 defmodule CodexPooler.Upstreams.SavedResetFirstSeenLedgerMigrationTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import ExUnit.CaptureLog, only: [with_log: 1]
 

@@ -389,7 +389,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
   end
 
   defp with_gateway_debug(fun) do
-    previous_env = Application.get_env(:codex_pooler, OperationalSettings)
+    previous_env = Application.fetch_env(:codex_pooler, OperationalSettings)
+
+    restore = fn ->
+      case previous_env do
+        {:ok, value} -> Application.put_env(:codex_pooler, OperationalSettings, value)
+        :error -> Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: %OperationalSettings{gateway_debug?: true}
@@ -398,9 +408,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
     try do
       fun.()
     after
-      if previous_env,
-        do: Application.put_env(:codex_pooler, OperationalSettings, previous_env),
-        else: Application.delete_env(:codex_pooler, OperationalSettings)
+      restore.()
     end
   end
 end

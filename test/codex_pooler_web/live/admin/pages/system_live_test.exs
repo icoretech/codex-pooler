@@ -1645,7 +1645,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   test "saving X-Forwarded-For depth changes the next runtime request without restart", %{
     conn: conn
   } do
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -1654,10 +1654,6 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       |> Keyword.delete(:settings)
       |> Keyword.put(:use_instance_settings?, true)
     )
-
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
-    end)
 
     assert {:ok, _settings} =
              InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{

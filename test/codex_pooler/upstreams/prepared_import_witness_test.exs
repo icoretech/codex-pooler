@@ -351,15 +351,14 @@ defmodule CodexPooler.Upstreams.PreparedImportWitnessTest do
   end
 
   test "sealed import witnesses validate on the shared configured key and reject key rotation" do
-    previous = Application.get_env(:codex_pooler, CodexPoolerWeb.Endpoint)
+    previous = Application.fetch_env!(:codex_pooler, CodexPoolerWeb.Endpoint)
+    on_exit(fn -> restore_endpoint_config(previous) end)
 
     Application.put_env(
       :codex_pooler,
       CodexPoolerWeb.Endpoint,
       Keyword.put(previous, :secret_key_base, "prepared-import-witness-key")
     )
-
-    on_exit(fn -> restore_endpoint_config(previous) end)
 
     scope = owner_scope()
 
@@ -382,13 +381,12 @@ defmodule CodexPooler.Upstreams.PreparedImportWitnessTest do
 
   test "public imports preserve invalid upstream secret key errors after witness preparation" do
     previous = Application.get_env(:codex_pooler, CodexPooler.Upstreams)
+    on_exit(fn -> restore_upstream_config(previous) end)
 
     Application.put_env(:codex_pooler, CodexPooler.Upstreams,
       upstream_secret_key: "invalid",
       upstream_secret_key_version: "invalid"
     )
-
-    on_exit(fn -> restore_upstream_config(previous) end)
 
     scope = owner_scope()
 
@@ -400,15 +398,14 @@ defmodule CodexPooler.Upstreams.PreparedImportWitnessTest do
   end
 
   test "invalid configured secret key base rejects import witness preparation" do
-    previous = Application.get_env(:codex_pooler, CodexPoolerWeb.Endpoint)
+    previous = Application.fetch_env!(:codex_pooler, CodexPoolerWeb.Endpoint)
+    on_exit(fn -> restore_endpoint_config(previous) end)
 
     Application.put_env(
       :codex_pooler,
       CodexPoolerWeb.Endpoint,
       Keyword.put(previous, :secret_key_base, "")
     )
-
-    on_exit(fn -> restore_endpoint_config(previous) end)
 
     scope = owner_scope()
 

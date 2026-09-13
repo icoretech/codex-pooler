@@ -1,5 +1,6 @@
 defmodule CodexPooler.Accounting.UsageSettlementPostgresTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import CodexPooler.AccountingTestSupport

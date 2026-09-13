@@ -1,5 +1,6 @@
 defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
   import Ecto.Query
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{LedgerEntry, Request, RequestLogFact}
@@ -168,7 +169,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
 
       on_exit(fn ->
         Sandbox.unboxed_run(Repo, fn ->
-          Repo.delete!(setup.pool)
+          CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
           Repo.delete!(setup.identity)
           Repo.delete!(setup.pricing)
         end)

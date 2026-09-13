@@ -1,5 +1,6 @@
 defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import CodexPoolerWeb.Runtime.AnchoredOwnerDrainSupport

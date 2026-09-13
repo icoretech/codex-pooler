@@ -80,7 +80,7 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShapeTest do
   end
 
   test "debug payload summary omits standalone identity previews and raw values" do
-    previous_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -89,8 +89,6 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShapeTest do
       |> Keyword.put(:settings, %OperationalSettings{gateway_debug?: true})
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous_config) end)
 
     payload = %{
       "input" => [
@@ -145,7 +143,7 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShapeTest do
 
   @tag :structured_tool_result_pass_through
   test "debug payload summary keeps structured tool output shape-only" do
-    previous_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -154,10 +152,6 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShapeTest do
       |> Keyword.put(:settings, %OperationalSettings{gateway_debug?: true})
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, previous_config)
-    end)
 
     previous_response_id = "resp_payload_shape_previous"
     call_id = "call_payload_shape_structured"

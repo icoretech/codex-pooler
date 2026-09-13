@@ -12132,7 +12132,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   defp setup_runtime_ingress_override(%OperationalSettings{} = settings) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -12141,8 +12141,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       |> Keyword.put(:settings, settings)
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp overloaded_bulkhead_settings(queue_limit \\ 0, queue_timeout_ms \\ 25) do

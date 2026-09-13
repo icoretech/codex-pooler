@@ -17,6 +17,7 @@ defmodule CodexPooler.DataCase do
   use ExUnit.CaseTemplate
 
   alias CodexPooler.Access.APIKeys.TouchDebounce
+  alias CodexPooler.CommittedWriteGuard
   alias CodexPooler.InstanceSettings
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
@@ -46,9 +47,19 @@ defmodule CodexPooler.DataCase do
   Handing the published entry back keeps every test's cache consistent with the
   database it can actually see; otherwise a leaked version makes later tests
   ignore their own settings broadcasts as stale.
+
+  It also puts the test under `CodexPooler.CommittedWriteGuard`, which fails
+  the test when it leaves committed rows behind.
   """
   def setup_sandbox(tags) do
+    guard = CommittedWriteGuard.begin_test!(tags)
     pid = Sandbox.start_owner!(Repo, shared: not tags[:async])
+
+    # Registered before every other `on_exit` of the test so that it runs after
+    # all of them: after the sandbox owner stops and after each cleanup the test
+    # registers. The owner's own sandbox calls above belong to the harness.
+    :ok = CommittedWriteGuard.register_verify!(guard)
+
     settings_cache = InstanceSettings.snapshot_cache_for_test()
 
     on_exit(fn -> stop_sandbox(pid, settings_cache) end)

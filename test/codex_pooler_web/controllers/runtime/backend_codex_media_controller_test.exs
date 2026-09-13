@@ -19,15 +19,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
   describe "Codex backend media endpoints" do
     setup do
-      previous = Application.get_env(:codex_pooler, InstanceSettings, [])
+      previous = CodexPooler.TestAppEnv.restore_on_exit(InstanceSettings)
       Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
 
-      on_exit(fn ->
-        Application.put_env(:codex_pooler, InstanceSettings, previous)
-        InstanceSettings.reset_cache_for_test()
-      end)
+      on_exit(fn -> InstanceSettings.reset_cache_for_test() end)
 
       :ok
     end
@@ -501,6 +498,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
     File.mkdir_p!(tmp_root)
 
     previous_upload_term = :persistent_term.get(Plug.Upload)
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs, and
+    # every later upload in the run would target the directory this test removes.
+    on_exit(fn ->
+      :persistent_term.put(Plug.Upload, previous_upload_term)
+      File.rm_rf!(tmp_root)
+    end)
+
     :persistent_term.put(Plug.Upload, {[tmp_root], "test-upload-suffix"})
     :ets.delete(Plug.Upload.Dir, self())
     :ets.delete(Plug.Upload.Path, self())

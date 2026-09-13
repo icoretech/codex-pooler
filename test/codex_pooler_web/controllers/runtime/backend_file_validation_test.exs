@@ -18,7 +18,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileValidationTest do
 
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
-    old_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+    CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 64,
@@ -30,10 +30,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileValidationTest do
       finalize_retry_interval_ms: 0
     )
 
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, Files, old_config)
-      Application.put_env(:codex_pooler, FileBridge, old_bridge_config)
-    end)
+    on_exit(fn -> Application.put_env(:codex_pooler, Files, old_config) end)
 
     :ok
   end
@@ -474,6 +471,14 @@ defmodule CodexPoolerWeb.Runtime.BackendFileValidationTest do
     File.mkdir_p!(tmp_root)
 
     previous_upload_term = :persistent_term.get(Plug.Upload)
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs, and
+    # every later upload in the run would target the directory this test removes.
+    on_exit(fn ->
+      :persistent_term.put(Plug.Upload, previous_upload_term)
+      File.rm_rf!(tmp_root)
+    end)
+
     :persistent_term.put(Plug.Upload, {[tmp_root], "test-upload-suffix"})
     :ets.delete(Plug.Upload.Dir, self())
     :ets.delete(Plug.Upload.Path, self())

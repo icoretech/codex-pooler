@@ -1,5 +1,6 @@
 defmodule CodexPooler.MixTasks.TestDatabasePruneTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   alias CodexPooler.MixTasks.{TestDatabaseLock, TestDatabasePrune}
   alias CodexPooler.Repo
@@ -100,13 +101,18 @@ defmodule CodexPooler.MixTasks.TestDatabasePruneTest do
         &{&1, System.get_env(&1)}
       )
 
+    restore = fn -> Enum.each(previous, fn {key, value} -> put_env(key, value) end) end
+
+    # Also on_exit: the ExUnit timeout kills the test before `after` runs.
+    on_exit(restore)
+
     put_env("CODEX_POOLER_TEST_RUN_NAMESPACE", namespace)
     put_env("MIX_TEST_PARTITION", partition)
 
     try do
       Config.Reader.read!("config/test.exs", env: :test)[:codex_pooler][Repo][:database]
     after
-      Enum.each(previous, fn {key, value} -> put_env(key, value) end)
+      restore.()
     end
   end
 

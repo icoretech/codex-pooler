@@ -881,10 +881,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
     FakeUpstream.stop(fixture.fake)
 
     Sandbox.unboxed_run(Repo, fn ->
-      case Repo.get(Pool, fixture.pool_id) do
-        %Pool{} = pool -> Repo.delete!(pool)
-        nil -> :ok
-      end
+      CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id])
 
       identity_ids = [fixture.target_assignment.upstream_identity_id, fixture.sibling_identity_id]
       Repo.delete_all(from(identity in UpstreamIdentity, where: identity.id in ^identity_ids))
