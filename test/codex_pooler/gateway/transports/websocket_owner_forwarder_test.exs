@@ -29,6 +29,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.ResponseTask
+  alias CodexPooler.PeerRegistry
   alias CodexPoolerWeb.CodexResponsesSocket
 
   @epmd_ready_timeout_ms 2_000
@@ -3680,26 +3681,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"], stderr_to_stdout: true)
-        await_epmd!(System.monotonic_time(:millisecond) + @epmd_ready_timeout_ms)
+
+        PeerRegistry.assert_epmd_ready!(
+          budget_ms: @epmd_ready_timeout_ms,
+          poll_ms: @epmd_ready_poll_ms
+        )
+
         true
-    end
-  end
-
-  defp await_epmd!(deadline) do
-    case :erl_epmd.names() do
-      {:ok, _names} -> :ok
-      {:error, _reason} = error -> retry_epmd_readiness!(error, deadline)
-    end
-  end
-
-  defp retry_epmd_readiness!(error, deadline) do
-    if System.monotonic_time(:millisecond) < deadline do
-      receive do
-      after
-        @epmd_ready_poll_ms -> await_epmd!(deadline)
-      end
-    else
-      flunk("EPMD did not become ready: #{inspect(error)}")
     end
   end
 

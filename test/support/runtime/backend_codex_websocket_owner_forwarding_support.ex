@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -256,7 +257,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
     on_exit(fn ->
       if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
-      await_peer_down!(peer_name, peer_node)
+
+      PeerRegistry.assert_peer_absent!(peer_name,
+        peer_node: peer_node,
+        budget_ms: @handoff_detection_timeout_ms
+      )
     end)
 
     assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
@@ -437,24 +442,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"], stderr_to_stdout: true)
-        await_epmd!(System.monotonic_time(:millisecond) + @epmd_ready_timeout_ms)
-    end
-  end
 
-  defp await_epmd!(deadline) do
-    case :erl_epmd.names() do
-      {:ok, _names} ->
+        PeerRegistry.assert_epmd_ready!(
+          budget_ms: @epmd_ready_timeout_ms,
+          poll_ms: @epmd_ready_poll_ms
+        )
+
         :ok
-
-      {:error, _reason} = error ->
-        if System.monotonic_time(:millisecond) < deadline do
-          receive do
-          after
-            @epmd_ready_poll_ms -> await_epmd!(deadline)
-          end
-        else
-          flunk("EPMD did not become ready: #{inspect(error)}")
-        end
     end
   end
 
@@ -505,31 +499,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   end
 
   defp remote_node_connected?(peer_node), do: peer_node in Node.list(:connected)
-
-  defp await_peer_down!(peer_name, peer_node),
-    do:
-      await_peer_down!(
-        peer_name,
-        peer_node,
-        System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms
-      )
-
-  defp await_peer_down!(peer_name, peer_node, deadline) do
-    {:ok, names} = :erl_epmd.names()
-
-    if peer_node not in Node.list(:connected) and
-         not Enum.any?(names, fn {name, _port} -> name == Atom.to_charlist(peer_name) end) do
-      :ok
-    else
-      remaining = deadline - System.monotonic_time(:millisecond)
-      assert remaining > 0, "peer did not stop"
-
-      receive do
-      after
-        min(@epmd_ready_poll_ms, remaining) -> await_peer_down!(peer_name, peer_node, deadline)
-      end
-    end
-  end
 
   def receive_receiver_delivery_gap_result(task_pid, state) do
     receive do
@@ -748,6 +717,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
   def capture_info_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do
@@ -763,6 +734,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   @dialyzer {:no_return, capture_websocket_lifecycle_log: 1}
   def capture_websocket_lifecycle_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do

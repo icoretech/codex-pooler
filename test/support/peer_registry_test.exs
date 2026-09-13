@@ -93,6 +93,48 @@ defmodule CodexPooler.PeerRegistryTest do
     refute detail.connected
   end
 
+  test "a peer that never leaves fails the assertion with the budget it spent" do
+    error =
+      assert_raise ExUnit.AssertionError, fn ->
+        PeerRegistry.assert_peer_absent!(@peer,
+          names_fun: fn -> @registered end,
+          budget_ms: 60,
+          poll_ms: 10
+        )
+      end
+
+    assert error.message =~ "over the 60ms detection budget"
+    assert error.message =~ "still registered with epmd: true"
+  end
+
+  test "epmd readiness keeps polling unreadable replies instead of sampling once" do
+    names = replies([{:error, :address}, {:error, :address}, @absent])
+
+    assert {:ok, detail} =
+             PeerRegistry.await_epmd_ready(names_fun: names, budget_ms: 5_000, poll_ms: 5)
+
+    assert detail.samples == 3
+    assert detail.elapsed_ms < 5_000
+  end
+
+  test "an epmd that never answers times out on the budget and the assertion names it" do
+    unreadable = fn -> {:error, :address} end
+
+    assert {:timeout, detail} =
+             PeerRegistry.await_epmd_ready(names_fun: unreadable, budget_ms: 120, poll_ms: 10)
+
+    assert detail.budget_ms == 120
+    assert detail.elapsed_ms >= 120
+    assert detail.samples > 1
+
+    error =
+      assert_raise ExUnit.AssertionError, fn ->
+        PeerRegistry.assert_epmd_ready!(names_fun: unreadable, budget_ms: 60, poll_ms: 10)
+      end
+
+    assert error.message =~ "within the 60ms detection budget"
+  end
+
   defp replies(list) do
     {:ok, agent} = Agent.start_link(fn -> list end)
 

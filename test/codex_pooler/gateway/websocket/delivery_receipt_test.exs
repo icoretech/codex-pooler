@@ -206,6 +206,8 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptTest do
 
   defp with_info_log(fun) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do

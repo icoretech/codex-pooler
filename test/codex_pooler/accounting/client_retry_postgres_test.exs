@@ -3,6 +3,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
 
   import Ecto.Query
   import CodexPooler.AccountingTestSupport
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
@@ -285,32 +286,40 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       for concurrency <- [1, 4, 16] do
         fixtures =
           for _index <- 1..logical_operations do
-            Sandbox.unboxed_run(Repo, fn -> committed_fixture(:attempted) end)
+            # Registered as soon as each fixture exists, never scoped in `try/after`: the claims
+            # run in linked tasks, so a failing one kills the test process before an enclosing
+            # `after` runs. `committed_fixture/1` derives its keys while it commits, so a
+            # fixture that fails partway through is not covered.
+            fixture = Sandbox.unboxed_run(Repo, fn -> committed_fixture(:attempted) end)
+            register_unboxed_cleanup!(fn -> cleanup_fixture(fixture) end)
+            fixture
           end
 
-        try do
-          {results, events} =
-            capture_repo_schedule(fn ->
-              run_claim_workload(fixtures, concurrency)
-            end)
-
-          assert Enum.all?(results, &match?({:ok, %ClientRetry.SuccessorClaim{}}, &1))
-
-          %{
-            concurrency: concurrency,
-            total: length(events),
-            per_operation: div(length(events), logical_operations),
-            operation_sources: Enum.frequencies_by(events, &{&1.operation, &1.source}),
-            query_time_us: Enum.sum(Enum.map(events, & &1.query_time_us)),
-            max_query_time_us: Enum.max(Enum.map(events, & &1.query_time_us)),
-            queue_time_us: Enum.sum(Enum.map(events, & &1.queue_time_us)),
-            max_queue_time_us: Enum.max(Enum.map(events, & &1.queue_time_us))
-          }
-        after
-          Enum.each(fixtures, fn fixture ->
-            Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(fixture) end)
+        {results, events} =
+          capture_repo_schedule(fn ->
+            run_claim_workload(fixtures, concurrency)
           end)
-        end
+
+        assert Enum.all?(results, &match?({:ok, %ClientRetry.SuccessorClaim{}}, &1))
+
+        schedule = %{
+          concurrency: concurrency,
+          total: length(events),
+          per_operation: div(length(events), logical_operations),
+          operation_sources: Enum.frequencies_by(events, &{&1.operation, &1.source}),
+          query_time_us: Enum.sum(Enum.map(events, & &1.query_time_us)),
+          max_query_time_us: Enum.max(Enum.map(events, & &1.query_time_us)),
+          queue_time_us: Enum.sum(Enum.map(events, & &1.queue_time_us)),
+          max_queue_time_us: Enum.max(Enum.map(events, & &1.queue_time_us))
+        }
+
+        # Also removed now, so each concurrency level runs against the database it always did;
+        # the registered pass then finds nothing left.
+        Enum.each(fixtures, fn fixture ->
+          Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(fixture) end)
+        end)
+
+        schedule
       end
 
     # Twenty-two statements per claim, the twenty-second being the key-wide

@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   import Ecto.Query
 
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
@@ -543,28 +544,24 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     parent = self()
     barrier = make_ref()
 
-    try do
-      holder = batch_plan_task(parent, barrier, :holder, fixture, fixture.prepared, true)
-      assert_receive {^barrier, :holder, :planned, holder_pid}, @detection_timeout_ms
+    holder = batch_plan_task(parent, barrier, :holder, fixture, fixture.prepared, true)
+    assert_receive {^barrier, :holder, :planned, holder_pid}, @detection_timeout_ms
 
-      waiter =
-        batch_plan_task(parent, barrier, :waiter, fixture, Enum.reverse(fixture.prepared), false)
+    waiter =
+      batch_plan_task(parent, barrier, :waiter, fixture, Enum.reverse(fixture.prepared), false)
 
-      assert_receive {^barrier, :waiter, :ready, waiter_pid}, @detection_timeout_ms
+    assert_receive {^barrier, :waiter, :ready, waiter_pid}, @detection_timeout_ms
 
-      assert_waiting_on!(waiter_pid, holder_pid)
+    assert_waiting_on!(waiter_pid, holder_pid)
 
-      CodexPooler.TestDiagnostics.puts(
-        "GREEN reverse_batch holder_pid=#{holder_pid} waiter_pid=#{waiter_pid} blocking=#{holder_pid}"
-      )
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN reverse_batch holder_pid=#{holder_pid} waiter_pid=#{waiter_pid} blocking=#{holder_pid}"
+    )
 
-      send(holder.pid, {barrier, :release})
-      assert {:ok, :holder} = Task.await(holder, @detection_timeout_ms)
-      assert {:ok, :waiter} = Task.await(waiter, @detection_timeout_ms)
-      CodexPooler.TestDiagnostics.puts("GREEN reverse_batch terminal=ok,ok sqlstate_40P01=0")
-    after
-      cleanup_committed_batch_fixture!(fixture)
-    end
+    send(holder.pid, {barrier, :release})
+    assert {:ok, :holder} = Task.await(holder, @detection_timeout_ms)
+    assert {:ok, :waiter} = Task.await(waiter, @detection_timeout_ms)
+    CodexPooler.TestDiagnostics.puts("GREEN reverse_batch terminal=ok,ok sqlstate_40P01=0")
   end
 
   defp owner_scope do
@@ -627,10 +624,19 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     {plan, diagnostics}
   end
 
+  # Registered before the commit and keyed on the pool slug, never scoped in `try/after`: both
+  # planners run in linked tasks, so an assertion failing in one kills the test process before an
+  # enclosing `after` runs, and the committed pool would outlive the test.
   defp committed_batch_fixture! do
+    slug = unique("reverse-batch")
+
+    register_unboxed_cleanup!(fn ->
+      Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.slug == ^slug)
+    end)
+
     Sandbox.unboxed_run(Repo, fn ->
       scope = owner_scope()
-      pool = pool_fixture(%{created_by_user_id: scope.user.id})
+      pool = pool_fixture(%{created_by_user_id: scope.user.id, slug: slug})
 
       prepared =
         prepare_many!(scope, pool, [import_attrs("reverse-a"), import_attrs("reverse-b")])
@@ -667,12 +673,6 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
         email_prepared: email_prepared,
         user_id: scope.user.id
       }
-    end)
-  end
-
-  defp cleanup_committed_batch_fixture!(fixture) do
-    Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^fixture.pool.id)
     end)
   end
 

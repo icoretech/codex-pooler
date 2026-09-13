@@ -6,6 +6,7 @@ defmodule CodexPooler.Admin.StatsTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, DailyRollup, DailyRollupCoverage, LedgerEntry, Request}
@@ -1520,9 +1521,15 @@ defmodule CodexPooler.Admin.StatsTest do
 
   @tag :pool_usage_rollup_fallback
   test "seven-day Pool usage falls back wholly when the coverage query is unavailable" do
+    # Registered before the commit, never scoped in `try/after`: the coverage lock holder is a
+    # linked task, so its failure kills the test process before an enclosing `after` runs, and
+    # the committed pool, identity, request and ledger rows would outlive the test.
+    suffix = System.unique_integer([:positive])
+    register_unboxed_cleanup!(fn -> delete_unboxed_pool_usage_fixture!(suffix) end)
+
     Sandbox.unboxed_run(Repo, fn ->
       as_of = DateTime.new!(Date.utc_today(), ~T[12:00:00.000000], "Etc/UTC")
-      fixture = insert_unboxed_pool_usage_fixture!(as_of)
+      fixture = insert_unboxed_pool_usage_fixture!(as_of, suffix)
       opts = [as_of: as_of, traffic_window: "7d", histogram_pool_ids: [fixture.pool.id]]
       raw = Stats.pool_usage_by_pool_ids([fixture.pool.id], Keyword.put(opts, :force_raw, true))
       parent = self()
@@ -1586,7 +1593,6 @@ defmodule CodexPooler.Admin.StatsTest do
         :telemetry.detach(handler_id)
         send(lock_task.pid, {barrier, :release})
         assert {:ok, :released} = Task.await(lock_task, 5_000)
-        cleanup_unboxed_pool_usage_fixture!(fixture)
       end
     end)
   end
@@ -2457,8 +2463,7 @@ defmodule CodexPooler.Admin.StatsTest do
     %{datetime | microsecond: {elem(datetime.microsecond, 0), 6}}
   end
 
-  defp insert_unboxed_pool_usage_fixture!(as_of) do
-    suffix = System.unique_integer([:positive])
+  defp insert_unboxed_pool_usage_fixture!(as_of, suffix) do
     occurred_at = DateTime.add(as_of, -30, :minute)
 
     pool =
@@ -2576,15 +2581,26 @@ defmodule CodexPooler.Admin.StatsTest do
     }
   end
 
-  defp cleanup_unboxed_pool_usage_fixture!(fixture) do
-    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
-    Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
+  # Keyed on the suffix every committed key derives from, so it can be registered before the
+  # fixture exists and still finds one that failed partway. The pool delete cascades to the
+  # request and ledger rows; the refutes come last, so a broken cascade fails loudly without
+  # cutting the rest of the teardown short.
+  defp delete_unboxed_pool_usage_fixture!(suffix) do
+    Repo.delete_all(from pool in Pool, where: pool.slug == ^"stats-unavailable-#{suffix}")
 
-    refute Repo.exists?(from request in Request, where: request.id == ^fixture.request_id)
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.account_label == ^"Stats unavailable upstream #{suffix}"
+    )
+
+    refute Repo.exists?(
+             from request in Request,
+               where: request.correlation_id == ^"stats-unavailable-#{suffix}"
+           )
 
     refute Repo.exists?(
              from ledger_entry in LedgerEntry,
-               where: ledger_entry.id == ^fixture.ledger_entry_id
+               where: ledger_entry.source_event_id == ^"stats-unavailable-settlement-#{suffix}"
            )
   end
 

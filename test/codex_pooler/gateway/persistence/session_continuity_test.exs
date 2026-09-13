@@ -1637,6 +1637,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
 
   defp capture_info_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do

@@ -305,21 +305,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   # connected list and before epmd has processed the closed registration, so asserting either
   # immediately asserts a state that is only about to be true.
   defp assert_peer_absent!(peer_name, peer_node \\ nil) do
-    case PeerRegistry.await_peer_absent(peer_name,
-           peer_node: peer_node,
-           budget_ms: @peer_shutdown_budget_ms
-         ) do
-      {:ok, _detail} ->
-        :ok
+    PeerRegistry.assert_peer_absent!(peer_name,
+      peer_node: peer_node,
+      budget_ms: @peer_shutdown_budget_ms
+    )
 
-      {:timeout, detail} ->
-        flunk("""
-        peer #{peer_name} was still visible #{detail.elapsed_ms}ms after :peer.stop/1, over the         #{detail.budget_ms}ms detection budget (#{detail.samples} samples).
-        still registered with epmd: #{detail.registered}
-        still in Node.list(:connected): #{detail.connected}
-        epmd names: #{inspect(detail.names)}
-        """)
-    end
+    :ok
   end
 
   defp owner_request(identity_id, opts) do

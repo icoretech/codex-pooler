@@ -8751,7 +8751,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     assert_receive {^barrier, task_pid, partial}, 1_000
     owned = %{identity_ids: [partial.identity_id], pool_ids: partial.pool_ids}
     on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(owned) end)
-    refute Process.alive?(task_pid)
+
+    # The failure arm hands its error back through `Task.yield/2`, which returns on the reply the
+    # task sends before it exits, so the task can still be alive for a moment here. Wait for the
+    # exit within the detection budget rather than sampling liveness once: a task that really
+    # outlives the failure never reports `:DOWN` and still fails.
+    task_monitor = Process.monitor(task_pid)
+
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, _reason},
+                   @cohort_fixture_task_timeout
 
     run_unboxed(fn ->
       refute Repo.exists?(

@@ -34,8 +34,10 @@ defmodule CodexPooler.Gateway.RequestCompression.OrchestrationBoundaryTest do
   test "unexpected tokenizer cache corruption preserves payload with safe failure metadata" do
     {body, context, opts} = fixture()
     key = {Ranks, :ranks, :o200k_base}
-    {:ok, original} = Ranks.load(:o200k_base)
-    on_exit(fn -> :persistent_term.put(key, original) end)
+    # Capture before touching the key and put back exactly that. Loading the table first and
+    # writing it back would hand every later test a cache this VM never had.
+    previous = :persistent_term.get(key, :not_found)
+    on_exit(fn -> restore_ranks_cache(key, previous) end)
     :persistent_term.put(key, :invalid_cache)
 
     {result, log} = with_log(fn -> RequestCompression.maybe_compress(body, context, opts) end)
@@ -48,6 +50,9 @@ defmodule CodexPooler.Gateway.RequestCompression.OrchestrationBoundaryTest do
     refute log =~ body
     refute inspect(result_opts.runtime.payload_compression) =~ "synthetic-value"
   end
+
+  defp restore_ranks_cache(key, :not_found), do: :persistent_term.erase(key)
+  defp restore_ranks_cache(key, previous), do: :persistent_term.put(key, previous)
 
   defp fixture do
     output =

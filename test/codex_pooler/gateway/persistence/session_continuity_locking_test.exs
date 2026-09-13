@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   import Ecto.Query
 
   alias CodexPooler.Access
@@ -168,28 +169,24 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       IO.puts("fresh runtime turn allocation: ok")
       """
 
-      try do
-        {output, status} =
-          System.cmd(
-            "mix",
-            [
-              "run",
-              "--no-compile",
-              "-e",
-              script,
-              "--",
-              fixture.session_id,
-              fixture.request_id
-            ],
-            env: [{"MIX_ENV", "test"}],
-            stderr_to_stdout: true
-          )
+      {output, status} =
+        System.cmd(
+          "mix",
+          [
+            "run",
+            "--no-compile",
+            "-e",
+            script,
+            "--",
+            fixture.session_id,
+            fixture.request_id
+          ],
+          env: [{"MIX_ENV", "test"}],
+          stderr_to_stdout: true
+        )
 
-        assert status == 0, output
-        assert output =~ "fresh runtime turn allocation: ok"
-      after
-        cleanup_unboxed_fixture!()
-      end
+      assert status == 0, output
+      assert output =~ "fresh runtime turn allocation: ok"
     end
 
     test "alias resolution uses one priority-ordered row lock" do
@@ -421,8 +418,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           %Task{} = renewal -> shutdown_task(renewal)
           nil -> :ok
         end
-
-        cleanup_unboxed_fixture!()
       end
     end
 
@@ -580,8 +575,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
             nil -> :ok
           end
         end
-
-        cleanup_unboxed_fixture!()
       end
     end
 
@@ -674,8 +667,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
             %Task{} = renewal -> shutdown_task(renewal)
             nil -> :ok
           end
-
-          cleanup_unboxed_fixture!()
         end
       end
     end
@@ -687,13 +678,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     test "replacement start locks the session before its claimed request" do
       fixture = unboxed_replacement_deadlock_fixture()
 
-      try do
-        with_replacement_deadlock_query_handler(fn ->
-          run_replacement_deadlock_schedule(fixture)
-        end)
-      after
-        cleanup_unboxed_fixture!()
-      end
+      with_replacement_deadlock_query_handler(fn ->
+        run_replacement_deadlock_schedule(fixture)
+      end)
     end
   end
 
@@ -702,62 +689,54 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     test "close_for_key freezes the old id while a replacement blocks on the partial unique index" do
       fixture = unboxed_expired_replacement_fixture()
 
-      try do
-        record =
-          with_frozen_query_handler(fn ->
-            run_frozen_replacement_schedule(fixture)
-          end)
+      record =
+        with_frozen_query_handler(fn ->
+          run_frozen_replacement_schedule(fixture)
+        end)
 
-        assert record.boundary_signature == expired_boundary_signature()
-        report_frozen_schedule(record)
-      after
-        cleanup_unboxed_fixture!()
-      end
+      assert record.boundary_signature == expired_boundary_signature()
+      report_frozen_schedule(record)
     end
 
     @tag :session_continuity_start_boundary
     test "real start flow invokes the frozen boundary before inserting the replacement" do
       fixture = unboxed_expired_session_fixture("session_continuity-start-boundary")
 
-      try do
-        {result, events} =
-          capture_detailed_repo_queries(fn ->
-            Sandbox.unboxed_run(Repo, fn ->
-              Gateway.start_codex_session(fixture.auth, %{
-                session_key: fixture.session_key,
-                owner_instance_id: "node-replacement"
-              })
-            end)
+      {result, events} =
+        capture_detailed_repo_queries(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Gateway.start_codex_session(fixture.auth, %{
+              session_key: fixture.session_key,
+              owner_instance_id: "node-replacement"
+            })
           end)
+        end)
 
-        assert {:ok, %CodexSession{} = replacement} = result
-        refute replacement.id == fixture.session.id
-        assert boundary_signature(events) == expired_boundary_signature()
+      assert {:ok, %CodexSession{} = replacement} = result
+      refute replacement.id == fixture.session.id
+      assert boundary_signature(events) == expired_boundary_signature()
 
-        boundary_close =
-          Enum.find_index(events, fn event ->
-            event.source == "codex_sessions" and event.operation == "UPDATE"
-          end)
+      boundary_close =
+        Enum.find_index(events, fn event ->
+          event.source == "codex_sessions" and event.operation == "UPDATE"
+        end)
 
-        replacement_insert =
-          Enum.find_index(events, fn event ->
-            event.source == "codex_sessions" and event.operation == "INSERT"
-          end)
+      replacement_insert =
+        Enum.find_index(events, fn event ->
+          event.source == "codex_sessions" and event.operation == "INSERT"
+        end)
 
-        assert is_integer(boundary_close)
-        assert is_integer(replacement_insert)
-        assert boundary_close < replacement_insert
+      assert is_integer(boundary_close)
+      assert is_integer(replacement_insert)
+      assert boundary_close < replacement_insert
 
-        assert %CodexSession{status: "closed"} =
-                 Sandbox.unboxed_run(Repo, fn -> Repo.get!(CodexSession, fixture.session.id) end)
+      assert %CodexSession{status: "closed"} =
+               Sandbox.unboxed_run(Repo, fn -> Repo.get!(CodexSession, fixture.session.id) end)
 
-        assert %CodexSession{status: "active"} =
-                 Sandbox.unboxed_run(Repo, fn -> Repo.get!(CodexSession, replacement.id) end)
+      assert %CodexSession{status: "active"} =
+               Sandbox.unboxed_run(Repo, fn -> Repo.get!(CodexSession, replacement.id) end)
 
-        report_start_boundary(events, fixture.session.id)
-      after
-        cleanup_unboxed_fixture!()
-      end
+      report_start_boundary(events, fixture.session.id)
     end
   end
 
@@ -1294,15 +1273,13 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp run_direction_iteration(direction_id, iteration, operations) do
+    # No per-iteration teardown: the next iteration's fixture starts with the same bootstrap
+    # reset, and the registered one covers the last iteration and any failure.
     fixture = unboxed_owner_session_fixture(direction_id, iteration)
 
-    try do
-      with_contention_query_handler(fn ->
-        run_contended_operations(direction_id, iteration, fixture, operations.(fixture))
-      end)
-    after
-      cleanup_unboxed_fixture!()
-    end
+    with_contention_query_handler(fn ->
+      run_contended_operations(direction_id, iteration, fixture, operations.(fixture))
+    end)
   end
 
   defp run_contended_operations(direction_id, iteration, fixture, {a_operation, b_operation}) do
@@ -2083,6 +2060,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_expired_session_fixture(prefix) do
+    register_bootstrap_reset!()
+
     Sandbox.unboxed_run(Repo, fn ->
       reset_bootstrap_state_fixture!()
       auth = auth_fixture()
@@ -2164,6 +2143,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_owner_session_fixture(direction_id, iteration) do
+    register_bootstrap_reset!()
+
     Sandbox.unboxed_run(Repo, fn ->
       reset_bootstrap_state_fixture!()
       auth = auth_fixture()
@@ -2189,6 +2170,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_fresh_runtime_turn_fixture do
+    register_bootstrap_reset!()
+
     Sandbox.unboxed_run(Repo, fn ->
       reset_bootstrap_state_fixture!()
       auth = auth_fixture()
@@ -2206,6 +2189,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_replacement_deadlock_fixture do
+    register_bootstrap_reset!()
+
     Sandbox.unboxed_run(Repo, fn ->
       reset_bootstrap_state_fixture!()
       auth = auth_fixture()
@@ -2243,8 +2228,21 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     end)
   end
 
-  defp cleanup_unboxed_fixture! do
-    Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end)
+  # Every unboxed fixture here commits a bootstrap owner on the fixed `owner@example.com`, and the
+  # full bootstrap reset is the only teardown that removes it. Registered, never scoped: the
+  # contention cases run their blockers in linked tasks, so an assertion failing in one kills the
+  # test process before any `after` in it runs, and the ExUnit timeout kills it the same way.
+  # Registered before the first commit, so a fixture that fails partway is covered, and once per
+  # test, so the ten-iteration directions do not queue ten resets.
+  defp register_bootstrap_reset! do
+    key = {__MODULE__, :bootstrap_reset_registered}
+
+    if !Process.get(key) do
+      register_unboxed_cleanup!(&reset_bootstrap_state_fixture!/0)
+      Process.put(key, true)
+    end
+
+    :ok
   end
 
   defp auth_fixture do

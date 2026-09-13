@@ -1659,6 +1659,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
 
     try do
       previous_logger_level = Logger.level()
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> Logger.configure(level: previous_logger_level) end)
 
       log =
         try do

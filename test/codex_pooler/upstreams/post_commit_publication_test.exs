@@ -2,6 +2,7 @@ defmodule CodexPooler.Upstreams.PostCommitPublicationTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountsFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Audit.AuditEvent
@@ -28,198 +29,178 @@ defmodule CodexPooler.Upstreams.PostCommitPublicationTest do
   test "auto-publishing direct import rejects a caller-owned transaction before work or publication" do
     fixture = committed_fixture!()
 
-    try do
-      observer = start_event_observer(fixture.pool.id)
-      before = snapshot(fixture)
+    observer = start_event_observer(fixture.pool.id)
+    before = snapshot(fixture)
 
-      assert {:error, :intentional_rollback} =
-               unboxed(fn ->
-                 Repo.transaction(fn ->
-                   assert {:error, @transaction_not_allowed} =
-                            Upstreams.import_codex_auth_json(
-                              fixture.scope,
-                              fixture.pool,
-                              "synthetic-malformed-auth-json"
-                            )
+    assert {:error, :intentional_rollback} =
+             unboxed(fn ->
+               Repo.transaction(fn ->
+                 assert {:error, @transaction_not_allowed} =
+                          Upstreams.import_codex_auth_json(
+                            fixture.scope,
+                            fixture.pool,
+                            "synthetic-malformed-auth-json"
+                          )
 
-                   assert {:error, @transaction_not_allowed} =
-                            Upstreams.import_trusted_account(
-                              fixture.scope,
-                              fixture.pool,
-                              fixture.attrs
-                            )
+                 assert {:error, @transaction_not_allowed} =
+                          Upstreams.import_trusted_account(
+                            fixture.scope,
+                            fixture.pool,
+                            fixture.attrs
+                          )
 
-                   assert snapshot_in_transaction(fixture) == before
-                   assert event_snapshot(observer) == []
-                   Repo.rollback(:intentional_rollback)
-                 end)
+                 assert snapshot_in_transaction(fixture) == before
+                 assert event_snapshot(observer) == []
+                 Repo.rollback(:intentional_rollback)
                end)
+             end)
 
-      assert snapshot(fixture) == before
-      assert event_snapshot(observer) == []
-    after
-      cleanup_fixture!(fixture)
-    end
+    assert snapshot(fixture) == before
+    assert event_snapshot(observer) == []
   end
 
   test "auto-publishing prepared link rejects a caller-owned transaction before work or publication" do
     fixture = committed_fixture!()
 
-    try do
-      prepared =
-        unboxed(fn ->
-          {:ok, prepared} =
-            Upstreams.prepare_trusted_account(fixture.scope, fixture.pool, fixture.attrs)
+    prepared =
+      unboxed(fn ->
+        {:ok, prepared} =
+          Upstreams.prepare_trusted_account(fixture.scope, fixture.pool, fixture.attrs)
 
-          prepared
-        end)
+        prepared
+      end)
 
-      observer = start_event_observer(fixture.pool.id)
-      before = snapshot(fixture)
+    observer = start_event_observer(fixture.pool.id)
+    before = snapshot(fixture)
 
-      assert {:error, :intentional_rollback} =
-               unboxed(fn ->
-                 Repo.transaction(fn ->
-                   assert {:error, @transaction_not_allowed} =
-                            TokenLinking.link_prepared(
-                              fixture.scope,
-                              fixture.pool,
-                              prepared,
-                              publish_options()
-                            )
+    assert {:error, :intentional_rollback} =
+             unboxed(fn ->
+               Repo.transaction(fn ->
+                 assert {:error, @transaction_not_allowed} =
+                          TokenLinking.link_prepared(
+                            fixture.scope,
+                            fixture.pool,
+                            prepared,
+                            publish_options()
+                          )
 
-                   assert snapshot_in_transaction(fixture) == before
-                   assert event_snapshot(observer) == []
-                   Repo.rollback(:intentional_rollback)
-                 end)
+                 assert snapshot_in_transaction(fixture) == before
+                 assert event_snapshot(observer) == []
+                 Repo.rollback(:intentional_rollback)
                end)
+             end)
 
-      assert snapshot(fixture) == before
-      assert event_snapshot(observer) == []
-    after
-      cleanup_fixture!(fixture)
-    end
+    assert snapshot(fixture) == before
+    assert event_snapshot(observer) == []
   end
 
   test "direct publication refuses a transaction before audit job or PubSub effects" do
     fixture = committed_fixture!()
 
-    try do
-      prepared =
-        unboxed(fn ->
-          {:ok, prepared} =
-            Upstreams.prepare_trusted_account(fixture.scope, fixture.pool, fixture.attrs)
+    prepared =
+      unboxed(fn ->
+        {:ok, prepared} =
+          Upstreams.prepare_trusted_account(fixture.scope, fixture.pool, fixture.attrs)
 
-          prepared
-        end)
+        prepared
+      end)
 
-      observer = start_event_observer(fixture.pool.id)
-      before = snapshot(fixture)
+    observer = start_event_observer(fixture.pool.id)
+    before = snapshot(fixture)
 
-      assert {:error, :intentional_rollback} =
-               unboxed(fn ->
-                 Repo.transaction(fn ->
-                   assert {:ok, result} =
-                            TokenLinking.link_prepared_in_transaction(
-                              fixture.scope,
-                              fixture.pool,
-                              prepared,
-                              []
-                            )
+    assert {:error, :intentional_rollback} =
+             unboxed(fn ->
+               Repo.transaction(fn ->
+                 assert {:ok, result} =
+                          TokenLinking.link_prepared_in_transaction(
+                            fixture.scope,
+                            fixture.pool,
+                            prepared,
+                            []
+                          )
 
-                   persisted = snapshot_in_transaction(fixture)
+                 persisted = snapshot_in_transaction(fixture)
 
-                   assert {:error, @transaction_not_allowed} =
-                            TokenLinking.publish_link_result(
-                              fixture.scope,
-                              fixture.pool,
-                              result,
-                              publish_options()
-                            )
+                 assert {:error, @transaction_not_allowed} =
+                          TokenLinking.publish_link_result(
+                            fixture.scope,
+                            fixture.pool,
+                            result,
+                            publish_options()
+                          )
 
-                   assert snapshot_in_transaction(fixture) == persisted
-                   assert event_snapshot(observer) == []
-                   Repo.rollback(:intentional_rollback)
-                 end)
+                 assert snapshot_in_transaction(fixture) == persisted
+                 assert event_snapshot(observer) == []
+                 Repo.rollback(:intentional_rollback)
                end)
+             end)
 
-      assert snapshot(fixture) == before
-      assert event_snapshot(observer) == []
-    after
-      cleanup_fixture!(fixture)
-    end
+    assert snapshot(fixture) == before
+    assert event_snapshot(observer) == []
   end
 
   test "transaction-only persistence rolls back without publication and normal linking publishes once" do
     rollback_fixture = committed_fixture!()
 
-    try do
-      prepared =
-        unboxed(fn ->
-          {:ok, prepared} =
-            Upstreams.prepare_trusted_account(
-              rollback_fixture.scope,
-              rollback_fixture.pool,
-              rollback_fixture.attrs
-            )
+    prepared =
+      unboxed(fn ->
+        {:ok, prepared} =
+          Upstreams.prepare_trusted_account(
+            rollback_fixture.scope,
+            rollback_fixture.pool,
+            rollback_fixture.attrs
+          )
 
-          prepared
-        end)
+        prepared
+      end)
 
-      observer = start_event_observer(rollback_fixture.pool.id)
-      before = snapshot(rollback_fixture)
+    observer = start_event_observer(rollback_fixture.pool.id)
+    before = snapshot(rollback_fixture)
 
-      assert {:error, :intentional_rollback} =
-               unboxed(fn ->
-                 Repo.transaction(fn ->
-                   assert {:ok, _result} =
-                            TokenLinking.link_prepared_in_transaction(
-                              rollback_fixture.scope,
-                              rollback_fixture.pool,
-                              prepared,
-                              []
-                            )
+    assert {:error, :intentional_rollback} =
+             unboxed(fn ->
+               Repo.transaction(fn ->
+                 assert {:ok, _result} =
+                          TokenLinking.link_prepared_in_transaction(
+                            rollback_fixture.scope,
+                            rollback_fixture.pool,
+                            prepared,
+                            []
+                          )
 
-                   assert event_snapshot(observer) == []
-                   Repo.rollback(:intentional_rollback)
-                 end)
+                 assert event_snapshot(observer) == []
+                 Repo.rollback(:intentional_rollback)
                end)
+             end)
 
-      assert snapshot(rollback_fixture) == before
-      assert event_snapshot(observer) == []
-    after
-      cleanup_fixture!(rollback_fixture)
-    end
+    assert snapshot(rollback_fixture) == before
+    assert event_snapshot(observer) == []
 
     committed_fixture = committed_fixture!()
 
-    try do
-      observer = start_event_observer(committed_fixture.pool.id)
-      before = snapshot(committed_fixture)
+    observer = start_event_observer(committed_fixture.pool.id)
+    before = snapshot(committed_fixture)
 
-      assert {:ok, %{identity: identity}} =
-               unboxed(fn ->
-                 Upstreams.import_codex_auth_json(
-                   committed_fixture.scope,
-                   committed_fixture.pool,
-                   auth_json(committed_fixture)
-                 )
-               end)
+    assert {:ok, %{identity: identity}} =
+             unboxed(fn ->
+               Upstreams.import_codex_auth_json(
+                 committed_fixture.scope,
+                 committed_fixture.pool,
+                 auth_json(committed_fixture)
+               )
+             end)
 
-      after_publish = snapshot(committed_fixture)
-      assert after_publish.identities == before.identities + 1
-      assert after_publish.assignments == before.assignments + 1
-      assert after_publish.secrets == before.secrets + 2
-      assert after_publish.audits == before.audits + 1
-      assert after_publish.jobs == before.jobs + 1
+    after_publish = snapshot(committed_fixture)
+    assert after_publish.identities == before.identities + 1
+    assert after_publish.assignments == before.assignments + 1
+    assert after_publish.secrets == before.secrets + 2
+    assert after_publish.audits == before.audits + 1
+    assert after_publish.jobs == before.jobs + 1
 
-      reasons = Enum.map(event_snapshot(observer), & &1.reason)
+    reasons = Enum.map(event_snapshot(observer), & &1.reason)
 
-      assert Enum.sort(reasons) == ["quota_priming_updated", "upstream_account_imported"]
-      assert identity.chatgpt_account_id == committed_fixture.attrs.chatgpt_account_id
-    after
-      cleanup_fixture!(committed_fixture)
-    end
+    assert Enum.sort(reasons) == ["quota_priming_updated", "upstream_account_imported"]
+    assert identity.chatgpt_account_id == committed_fixture.attrs.chatgpt_account_id
   end
 
   test "event observer snapshot includes an event queued before the barrier" do
@@ -231,8 +212,12 @@ defmodule CodexPooler.Upstreams.PostCommitPublicationTest do
     assert event_snapshot(observer) == [event]
   end
 
+  # Registered before the commit, never scoped in `try/after`: a test process killed by the
+  # ExUnit timeout or by its linked event observer never reaches an `after`, and the committed
+  # pool, identities, audit rows and jobs would then outlive the test into every later file.
   defp committed_fixture! do
     suffix = System.unique_integer([:positive, :monotonic])
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(suffix) end)
 
     unboxed(fn ->
       %{user: user} =
@@ -351,25 +336,29 @@ defmodule CodexPooler.Upstreams.PostCommitPublicationTest do
     }
   end
 
-  defp cleanup_fixture!(fixture) do
-    unboxed(fn ->
-      Repo.delete_all(
-        from identity in UpstreamIdentity,
-          where: identity.chatgpt_account_id == ^fixture.attrs.chatgpt_account_id
-      )
+  # Keyed on the suffix `committed_fixture!/0` derives every committed key from, so it can be
+  # registered before the fixture exists and still finds one that failed partway through.
+  defp delete_committed_fixture!(suffix) do
+    account_id = "acct_post_commit_#{suffix}"
+    slug = "post-commit-#{suffix}"
 
-      Repo.delete_all(from event in AuditEvent, where: event.pool_id == ^fixture.pool.id)
+    pool_ids =
+      Repo.all(from pool in CodexPooler.Pools.Pool, where: pool.slug == ^slug, select: pool.id)
 
-      Repo.delete_all(
-        from job in Oban.Job,
-          where: fragment("?->>'pool_id' = ?", job.args, ^fixture.pool.id)
-      )
+    Repo.delete_all(
+      from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id
+    )
 
+    Repo.delete_all(from event in AuditEvent, where: event.pool_id in ^pool_ids)
+
+    for pool_id <- pool_ids do
       Repo.delete_all(
-        from pool in CodexPooler.Pools.Pool,
-          where: pool.id == ^fixture.pool.id
+        from job in Oban.Job, where: fragment("?->>'pool_id' = ?", job.args, ^pool_id)
       )
-    end)
+    end
+
+    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id in ^pool_ids)
+    :ok
   end
 
   defp start_event_observer(pool_id) do

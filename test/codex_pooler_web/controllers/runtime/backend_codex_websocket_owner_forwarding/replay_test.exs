@@ -1517,8 +1517,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, _reason},
                    @handoff_detection_timeout_ms
 
-    assert :erpc.call(remote_node, WebsocketOwnerNodeHarness, :owner_absent?, [codex_session_id])
+    assert_remote_owner_unregistered!(remote_node, codex_session_id)
     assert Repo.get_by!(BridgeOwnerLease, codex_session_id: codex_session_id).status == "released"
+  end
+
+  # `Registry.lookup/2` reads the registry table without checking liveness, and the registry
+  # drops the entry only when it processes the owner's exit signal, which arrives independently
+  # of the monitor that just fired. One sample straight after `:DOWN` asserts a state that is
+  # only about to be true, so poll within the detection budget and name it: an owner that really
+  # stays registered still fails here.
+  defp assert_remote_owner_unregistered!(remote_node, codex_session_id) do
+    deadline = System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms
+    await_remote_owner_unregistered!(remote_node, codex_session_id, deadline, 1)
+  end
+
+  defp await_remote_owner_unregistered!(remote_node, codex_session_id, deadline, samples) do
+    cond do
+      :erpc.call(remote_node, WebsocketOwnerNodeHarness, :owner_absent?, [codex_session_id]) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk(
+          "the stopped owner was still registered on #{remote_node} after the " <>
+            "#{@handoff_detection_timeout_ms}ms detection budget (#{samples} samples)"
+        )
+
+      true ->
+        receive do
+        after
+          10 ->
+            await_remote_owner_unregistered!(remote_node, codex_session_id, deadline, samples + 1)
+        end
+    end
   end
 
   defp assert_active_reconnect_frame_matrix(route) when route in [:direct, :proxy] do

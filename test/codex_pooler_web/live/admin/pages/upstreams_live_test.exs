@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   import Phoenix.LiveViewTest
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Access.Invite
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
@@ -8976,7 +8977,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            sandbox_settings_cache: settings_cache
          } do
       source = unquote(source)
-      fixture = committed_auth_json_recovery_fixture!()
+      fixture = committed_auth_json_recovery_fixture!(sandbox_owner, settings_cache)
       barrier = make_ref()
       sensitive_sentinel = fixture.sensitive_sentinel
 
@@ -9078,18 +9079,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         :telemetry.detach(handler_id)
         send(holder.pid, {barrier, :advance})
         stop_live_view_proxy!(view)
-        # The resubmitted import updated the committed identity inside the
-        # sandboxed transaction, whose row lock would block the unboxed delete
-        # until the owner exits; release the sandbox before cleaning up.
-        DataCase.stop_sandbox(sandbox_owner, settings_cache)
-        cleanup_committed_auth_json_recovery_fixture!(fixture)
       end
     end
   end
 
-  defp committed_auth_json_recovery_fixture! do
+  # Registered before the commit and keyed on the suffix every committed key derives from, never
+  # scoped in `try/after`: the stale-import holder and its monitor are linked tasks, so an assertion
+  # failing in either kills the test process before an enclosing `after` runs, and the committed
+  # pool and identity would outlive the test. The sandbox is stopped first because the resubmitted
+  # import updates the committed identity inside the sandboxed transaction, whose row lock would
+  # block the unboxed delete until the owner exits; `DataCase.stop_sandbox/2` is idempotent, so
+  # the case template's own teardown still runs after it.
+  defp committed_auth_json_recovery_fixture!(sandbox_owner, settings_cache) do
+    suffix = System.unique_integer([:positive])
+
+    register_unboxed_cleanup!(fn ->
+      DataCase.stop_sandbox(sandbox_owner, settings_cache)
+      delete_committed_auth_json_recovery_fixture!(suffix)
+    end)
+
     Sandbox.unboxed_run(Repo, fn ->
-      suffix = System.unique_integer([:positive])
       account_id = "acct-mounted-recovery-#{suffix}"
       email = "fixture-user@example.com"
       pool = pool_fixture(%{slug: "mounted-recovery-#{suffix}", name: "Mounted recovery"})
@@ -9112,18 +9121,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     end)
   end
 
-  defp cleanup_committed_auth_json_recovery_fixture!(fixture) do
-    Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(
-        from identity in UpstreamIdentity,
-          where: identity.id == ^fixture.identity.id
-      )
+  defp delete_committed_auth_json_recovery_fixture!(suffix) do
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.chatgpt_account_id == ^"acct-mounted-recovery-#{suffix}"
+    )
 
-      Repo.delete_all(
-        from pool in CodexPooler.Pools.Pool,
-          where: pool.id == ^fixture.pool.id
-      )
-    end)
+    Repo.delete_all(
+      from pool in CodexPooler.Pools.Pool, where: pool.slug == ^"mounted-recovery-#{suffix}"
+    )
+
+    :ok
   end
 
   defp stop_live_view_proxy!(view) do
