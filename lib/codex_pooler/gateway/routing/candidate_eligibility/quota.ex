@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   # The routing states `add_classified_quota_candidate/4` keeps as candidates.
   # An eligibility map also carries `routing_state` when it is blocked, so
@@ -150,6 +151,14 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
           DateTime.t()
         ) :: boolean()
   def quota_routable?(
+        _model,
+        {_assignment, %{credential_provenance: "responses_api_key"}},
+        _snapshot,
+        _at
+      ),
+      do: true
+
+  def quota_routable?(
         %Model{} = model,
         {_assignment, identity},
         %RoutingQuotaSnapshot{as_of: at} = snapshot,
@@ -236,6 +245,28 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   end
 
   defp classify_quota_candidates(%Model{} = model, candidates, route_state) do
+    {api_candidates, codex_candidates} =
+      Enum.split_with(candidates, fn {_assignment, identity} ->
+        UpstreamIdentity.responses_api?(identity)
+      end)
+
+    case classify_codex_quota_candidates(model, codex_candidates, route_state) do
+      result when api_candidates == [] ->
+        result
+
+      {:ok, candidates, decision} ->
+        {:ok, candidates ++ api_candidates,
+         Map.put(decision, "api_key_upstream_count", length(api_candidates))}
+
+      {:error, _exclusions, _refreshable} when api_candidates != [] ->
+        {:ok, api_candidates, %{"api_key_upstream_count" => length(api_candidates)}}
+
+      error ->
+        error
+    end
+  end
+
+  defp classify_codex_quota_candidates(%Model{} = model, candidates, route_state) do
     {precise_candidates, credit_backed_probe_candidates, weekly_probe_candidates,
      reset_probe_candidates, windowless_candidates, exclusions, refreshable_candidates} =
       Enum.reduce(candidates, {[], [], [], [], [], [], []}, fn {assignment, identity} = candidate,

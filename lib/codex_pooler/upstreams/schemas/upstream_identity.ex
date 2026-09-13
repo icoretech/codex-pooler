@@ -143,6 +143,10 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
 
   def authenticated_codex_chatgpt?(%__MODULE__{}), do: false
 
+  @spec responses_api?(t()) :: boolean()
+  def responses_api?(%__MODULE__{credential_provenance: "responses_api_key"}), do: true
+  def responses_api?(%__MODULE__{}), do: false
+
   @spec put_credential_provenance(Ecto.Changeset.t(), :codex_chatgpt | :unclassified) ::
           Ecto.Changeset.t()
   def put_credential_provenance(changeset, :codex_chatgpt),

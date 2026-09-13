@@ -1,0 +1,105 @@
+---
+title: Responses API upstreams
+description: Connect an API-key provider while retaining Codex accounts, existing client keys, routing and token accounting.
+---
+
+This fork adds optional upstream support for stateless, OpenAI Responses-compatible
+APIs. Existing Codex OAuth accounts are unchanged. An operator can keep both kinds
+of upstream in the same Pool and use the existing API-key policy's enforced model
+to select the API provider without replacing downstream keys or URLs.
+
+## Import an API upstream
+
+The initial import API is `CodexPooler.Upstreams.import_responses_api/3`. It requires
+an authenticated operator scope with the Pool's operate capability. The import
+checks the provider's `/models` endpoint before storing an encrypted credential,
+creates an active assignment and synchronizes the configured models.
+
+```elixir
+CodexPooler.Upstreams.import_responses_api(scope, pool, %{
+  label: "Responses API",
+  base_url: "https://api.example.com/v1",
+  api_key: File.read!("/run/secrets/provider-api-key") |> String.trim(),
+  models: [%{
+    "id" => "provider-model",
+    "display_name" => "Provider Model",
+    "context_window" => 128_000,
+    "supports_streaming" => true,
+    "supports_tools" => true,
+    "supports_reasoning" => true,
+    "input_modalities" => ["text", "image"],
+    "default_reasoning_level" => "high",
+    "supported_reasoning_levels" => [
+      %{"effort" => "low", "description" => "Low"},
+      %{"effort" => "high", "description" => "High"}
+    ]
+  }]
+})
+```
+
+Configure only capabilities supported by the provider. HTTPS is required except
+for loopback development servers. Credentials cannot be embedded in the URL and
+redirects are disabled. API keys use their own credential provenance and never
+enter the Codex OAuth refresh or saved-reset paths.
+
+For DeepSeek, use `https://api.deepseek.com` and a currently advertised model such
+as `deepseek-flash`. Check the provider's current model documentation and verify
+tool and image support before enabling a team. Store the real key outside the
+repository; examples and PRs must contain no real credentials.
+
+## Select the provider without replacing clients
+
+Use the existing API-key policy editor to enforce the API model for the intended
+keys. The original Codex account remains assigned to the Pool. Clearing or changing
+the enforced model restores ordinary model selection when the relevant upstream
+has capacity. There is no automatic fallback to another provider for an enforced
+model that only the API upstream serves.
+
+Clients may keep their current URL and key. Backend WebSocket clients are bridged
+to provider HTTP/SSE, and ordinary HTTP clients remain HTTP. Responses identify
+the actual provider model. A client's saved model label can remain unchanged until
+its catalog/settings refresh; the gateway does not claim the API model is an
+OpenAI model.
+
+Token usage uses the existing request/attempt/ledger path and retains key and Pool
+attribution. Missing provider prices remain unpriced; OpenAI model prices are not
+substituted. API billing has no Codex weekly quota or saved resets. Authentication,
+Pool/key policy, lifecycle, circuit protection and provider errors still apply.
+
+## Context and capability boundaries
+
+The provider must support the Responses API and full-history input. Pooler expands
+incremental `previous_response_id` requests from a volatile cache, isolated by Pool
+and client key. Each node retains up to 128 responses and 256 MiB, with a 32 MiB
+per-response limit and a 30-minute idle expiry. No conversation text is persisted.
+Use sticky routing for multiple nodes. After eviction or restart, a missing ID
+returns `previous_response_not_found`; the client must resend full history.
+
+Native `additional_tools`, namespaces and custom tools are translated into JSON
+functions. Replies are converted back to native tool items before reaching the
+client. Unsupported provider-hosted tools are not implemented by this adapter.
+
+Native WebSocket compaction authority is tied to an upstream WebSocket lifecycle.
+API upstreams use HTTP, so Codex Desktop 0.153.4 can report a duplicate-turn retry
+and automatically fall back to HTTP during compaction. Ordinary native WebSocket
+tool continuations work without that fallback. This is not full equivalence with
+the native Codex compaction protocol. Older CLI 0.147.0 lacks the newer context
+window metadata and can fail WebSocket compaction; use a current client.
+
+For `/responses/compact`, Pooler asks the API model for a bounded handoff summary
+and returns a client-carried AES-GCM capsule. The capsule is authenticated to the
+Pool and client key using the existing upstream secret encryption key. Subsequent
+requests restore it into a text message before provider dispatch. Conversation
+text and summaries are never stored in a gateway database. Changing the encryption
+key invalidates earlier capsules, as with other encrypted upstream state.
+
+Existing OpenAI-encrypted compaction items cannot be decrypted by an API provider.
+Start a new task when moving a conversation with such history. Proprietary hosted
+tools, audio and file endpoints are not automatically implemented by Responses
+compatibility. Unsupported endpoints fail rather than silently falling back to
+a Codex account.
+
+The migration adds `responses_api_key` to the credential provenance constraint.
+Rolling that migration back requires first removing API upstream identities through
+the normal lifecycle; the down migration deliberately does not erase credentials
+or rewrite their type.

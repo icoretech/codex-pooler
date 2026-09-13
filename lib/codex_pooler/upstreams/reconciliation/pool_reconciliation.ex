@@ -15,6 +15,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.CreditBalanceStore
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
+  alias CodexPooler.Upstreams.ResponsesAPI
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
   alias CodexPooler.Upstreams.SavedResets.Convergence
@@ -69,6 +70,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     assignment_id = assignment_id(assignment_or_id)
 
     case load_active_assignment_with_identity(pool_id, assignment_id) do
+      {%PoolUpstreamAssignment{} = assignment,
+       %UpstreamIdentity{credential_provenance: "responses_api_key"} = identity} ->
+        ResponsesAPI.reconcile(assignment, identity)
+
       {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity} ->
         with {:ok, identity} <- LegacyAccessTokenExpiry.repair(identity) do
           quota_step =
