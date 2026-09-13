@@ -12,8 +12,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "ec83632287a87bd9a7b6da694ed32482d6b91bfc59810c7cfa89c2914827adfb"
-  @target_generated_at "2026-09-11T19:30:13.718153Z"
+  @target_sha256 "941cb4fca0f134563356844fadcf84008bd593d162407b4874a138d386aad52e"
+  @target_generated_at "2026-09-12T20:55:16.394578Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -314,7 +314,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "imports the reviewed September 11 target as canonical revision 2 rows" do
+  test "imports the reviewed September 12 target as canonical revision 2 rows" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
@@ -338,7 +338,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
-    assert first.inserted == 182
+    assert first.inserted == 179
     assert first.skipped == 87
 
     rows =
@@ -346,7 +346,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
         from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
       )
 
-    assert length(rows) == 182
+    assert length(rows) == 179
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
     refute Enum.any?(rows, &(&1.model_identifier in @removed_identifiers))
@@ -376,6 +376,12 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     raw = File.read!(@target)
     payload = CodexPooler.JSON.decode!(raw)
     expected_rates = @reviewed_fast_long_context_rates["gpt-5.6-luna"] |> Enum.map(&Decimal.new/1)
+
+    # The positive half. Without it the pin can go stale and the refute below
+    # still passes -- a mutated file differs from a stale pin exactly as it
+    # differs from a current one, so the test would claim to detect drift while
+    # being unable to.
+    assert file_sha256(@target) == @target_sha256
 
     one_byte_path = write_raw!(raw <> " ")
     refute file_sha256(one_byte_path) == @target_sha256
