@@ -2371,6 +2371,58 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
+      "title": "Pre-attempt Reservation Releases",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (phase, transport) (rate(codex_pooler_accounting_reservation_pre_attempt_release_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{phase}} {{transport}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 119
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
       "title": "Websocket Bridge Fallback Rate",
       "datasource": {
         "type": "prometheus",
@@ -2423,7 +2475,7 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 119
       }
     },
@@ -2475,8 +2527,8 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 12,
-        "y": 119
+        "x": 0,
+        "y": 128
       }
     },
     {
@@ -2487,7 +2539,7 @@
       "title": "Saved-reset Post-consume Convergence",
       "gridPos": {
         "x": 0,
-        "y": 128,
+        "y": 137,
         "h": 1,
         "w": 24
       }
@@ -2541,7 +2593,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 129
+        "y": 138
       }
     },
     {
@@ -2609,7 +2661,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 129
+        "y": 138
       }
     },
     {
@@ -2661,59 +2713,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 138
-      }
-    },
-    {
-      "type": "timeseries",
-      "transparent": false,
-      "repeatDirection": "h",
-      "title": "Ingress Firewall Denial Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Ingress firewall denials by bounded scope and reason. These denials happen before authenticated request accounting.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "asc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum by (scope, reason) (rate(codex_pooler_ingress_firewall_denied_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
-          "legendFormat": "{{scope}} {{reason}}",
-          "range": true,
-          "instant": false,
-          "editorMode": "code"
-        }
-      ],
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 138
+        "y": 147
       }
     },
     {
@@ -2764,7 +2764,7 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 147
       }
     },
@@ -2772,12 +2772,12 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Pre-attempt Reservation Releases",
+      "title": "Ingress Firewall Denial Rate",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
+      "description": "Ingress firewall denials by bounded scope and reason. These denials happen before authenticated request accounting.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2805,9 +2805,9 @@
       },
       "targets": [
         {
-          "expr": "sum by (phase, transport) (rate(codex_pooler_accounting_reservation_pre_attempt_release_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (scope, reason) (rate(codex_pooler_ingress_firewall_denied_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
           "refId": "",
-          "legendFormat": "{{phase}} {{transport}}",
+          "legendFormat": "{{scope}} {{reason}}",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -2816,8 +2816,8 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 12,
-        "y": 147
+        "x": 0,
+        "y": 156
       }
     }
   ]
