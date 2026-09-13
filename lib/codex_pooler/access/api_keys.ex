@@ -270,6 +270,8 @@ defmodule CodexPooler.Access.APIKeys do
              RuntimeAuthorization.prepare_status_transition(api_key, target_status),
            previous_api_key = transition.api_key,
            {:ok, target_pool_id} <- authorize_api_key_update(scope, previous_api_key, attrs),
+           transition =
+             RuntimeAuthorization.advance_epoch_for_pool_move(transition, target_pool_id),
            update_attrs = api_key_update_attrs(attrs, target_pool_id),
            {:ok, updated_api_key} <-
              update_api_key_record(previous_api_key, update_attrs, transition) do
@@ -278,7 +280,7 @@ defmodule CodexPooler.Access.APIKeys do
            updated_api_key,
            previous_api_key,
            dashboard_session_invalidation_required?(previous_api_key, update_attrs),
-           api_key_update_notification(attrs, transition)
+           api_key_update_notification(attrs, transition, previous_api_key, updated_api_key)
          }}
       end
     end)
@@ -885,9 +887,10 @@ defmodule CodexPooler.Access.APIKeys do
     Notifications.notify_api_key_change(result, "api_key_updated", previous_api_key.pool_id)
   end
 
-  defp api_key_update_notification(attrs, transition) do
+  defp api_key_update_notification(attrs, transition, previous_api_key, updated_api_key) do
     cond do
       transition.effective_disabling_transition? -> :effective_disabling_transition
+      RuntimeAuthorization.reread_required?(previous_api_key, updated_api_key) -> :ordinary_update
       status_submitted?(attrs) -> :status_without_disable
       true -> :ordinary_update
     end

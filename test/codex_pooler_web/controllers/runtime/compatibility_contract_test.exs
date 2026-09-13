@@ -97,16 +97,45 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   }
   @api_key_websocket_revocation_contract %{
     disabling_statuses: [:paused, :revoked],
+    disabling_changes: [
+      :pause,
+      :revoke,
+      :key_delete,
+      :expiry,
+      :pool_disable,
+      :pool_archive,
+      :pool_delete,
+      :pool_move
+    ],
     new_authentication: :blocked,
     prompt_delivery: %{
       channel: :pool_scoped_post_commit_event,
       role: :prompt_only,
-      authorization_authority: :durable_api_key_row
+      authorization_authority: :durable_api_key_row,
+      newer_epoch_event: :latches_revocation,
+      reread_events: [
+        :api_key_deleted,
+        :api_key_updated,
+        :pool_status_updated,
+        :inactive_pool_updated,
+        :pool_deleted
+      ]
     },
     durable_fence: %{
       authority: :locked_api_key_row,
       captured_epoch: :must_match,
-      missed_relay: :reject_later_frame
+      missed_relay: :reject_later_frame,
+      key_missing: :refused_with_captured_epoch,
+      expiry: :compared_with_database_clock,
+      pool_status: :read_with_key_row,
+      response_processed: :authorized_before_upstream_forward,
+      claim_and_reservation_refusal: :latches_revocation,
+      pool_move: :advances_runtime_epoch
+    },
+    idle_expiry: %{
+      event: :none,
+      check: :scheduled_at_expires_at,
+      authority: :durable_reread
     },
     close: %{
       code: 1008,

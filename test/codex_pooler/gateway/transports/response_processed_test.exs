@@ -3,13 +3,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Access
+  alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request, as: WireRequest
+  alias CodexPooler.Pools
 
   @endpoint "/backend-api/codex/responses"
 
@@ -113,12 +117,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
-  test "accounting rejection after forwarding is surfaced without a success row" do
+  test "accounting rejection after forwarding is surfaced without a success row", %{auth: auth} do
     {session, upstream, ack_ref} = connected_session(1)
 
+    # The key authorizes, but the context lacks the Pool the metadata row needs,
+    # so the failure can only come from accounting after the ack was forwarded.
     assert {:error, %{status: 500, code: "gateway_accounting_failed", accounting_error: reason}} =
              ResponseProcessed.handle_prepared(
-               %{key_prefix: "synthetic"},
+               Map.delete(auth, :pool),
                payload(),
                options(%{upstream_websocket_session: session})
              )
@@ -129,13 +135,109 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  describe "durable API-key authorization before forwarding" do
+    for {invalidation, expected_code} <- [
+          deleted: :api_key_missing,
+          expired: :api_key_expired,
+          pool_inactive: :pool_inactive
+        ] do
+      test "a #{invalidation} key is refused before the ack reaches the upstream websocket" do
+        invalidation = unquote(invalidation)
+        expected_code = unquote(expected_code)
+        %{pool: pool, api_key: key} = active_api_key_fixture()
+        auth = %{pool: pool, api_key: key, key_prefix: key.key_prefix}
+        {session, upstream, _ack_ref} = connected_session(0)
+        invalidate!(invalidation, pool, key)
+
+        assert {:error, %{code: ^expected_code, disabling_epoch: 0}} =
+                 ResponseProcessed.handle_prepared(
+                   auth,
+                   payload(),
+                   options(%{upstream_websocket_session: session})
+                 )
+
+        assert FakeUpstream.count(upstream) == 1
+        assert Repo.aggregate(Request, :count) == 0
+        assert :ok = FakeUpstream.verify!(upstream)
+      end
+    end
+
+    # Neither context can come from a live socket. Refusing it as a runtime
+    # disposition would latch revocation and close a socket whose key is still
+    # usable, so it is refused as a gateway error that carries no epoch.
+    test "a context without an API key is refused before the ack reaches the upstream websocket without a revocation" do
+      {session, upstream, _ack_ref} = connected_session(0)
+
+      assert {:error, %{status: 500, code: "api_key_authorization_context_missing"} = error} =
+               ResponseProcessed.handle_prepared(
+                 %{key_prefix: "synthetic"},
+                 payload(),
+                 options(%{upstream_websocket_session: session})
+               )
+
+      refute Map.has_key?(error, :disabling_epoch)
+      assert FakeUpstream.count(upstream) == 1
+      assert Repo.aggregate(Request, :count) == 0
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+
+    test "a context without a captured epoch is refused without inventing one" do
+      %{pool: pool, api_key: key} = active_api_key_fixture()
+      scope = owner_scope(key)
+
+      # A pause and resume leaves the key usable at a later epoch, which a
+      # fabricated epoch of 0 would refuse as stale.
+      assert {:ok, _paused} = Access.pause_api_key(scope, key)
+      assert {:ok, %APIKey{runtime_revocation_epoch: 1}} = Access.resume_api_key(scope, key)
+
+      auth = %{pool: pool, api_key: %{id: key.id}, key_prefix: key.key_prefix}
+      {session, upstream, _ack_ref} = connected_session(0)
+
+      assert {:error, %{status: 500, code: "api_key_authorization_context_missing"} = error} =
+               ResponseProcessed.handle_prepared(
+                 auth,
+                 payload(),
+                 options(%{upstream_websocket_session: session})
+               )
+
+      refute Map.has_key?(error, :disabling_epoch)
+      assert FakeUpstream.count(upstream) == 1
+      assert Repo.aggregate(Request, :count) == 0
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+  end
+
+  defp invalidate!(:deleted, _pool, key),
+    do: assert({:ok, _deleted} = Access.delete_api_key(owner_scope(key), key))
+
+  defp invalidate!(:expired, _pool, key) do
+    past = DateTime.add(DateTime.utc_now(), -1, :second)
+
+    assert {1, _rows} =
+             Repo.update_all(from(api_key in APIKey, where: api_key.id == ^key.id),
+               set: [expires_at: past]
+             )
+  end
+
+  defp invalidate!(:pool_inactive, pool, key) do
+    assert {:ok, %{status: "disabled"}} =
+             Pools.change_pool_status(owner_scope(key), pool, "disabled")
+  end
+
+  defp owner_scope(key) do
+    User
+    |> Repo.get!(key.created_by_user_id)
+    |> Scope.for_user(["instance_owner"])
+  end
+
   defp options(attrs \\ %{}), do: RequestOptions.build(attrs, @endpoint, %{})
   defp payload, do: %{"type" => "response.processed", "response_id" => "resp_sample_processed"}
 
   # Opens one native websocket turn and declares exactly `ack_count` processed
   # acks on the same connection. The fake replies nothing to an ack, so each
   # ack's consumption is observed through its barrier via `assert_ack_forwarded/2`.
-  defp connected_session(ack_count) when is_integer(ack_count) and ack_count > 0 do
+  # With no ack declared, any forwarded ack is an unexpected request.
+  defp connected_session(ack_count) when is_integer(ack_count) and ack_count >= 0 do
     observer = self()
     ack_ref = make_ref()
 
@@ -146,7 +248,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
       })
 
     ack_entries =
-      for _ <- 1..ack_count do
+      for _ <- List.duplicate(:ack, ack_count) do
         FakeUpstream.expect_request(
           method: "WEBSOCKET",
           path: @endpoint,

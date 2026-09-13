@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   @behaviour WebSock
 
   alias CodexPooler.Access
+  alias CodexPooler.Access.APIKey
   alias CodexPooler.Events
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata}
@@ -121,17 +122,42 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   def handle_info(
-        {Events, %Events.Event{pool_id: pool_id, topics: topics, payload: payload}},
+        {Events,
+         %Events.Event{pool_id: pool_id, topics: topics, reason: reason, payload: payload}},
         state
       )
       when is_list(topics) and is_map(payload) do
     if "pools" in topics and Map.get(state, :api_key_pool_id) == pool_id do
-      payload
-      |> handle_api_key_event(state)
+      reason
+      |> handle_pool_event(payload, state)
       |> close_if_revoked_idle()
     else
       {:ok, state}
     end
+  end
+
+  # A superseded token belongs to a check an edited expiry already replaced,
+  # so it falls through to the catch-all below.
+  def handle_info(
+        {:api_key_expiry_check, token},
+        %{api_key_expiry_check: %{token: token}} = state
+      )
+      when is_reference(token) do
+    state
+    |> Map.put(:api_key_expiry_check, nil)
+    |> reread_api_key_authorization()
+    |> close_if_revoked_idle()
+  end
+
+  # A superseded token belongs to a retry that a later reread already settled.
+  def handle_info(
+        {:api_key_reread_retry, token},
+        %{api_key_reread_retry: %{token: token}} = state
+      )
+      when is_reference(token) do
+    state
+    |> reread_api_key_authorization()
+    |> close_if_revoked_idle()
   end
 
   # Chunks are attributed to their producing turn by pid. A chunk from a task the
@@ -341,12 +367,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp handle_response_done(pid, result, state) do
     case api_key_revocation_disposition(result) do
       {:revoked, disabling_epoch} ->
+        # A durable refusal happens before dispatch, so the refused turn has no
+        # terminal for the client and delivery would never be scheduled for it
+        # on its own. Settling it here releases the parked task; otherwise it
+        # would count as admitted work forever and hold the 1008 close open.
         state =
           state
           |> remove_tracked_response_task(pid)
           |> remove_native_turn_output(pid)
           |> finish_revoked_public_turn(pid)
           |> revoke_api_key(disabling_epoch)
+          |> schedule_response_task_delivery(pid, :completed)
 
         {:ok, state}
 
@@ -368,6 +399,22 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     if active_public_turn?(state, pid), do: finish_public_turn(state), else: state
   end
 
+  # Every durable runtime-authorization refusal carries the epoch it refuses
+  # at, which is what separates it from an ordinary turn failure. A key that
+  # no longer exists, an expired key and a key on an inactive Pool latch
+  # revocation exactly like pause and revoke, so a claim, replay-intent or
+  # reservation refusal for them closes the socket after the drain instead of
+  # answering with an error frame on a socket that stays open.
+  @api_key_revocation_codes [
+    :api_key_paused,
+    :api_key_revoked,
+    :api_key_inactive,
+    :api_key_runtime_epoch_stale,
+    :api_key_expired,
+    :api_key_missing,
+    :pool_inactive
+  ]
+
   defp api_key_revocation_disposition({:socket_response_result, _source, result}),
     do: api_key_revocation_disposition(result)
 
@@ -378,12 +425,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     do: api_key_revocation_disposition(result)
 
   defp api_key_revocation_disposition({:error, %{code: code, disabling_epoch: disabling_epoch}})
-       when code in [
-              :api_key_paused,
-              :api_key_revoked,
-              :api_key_inactive,
-              :api_key_runtime_epoch_stale
-            ] and is_integer(disabling_epoch),
+       when code in @api_key_revocation_codes and is_integer(disabling_epoch),
        do: {:revoked, disabling_epoch}
 
   defp api_key_revocation_disposition(_result), do: :other
@@ -646,7 +688,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          |> Map.put(:api_key_pool_id, pool_id)
          |> Map.put(:api_key_runtime_epoch, captured_api_key_epoch(state))
          |> Map.put(:api_key_revoked?, false)
-         |> Map.put(:api_key_close_sent?, false)}
+         |> Map.put(:api_key_close_sent?, false)
+         |> schedule_api_key_expiry_check(authenticated_api_key_expiry(state))}
 
       {:error, reason} ->
         {:stop, reason, state}
@@ -666,6 +709,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        do: epoch
 
   defp captured_api_key_epoch(_state), do: 0
+
+  defp authenticated_api_key_expiry(%{auth: %{api_key: %{expires_at: %DateTime{} = expires_at}}}),
+    do: expires_at
+
+  defp authenticated_api_key_expiry(_state), do: nil
 
   defp initialize_firewall_state(state) do
     case InstanceSettingsCache.subscribe_applied() do
@@ -725,9 +773,22 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> drop_queued_responses()
   end
 
-  defp handle_api_key_event(_payload, %{api_key_revoked?: true} = state), do: {:ok, state}
+  # Pause and revoke broadcast the newer runtime epoch they disable at, so that
+  # event alone latches. Every other change that can make the key unusable
+  # carries nothing the socket could decide from -- a delete keeps the key's
+  # old status and epoch, an edited expiry changes neither, and a Pool change
+  # names no key -- so those events only prompt a reread of the durable
+  # authorization, which stays the authority. Pool events that cannot disable
+  # the Pool (a rename, a routing change) do not reread, so an ordinary Pool
+  # edit does not make every open socket of that Pool query its key row.
+  @api_key_reread_event_reasons ["api_key_deleted", "api_key_updated"]
+  @pool_reread_event_reasons ["pool_status_updated", "pool_deleted"]
+  @active_pool_status "active"
 
-  defp handle_api_key_event(
+  defp handle_pool_event(_reason, _payload, %{api_key_revoked?: true} = state), do: {:ok, state}
+
+  defp handle_pool_event(
+         _reason,
          %{
            "api_key_id" => api_key_id,
            "status" => status,
@@ -740,7 +801,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:ok, revoke_api_key(state, event_epoch)}
   end
 
-  defp handle_api_key_event(
+  defp handle_pool_event(reason, %{"api_key_id" => api_key_id}, %{api_key_id: api_key_id} = state)
+       when reason in @api_key_reread_event_reasons,
+       do: reread_api_key_authorization(state)
+
+  defp handle_pool_event(
+         _reason,
          %{"api_key_id" => api_key_id, "status" => status} = payload,
          %{api_key_id: api_key_id} = state
        )
@@ -748,18 +814,104 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     if Map.has_key?(payload, "runtime_revocation_epoch") do
       {:ok, state}
     else
-      case refresh_api_key_authorization(state) do
-        {:authorized, state} -> {:ok, state}
-        {:revoked, state} -> {:ok, state}
-      end
+      reread_api_key_authorization(state)
     end
   end
 
-  defp handle_api_key_event(_payload, state), do: {:ok, state}
+  defp handle_pool_event(reason, payload, state)
+       when reason in @pool_reread_event_reasons and not is_map_key(payload, "api_key_id"),
+       do: reread_api_key_authorization(state)
+
+  defp handle_pool_event("pool_updated", %{"status" => status} = payload, state)
+       when is_binary(status) and status != @active_pool_status and
+              not is_map_key(payload, "api_key_id"),
+       do: reread_api_key_authorization(state)
+
+  defp handle_pool_event(_reason, _payload, state), do: {:ok, state}
+
+  # An event or the expiry check only prompts this reread, while the socket may
+  # be carrying admitted work that does not need the database at this instant.
+  # A database error here therefore keeps the socket open and retries the
+  # reread with backoff, instead of ending the connection and cancelling that
+  # work. Nothing is authorized meanwhile, and the next client frame still
+  # meets the per-frame check, which does not rescue. Only errors reaching or
+  # querying PostgreSQL are retried; anything else is a defect and raises.
+  @api_key_reread_retry_base_ms 1_000
+  @api_key_reread_retry_max_ms 30_000
+
+  defp reread_api_key_authorization(state) do
+    {_authorization, state} = refresh_api_key_authorization(state)
+    {:ok, clear_api_key_reread_retry(state)}
+  rescue
+    error in [DBConnection.ConnectionError, Postgrex.Error] ->
+      {:ok, schedule_api_key_reread_retry(state, error)}
+  end
+
+  defp schedule_api_key_reread_retry(state, error) do
+    attempt =
+      case Map.get(state, :api_key_reread_retry) do
+        %{attempt: previous_attempt} = previous_retry ->
+          cancel_api_key_timer(previous_retry)
+          previous_attempt + 1
+
+        nil ->
+          1
+      end
+
+    delay_ms = api_key_reread_retry_delay(attempt)
+    token = make_ref()
+    timer = Process.send_after(self(), {:api_key_reread_retry, token}, delay_ms)
+
+    Logger.warning(
+      "api key authorization reread failed; retrying " <>
+        "reason=#{inspect(error.__struct__)} attempt=#{attempt} delay_ms=#{delay_ms}"
+    )
+
+    Map.put(state, :api_key_reread_retry, %{token: token, timer: timer, attempt: attempt})
+  end
+
+  # Doubles from the base up to the cap, with up to a quarter of jitter, so the
+  # sockets of one Pool that all failed together do not retry together.
+  defp api_key_reread_retry_delay(attempt) do
+    delay_ms =
+      min(
+        @api_key_reread_retry_base_ms * Integer.pow(2, min(attempt - 1, 5)),
+        @api_key_reread_retry_max_ms
+      )
+
+    delay_ms + :rand.uniform(div(delay_ms, 4) + 1) - 1
+  end
+
+  defp clear_api_key_reread_retry(state) do
+    case Map.get(state, :api_key_reread_retry) do
+      nil ->
+        state
+
+      retry ->
+        cancel_api_key_timer(retry)
+        Map.put(state, :api_key_reread_retry, nil)
+    end
+  end
 
   defp refresh_api_key_authorization(%{api_key_revoked?: true} = state),
     do: {:revoked, state}
 
+  # `Repo.transact/1` hands back the function's own `{:ok, authorization}` or
+  # rolls back to `{:error, disposition}`; it never nests them, and any other
+  # return raises. So the success is matched exactly and every refusal revokes:
+  # a disabled, stale, expired or missing key and an inactive Pool all close
+  # the socket with the same 1008 after the drain. A refusal without a
+  # disabling epoch latches at the epoch the socket captured.
+  #
+  # A database exception is deliberately not rescued here. On the per-frame
+  # path it propagates out of the socket callback, the connection process exits
+  # and the client sees the connection end, so nothing is authorized and no
+  # frame is dispatched. Every frame this check admits needs the same database
+  # next -- the claim, the reservation, the acknowledgement's own authorization
+  # -- so answering a retryable error would only move the failure one step later
+  # while keeping open a socket that cannot prove its key is still usable. A
+  # reread that only an event or the expiry check prompted has no frame waiting
+  # on it and retries instead (`reread_api_key_authorization/1`).
   defp refresh_api_key_authorization(
          %{api_key_id: api_key_id, api_key_runtime_epoch: captured_epoch} = state
        )
@@ -767,33 +919,93 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     case Repo.transact(fn ->
            Access.authorize_api_key_runtime_turn_for_read(api_key_id, captured_epoch)
          end) do
-      {:ok, {:ok, _authorization}} ->
-        {:authorized, state}
+      {:ok, %{api_key: %APIKey{} = api_key, runtime_revocation_epoch: ^captured_epoch}} ->
+        {:authorized, schedule_api_key_expiry_check(state, api_key.expires_at)}
 
-      {:ok, {:error, %{code: code, disabling_epoch: epoch}}}
-      when code in [
-             :api_key_paused,
-             :api_key_revoked,
-             :api_key_inactive,
-             :api_key_runtime_epoch_stale
-           ] ->
-        {:revoked, revoke_api_key(state, epoch)}
-
-      {:error, %{code: code, disabling_epoch: epoch}}
-      when code in [
-             :api_key_paused,
-             :api_key_revoked,
-             :api_key_inactive,
-             :api_key_runtime_epoch_stale
-           ] ->
-        {:revoked, revoke_api_key(state, epoch)}
-
-      _unavailable_or_missing ->
-        {:authorized, state}
+      {:error, reason} ->
+        {:revoked, revoke_api_key(state, revocation_epoch(reason, captured_epoch))}
     end
   end
 
-  defp refresh_api_key_authorization(state), do: {:authorized, state}
+  # `init/1` refuses to start a socket without an API-key identity
+  # (`:api_key_identity_required`), so a live connection always reaches the
+  # clause above. A state without the identity key is one built by hand to
+  # exercise transport behaviour; a state that carries an identity this check
+  # cannot use is refused rather than passed through.
+  defp refresh_api_key_authorization(state) when not is_map_key(state, :api_key_id),
+    do: {:authorized, state}
+
+  defp refresh_api_key_authorization(state),
+    do: {:revoked, revoke_api_key(state, Map.get(state, :api_key_runtime_epoch))}
+
+  defp revocation_epoch(%{disabling_epoch: epoch}, _captured_epoch) when is_integer(epoch),
+    do: epoch
+
+  defp revocation_epoch(_reason, captured_epoch), do: captured_epoch
+
+  # Expiry is a clock crossing rather than an edit, so no event announces it.
+  # A socket whose key has an expiry asks the durable authorization again at
+  # that instant, which closes an idle connection without waiting for a client
+  # frame that may never come. The timer only decides when to ask: the reread
+  # compares the expiry with the database clock and stays the authority, so a
+  # node whose clock runs ahead of the database finds the key still usable and
+  # asks again a little later, and an edited expiry re-arms the check from the
+  # row the reread returns. The next frame alone would already be refused, but
+  # waiting for it would keep an expired credential's connection, its owner
+  # lease and its upstream websocket open for as long as the client stays quiet.
+  @api_key_expiry_recheck_floor_ms 1_000
+  @api_key_expiry_check_max_delay_ms 3_600_000
+
+  defp schedule_api_key_expiry_check(state, %DateTime{} = expires_at) do
+    case Map.get(state, :api_key_expiry_check) do
+      %{expires_at: ^expires_at} ->
+        state
+
+      previous_check ->
+        cancel_api_key_timer(previous_check)
+        token = make_ref()
+
+        timer =
+          Process.send_after(
+            self(),
+            {:api_key_expiry_check, token},
+            api_key_expiry_check_delay(expires_at)
+          )
+
+        Map.put(state, :api_key_expiry_check, %{
+          token: token,
+          timer: timer,
+          expires_at: expires_at
+        })
+    end
+  end
+
+  defp schedule_api_key_expiry_check(state, nil) do
+    case Map.get(state, :api_key_expiry_check) do
+      nil ->
+        state
+
+      check ->
+        cancel_api_key_timer(check)
+        Map.put(state, :api_key_expiry_check, nil)
+    end
+  end
+
+  defp cancel_api_key_timer(%{timer: timer}) when is_reference(timer) do
+    _remaining = Process.cancel_timer(timer)
+    :ok
+  end
+
+  defp cancel_api_key_timer(_check), do: :ok
+
+  # A capped delay rereads when it fires and re-arms from the durable row, so
+  # an expiry further ahead than one timer should wait still gets its check.
+  defp api_key_expiry_check_delay(expires_at) do
+    case DateTime.diff(expires_at, DateTime.utc_now(), :millisecond) + 1 do
+      remaining_ms when remaining_ms > 0 -> min(remaining_ms, @api_key_expiry_check_max_delay_ms)
+      _already_passed -> @api_key_expiry_recheck_floor_ms
+    end
+  end
 
   defp revoke_api_key(%{api_key_revoked?: true} = state, _disabling_epoch), do: state
 
@@ -2364,7 +2576,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     reject_prepared_response(owner_error(reason), state)
   end
 
+  # A replay intent reauthorizes the key after the socket's own frame check, so
+  # a key that stopped being usable in between reaches this point as a durable
+  # fence refusal. That is a revocation rather than a rejected frame: it
+  # latches and closes with 1008 once the drain allows, instead of answering
+  # with an error frame on a socket that would stay open.
   defp reject_prepared_response(reason, state) do
+    case api_key_revocation_disposition({:error, reason}) do
+      {:revoked, disabling_epoch} ->
+        revoked_state =
+          state
+          |> clear_public_response_context()
+          |> revoke_api_key(disabling_epoch)
+
+        close_if_revoked_idle({:ok, revoked_state})
+
+      :other ->
+        render_prepared_response_rejection(reason, state)
+    end
+  end
+
+  defp render_prepared_response_rejection(reason, state) do
     :telemetry.execute([:codex_pooler, :gateway, :native_compaction, :rejection], %{count: 1}, %{
       reason: DiagnosticTaxonomy.identifier(reason)
     })

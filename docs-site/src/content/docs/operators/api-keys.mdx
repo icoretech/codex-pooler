@@ -254,7 +254,7 @@ The current actions are:
   <tbody>
     <tr>
       <td>Edit</td>
-      <td>Opens the same policy wizard for an existing key. Stored secret material is not shown.</td>
+      <td>Opens the same policy wizard for an existing key. Stored secret material is not shown. Moving the key to another Pool or changing its expiry also affects connections already open with it. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
     <tr>
       <td>Pause</td>
@@ -274,7 +274,7 @@ The current actions are:
     </tr>
     <tr>
       <td>Delete</td>
-      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key and related request history from this instance.</td>
+      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key and related request history from this instance. Connections still open with the key close as well. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
   </tbody>
 </table>
@@ -283,17 +283,29 @@ Prefer pause for temporary containment, rotate for suspected exposure, revoke fo
 
 ## Responses WebSocket lifecycle
 
-For supported Responses WebSocket routes, pausing or revoking a Pool API key blocks new runtime authentication and prompts existing WebSocket connections to close with policy code `1008`. The cluster notification is prompt-only delivery, not the authorization authority.
+For supported Responses WebSocket routes, every change that makes a Pool API key unusable also ends the WebSocket connections already open with it:
 
-A durable fence checks the key's persisted status and revocation generation before later work is admitted. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work.
+1. pausing or revoking the key
+2. deleting the key, or deleting the archived Pool it belongs to
+3. the key reaching its expiry time
+4. disabling or archiving the key's Pool
+5. moving the key to another Pool
 
-Only work admitted before the disabling change won the durable ordering may drain and finish once. Queued and later frames do not start after pause or revoke takes effect.
+The first four block new runtime authentication. A move does not: the key authenticates in its new Pool, but a connection opened before the move still belongs to the previous Pool. In every case the existing connections close with policy code `1008` and the reason `api key is no longer active`. The cluster notification only prompts that close; it is not the authorization authority.
 
-That drain has no deadline of its own. A request already running when the pause or revoke landed finishes under whatever timeout already governs it, and the connection closes when it ends, so the interval is the length of that one request rather than a separate bound you can configure. Everything else stops immediately: the key authenticates nothing new, later frames on an open connection are ignored rather than queued, and work already waiting behind the running request is discarded without being started.
+Before later work is admitted, a durable fence reads the key's persisted status, revocation generation, and expiry, together with its Pool's status. A move advances the revocation generation, so authorization from before the move no longer matches. A key that no longer exists fails the same fence. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work. That includes `response.processed` acknowledgements: one sent after the change is not passed on to the upstream account.
+
+Expiry sends no notification, because nothing is edited when the clock passes the expiry time. A connection whose key has an expiry time checks the key again when that time arrives and closes then, even if the client sends nothing. Editing the expiry, including moving it into the past, prompts the same check immediately.
+
+Only work admitted before the disabling change won the durable ordering may drain and finish once. Queued and later frames do not start after the change takes effect.
+
+That drain has no deadline of its own. A request already running when the change landed finishes under whatever timeout already governs it, and the connection closes when it ends, so the interval is the length of that one request rather than a separate bound you can configure. Everything else stops immediately: the key authenticates nothing new, later frames on an open connection are ignored rather than queued, and work already waiting behind the running request is discarded without being started.
 
 Draining rather than cutting is deliberate. Ending a response mid-stream would leave the client with a truncated answer and no terminal, and would leave its accounting unbalanced. If you are revoking a credential you believe is compromised and need certainty that nothing is still running, watch for the connection to close rather than assuming revocation alone ended it.
 
-Resuming a paused key makes it eligible for new authentication, but it does not reopen an existing socket that was closed or marked for closure. The client must establish a fresh WebSocket connection.
+Delete also removes the key's request history, including the record of a request that is still running. When that record matters, pause or revoke the key first, wait for its connections to close, and delete it afterwards.
+
+Resuming a paused key, re-enabling its Pool, or moving its expiry later makes it eligible for new authentication, but it does not reopen an existing socket that was closed or marked for closure. The client must establish a fresh WebSocket connection. After a move, that fresh connection authenticates in the key's new Pool.
 
 During a rolling update, full cluster protection begins only after all application replicas run the release that contains this behavior. No new Helm value or runtime environment setting is required.
 
@@ -308,7 +320,7 @@ When client traffic is rejected or not behaving as expected, check API keys in t
 5. confirm model policy allows the requested model
 6. confirm enforced request fields are expected
 7. confirm request and token limits are not exceeded
-8. check the owning Pool for active upstream assignments
+8. confirm the owning Pool is active and has active upstream assignments
 9. use Request logs filtered by Pool or key metadata to inspect recent failures
 10. use Audit logs to confirm recent create, rotate, pause, revoke, or edit actions
 

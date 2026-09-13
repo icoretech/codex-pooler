@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessed do
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata, as: FinalizationMetadata
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
+  alias CodexPooler.Repo
   alias CodexPooler.RouteClass
 
   @endpoint "/backend-api/codex/responses"
@@ -37,6 +38,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessed do
           {:ok, gateway_result()} | {:error, gateway_error()}
   def handle_prepared(auth, payload, %RequestOptions{} = request_options)
       when is_map(payload) do
+    with :ok <- authorize_api_key(auth, request_options) do
+      forward_and_record(auth, payload, request_options)
+    end
+  end
+
+  defp forward_and_record(auth, payload, %RequestOptions{} = request_options) do
     case UpstreamDispatch.forward_response_processed(payload, request_options) do
       :ok ->
         with :ok <- record_processed_ack(auth, payload, request_options) do
@@ -46,6 +53,60 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessed do
       {:error, reason} ->
         {:error, forward_error(reason)}
     end
+  end
+
+  # An acknowledgement has no turn claim or reservation behind it, so nothing
+  # else fences the forward. The socket rereads authorization when a frame
+  # arrives, but a frame that waited in the queue behind an admitted turn, or
+  # one an owner node runs for another node's socket, reaches this point long
+  # after that check. The reader-mode authorization the websocket claim uses
+  # therefore runs here, before the frame can reach the upstream websocket, and
+  # a refusal returns the runtime disposition unchanged so the socket latches
+  # revocation and closes with 1008. A database exception propagates: the
+  # response task fails and nothing is forwarded.
+  #
+  # A context without an API key id or a captured epoch cannot come from a live
+  # socket. It is refused as a gateway error that carries no disabling epoch,
+  # because an invented epoch or a missing-key disposition would latch
+  # revocation and close a socket whose key is still usable.
+  defp authorize_api_key(auth, %RequestOptions{} = request_options) do
+    with {:ok, api_key_id} <- auth_api_key_id(auth),
+         {:ok, captured_epoch} <- captured_api_key_epoch(auth, request_options) do
+      authorize_turn_for_read(api_key_id, captured_epoch)
+    end
+  end
+
+  defp authorize_turn_for_read(api_key_id, captured_epoch) do
+    case Repo.transact(fn ->
+           Access.authorize_api_key_runtime_turn_for_read(api_key_id, captured_epoch)
+         end) do
+      {:ok, %{api_key: _api_key, runtime_revocation_epoch: _epoch}} -> :ok
+      {:error, disposition} -> {:error, disposition}
+    end
+  end
+
+  defp auth_api_key_id(%{api_key: %{id: api_key_id}}) when is_binary(api_key_id),
+    do: {:ok, api_key_id}
+
+  defp auth_api_key_id(_auth), do: {:error, authorization_context_error()}
+
+  defp captured_api_key_epoch(_auth, %RequestOptions{runtime: %{api_key_runtime_epoch: epoch}})
+       when is_integer(epoch) and epoch >= 0,
+       do: {:ok, epoch}
+
+  defp captured_api_key_epoch(%{api_key: %{runtime_revocation_epoch: epoch}}, _request_options)
+       when is_integer(epoch) and epoch >= 0,
+       do: {:ok, epoch}
+
+  defp captured_api_key_epoch(_auth, _request_options),
+    do: {:error, authorization_context_error()}
+
+  defp authorization_context_error do
+    error(
+      500,
+      "api_key_authorization_context_missing",
+      "response.processed has no API key authorization context"
+    )
   end
 
   defp record_processed_ack(auth, payload, %RequestOptions{} = request_options) do

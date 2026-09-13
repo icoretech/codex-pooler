@@ -511,7 +511,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :api_key_websocket_revocation,
       contract:
-        "pausing or revoking a Pool API key blocks new authentication and uses a pool-scoped event only to prompt existing Responses websocket closure; the locked durable key row and captured revocation epoch remain authoritative when relay is missed or delayed, queued and later work is dropped, only pre-admitted work drains and settles once before the fixed 1008 close, legacy epochless events reread durable authorization, resume requires a fresh connection, and firewall revocation semantics remain unchanged"
+        "pausing, revoking or deleting a Pool API key, its expiry, moving it to another Pool, and disabling, archiving or deleting its Pool close existing Responses websockets, all but the move block new authentication, and a pool-scoped event only prompts closure; a newer-epoch pause or revoke event latches directly, key delete, key edit and Pool status or delete events reread durable authorization, an edit that changes the key's Pool or expiry broadcasts to both Pools even when it submits an unchanged status, an event- or expiry-prompted reread that meets a database error retries with backoff while the socket stays open, and an idle socket rereads at the key's expiry; the locked durable key row, its captured revocation epoch, which a Pool move advances, its expiry against the database clock and its Pool status remain authoritative when relay is missed or delayed, refuse a key that no longer exists with the captured epoch, and authorize response.processed before any upstream forward; claim, replay-intent and reservation refusals latch revocation, queued and later work is dropped, only pre-admitted work drains and settles once before the fixed 1008 close, legacy epochless events reread durable authorization, resume or re-enable requires a fresh connection, and firewall revocation semantics remain unchanged"
     },
     %{
       slug: :firewall,
@@ -2229,16 +2229,45 @@ defmodule CodexPooler.CompatibilityMatrix do
     },
     api_key_websocket_revocation: %{
       disabling_statuses: [:paused, :revoked],
+      disabling_changes: [
+        :pause,
+        :revoke,
+        :key_delete,
+        :expiry,
+        :pool_disable,
+        :pool_archive,
+        :pool_delete,
+        :pool_move
+      ],
       new_authentication: :blocked,
       prompt_delivery: %{
         channel: :pool_scoped_post_commit_event,
         role: :prompt_only,
-        authorization_authority: :durable_api_key_row
+        authorization_authority: :durable_api_key_row,
+        newer_epoch_event: :latches_revocation,
+        reread_events: [
+          :api_key_deleted,
+          :api_key_updated,
+          :pool_status_updated,
+          :inactive_pool_updated,
+          :pool_deleted
+        ]
       },
       durable_fence: %{
         authority: :locked_api_key_row,
         captured_epoch: :must_match,
-        missed_relay: :reject_later_frame
+        missed_relay: :reject_later_frame,
+        key_missing: :refused_with_captured_epoch,
+        expiry: :compared_with_database_clock,
+        pool_status: :read_with_key_row,
+        response_processed: :authorized_before_upstream_forward,
+        claim_and_reservation_refusal: :latches_revocation,
+        pool_move: :advances_runtime_epoch
+      },
+      idle_expiry: %{
+        event: :none,
+        check: :scheduled_at_expires_at,
+        authority: :durable_reread
       },
       close: %{
         code: 1008,

@@ -180,6 +180,30 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
     end
   end
 
+  test "a runtime authorization locks the key row but never the key's Pool row", %{
+    fixture: fixture
+  } do
+    for authorize <- [
+          &Access.authorize_api_key_runtime_turn_for_read/2,
+          &Access.authorize_api_key_runtime_turn/2
+        ] do
+      try do
+        holder = hold_authorization!(fixture, authorize)
+
+        # The holder does hold the key row, so a writer of that row waits ...
+        assert row_lock_outcome("api_keys", fixture.api_key.id) == :lock_not_available
+
+        # ... while the Pool row stays free: a Pool change or delete, which
+        # locks the Pool before it reaches `api_keys`, never waits on an
+        # authorization and cannot order the two rows against it.
+        assert row_lock_outcome("pools", fixture.api_key.pool_id) == :locked
+        assert release!(holder) == {:ok, :released}
+      after
+        shutdown_participants()
+      end
+    end
+  end
+
   defp hold_reservation_lock!(fixture) do
     parent = self()
     ref = make_ref()
@@ -217,6 +241,63 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
         @detection_budget_ms -> raise "the reservation holder was not released"
       end
     end)
+  end
+
+  defp hold_authorization!(fixture, authorize) do
+    parent = self()
+    ref = make_ref()
+
+    task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          authorization_holder(parent, ref, fixture.api_key.id, authorize)
+        end)
+      end)
+
+    track_participant(%{task: task, ref: ref})
+
+    receive do
+      {:authorization_holding, ^ref, authorization} ->
+        assert {:ok, %{runtime_revocation_epoch: 0}} = authorization
+        %{task: task, ref: ref}
+    after
+      @detection_budget_ms -> flunk("the authorization holder did not report its locks")
+    end
+  end
+
+  defp authorization_holder(parent, ref, api_key_id, authorize) do
+    Repo.transaction(fn ->
+      set_no_wait_lock_timeout!()
+      send(parent, {:authorization_holding, ref, authorize.(api_key_id, 0)})
+
+      receive do
+        {:release_participant, ^ref} -> :released
+      after
+        @detection_budget_ms -> raise "the authorization holder was not released"
+      end
+    end)
+  end
+
+  # `NOWAIT` answers at once whether another backend holds the row, so the case
+  # spends no lock timeout. Only fixed table names reach the statement.
+  defp row_lock_outcome(table, id) when table in ["api_keys", "pools"] do
+    Sandbox.unboxed_run(Repo, fn ->
+      {:ok, :locked} =
+        Repo.transaction(fn ->
+          SQL.query!(
+            Repo,
+            "SELECT id FROM #{table} WHERE id = $1 FOR UPDATE NOWAIT",
+            [Ecto.UUID.dump!(id)]
+          )
+
+          :locked
+        end)
+
+      :locked
+    end)
+  rescue
+    error in Postgrex.Error ->
+      if lock_not_available?(error), do: :lock_not_available, else: reraise(error, __STACKTRACE__)
   end
 
   defp expect_lock_wait(fun) do
