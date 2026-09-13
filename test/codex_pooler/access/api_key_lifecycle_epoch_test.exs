@@ -558,8 +558,11 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
     end
   end
 
+  # Every caller runs inside `Sandbox.unboxed_run/2`, so this owner is committed. The committed
+  # fixture registers its removal first, which also returns the bootstrap singleton to pending;
+  # `bootstrap_owner_fixture/1` left both behind for the next file to find.
   defp owner_scope_and_pool do
-    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    %{user: owner} = committed_bootstrap_owner_fixture!(%{"email" => unique_user_email()})
     scope = Scope.for_user(owner, ["instance_owner"])
     suffix = System.unique_integer([:positive])
 
