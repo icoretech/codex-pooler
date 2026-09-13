@@ -226,6 +226,3 @@ test-fast:
 		fi; \
 	done; \
 	exit 1
-
-smoke:
-	@scripts/dev/codex-smoke.sh
