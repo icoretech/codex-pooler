@@ -31,7 +31,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
-  @root Path.join(["tmp", "issue-241"])
+  @root Path.join(["tmp", "responses-tool-compat"])
   @runtime_root Path.join(@root, "runtime")
   @receipt_root Path.join(@root, "receipts")
   @manifest_name "manifest.json"
@@ -468,13 +468,17 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, journal, []}, fn {identity, index}, {:ok, journal, fixtures} ->
       slug = Enum.at(journal["pool_slugs"], index - 1)
-      key_label = "issue-241-#{journal["run_id"]}-#{index}"
+      key_label = "responses-tool-compat-#{journal["run_id"]}-#{index}"
 
       with {:ok, journal} <- before_call(journal, run_dir, "pool", "create", %{slug: slug}),
            {:ok, %Pool{} = pool} <-
              Pools.create_pool(
                scope,
-               %{slug: slug, name: "Issue 241 certification #{index}", status: "active"},
+               %{
+                 slug: slug,
+                 name: "Responses tool compatibility certification #{index}",
+                 status: "active"
+               },
                broadcast?: false
              ),
            {:ok, journal} <- after_resource(journal, run_dir, "pool", pool.id, %{slug: pool.slug}),
@@ -747,13 +751,13 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       "custom" =>
         custom_case(
           "candidate_custom_#{suffix}",
-          %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
-          "issue241",
-          {:exact, "issue241"}
+          %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "responses_tool")},
+          "responses_tool",
+          {:exact, "responses_tool"}
         ),
       "function" =>
         function_case("candidate_function_#{suffix}", strict_object_schema(), %{
-          "goal" => %{"value" => "issue241"}
+          "goal" => %{"value" => "responses_tool"}
         })
     }
   end
@@ -1356,15 +1360,15 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     [
       custom_case(
         "custom_lark_#{suffix}",
-        %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
-        "issue241",
-        {:exact, "issue241"}
+        %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "responses_tool")},
+        "responses_tool",
+        {:exact, "responses_tool"}
       ),
       function_case("function_object_#{suffix}", repaired_object_schema(), %{
-        "goal" => %{"value" => "issue241"}
+        "goal" => %{"value" => "responses_tool"}
       }),
       function_case("function_array_#{suffix}", repaired_array_schema(), %{
-        "items" => ["issue241"]
+        "items" => ["responses_tool"]
       }),
       # Unforced: every other accepted case carries a map-shaped tool_choice, so
       # in Lite they all certify as the expected 400. Without this cell a
@@ -1373,12 +1377,17 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       auto_choice_case(
         custom_case(
           "custom_lark_auto_#{suffix}",
-          %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
-          "issue241",
-          {:exact, "issue241"}
+          %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "responses_tool")},
+          "responses_tool",
+          {:exact, "responses_tool"}
         )
       ),
-      custom_case("custom_text_#{suffix}", %{"type" => "text"}, "issue241-text", :any_string),
+      custom_case(
+        "custom_text_#{suffix}",
+        %{"type" => "text"},
+        "responses_tool-text",
+        :any_string
+      ),
       custom_case(
         "custom_regex_#{suffix}",
         %{"type" => "grammar", "syntax" => "regex", "definition" => "^[a-z]{8}$"},
@@ -1386,25 +1395,25 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         {:matches, ~r/^[a-z]{8}$/}
       ),
       negative_case("malformed_custom_format", %{
-        "input" => "issue241",
+        "input" => "responses_tool",
         "tools" => [
           %{"type" => "custom", "name" => "bad_#{suffix}", "format" => %{"type" => "grammar"}}
         ]
       }),
       negative_case("unknown_named_choice", %{
-        "input" => "issue241",
+        "input" => "responses_tool",
         "tools" => [%{"type" => "custom", "name" => "known_#{suffix}"}],
         "tool_choice" => %{"type" => "custom", "name" => "unknown_#{suffix}"}
       }),
       negative_case("executable_collision", %{
-        "input" => "issue241",
+        "input" => "responses_tool",
         "tools" => [
           %{"type" => "custom", "name" => "collision_#{suffix}"},
           %{"type" => "function", "name" => "collision_#{suffix}", "strict" => false}
         ]
       }),
       negative_case("invalid_explicit_type", %{
-        "input" => "issue241",
+        "input" => "responses_tool",
         "tools" => [
           %{
             "type" => "function",
@@ -1422,7 +1431,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   # because a custom tool's `format` decides how much of the output is actually
   # constrained:
   #
-  #   * a lark grammar of `start: "issue241"` admits exactly one string, so exact
+  #   * a lark grammar of `start: "responses_tool"` admits exactly one string, so exact
   #     equality is a property of the request and holds deterministically;
   #   * `^[a-z]{8}$` constrains the shape only — any eight lowercase letters
   #     satisfy it, and which eight the model picks is its own business;
@@ -1606,7 +1615,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
     headers = [
       {"authorization", "Bearer #{raw_key}"},
-      {"x-codex-turn-state", "issue241-#{random_suffix()}"},
+      {"x-codex-turn-state", "responses_tool-#{random_suffix()}"},
       {"openai-beta", "responses_websockets=2026-02-06"}
     ]
 
@@ -2675,7 +2684,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     previous_oban = Application.get_env(:codex_pooler, Oban)
     previous_repo = Application.get_env(:codex_pooler, Repo)
     previous_endpoint = Application.get_env(:codex_pooler, CodexPoolerWeb.Endpoint)
-    application_name = "issue241_#{System.unique_integer([:positive])}"
+    application_name = "responses_tool_#{System.unique_integer([:positive])}"
 
     oban =
       previous_oban
@@ -2781,7 +2790,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     parameters =
       config
       |> Keyword.get(:parameters, [])
-      |> Keyword.put(:application_name, "issue241_inspector")
+      |> Keyword.put(:application_name, "responses_tool_inspector")
 
     Keyword.put(config, :parameters, parameters)
   end
@@ -2846,11 +2855,13 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
     %{rows: [[locked?]]} =
       Postgrex.query!(inspector, "SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))", [
-        "codex-pooler:issue-241-certification",
+        "codex-pooler:responses-tool-compat-certification",
         database
       ])
 
-    if locked?, do: :ok, else: {:error, "another issue-241 certification holds the database lock"}
+    if locked?,
+      do: :ok,
+      else: {:error, "another responses-tool-compat certification holds the database lock"}
   end
 
   defp release_lock(inspector) when is_pid(inspector) do
@@ -3049,7 +3060,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     do:
       Enum.map(
         1..@identity_count,
-        &("issue-241-#{run_id}-#{String.pad_leading(Integer.to_string(&1), 2, "0")}"
+        &("responses-tool-compat-#{run_id}-#{String.pad_leading(Integer.to_string(&1), 2, "0")}"
           |> String.downcase())
       )
 

@@ -3820,7 +3820,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              Responses.coerce(payload)
   end
 
-  describe "issue 241 direct Responses custom tool admission" do
+  describe "responses tool compatibility direct Responses custom tool admission" do
     test "existing function tools and named choices remain semantically unchanged" do
       function_tool =
         flat_function_tool(

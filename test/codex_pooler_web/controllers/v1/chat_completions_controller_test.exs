@@ -474,14 +474,14 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         %{
           "type" => "function",
           "function" => %{
-            "name" => "issue241_chat_tool",
+            "name" => "responses_tool_chat_tool",
             "parameters" => %{"type" => "object", "properties" => %{}}
           }
         }
       ])
       |> Map.put("tool_choice", %{
         "type" => "function",
-        "function" => %{"name" => "issue241_chat_tool"}
+        "function" => %{"name" => "responses_tool_chat_tool"}
       })
 
     response =

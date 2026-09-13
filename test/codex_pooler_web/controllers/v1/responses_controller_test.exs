@@ -3876,7 +3876,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       "description" => "Synthetic Lite choice fixture",
       "format" => %{
         "type" => "grammar",
-        "definition" => ~s(start: "issue241"),
+        "definition" => ~s(start: "responses_tool"),
         "syntax" => "lark"
       }
     }
@@ -7560,9 +7560,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   test "POST /v1/responses SSE collection backfills tool calls from a real empty terminal" do
     call = %{
       "type" => "custom_tool_call",
-      "name" => "issue241_probe",
-      "call_id" => "call_issue241",
-      "input" => "issue241"
+      "name" => "responses_tool_probe",
+      "call_id" => "call_responses_tool",
+      "input" => "responses_tool"
     }
 
     body =
@@ -7575,7 +7575,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
-            "id" => "resp_issue241_empty_terminal",
+            "id" => "resp_responses_tool_empty_terminal",
             "status" => "completed",
             "error" => nil,
             "output" => []
@@ -7602,7 +7602,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         CodexPooler.JSON.encode!(%{
           "type" => "response.completed",
           "response" => %{
-            "id" => "resp_issue241_populated_terminal",
+            "id" => "resp_responses_tool_populated_terminal",
             "status" => "completed",
             "output" => [authoritative]
           }

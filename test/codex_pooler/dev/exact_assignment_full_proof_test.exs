@@ -14,7 +14,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProofTest do
 
   setup do
     run_id = "20260811T120000Z-#{random_hex(6)}"
-    run_dir = Path.join(["tmp", "issue-241", "runtime", run_id])
+    run_dir = Path.join(["tmp", "responses-tool-compat", "runtime", run_id])
 
     on_exit(fn -> File.rm_rf(run_dir) end)
 
@@ -90,7 +90,9 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProofTest do
 
     assert :ok = Proof.verify_loopback_fake(fake)
 
-    owned = PoolerFixtures.pool_fixture(%{slug: "issue-241-#{String.downcase(run_id)}-01"})
+    owned =
+      PoolerFixtures.pool_fixture(%{slug: "responses-tool-compat-#{String.downcase(run_id)}-01"})
+
     unrelated = PoolerFixtures.pool_fixture()
     journal = journal_for_pool(run_id, owned.id, owned.slug)
 

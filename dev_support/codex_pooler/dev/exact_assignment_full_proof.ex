@@ -51,7 +51,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.TokenLinking
 
-  @runtime_root Path.join(["tmp", "issue-241", "runtime"])
+  @runtime_root Path.join(["tmp", "responses-tool-compat", "runtime"])
   @model_id "gateway-perf-full"
   @responses_endpoint "/backend-api/codex/responses"
   @lite_http_header "x-openai-internal-codex-responses-lite"
