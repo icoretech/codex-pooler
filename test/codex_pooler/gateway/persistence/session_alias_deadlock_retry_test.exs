@@ -1,8 +1,20 @@
 defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
+  @moduledoc """
+  Locks the deadlock-retry contract of continuity registration.
+
+  Every fixture here commits outside the sandbox, and one of them is a `BEFORE INSERT`
+  trigger on the shared `bridge_session_aliases` table that raises `40P01` on every insert.
+  Its teardown is therefore registered with `register_unboxed_cleanup!/1` rather than scoped
+  in `try/after`: a scoped block runs only while the test process is alive, so an ExUnit
+  timeout kill or an exit signal from a linked helper skips it, and a leaked trigger then
+  makes every later insert into that table fail, in any file of the same `mix test`
+  invocation.
+  """
   use CodexPooler.DataCase, async: false
 
-  import CodexPooler.AccountsFixtures
+  import CodexPooler.AccountsFixtures, only: [reset_bootstrap_state_fixture!: 0]
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture
   import Ecto.Query
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -14,103 +26,94 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
 
   test "continuity registration retries a PostgreSQL deadlock" do
     fixture = committed_fixture!()
+    deadlock_trigger = install_deadlock_trigger!(:once)
 
-    try do
-      deadlock_trigger = install_deadlock_trigger!(:once)
+    assert :ok =
+             Sandbox.unboxed_run(Repo, fn ->
+               SessionContinuity.register_codex_session_continuity(
+                 fixture.session,
+                 %{"type" => "response.create"},
+                 %{"id" => "resp_deadlock_retry"},
+                 request_options(fixture.turn_state)
+                 |> RequestOptions.put_continuity(response_id: "resp_deadlock_retry")
+               )
+             end)
 
-      try do
-        assert :ok =
-                 Sandbox.unboxed_run(Repo, fn ->
-                   SessionContinuity.register_codex_session_continuity(
-                     fixture.session,
-                     %{"type" => "response.create"},
-                     %{"id" => "resp_deadlock_retry"},
-                     request_options(fixture.turn_state)
-                     |> RequestOptions.put_continuity(response_id: "resp_deadlock_retry")
-                   )
-                 end)
-
-        assert response_alias_count(fixture, "resp_deadlock_retry") == 1
-        assert active_lease_count(fixture) == 1
-        assert trigger_attempt_count(deadlock_trigger) == 2
-      after
-        remove_deadlock_trigger!(deadlock_trigger)
-      end
-    after
-      cleanup_fixture!(fixture)
-    end
+    assert response_alias_count(fixture, "resp_deadlock_retry") == 1
+    assert active_lease_count(fixture) == 1
+    assert trigger_attempt_count(deadlock_trigger) == 2
   end
 
   test "continuity registration returns a bounded error after deadlock retry exhaustion" do
     fixture = committed_fixture!()
+    deadlock_trigger = install_deadlock_trigger!(:always)
 
-    try do
-      deadlock_trigger = install_deadlock_trigger!(:always)
+    assert {:error, :continuity_deadlock} =
+             Sandbox.unboxed_run(Repo, fn ->
+               SessionContinuity.register_codex_session_continuity(
+                 fixture.session,
+                 %{"type" => "response.create"},
+                 %{"id" => "resp_deadlock_exhausted"},
+                 request_options(fixture.turn_state)
+               )
+             end)
 
-      try do
-        assert {:error, :continuity_deadlock} =
-                 Sandbox.unboxed_run(Repo, fn ->
-                   SessionContinuity.register_codex_session_continuity(
-                     fixture.session,
-                     %{"type" => "response.create"},
-                     %{"id" => "resp_deadlock_exhausted"},
-                     request_options(fixture.turn_state)
-                   )
-                 end)
-
-        assert response_alias_count(fixture, "resp_deadlock_exhausted") == 0
-        assert active_lease_count(fixture) == 1
-        assert trigger_attempt_count(deadlock_trigger) == 2
-      after
-        remove_deadlock_trigger!(deadlock_trigger)
-      end
-    after
-      cleanup_fixture!(fixture)
-    end
+    assert response_alias_count(fixture, "resp_deadlock_exhausted") == 0
+    assert active_lease_count(fixture) == 1
+    assert trigger_attempt_count(deadlock_trigger) == 2
   end
 
   test "continuity registration does not retry another PostgreSQL error" do
     fixture = committed_fixture!()
+    error_trigger = install_error_trigger!(:unique_violation)
 
-    try do
-      error_trigger = install_error_trigger!(:unique_violation)
-
-      try do
-        assert_raise Postgrex.Error, ~r/unique_violation/, fn ->
-          Sandbox.unboxed_run(Repo, fn ->
-            SessionContinuity.register_codex_session_continuity(
-              fixture.session,
-              %{"type" => "response.create"},
-              %{"id" => "resp_non_deadlock"},
-              request_options(fixture.turn_state)
-            )
-          end)
-        end
-
-        assert response_alias_count(fixture, "resp_non_deadlock") == 0
-        assert active_lease_count(fixture) == 1
-        assert trigger_attempt_count(error_trigger) == 1
-      after
-        remove_deadlock_trigger!(error_trigger)
-      end
-    after
-      cleanup_fixture!(fixture)
+    assert_raise Postgrex.Error, ~r/unique_violation/, fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        SessionContinuity.register_codex_session_continuity(
+          fixture.session,
+          %{"type" => "response.create"},
+          %{"id" => "resp_non_deadlock"},
+          request_options(fixture.turn_state)
+        )
+      end)
     end
+
+    assert response_alias_count(fixture, "resp_non_deadlock") == 0
+    assert active_lease_count(fixture) == 1
+    assert trigger_attempt_count(error_trigger) == 1
   end
 
+  # The pool is the whole committed graph: `api_keys`, `codex_sessions`, `bridge_owner_leases`
+  # and `bridge_session_aliases` all cascade from it. Nothing here needs an owner, so the
+  # fixture no longer completes the `platform_bootstrap_state` singleton for a shared
+  # `owner@example.com` -- `created_by_user_id` is nullable, and a committed bootstrap owner
+  # is a shared key that outlives this file and breaks absolute user counts elsewhere.
+  # The cleanup is keyed on the slug and registered before the commit, so it also covers a
+  # fixture that fails partway through.
+  # `api_key_fixture/2` also commits an instance owner of its own when the instance has none,
+  # and that user is outside the pool's cascade, so the reset below removes it: deleting only
+  # the pool would leave a `users` row behind and break the suites that assert absolute user
+  # counts.
   defp committed_fixture! do
-    Sandbox.unboxed_run(Repo, fn ->
-      %{user: owner} = bootstrap_owner_fixture()
-      pool = pool_fixture(%{created_by_user_id: owner.id})
-      %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
+    slug = "alias-deadlock-#{System.unique_integer([:positive, :monotonic])}"
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(slug) end)
+
+    run_unboxed(fn ->
+      pool = pool_fixture(%{slug: slug})
+      %{api_key: api_key} = active_api_key_fixture(pool, %{})
       auth = %{pool: pool, api_key: api_key}
-      turn_state = "alias-deadlock-#{System.unique_integer([:positive, :monotonic])}"
 
       assert {:ok, session} =
-               Gateway.start_codex_session(auth, request_options(turn_state))
+               Gateway.start_codex_session(auth, request_options(slug))
 
-      %{auth: auth, pool: pool, session: session, turn_state: turn_state}
+      %{auth: auth, pool: pool, session: session, turn_state: slug}
     end)
+  end
+
+  defp delete_committed_fixture!(slug) do
+    Repo.delete_all(from pool in Pool, where: pool.slug == ^slug)
+    reset_bootstrap_state_fixture!()
+    :ok
   end
 
   defp request_options(turn_state) do
@@ -140,8 +143,13 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
     function = "alias_deadlock_function_#{unique}"
     trigger = "alias_deadlock_trigger_#{unique}"
     condition = String.replace(condition, "__SEQUENCE__", sequence)
+    names = %{function: function, sequence: sequence, trigger: trigger}
 
-    Sandbox.unboxed_run(Repo, fn ->
+    # Registered before the objects exist: the drops are `IF EXISTS`, so this also covers a
+    # creation that fails partway through.
+    register_unboxed_cleanup!(fn -> remove_trigger!(names) end)
+
+    run_unboxed(fn ->
       Repo.query!("CREATE SEQUENCE #{sequence} START 1")
 
       Repo.query!("""
@@ -163,7 +171,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
       """)
     end)
 
-    %{function: function, sequence: sequence, trigger: trigger}
+    names
   end
 
   defp trigger_attempt_count(names) do
@@ -200,17 +208,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
     end)
   end
 
-  defp remove_deadlock_trigger!(names) do
-    Sandbox.unboxed_run(Repo, fn ->
-      Repo.query!("DROP TRIGGER IF EXISTS #{names.trigger} ON bridge_session_aliases")
-      Repo.query!("DROP FUNCTION IF EXISTS #{names.function}()")
-      Repo.query!("DROP SEQUENCE IF EXISTS #{names.sequence}")
-    end)
-  end
-
-  defp cleanup_fixture!(fixture) do
-    Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
-    end)
+  defp remove_trigger!(names) do
+    Repo.query!("DROP TRIGGER IF EXISTS #{names.trigger} ON bridge_session_aliases")
+    Repo.query!("DROP FUNCTION IF EXISTS #{names.function}()")
+    Repo.query!("DROP SEQUENCE IF EXISTS #{names.sequence}")
   end
 end

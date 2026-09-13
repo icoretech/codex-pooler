@@ -282,14 +282,20 @@ defmodule CodexPooler.Accounts.OperatorPasswordLifecycleTest do
     apply(Accounts, name, args)
   end
 
+  # `on_exit` rather than `after`: a scoped restore runs only while the test process is alive,
+  # so a killed test would leave the fault-injecting adapter configured for every later test in
+  # the partition. Restoring an absent key means deleting it, not writing back the `nil` that
+  # `get_env/2` returns for one.
   defp with_mailer_adapter(adapter, fun) do
-    previous_config = Application.get_env(:codex_pooler, CodexPooler.Mailer)
+    previous_config = Application.fetch_env(:codex_pooler, CodexPooler.Mailer)
+    on_exit(fn -> restore_mailer_config(previous_config) end)
     Application.put_env(:codex_pooler, CodexPooler.Mailer, adapter: adapter)
-
-    try do
-      fun.()
-    after
-      Application.put_env(:codex_pooler, CodexPooler.Mailer, previous_config)
-    end
+    fun.()
   end
+
+  defp restore_mailer_config({:ok, config}),
+    do: Application.put_env(:codex_pooler, CodexPooler.Mailer, config)
+
+  defp restore_mailer_config(:error),
+    do: Application.delete_env(:codex_pooler, CodexPooler.Mailer)
 end

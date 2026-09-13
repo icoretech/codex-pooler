@@ -1,8 +1,9 @@
 defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
   use CodexPooler.DataCase, async: false
 
-  import CodexPooler.AccountsFixtures
+  import CodexPooler.AccountsFixtures, only: [reset_bootstrap_state_fixture!: 0]
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture
   import Ecto.Query
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -15,49 +16,61 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
   test "bootstrap continuity registration and turn-state attach do not deadlock" do
     fixture = committed_fixture!()
 
-    try do
-      for iteration <- 1..100 do
-        response_id = "resp_alias_deadlock_#{iteration}"
+    for iteration <- 1..100 do
+      response_id = "resp_alias_deadlock_#{iteration}"
 
-        results =
-          run_concurrently([
-            fn ->
-              SessionContinuity.register_codex_session_continuity(
-                fixture.session,
-                %{"type" => "response.create"},
-                %{"id" => response_id},
-                request_options(fixture.turn_state)
-                |> RequestOptions.put_continuity(response_id: response_id)
-              )
-            end,
-            fn ->
-              SessionContinuity.start_codex_session_from_turn_state(
-                fixture.auth,
-                request_options(fixture.turn_state)
-              )
-            end
-          ])
+      results =
+        run_concurrently([
+          fn ->
+            SessionContinuity.register_codex_session_continuity(
+              fixture.session,
+              %{"type" => "response.create"},
+              %{"id" => response_id},
+              request_options(fixture.turn_state)
+              |> RequestOptions.put_continuity(response_id: response_id)
+            )
+          end,
+          fn ->
+            SessionContinuity.start_codex_session_from_turn_state(
+              fixture.auth,
+              request_options(fixture.turn_state)
+            )
+          end
+        ])
 
-        assert [{:ok, :ok}, {:ok, {:ok, %CodexSession{id: session_id}}}] = results
-        assert session_id == fixture.session.id
-      end
-    after
-      Sandbox.unboxed_run(Repo, fn ->
-        Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
-      end)
+      assert [{:ok, :ok}, {:ok, {:ok, %CodexSession{id: session_id}}}] = results
+      assert session_id == fixture.session.id
     end
   end
 
+  # Registered, never scoped. `run_concurrently/1` drives the body through linked tasks, so a
+  # Postgrex error inside one of them kills the untrapped test process and a `try/after` never
+  # runs; an ExUnit timeout kill loses it the same way. The pool is the whole committed graph
+  # -- api key, codex session, owner lease and alias rows all cascade from it -- and nothing
+  # here needs an owner, so the fixture no longer completes the `platform_bootstrap_state`
+  # singleton for a shared `owner@example.com`. Keying the cleanup on the slug and registering
+  # it before the commit also covers a fixture that fails partway through.
+  # `api_key_fixture/2` also commits an instance owner of its own when the instance has none,
+  # and that user is outside the pool's cascade, so the reset below removes it: deleting only
+  # the pool would leave a `users` row behind and break the suites that assert absolute user
+  # counts.
   defp committed_fixture! do
-    Sandbox.unboxed_run(Repo, fn ->
-      %{user: owner} = bootstrap_owner_fixture()
-      pool = pool_fixture(%{created_by_user_id: owner.id})
-      %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
+    slug = "alias-concurrency-#{System.unique_integer([:positive, :monotonic])}"
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(slug) end)
+
+    run_unboxed(fn ->
+      pool = pool_fixture(%{slug: slug})
+      %{api_key: api_key} = active_api_key_fixture(pool, %{})
       auth = %{pool: pool, api_key: api_key}
-      turn_state = "alias-concurrency-#{System.unique_integer([:positive, :monotonic])}"
-      assert {:ok, session} = Gateway.start_codex_session(auth, request_options(turn_state))
-      %{auth: auth, pool: pool, session: session, turn_state: turn_state}
+      assert {:ok, session} = Gateway.start_codex_session(auth, request_options(slug))
+      %{auth: auth, pool: pool, session: session, turn_state: slug}
     end)
+  end
+
+  defp delete_committed_fixture!(slug) do
+    Repo.delete_all(from pool in Pool, where: pool.slug == ^slug)
+    reset_bootstrap_state_fixture!()
+    :ok
   end
 
   defp run_concurrently(operations) do

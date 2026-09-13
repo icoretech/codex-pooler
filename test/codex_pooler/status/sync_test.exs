@@ -1,6 +1,8 @@
 defmodule CodexPooler.Status.SyncTest do
   use CodexPooler.DataCase, async: false
 
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
+
   alias CodexPooler.OpenAIStatus
   alias CodexPooler.Status.Events
   alias CodexPooler.Status.Schemas.{FeedState, Incident}
@@ -240,6 +242,13 @@ defmodule CodexPooler.Status.SyncTest do
     refute Repo.get(CodexPooler.Status.Schemas.Incident, resolved.id)
   end
 
+  # Registered, never scoped. `openai_status_feed_states` is a committed singleton and the
+  # incident rows are committed too, so losing this teardown makes the very first assertion of
+  # every later `with_committed_status/2` -- and of any other file that expects no feed state
+  # -- fail on rows nobody in that file wrote. A `try/after` only runs while the test process
+  # is alive: an ExUnit timeout kill or an exit signal from the notification listener skips it,
+  # and the old block also ended in assertions, so a failing check there aborted the rest of
+  # the teardown instead of just reporting it.
   defp with_committed_status(guid, fun) do
     :ok = OpenAIStatus.subscribe()
     assert %{status_listen_ref: bridge_ref} = :sys.get_state(CodexPooler.Events.PostgresBridge)
@@ -253,20 +262,24 @@ defmodule CodexPooler.Status.SyncTest do
 
     channel = Events.postgres_channel()
     assert {:ok, ref} = Postgrex.Notifications.listen(notifications, channel)
+    register_unboxed_cleanup!(fn -> delete_committed_status!(guid) end)
 
     Sandbox.unboxed_run(Repo, fn ->
       assert OpenAIStatus.feed_state() == nil
       assert OpenAIStatus.list_incidents() == []
 
-      try do
-        fun.({notifications, ref, channel})
-      after
-        Repo.delete_all(from(i in Incident, where: i.guid == ^guid))
-        Repo.delete_all(from(s in FeedState, where: s.singleton == true))
-        assert Repo.get_by(Incident, guid: guid) == nil
-        assert OpenAIStatus.feed_state() == nil
-      end
+      fun.({notifications, ref, channel})
     end)
+  end
+
+  # Both deletes run before either check, so a check that fails still leaves the table clean.
+  defp delete_committed_status!(guid) do
+    Repo.delete_all(from(i in Incident, where: i.guid == ^guid))
+    Repo.delete_all(from(s in FeedState, where: s.singleton == true))
+
+    assert Repo.get_by(Incident, guid: guid) == nil
+    assert OpenAIStatus.feed_state() == nil
+    :ok
   end
 
   defp assert_status_event({notifications, ref, channel}, changed_count, revision, emitted_at) do

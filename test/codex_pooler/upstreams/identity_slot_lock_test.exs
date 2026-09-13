@@ -1,8 +1,9 @@
 defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
   use ExUnit.Case, async: false
 
-  import CodexPooler.AccountsFixtures
+  import CodexPooler.AccountsFixtures, only: [reset_bootstrap_state_fixture!: 0]
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   import Ecto.Query
 
   alias CodexPooler.Pools.Pool
@@ -138,25 +139,21 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
   test "workspace and subject selection stays distinct after acquiring broader account locks" do
     %{legacy: legacy, alpha: alpha, beta: beta} = committed_workspace_fixture!()
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          attrs = %{
-            chatgpt_account_id: legacy.chatgpt_account_id,
-            workspace_id: beta.workspace_id,
-            chatgpt_user_id: "subject_beta"
-          }
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        attrs = %{
+          chatgpt_account_id: legacy.chatgpt_account_id,
+          workspace_id: beta.workspace_id,
+          chatgpt_user_id: "subject_beta"
+        }
 
-          IdentitySlotLock.lock_slots!([attrs])
-          assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
-          assert selected.id == beta.id
-          refute selected.id == alpha.id
-          refute selected.id == legacy.id
-        end)
+        IdentitySlotLock.lock_slots!([attrs])
+        assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
+        assert selected.id == beta.id
+        refute selected.id == alpha.id
+        refute selected.id == legacy.id
       end)
-    after
-      cleanup_identities!([legacy.id, alpha.id, beta.id])
-    end
+    end)
   end
 
   test "a concrete subject converges on the existing subjectless workspace slot" do
@@ -167,72 +164,60 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
         chatgpt_user_id: nil
       })
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          attrs = %{
-            chatgpt_account_id: identity.chatgpt_account_id,
-            workspace_id: identity.workspace_id,
-            chatgpt_user_id: "subject_new"
-          }
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        attrs = %{
+          chatgpt_account_id: identity.chatgpt_account_id,
+          workspace_id: identity.workspace_id,
+          chatgpt_user_id: "subject_new"
+        }
 
-          IdentitySlotLock.lock_slots!([attrs])
-          assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
-          assert selected.id == identity.id
-        end)
+        IdentitySlotLock.lock_slots!([attrs])
+        assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
+        assert selected.id == identity.id
       end)
-    after
-      cleanup_identities!([identity.id])
-    end
+    end)
   end
 
   test "identity, assignment, and secret rows are locked and returned in sorted id order" do
     fixture = committed_graph_fixture!()
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          locked =
-            IdentitySlotLock.lock_identity_rows!([
-              fixture.second.identity.id,
-              fixture.first.identity.id,
-              fixture.second.identity.id
-            ])
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        locked =
+          IdentitySlotLock.lock_identity_rows!([
+            fixture.second.identity.id,
+            fixture.first.identity.id,
+            fixture.second.identity.id
+          ])
 
-          assert Enum.map(locked.identities, & &1.id) ==
-                   Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
+        assert Enum.map(locked.identities, & &1.id) ==
+                 Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
 
-          assert Enum.map(locked.assignments, & &1.id) ==
-                   Enum.sort([fixture.first.assignment.id, fixture.second.assignment.id])
+        assert Enum.map(locked.assignments, & &1.id) ==
+                 Enum.sort([fixture.first.assignment.id, fixture.second.assignment.id])
 
-          assert Enum.map(locked.secrets, & &1.id) == Enum.sort(fixture.secret_ids)
-        end)
+        assert Enum.map(locked.secrets, & &1.id) == Enum.sort(fixture.secret_ids)
       end)
-    after
-      cleanup_graph_fixture!(fixture)
-    end
+    end)
   end
 
   test "credential fencing delegates multi-identity replacement locks in sorted order" do
     fixture = committed_graph_fixture!()
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          locked =
-            CredentialFencing.lock_credential_replacements([
-              fixture.second.identity,
-              fixture.first.identity.id,
-              fixture.second.identity.id
-            ])
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        locked =
+          CredentialFencing.lock_credential_replacements([
+            fixture.second.identity,
+            fixture.first.identity.id,
+            fixture.second.identity.id
+          ])
 
-          assert Enum.map(locked, & &1.id) ==
-                   Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
-        end)
+        assert Enum.map(locked, & &1.id) ==
+                 Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
       end)
-    after
-      cleanup_graph_fixture!(fixture)
-    end
+    end)
   end
 
   defp assert_serialized!(first_attrs, second_attrs) do
@@ -327,53 +312,68 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     }
   end
 
+  # Registered, never scoped. This file runs without a sandbox, so every row it writes is
+  # committed; `try/after` runs only while the test process is alive, and an ExUnit timeout
+  # kill or an exit signal from one of the linked lock tasks skips it. The label is chosen
+  # before the fixture runs so a creation that fails partway through is covered too.
   defp committed_identity!(attrs) do
-    unboxed(fn -> upstream_identity_fixture(attrs) end)
+    label = unique("identity slot lock identity")
+    register_unboxed_cleanup!(fn -> delete_identities_by_label!(label) end)
+    unboxed(fn -> upstream_identity_fixture(Map.put(attrs, :account_label, label)) end)
   end
 
+  # `reset_bootstrap_state_fixture!/0` is registered first, so it runs last. It truncates
+  # `users` with `CASCADE`, which reaches `pools` and `upstream_identities`: that covers both a
+  # fixture that fails partway through and the instance owner `active_upstream_assignment_fixture/2`
+  # commits on its own when the instance has none -- a row outside the pool's cascade that a
+  # pool-and-identity delete alone would leave behind for the suites asserting user counts.
   defp committed_graph_fixture! do
-    unboxed(fn ->
-      %{user: owner} = bootstrap_owner_fixture()
-      first_pool = pool_fixture(%{created_by_user_id: owner.id})
-      second_pool = pool_fixture(%{created_by_user_id: owner.id})
-      first = active_upstream_assignment_fixture(first_pool, %{})
-      second = active_upstream_assignment_fixture(second_pool, %{})
+    register_unboxed_cleanup!(&reset_bootstrap_state_fixture!/0)
 
-      secret_ids =
-        Repo.all(
-          from secret in CodexPooler.Upstreams.Schemas.EncryptedSecret,
-            where: secret.upstream_identity_id in ^[first.identity.id, second.identity.id],
-            select: secret.id
-        )
+    fixture =
+      unboxed(fn ->
+        first_pool = pool_fixture(%{})
+        second_pool = pool_fixture(%{})
+        first = active_upstream_assignment_fixture(first_pool, %{})
+        second = active_upstream_assignment_fixture(second_pool, %{})
 
-      %{
-        first: first,
-        first_pool_id: first_pool.id,
-        second: second,
-        second_pool_id: second_pool.id,
-        secret_ids: secret_ids
-      }
-    end)
+        secret_ids =
+          Repo.all(
+            from secret in CodexPooler.Upstreams.Schemas.EncryptedSecret,
+              where: secret.upstream_identity_id in ^[first.identity.id, second.identity.id],
+              select: secret.id
+          )
+
+        %{
+          first: first,
+          first_pool_id: first_pool.id,
+          second: second,
+          second_pool_id: second_pool.id,
+          secret_ids: secret_ids
+        }
+      end)
+
+    register_unboxed_cleanup!(fn -> delete_graph_fixture!(fixture) end)
+    fixture
   end
 
-  defp cleanup_graph_fixture!(fixture) do
-    unboxed(fn ->
-      Repo.delete_all(
-        from pool in Pool,
-          where: pool.id in ^[fixture.first_pool_id, fixture.second_pool_id]
-      )
+  defp delete_graph_fixture!(fixture) do
+    Repo.delete_all(
+      from pool in Pool,
+        where: pool.id in ^[fixture.first_pool_id, fixture.second_pool_id]
+    )
 
-      Repo.delete_all(
-        from identity in UpstreamIdentity,
-          where: identity.id in ^[fixture.first.identity.id, fixture.second.identity.id]
-      )
-    end)
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.id in ^[fixture.first.identity.id, fixture.second.identity.id]
+    )
+
+    :ok
   end
 
-  defp cleanup_identities!(identity_ids) do
-    unboxed(fn ->
-      Repo.delete_all(from identity in UpstreamIdentity, where: identity.id in ^identity_ids)
-    end)
+  defp delete_identities_by_label!(label) do
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label == ^label)
+    :ok
   end
 
   defp backend_pid! do

@@ -222,11 +222,19 @@ defmodule CodexPooler.Alerts.SavedResetDeliveryDedupeTest do
     end
   end
 
+  # Restoring an absent key means deleting it, not writing back the `nil` that `get_env/2`
+  # returns for one: a present `nil` is not the same as unset for anything that reads through
+  # `get_env/3` with a default.
   defp use_test_mailer do
-    mailer_config = Application.get_env(:codex_pooler, Mailer)
+    mailer_config = Application.fetch_env(:codex_pooler, Mailer)
     Application.put_env(:codex_pooler, Mailer, adapter: Swoosh.Adapters.Test)
-    on_exit(fn -> Application.put_env(:codex_pooler, Mailer, mailer_config) end)
+    on_exit(fn -> restore_mailer_config(mailer_config) end)
   end
+
+  defp restore_mailer_config({:ok, config}),
+    do: Application.put_env(:codex_pooler, Mailer, config)
+
+  defp restore_mailer_config(:error), do: Application.delete_env(:codex_pooler, Mailer)
 
   defp delivery_job_count, do: length(all_enqueued(worker: AlertDeliveryWorker))
 

@@ -173,10 +173,17 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
         nil
       )
 
+    # Restoring the captured state, not a hardcoded `false`. No config sets this key, so it is
+    # absent here, and the runtime reads it through `get_env/3` with a `false` default that
+    # applies only to an absent key; writing `false` back leaves it present and pins the value
+    # for the rest of the partition instead of restoring absence.
+    previous =
+      Application.fetch_env(:codex_pooler, :multi_agent_round_product_observation_enabled)
+
     Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, true)
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, false)
+      restore_product_observation_gate(previous)
       :telemetry.detach(handler_id)
     end)
 
@@ -270,4 +277,10 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
 
     capability
   end
+
+  defp restore_product_observation_gate({:ok, value}),
+    do: Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, value)
+
+  defp restore_product_observation_gate(:error),
+    do: Application.delete_env(:codex_pooler, :multi_agent_round_product_observation_enabled)
 end
