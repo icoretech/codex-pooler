@@ -168,6 +168,9 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshotTest do
   defp capture_queries(fun) do
     handler_id = {__MODULE__, self(), System.unique_integer([:positive, :monotonic])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

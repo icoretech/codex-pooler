@@ -437,6 +437,9 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
     table = :ets.new(:client_retry_query_schedule, [:ordered_set, :public])
     handler_id = {__MODULE__, :query_schedule, System.unique_integer([:positive, :monotonic])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

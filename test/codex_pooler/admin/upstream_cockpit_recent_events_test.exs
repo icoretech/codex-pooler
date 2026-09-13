@@ -156,6 +156,9 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
   defp capture_event_query(context) do
     handler = {__MODULE__, self()}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
+
     :ok =
       :telemetry.attach(
         handler,

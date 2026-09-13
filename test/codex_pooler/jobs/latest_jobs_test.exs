@@ -1083,6 +1083,9 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
       end
     end
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok = :telemetry.attach(handler_id, [:codex_pooler, :repo, :query], handler, nil)
 
     try do

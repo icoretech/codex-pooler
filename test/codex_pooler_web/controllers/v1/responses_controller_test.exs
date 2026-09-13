@@ -11041,6 +11041,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     parent = self()
     handler_id = "v1-responses-controller-test-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -11068,6 +11071,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     parent = self()
     handler_id = "v1-responses-truncation-#{System.unique_integer([:positive])}"
     event = [:codex_pooler, :gateway, :stream_buffer, :truncated]
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

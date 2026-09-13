@@ -3,7 +3,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
-  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   import Ecto.Query
 
   alias CodexPooler.Access
@@ -982,6 +981,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     handler_id =
       {__MODULE__, :replacement_deadlock, System.unique_integer([:positive, :monotonic])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -1094,6 +1096,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp with_frozen_query_handler(fun) when is_function(fun, 0) do
     handler_id = {__MODULE__, :frozen, System.unique_integer([:positive, :monotonic])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -1273,8 +1278,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp run_direction_iteration(direction_id, iteration, operations) do
-    # No per-iteration teardown: the next iteration's fixture starts with the same bootstrap
-    # reset, and the registered one covers the last iteration and any failure.
+    # No per-iteration teardown: every iteration commits its Pool, key and session under the
+    # test's one committed owner, whose registered removal takes all of them when the test ends.
     fixture = unboxed_owner_session_fixture(direction_id, iteration)
 
     with_contention_query_handler(fn ->
@@ -1364,6 +1369,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp with_contention_query_handler(fun) when is_function(fun, 0) do
     handler_id = {__MODULE__, :contention, System.unique_integer([:positive, :monotonic])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -1860,6 +1868,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     parent = self()
     handler_id = {__MODULE__, :detailed, System.unique_integer([:positive, :monotonic])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -2060,11 +2071,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_expired_session_fixture(prefix) do
-    register_bootstrap_reset!()
+    %{user: owner} = committed_bootstrap_owner_fixture!()
 
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      auth = auth_fixture()
+      auth = auth_fixture(owner)
 
       session_key =
         "#{prefix}-#{System.unique_integer([:positive, :monotonic])}"
@@ -2143,11 +2153,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_owner_session_fixture(direction_id, iteration) do
-    register_bootstrap_reset!()
+    %{user: owner} = committed_bootstrap_owner_fixture!()
 
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      auth = auth_fixture()
+      auth = auth_fixture(owner)
 
       session_key =
         "session_continuity-#{direction_id}-#{iteration}-#{System.unique_integer([:positive, :monotonic])}"
@@ -2170,11 +2179,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_fresh_runtime_turn_fixture do
-    register_bootstrap_reset!()
+    %{user: owner} = committed_bootstrap_owner_fixture!()
 
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      auth = auth_fixture()
+      auth = auth_fixture(owner)
 
       assert {:ok, %CodexSession{} = session} =
                Gateway.start_codex_session(auth, %{
@@ -2189,11 +2197,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_replacement_deadlock_fixture do
-    register_bootstrap_reset!()
+    %{user: owner} = committed_bootstrap_owner_fixture!()
 
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      auth = auth_fixture()
+      auth = auth_fixture(owner)
       %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
 
       assert {:ok, %CodexSession{} = session} =
@@ -2228,25 +2235,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     end)
   end
 
-  # Every unboxed fixture here commits a bootstrap owner on the fixed `owner@example.com`, and the
-  # full bootstrap reset is the only teardown that removes it. Registered, never scoped: the
-  # contention cases run their blockers in linked tasks, so an assertion failing in one kills the
-  # test process before any `after` in it runs, and the ExUnit timeout kills it the same way.
-  # Registered before the first commit, so a fixture that fails partway is covered, and once per
-  # test, so the ten-iteration directions do not queue ten resets.
-  defp register_bootstrap_reset! do
-    key = {__MODULE__, :bootstrap_reset_registered}
+  # Every unboxed fixture here commits under the test's one owner from
+  # `committed_bootstrap_owner_fixture!/1`, which registers the owner's removal before the commit.
+  # Registered, never scoped: the contention cases run their blockers in linked tasks, so an
+  # assertion failing in one kills the test process before any `after` in it runs, and the ExUnit
+  # timeout kills it the same way. The owner's Pools cascade to every key, session, lease, request
+  # and turn committed under them, and an identity goes with the only Pool that holds it.
+  defp auth_fixture, do: auth_fixture(bootstrap_owner_fixture().user)
 
-    if !Process.get(key) do
-      register_unboxed_cleanup!(&reset_bootstrap_state_fixture!/0)
-      Process.put(key, true)
-    end
-
-    :ok
-  end
-
-  defp auth_fixture do
-    %{user: owner} = bootstrap_owner_fixture()
+  defp auth_fixture(owner) do
     pool = pool_fixture(%{created_by_user_id: owner.id})
     %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
     %{pool: pool, api_key: api_key}
@@ -2305,6 +2302,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   defp capture_repo_queries(fun) when is_function(fun, 0) do
     parent = self()
     handler_id = {__MODULE__, System.unique_integer([:positive, :monotonic])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

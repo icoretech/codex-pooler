@@ -34,7 +34,6 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
 
   setup do
     fixture = unboxed_api_key_fixture()
-    on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end) end)
     %{fixture: fixture}
   end
 
@@ -403,10 +402,12 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
     :ok
   end
 
+  # The committed owner's registered removal takes its Pool, the key and every row the cases
+  # commit under them.
   defp unboxed_api_key_fixture do
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
       pool = pool_fixture(%{created_by_user_id: owner.id})
 
       %{api_key: api_key} =

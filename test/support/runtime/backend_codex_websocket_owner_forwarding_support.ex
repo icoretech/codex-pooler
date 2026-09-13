@@ -45,7 +45,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   @blocking_owner_receive_timeout_ms 5_000
   @response_task_stop_timeout_ms 15_000
   @handoff_detection_timeout_ms 15_000
-  @epmd_ready_timeout_ms 2_000
   @epmd_ready_poll_ms 10
   @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
   @model_serving_metadata_keys ~w(
@@ -443,10 +442,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"], stderr_to_stdout: true)
 
-        PeerRegistry.assert_epmd_ready!(
-          budget_ms: @epmd_ready_timeout_ms,
-          poll_ms: @epmd_ready_poll_ms
-        )
+        PeerRegistry.assert_epmd_ready!(poll_ms: @epmd_ready_poll_ms)
 
         :ok
     end

@@ -199,6 +199,9 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Direct
       socket = session |> :sys.get_state() |> Map.fetch!(:conn) |> Mint.HTTP.get_socket()
       handler_id = {__MODULE__, :send_failure, make_ref()}
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      ExUnit.Callbacks.on_exit(fn -> :telemetry.detach(handler_id) end)
+
       :ok =
         :telemetry.attach(
           handler_id,

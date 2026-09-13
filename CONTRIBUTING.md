@@ -12,6 +12,8 @@ mix test
 
 Run a focused file by passing its path to the same command. On Unix, `make test-fast N=4` runs the application suite in four isolated database partitions.
 
+A run with `CODEX_POOLER_TEST_RUN_NAMESPACE` and `MIX_TEST_PARTITION` set uses a database of its own and drops it when it finishes, whether it passes or fails. A run that is killed or crashes leaves that database behind; `make test-db-prune` drops every such database that no session is connected to and no running test holds, and never touches the shared `codex_pooler_test` databases.
+
 The default suite excludes the `unix_integration` profile. That profile tests the repository's Bash lifecycle scripts and Makefile, plus fixture contracts that require POSIX file ownership, permissions, or symbolic links. It includes process signals, resource cleanup, source manifests, and Docker Compose configuration merging. Parsing and domain tests remain in the ordinary suite. The integration profile runs separately and is required in CI:
 
 ```sh

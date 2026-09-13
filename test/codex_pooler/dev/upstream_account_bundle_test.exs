@@ -231,6 +231,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     for dry_run? <- [false, true] do
       handler = {__MODULE__, :empty_bundle_query, dry_run?, System.unique_integer([:positive])}
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler) end)
+
       :ok =
         :telemetry.attach(
           handler,

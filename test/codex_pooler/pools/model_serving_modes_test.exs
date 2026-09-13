@@ -721,10 +721,12 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
     end
   end
 
+  # The tests exercise the explicit cleanup below; the owner's registered removal is the teardown
+  # that still runs when a test dies before it gets there.
   defp create_unboxed_model_serving_fixture(exposed_model_id) do
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      %{user: owner} = bootstrap_owner_fixture()
       scope = Scope.for_user(owner, ["instance_owner"])
       pool = pool_fixture(%{created_by_user_id: owner.id})
       %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool)
@@ -830,6 +832,9 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
   defp count_repo_sources(fun) do
     parent = self()
     handler_id = "model-serving-query-count-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

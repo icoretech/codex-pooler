@@ -32,8 +32,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.PeerRegistry
   alias CodexPoolerWeb.CodexResponsesSocket
 
-  @epmd_ready_timeout_ms 2_000
-  @epmd_ready_poll_ms 10
   @frame "synthetic-frame"
   @peer_detection_timeout_ms 10_000
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
@@ -3682,10 +3680,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"], stderr_to_stdout: true)
 
-        PeerRegistry.assert_epmd_ready!(
-          budget_ms: @epmd_ready_timeout_ms,
-          poll_ms: @epmd_ready_poll_ms
-        )
+        PeerRegistry.assert_epmd_ready!()
 
         true
     end

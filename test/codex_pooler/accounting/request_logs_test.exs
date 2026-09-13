@@ -2269,6 +2269,9 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     counter = :counters.new(1, [])
     handler_id = {:request_logs_query_counter, self(), System.unique_integer([:positive])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :telemetry.attach(
       handler_id,
       [:codex_pooler, :repo, :query],
@@ -3289,6 +3292,9 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
   defp capture_request_log_queries(fun) do
     parent = self()
     handler_id = {:request_logs_sql_shape, self(), System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :telemetry.attach(
       handler_id,

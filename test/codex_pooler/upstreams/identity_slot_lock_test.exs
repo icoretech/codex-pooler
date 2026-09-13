@@ -1,7 +1,6 @@
 defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
   use ExUnit.Case, async: false
 
-  import CodexPooler.AccountsFixtures, only: [reset_bootstrap_state_fixture!: 0]
   import CodexPooler.PoolerFixtures
   import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   import Ecto.Query
@@ -322,20 +321,26 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     unboxed(fn -> upstream_identity_fixture(Map.put(attrs, :account_label, label)) end)
   end
 
-  # `reset_bootstrap_state_fixture!/0` is registered first, so it runs last. It truncates
-  # `users` with `CASCADE`, which reaches `pools` and `upstream_identities`: that covers both a
-  # fixture that fails partway through and the instance owner `active_upstream_assignment_fixture/2`
-  # commits on its own when the instance has none -- a row outside the pool's cascade that a
-  # pool-and-identity delete alone would leave behind for the suites asserting user counts.
+  # Registered before the commit and keyed on the slugs and labels derived here, so a fixture that
+  # fails partway through is covered too. Nothing here commits a user: the Pools carry no creator,
+  # and `active_upstream_assignment_fixture/2` creates and assigns its identity without one.
   defp committed_graph_fixture! do
-    register_unboxed_cleanup!(&reset_bootstrap_state_fixture!/0)
+    suffix = System.unique_integer([:positive, :monotonic])
+
+    [first_slug, second_slug] =
+      slugs = ["slot-lock-first-#{suffix}", "slot-lock-second-#{suffix}"]
+
+    [first_label, second_label] =
+      labels = ["Slot lock first #{suffix}", "Slot lock second #{suffix}"]
+
+    register_unboxed_cleanup!(fn -> delete_graph_fixture!(slugs, labels) end)
 
     fixture =
       unboxed(fn ->
-        first_pool = pool_fixture(%{})
-        second_pool = pool_fixture(%{})
-        first = active_upstream_assignment_fixture(first_pool, %{})
-        second = active_upstream_assignment_fixture(second_pool, %{})
+        first_pool = pool_fixture(%{slug: first_slug})
+        second_pool = pool_fixture(%{slug: second_slug})
+        first = active_upstream_assignment_fixture(first_pool, %{account_label: first_label})
+        second = active_upstream_assignment_fixture(second_pool, %{account_label: second_label})
 
         secret_ids =
           Repo.all(
@@ -353,21 +358,12 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
         }
       end)
 
-    register_unboxed_cleanup!(fn -> delete_graph_fixture!(fixture) end)
     fixture
   end
 
-  defp delete_graph_fixture!(fixture) do
-    Repo.delete_all(
-      from pool in Pool,
-        where: pool.id in ^[fixture.first_pool_id, fixture.second_pool_id]
-    )
-
-    Repo.delete_all(
-      from identity in UpstreamIdentity,
-        where: identity.id in ^[fixture.first.identity.id, fixture.second.identity.id]
-    )
-
+  defp delete_graph_fixture!(slugs, labels) do
+    Repo.delete_all(from pool in Pool, where: pool.slug in ^slugs)
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label in ^labels)
     :ok
   end
 

@@ -18,6 +18,9 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanSupport do
   def collect_observatory_queries(fun) do
     handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    ExUnit.Callbacks.on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

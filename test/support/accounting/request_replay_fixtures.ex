@@ -16,7 +16,8 @@ defmodule CodexPooler.RequestReplayFixtures do
   alias CodexPooler.Repo
 
   def replay_fixture(opts \\ []) do
-    %{user: owner} = bootstrap_owner_fixture()
+    # A committed caller passes the owner it committed and registered for removal.
+    owner = Keyword.get_lazy(opts, :owner, fn -> bootstrap_owner_fixture().user end)
     scope = Scope.for_user(owner, ["instance_owner"])
     pool = pool_fixture(%{created_by_user_id: owner.id})
 

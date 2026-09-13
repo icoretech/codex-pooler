@@ -2668,6 +2668,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       handler_id = "saved-reset-final-update-#{System.unique_integer([:positive])}"
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       :ok =
         :telemetry.attach(
           handler_id,
@@ -2747,6 +2750,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert_receive {^barrier, :redemption_backend, redemption_backend_pid}, 5_000
 
       handler_id = "saved-reset-finalizer-lock-#{System.unique_integer([:positive])}"
+
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
 
       :ok =
         :telemetry.attach(
@@ -4815,18 +4821,22 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(manual_fixture) end)
       on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(scheduled_fixture) end)
 
+      manual_handler_id = register_claim_lock_handler!()
+
       {manual_result, manual_locks} =
         run_unboxed(fn ->
-          capture_claim_locks_until_identity_update!(fn ->
+          capture_claim_locks_until_identity_update!(manual_handler_id, fn ->
             SavedResetRedemption.redeem(List.first(manual_fixture.assignment_ids),
               started_at: manual_fixture.as_of
             )
           end)
         end)
 
+      scheduled_handler_id = register_claim_lock_handler!()
+
       {scheduled_result, scheduled_locks} =
         run_unboxed(fn ->
-          capture_claim_locks_until_identity_update!(fn ->
+          capture_claim_locks_until_identity_update!(scheduled_handler_id, fn ->
             SavedResetRedemption.redeem_scheduled_expiry(
               List.first(scheduled_fixture.assignment_ids),
               scheduled_fixture.identity_id,
@@ -5458,6 +5468,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         handler_id =
           "saved-reset-probe-lock-#{System.unique_integer([:positive])}"
 
+        # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+        on_exit(fn -> :telemetry.detach(handler_id) end)
+
         :ok =
           :telemetry.attach(
             handler_id,
@@ -5554,6 +5567,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       convergence_handler = {__MODULE__, :multi_node_convergence, barrier}
       repo_handler = {__MODULE__, :multi_node_repo, barrier}
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(convergence_handler) end)
+
       :ok =
         :telemetry.attach(
           convergence_handler,
@@ -5563,6 +5579,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           end,
           parent
         )
+
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(repo_handler) end)
 
       :ok =
         :telemetry.attach(
@@ -5844,6 +5863,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       handler_id = "saved-reset-probe-identity-first-#{System.unique_integer([:positive])}"
+
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
 
       :ok =
         :telemetry.attach(
@@ -6967,6 +6989,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       test_pid = self()
       handler_id = {__MODULE__, System.unique_integer([:positive, :monotonic])}
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       :ok =
         :telemetry.attach(
           handler_id,
@@ -7678,6 +7703,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     handler_id = {__MODULE__, :probe_completion, System.unique_integer([:positive, :monotonic])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -7729,6 +7757,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     handler_id =
       {__MODULE__, :transient_claim_race, System.unique_integer([:positive, :monotonic])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -7821,6 +7852,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end)
 
     handler_id = {__MODULE__, :first_insert, System.unique_integer([:positive, :monotonic])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -9086,6 +9120,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   defp attach_gateway_auto_cohort_barrier(handler_id, parent, barrier) do
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :telemetry.attach(
       handler_id,
       [:codex_pooler, :repo, :query],
@@ -9120,8 +9157,16 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end)
   end
 
-  defp capture_claim_locks_until_identity_update!(claim_fun) do
+  # The capture runs inside `run_unboxed/1`'s task, where `on_exit/1` raises, so the test process
+  # creates the handler id and registers its detach here first.
+  defp register_claim_lock_handler! do
     handler_id = {__MODULE__, :claim_locks, System.unique_integer([:positive, :monotonic])}
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    handler_id
+  end
+
+  defp capture_claim_locks_until_identity_update!(handler_id, claim_fun) do
     process_key = {__MODULE__, handler_id, :capture?}
     Process.put(process_key, true)
 
@@ -9374,6 +9419,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     parent = self()
     barrier = make_ref()
     handler_id = {__MODULE__, :claim_shape, System.unique_integer([:positive, :monotonic])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -9670,6 +9718,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       handler_id = "saved-reset-automatic-lock-#{System.unique_integer([:positive])}"
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       :ok =
         :telemetry.attach(
           handler_id,
@@ -9811,6 +9862,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp attach_post_consume_finalizer_handler!(parent, identity_id) do
     handler_id =
       "saved-reset-post-consume-finalizer-#{System.unique_integer([:positive, :monotonic])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

@@ -793,6 +793,9 @@ defmodule CodexPooler.AccessTest do
     handler_id = {__MODULE__, :api_key_updates, System.unique_integer([:positive])}
     parent = self()
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -827,6 +830,9 @@ defmodule CodexPooler.AccessTest do
   defp count_repo_sources(fun) when is_function(fun, 0) do
     parent = self()
     handler_id = {__MODULE__, :repo_sources, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

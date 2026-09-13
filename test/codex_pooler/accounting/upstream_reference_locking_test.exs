@@ -456,6 +456,9 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
     handler_id =
       "upstream-membership-accounting-#{schedule.id}-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -479,6 +482,9 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   defp attach_membership_handler!(barrier, accounting_pid) do
     parent = self()
     handler_id = "upstream-membership-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

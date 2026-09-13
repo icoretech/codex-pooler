@@ -30,6 +30,9 @@ defmodule CodexPooler.Upstreams.Auth.LegacyAccessTokenExpiryConcurrencyTest do
     handler = {__MODULE__, barrier}
     :ok = Events.subscribe_pool(fixture.pool.id, "upstreams")
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
+
     :ok =
       :telemetry.attach(handler, [:codex_pooler, :repo, :query], &__MODULE__.hold_lock/4, nil)
 

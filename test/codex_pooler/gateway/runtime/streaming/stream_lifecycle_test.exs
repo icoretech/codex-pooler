@@ -3095,6 +3095,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     handler_id = "stream-lifecycle-#{System.unique_integer([:positive])}"
     parent = self()
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -3115,6 +3118,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   defp capture_stream_outcome_telemetry(fun) do
     handler_id = "stream-outcome-#{System.unique_integer([:positive])}"
     parent = self()
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.OwnerCleanupPeer, as: Peer
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -12,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
   setup do
     unless Node.alive?() do
       {_, 0} = System.cmd("epmd", ["-daemon"])
+      PeerRegistry.assert_epmd_ready!()
 
       {:ok, _} =
         :net_kernel.start([

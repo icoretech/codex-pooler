@@ -736,6 +736,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     handler_id = "pricing-import-idempotence-#{unique}"
     insert_count = :counters.new(1, [])
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -1113,6 +1116,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     parent = self()
     barrier = make_ref()
     handler_id = "pricing-import-race-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

@@ -23,11 +23,13 @@ defmodule CodexPooler.Gateway.Persistence.TurnCompletionLockOrderTest do
   @tag timeout: 60_000
   test "turn completion locks the session before the turn so session-first paths cannot deadlock" do
     fixture = unboxed_completion_fixture()
-    on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end) end)
 
     parent = self()
     ref = make_ref()
     handler_id = {__MODULE__, ref}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :telemetry.attach(
       handler_id,
@@ -164,10 +166,13 @@ defmodule CodexPooler.Gateway.Persistence.TurnCompletionLockOrderTest do
     end
   end
 
+  # The committed owner's registered removal takes the whole graph with it: its Pool cascades to
+  # the key, assignment, session, request, turn and attempt, and the identity goes as the only
+  # Pool's holder.
   defp unboxed_completion_fixture do
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      %{user: owner} = bootstrap_owner_fixture()
       pool = pool_fixture(%{created_by_user_id: owner.id})
       %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
       auth = %{pool: pool, api_key: api_key}

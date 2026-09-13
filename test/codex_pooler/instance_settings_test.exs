@@ -10,6 +10,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.{Cache, Settings}
+  alias CodexPooler.PeerRegistry
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
 
   defmodule FailingRepo do
@@ -1696,6 +1697,7 @@ defmodule CodexPooler.InstanceSettingsTest do
 
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"])
+        PeerRegistry.assert_epmd_ready!()
         true
     end
   end

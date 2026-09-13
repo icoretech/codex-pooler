@@ -2165,6 +2165,9 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     test_pid = self()
     handler_id = {__MODULE__, :stats_repo_query, test_pid, System.unique_integer([:positive])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

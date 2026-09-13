@@ -569,6 +569,12 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
     Scope.for_user(user, ["instance_owner"])
   end
 
+  # Committed and registered before the fixture's own rows, so the owner is removed after them.
+  defp committed_owner_scope! do
+    %{user: user} = committed_bootstrap_owner_fixture!()
+    Scope.for_user(user, ["instance_owner"])
+  end
+
   defp import_attrs(label) do
     %{
       chatgpt_account_id: unique("account-#{label}"),
@@ -629,13 +635,13 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
   # enclosing `after` runs, and the committed pool would outlive the test.
   defp committed_batch_fixture! do
     slug = unique("reverse-batch")
+    scope = committed_owner_scope!()
 
     register_unboxed_cleanup!(fn ->
       Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.slug == ^slug)
     end)
 
     Sandbox.unboxed_run(Repo, fn ->
-      scope = owner_scope()
       pool = pool_fixture(%{created_by_user_id: scope.user.id, slug: slug})
 
       prepared =
@@ -646,8 +652,9 @@ defmodule CodexPooler.Upstreams.ImportBatchPlannerTest do
   end
 
   defp committed_email_account_fixture! do
+    scope = committed_owner_scope!()
+
     Sandbox.unboxed_run(Repo, fn ->
-      scope = owner_scope()
       pool = pool_fixture(%{created_by_user_id: scope.user.id})
 
       fixture =

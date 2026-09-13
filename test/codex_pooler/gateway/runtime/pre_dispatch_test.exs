@@ -2852,6 +2852,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     parent = self()
     handler_id = "pre-dispatch-query-count-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

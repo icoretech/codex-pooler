@@ -111,6 +111,9 @@ defmodule CodexPooler.Accounting.APIKeyFinalizationLockModeTest do
     parent = self()
     handler_id = {__MODULE__, System.unique_integer([:positive, :monotonic])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

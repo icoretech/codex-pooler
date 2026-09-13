@@ -106,6 +106,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
     fixture.attempt |> Ecto.Changeset.change(status: "failed") |> Repo.update!()
     handler = "visibility-failure-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
+
     :ok =
       :telemetry.attach(
         handler,
@@ -165,6 +168,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     parent = self()
     handler = "websocket-visibility-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
 
     :ok =
       :telemetry.attach(

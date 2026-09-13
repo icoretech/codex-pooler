@@ -585,12 +585,16 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
   # this file are exactly what a leaked identity breaks.
   defp committed_fixture! do
     suffix = System.unique_integer([:positive, :monotonic])
+
+    # Committed and registered before the Pool's cleanup, so the owner is removed after it.
+    %{user: user} =
+      committed_bootstrap_owner_fixture!(%{
+        "email" => "prepared-persistence-#{suffix}@example.com"
+      })
+
     register_unboxed_cleanup!(fn -> delete_committed_fixture!(suffix) end)
 
     unboxed(fn ->
-      %{user: user} =
-        bootstrap_owner_fixture(%{"email" => "prepared-persistence-#{suffix}@example.com"})
-
       scope = Scope.for_user(user)
 
       {:ok, pool} =

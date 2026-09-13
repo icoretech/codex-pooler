@@ -1062,6 +1062,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalizationTest do
     handler_id = "native-stream-telemetry-#{System.unique_integer([:positive])}"
     parent = self()
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach_many(
         handler_id,

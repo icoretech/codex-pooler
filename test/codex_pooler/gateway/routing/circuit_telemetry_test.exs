@@ -88,6 +88,9 @@ defmodule CodexPooler.Gateway.Routing.CircuitTelemetryTest do
     parent = self()
     handler_id = "circuit-transition-test-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -126,6 +129,9 @@ defmodule CodexPooler.Gateway.Routing.CircuitTelemetryTest do
   defp emitted_reason_class(reason_code) do
     parent = self()
     handler_id = "circuit-reason-test-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.DirectCleanup
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -409,6 +410,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   defp start_distribution! do
     if node() == :nonode@nohost do
       {_output, 0} = System.cmd("epmd", ["-daemon"])
+      PeerRegistry.assert_epmd_ready!()
       previous = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
       Application.put_env(:kernel, :prevent_overlapping_partitions, false)
       name = String.to_atom("pending_proxy_#{System.unique_integer([:positive])}")

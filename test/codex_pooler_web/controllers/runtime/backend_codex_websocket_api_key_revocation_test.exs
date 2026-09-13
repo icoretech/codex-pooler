@@ -454,6 +454,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationDistribute
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Events.PostgresBridge
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -691,8 +692,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationDistribute
 
   defp ensure_epmd_started! do
     case :erl_epmd.names() do
-      {:ok, _names} -> :ok
-      {:error, _reason} -> assert {_output, 0} = System.cmd("epmd", ["-daemon"])
+      {:ok, _names} ->
+        :ok
+
+      {:error, _reason} ->
+        assert {_output, 0} = System.cmd("epmd", ["-daemon"])
+        PeerRegistry.assert_epmd_ready!()
     end
   end
 

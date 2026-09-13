@@ -28,7 +28,7 @@ N ?= 4
 TEST_FAST_COMMAND ?= $(MIX) test
 TEST_FAST_DROP_COMMAND ?= $(MIX) ecto.drop --quiet
 
-.PHONY: dev dev-prepare dev-db dev-compile dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-fast
+.PHONY: dev dev-prepare dev-db dev-compile dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-db-prune test-fast
 
 dev: dev-prepare
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) DEV_SERVER_COMMAND='PORT=$(PORT) $(MIX) phx.server' $(DEV_SERVER_LIFECYCLE) start
@@ -80,6 +80,11 @@ dev-logs:
 
 precommit:
 	@$(MIX) precommit
+
+# Drops the run-scoped test databases that killed or crashed runs left behind. A database any
+# session is connected to, or a running test holds, is kept.
+test-db-prune:
+	@MIX_ENV=test $(MIX) codex_pooler.test.prune_databases
 
 test-fast:
 	@partitions="$(N)"; \

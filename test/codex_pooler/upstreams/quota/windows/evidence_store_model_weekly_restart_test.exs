@@ -278,6 +278,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     parent = self()
     handler_id = "model-weekly-anchor-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

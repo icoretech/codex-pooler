@@ -1,6 +1,7 @@
 defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
   use ExUnit.Case, async: false
   import Ecto.Query
+  import CodexPooler.AccountsFixtures, only: [committed_bootstrap_owner_fixture!: 0]
   import CodexPooler.RequestReplayFixtures
   import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   alias CodexPooler.Access.APIKey
@@ -477,9 +478,14 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
   # run before `allow_committed_owner/1`'s own teardown stops the database owner the replay owner
   # is allowed on; the registered pass then finds nothing left. `replay_fixture/1` derives every
   # key while it commits, so this cannot be registered earlier and a fixture that fails partway
-  # through is not covered.
+  # through is not covered. The bootstrap owner is committed and registered first instead, keyed on
+  # its email, so its removal runs after this fixture's and covers a bootstrap that failed.
   defp committed_replay_fixture! do
-    fixture = Sandbox.unboxed_run(Repo, fn -> replay_fixture(reservation?: true) end)
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+
+    fixture =
+      Sandbox.unboxed_run(Repo, fn -> replay_fixture(reservation?: true, owner: owner) end)
+
     register_unboxed_cleanup!(fn -> delete_replay_fixture!(fixture) end)
     fixture
   end

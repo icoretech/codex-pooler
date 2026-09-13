@@ -7802,7 +7802,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "auth-json-live", name: "auth.json Live"})
     access_token = jwt_token(%{"exp" => future_unix()})
     refresh_token = runtime_secret("auth-json-refresh")
-    auth_json = auth_json_fixture(access_token: access_token, refresh_token: refresh_token)
+    email = unique_user_email()
+
+    auth_json =
+      auth_json_fixture(access_token: access_token, refresh_token: refresh_token, email: email)
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
@@ -7824,7 +7827,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert identity.metadata["auth_json_imported"] == true
     assert assignment.pool_id == pool.id
     assert assignment.status == "active"
-    assert has_element?(view, "#upstream-account-#{identity.id}", "fixture-user@example.com")
+    assert has_element?(view, "#upstream-account-#{identity.id}", email)
     refute has_element?(view, "#upstream-account-#{identity.id}", "acct_fixture_auth_json")
     refute has_element?(view, "#upstream-account-#{identity.id}", "auth.json import")
     refute has_element?(view, "#upstream-account-#{identity.id}", "stored account id")
@@ -7852,7 +7855,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "auth-json-file", name: "auth.json File"})
     access_token = jwt_token(%{"exp" => future_unix(), "source" => "file"})
     refresh_token = runtime_secret("auth-json-file-refresh")
-    auth_json = auth_json_fixture(access_token: access_token, refresh_token: refresh_token)
+    email = unique_user_email()
+
+    auth_json =
+      auth_json_fixture(access_token: access_token, refresh_token: refresh_token, email: email)
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
     open_auth_json_import_dialog(view)
@@ -7874,7 +7880,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     identity = Repo.one!(UpstreamIdentity)
     assert identity.metadata["auth_json_imported"] == true
-    assert has_element?(view, "#upstream-account-#{identity.id}", "fixture-user@example.com")
+    assert has_element?(view, "#upstream-account-#{identity.id}", email)
     refute has_element?(view, "#auth-json-import-dialog")
 
     html = render(view)
@@ -7983,19 +7989,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     second_access = jwt_token(%{"exp" => future_unix(), "nonce" => "shared-target"})
     first_refresh = runtime_secret("shared-source-refresh")
     second_refresh = runtime_secret("shared-target-refresh")
+    email = unique_user_email()
 
     assert {:ok, %{identity: identity, assignment: source_assignment}} =
              Upstreams.import_codex_auth_json(
                scope,
                source_pool,
-               auth_json_fixture(access_token: first_access, refresh_token: first_refresh)
+               auth_json_fixture(
+                 access_token: first_access,
+                 refresh_token: first_refresh,
+                 email: email
+               )
              )
 
     assert {:ok, %{identity: same_identity, assignment: target_assignment}} =
              Upstreams.import_codex_auth_json(
                scope,
                target_pool,
-               auth_json_fixture(access_token: second_access, refresh_token: second_refresh)
+               auth_json_fixture(
+                 access_token: second_access,
+                 refresh_token: second_refresh,
+                 email: email
+               )
              )
 
     assert same_identity.id == identity.id
@@ -8004,7 +8019,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert Repo.aggregate(UpstreamIdentity, :count) == 1
     assert Repo.aggregate(PoolUpstreamAssignment, :count) == 2
-    assert has_element?(view, "#upstream-account-#{identity.id}", "fixture-user@example.com")
+    assert has_element?(view, "#upstream-account-#{identity.id}", email)
     assert has_element?(view, "#upstream-account-#{identity.id}", "2 Pools")
 
     assert has_element?(
@@ -9100,7 +9115,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     Sandbox.unboxed_run(Repo, fn ->
       account_id = "acct-mounted-recovery-#{suffix}"
-      email = "fixture-user@example.com"
+      # Committed, so derived per call: a literal shared with the sandboxed auth.json tests would
+      # collide with any identity another committed run leaves on the same address.
+      email = "mounted-recovery-#{suffix}@example.com"
       pool = pool_fixture(%{slug: "mounted-recovery-#{suffix}", name: "Mounted recovery"})
 
       %{identity: identity} =
@@ -9168,6 +9185,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   defp attach_import_preparation_probe!(handler_id, target) do
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :telemetry.attach(
       handler_id,
       [:codex_pooler, :repo, :query],
@@ -9497,8 +9517,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   defp auth_json_fixture(opts) do
+    email = Keyword.get(opts, :email, "fixture-user@example.com")
+
     tokens = %{
-      "id_token" => Keyword.get(opts, :id_token, id_token_fixture()),
+      "id_token" => Keyword.get_lazy(opts, :id_token, fn -> id_token_fixture(email) end),
       "access_token" => Keyword.fetch!(opts, :access_token),
       "refresh_token" => Keyword.fetch!(opts, :refresh_token),
       "account_id" => Keyword.get(opts, :account_id, "acct_fixture_auth_json")
@@ -9513,9 +9535,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> CodexPooler.JSON.encode!()
   end
 
-  defp id_token_fixture do
+  defp id_token_fixture(email) do
     jwt_token(%{
-      "email" => "fixture-user@example.com",
+      "email" => email,
       "https://api.openai.com/auth" => %{
         "chatgpt_account_id" => "acct_fixture_auth_json",
         "chatgpt_user_id" => "user_fixture_auth_json",
@@ -9740,6 +9762,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     test_pid = self()
     handler_id = {__MODULE__, test_pid, System.unique_integer([:positive])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -9760,6 +9785,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
        when is_pid(query_pid) and is_function(fun, 0) do
     test_pid = self()
     handler_id = {__MODULE__, :repo_query, test_pid, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

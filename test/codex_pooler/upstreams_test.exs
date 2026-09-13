@@ -13189,6 +13189,9 @@ defmodule CodexPooler.UpstreamsTest do
     parent = self()
     handler_id = "upstreams-repo-query-capture-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,

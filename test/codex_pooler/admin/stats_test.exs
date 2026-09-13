@@ -1566,16 +1566,27 @@ defmodule CodexPooler.Admin.StatsTest do
           parent
         )
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       try do
         assert_receive {^barrier, :coverage_locked}, 5_000
-        Repo.query!("SET lock_timeout TO '100ms'")
 
+        # The session-level timeout is set and reset inside one checkout. An owner killed between
+        # two queries of a plain unboxed checkout (the linked lock task failing, the ExUnit timeout)
+        # hands the connection back to the pool with the 100 ms timeout still set, and whichever
+        # test draws it next fails its own lock waits; an owner killed inside a checkout gets the
+        # connection disconnected instead.
         result =
-          try do
-            Stats.pool_usage_by_pool_ids([fixture.pool.id], opts)
-          after
-            Repo.query!("SET lock_timeout TO DEFAULT")
-          end
+          Repo.checkout(fn ->
+            Repo.query!("SET lock_timeout TO '100ms'")
+
+            try do
+              Stats.pool_usage_by_pool_ids([fixture.pool.id], opts)
+            after
+              Repo.query!("SET lock_timeout TO DEFAULT")
+            end
+          end)
 
         assert result.source == :raw_fallback
         assert result == raw
@@ -2632,6 +2643,9 @@ defmodule CodexPooler.Admin.StatsTest do
         &__MODULE__.handle_repo_query_event/4,
         {handler_id, self()}
       )
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     try do
       result = fun.()

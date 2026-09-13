@@ -29,7 +29,6 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendLockOrderTest do
   @tag timeout: 60_000
   test "the resend claim locks the session before api_keys so a session-first reservation serializes" do
     fixture = unboxed_resend_fixture()
-    on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end) end)
 
     parent = self()
     ref = make_ref()
@@ -164,10 +163,13 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendLockOrderTest do
     end
   end
 
+  # The committed owner's registered removal takes the whole graph with it: its Pool cascades to
+  # the key, model, assignment, session, requests, attempts and turns, and the identity goes as
+  # the only Pool's holder.
   defp unboxed_resend_fixture do
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      %{user: owner} = bootstrap_owner_fixture()
       pool = pool_fixture(%{created_by_user_id: owner.id})
       %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
       auth = %{pool: pool, api_key: api_key}

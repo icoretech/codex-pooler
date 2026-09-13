@@ -6414,6 +6414,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   end
 
   defp attach_import_preparation_probe!(handler_id, target) do
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :telemetry.attach(
       handler_id,
       [:codex_pooler, :repo, :query],

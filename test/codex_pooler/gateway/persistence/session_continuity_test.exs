@@ -137,15 +137,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     @tag :session_start_race
     @tag timeout: 30_000
     test "HTTP continuity registration revalidates its witness after waiting for the session lock" do
+      %{user: owner} = committed_bootstrap_owner_fixture!()
+
       fixture =
         Sandbox.unboxed_run(Repo, fn ->
-          reset_bootstrap_state_fixture!()
-          auth = auth_fixture()
+          auth = auth_fixture(owner)
           session = continuity_session_fixture(auth, "registration-lock-wait")
           %{auth: auth, session: Repo.get!(CodexSession, session.id)}
         end)
-
-      on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end) end)
 
       parent = self()
       barrier = make_ref()
@@ -402,17 +401,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
 
   @tag :session_start_race
   test "concurrent first start for the same session key reuses the winning session" do
-    auth =
-      Sandbox.unboxed_run(Repo, fn ->
-        reset_bootstrap_state_fixture!()
-        auth_fixture()
-      end)
-
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        reset_bootstrap_state_fixture!()
-      end)
-    end)
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+    auth = Sandbox.unboxed_run(Repo, fn -> auth_fixture(owner) end)
 
     parent = self()
     barrier = make_ref()
@@ -1391,25 +1381,17 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     }
   end
 
+  # The committed owner registers its own removal before the commit, and its Pools cascade to every
+  # session, lease, alias and turn the cases commit under them.
   defp unboxed_auth_fixture! do
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end)
-    end)
-
-    Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      auth_fixture()
-    end)
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+    Sandbox.unboxed_run(Repo, fn -> auth_fixture(owner) end)
   end
 
   defp unboxed_same_pool_auths! do
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end)
-    end)
+    %{user: owner} = committed_bootstrap_owner_fixture!()
 
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      %{user: owner} = bootstrap_owner_fixture()
       pool = pool_fixture(%{created_by_user_id: owner.id})
       %{api_key: primary_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
       %{api_key: alternate_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
@@ -1487,8 +1469,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     Sandbox.unboxed_run(Repo, fn -> refute_raw_turn_state_session_key!(pool_id, turn_state) end)
   end
 
-  defp auth_fixture do
-    %{user: owner} = bootstrap_owner_fixture()
+  defp auth_fixture, do: auth_fixture(bootstrap_owner_fixture().user)
+
+  defp auth_fixture(owner) do
     pool = pool_fixture(%{created_by_user_id: owner.id})
     %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
     %{pool: pool, api_key: api_key}

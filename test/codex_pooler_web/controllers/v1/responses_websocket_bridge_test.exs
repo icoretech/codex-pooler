@@ -3210,6 +3210,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       [:codex_pooler, :gateway, :stream, :finalization]
     ]
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach_many(
         handler_id,

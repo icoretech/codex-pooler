@@ -12,7 +12,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
   """
   use CodexPooler.DataCase, async: false
 
-  import CodexPooler.AccountsFixtures, only: [reset_bootstrap_state_fixture!: 0]
+  import CodexPooler.AccountsFixtures, only: [delete_user_graph!: 1]
   import CodexPooler.PoolerFixtures
   import CodexPooler.UnboxedFixture
   import Ecto.Query
@@ -91,9 +91,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
   # The cleanup is keyed on the slug and registered before the commit, so it also covers a
   # fixture that fails partway through.
   # `api_key_fixture/2` also commits an instance owner of its own when the instance has none,
-  # and that user is outside the pool's cascade, so the reset below removes it: deleting only
-  # the pool would leave a `users` row behind and break the suites that assert absolute user
-  # counts.
+  # and that user is outside the pool's cascade, so the cleanup below removes it as the key's
+  # creator, with its membership and audit rows: deleting only the pool would leave a `users`
+  # row behind and break the suites that assert absolute user counts.
   defp committed_fixture! do
     slug = "alias-deadlock-#{System.unique_integer([:positive, :monotonic])}"
     register_unboxed_cleanup!(fn -> delete_committed_fixture!(slug) end)
@@ -111,8 +111,18 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasDeadlockRetryTest do
   end
 
   defp delete_committed_fixture!(slug) do
+    creator_ids =
+      Repo.all(
+        from api_key in "api_keys",
+          join: pool in "pools",
+          on: pool.id == api_key.pool_id,
+          where: pool.slug == ^slug and not is_nil(api_key.created_by_user_id),
+          distinct: true,
+          select: type(api_key.created_by_user_id, Ecto.UUID)
+      )
+
     Repo.delete_all(from pool in Pool, where: pool.slug == ^slug)
-    reset_bootstrap_state_fixture!()
+    delete_user_graph!(creator_ids)
     :ok
   end
 

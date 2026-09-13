@@ -152,6 +152,9 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
     ref = make_ref()
     handler = {__MODULE__, ref}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
+
     :ok =
       :telemetry.attach(
         handler,
