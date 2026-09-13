@@ -80,12 +80,23 @@ defmodule CodexPooler.Gateway.ErrorClassificationTest do
   end
 
   test "the enumerated client class never covers a server-side status" do
-    for code <- ErrorClassification.client_error_codes() do
-      assert {:ok, payload} =
-               WebsocketOwnerContract.safe_error_payload(String.to_existing_atom(code), nil)
+    # Walk the owner vocabulary's own atoms rather than converting the codes
+    # back: an atom exists only once a module naming it is loaded, and which
+    # modules a test partition has loaded depends on the seed.
+    client_errors =
+      Enum.filter(
+        OwnerErrorVocabulary.owner_errors(),
+        &(Atom.to_string(&1) in ErrorClassification.client_error_codes())
+      )
+
+    assert Enum.map(client_errors, &Atom.to_string/1) |> Enum.sort() ==
+             Enum.sort(ErrorClassification.client_error_codes())
+
+    for error <- client_errors do
+      assert {:ok, payload} = WebsocketOwnerContract.safe_error_payload(error, nil)
 
       assert payload.status < 500,
-             "#{code} is client class but is emitted at #{payload.status}"
+             "#{error} is client class but is emitted at #{payload.status}"
     end
   end
 
@@ -144,9 +155,11 @@ defmodule CodexPooler.Gateway.ErrorClassificationTest do
   end
 
   defp owner_error_status(code) do
-    {:ok, payload} =
-      WebsocketOwnerContract.safe_error_payload(String.to_existing_atom(code), nil)
+    owner_error =
+      Enum.find(OwnerErrorVocabulary.owner_errors(), &(Atom.to_string(&1) == code)) ||
+        flunk("#{code} is not in the owner error vocabulary")
 
+    {:ok, payload} = WebsocketOwnerContract.safe_error_payload(owner_error, nil)
     payload.status
   end
 end

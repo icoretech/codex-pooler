@@ -41,8 +41,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
   # `invalid_request_error` -- the terminal class -- including the throttle and
   # the two server-side failures, which is the whole defect the ticket names.
   @tag :file_bridge_error_classification
-  test "a relayed upstream file-create status renders the class that status implies",
-       %{conn: conn} do
+  test "a relayed upstream file-create status renders the class that status implies" do
     for {upstream_status, expected_type} <- [
           {429, "rate_limit_error"},
           {502, "server_error"},
