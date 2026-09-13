@@ -1089,7 +1089,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Oversized observations are saturated at 128 MiB for Prometheus histogram export, keeping p95 finite. This changes telemetry only, not stream-buffer handling or the raw telemetry event.",
+      "description": "p95 observed oversized and truncated stream-buffer payload size. Oversized observations saturate at 128 MiB for histogram export, so a value at that ceiling means 128 MiB or larger. The saturation changes telemetry only, not stream-buffer handling or the raw telemetry event.",
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
@@ -2324,7 +2324,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod.",
+      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the turns that expired-owner recovery settles from the runtime cleanup job are never exported here. A low or empty interrupted series means interruptions settled by that job are not measured, not that they did not happen; read the accounting request and attempt rows instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2436,7 +2436,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. Repeated candidate decisions indicate a convergence loop.",
+      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. Repeated candidate decisions indicate a convergence loop. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the decisions taken by account reconciliation, saved-reset redemption and alert evaluation are never exported here. An empty or low graph means those roles are not measured, not that no cycle decision was taken; read the account quota window rows and their evidence history instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",

@@ -491,7 +491,11 @@ defmodule CodexPoolerWeb.Telemetry do
         measurement: :count,
         tags: [:outcome, :downstream_transport, :upstream_transport],
         tag_values: &stream_outcome_tag_values/1,
-        description: "Gateway stream outcomes by bounded outcome and transport metadata."
+        description:
+          "Gateway stream outcomes by bounded outcome and transport metadata. " <>
+            "Expired-owner recovery settles abandoned turns from the runtime cleanup job, and " <>
+            "no reporter runs for OBAN_MODE=worker or scheduler, so the interrupted outcome is " <>
+            "under-counted; read the request and attempt rows for the rest."
       ),
       counter("codex_pooler.gateway.websocket_bridge.fallback.count",
         event_name: [:codex_pooler, :gateway, :websocket_bridge, :fallback],
@@ -510,7 +514,11 @@ defmodule CodexPoolerWeb.Telemetry do
         measurement: :count,
         tags: [:scope, :decision, :source],
         tag_values: &quota_cycle_decision_tag_values/1,
-        description: "Quota cycle decisions by bounded scope, decision, and source class."
+        description:
+          "Quota cycle decisions by bounded scope, decision, and source class. " <>
+            "Account reconciliation, saved-reset redemption, and alert evaluation also decide " <>
+            "cycles, and no reporter runs for OBAN_MODE=worker or scheduler, so this counter " <>
+            "carries the request-path share only; read the quota window rows for the rest."
       ),
       counter("codex_pooler.saved_reset.convergence.count",
         event_name: [:codex_pooler, :saved_reset, :convergence],
@@ -518,7 +526,9 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:source, :outcome],
         tag_values: &ConvergenceTelemetry.tag_values/1,
         description:
-          "Committed saved-reset convergence transitions observed on scraped web nodes."
+          "Committed saved-reset convergence transitions observed on scraped web nodes. " <>
+            "No reporter runs for OBAN_MODE=worker or scheduler, so transitions committed by " <>
+            "the redemption and reconciliation jobs are absent; read the saved-reset audit trail."
       ),
       distribution("codex_pooler.saved_reset.convergence.applied_to_canonical.seconds",
         event_name: [:codex_pooler, :saved_reset, :convergence],
@@ -526,7 +536,10 @@ defmodule CodexPoolerWeb.Telemetry do
         unit: {:millisecond, :second},
         tags: [:source, :outcome],
         tag_values: &ConvergenceTelemetry.tag_values/1,
-        description: "Applied-to-canonical saved-reset latency observed on scraped web nodes.",
+        description:
+          "Applied-to-canonical saved-reset latency observed on scraped web nodes. " <>
+            "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
+            "are absent; read the saved-reset audit trail.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       distribution("codex_pooler.saved_reset.convergence.canonical_to_lifecycle.seconds",
@@ -535,7 +548,10 @@ defmodule CodexPoolerWeb.Telemetry do
         unit: {:millisecond, :second},
         tags: [:source, :outcome],
         tag_values: &ConvergenceTelemetry.tag_values/1,
-        description: "Canonical-to-lifecycle saved-reset latency observed on scraped web nodes.",
+        description:
+          "Canonical-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
+            "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
+            "are absent; read the saved-reset audit trail.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       distribution("codex_pooler.saved_reset.convergence.applied_to_lifecycle.seconds",
@@ -544,7 +560,10 @@ defmodule CodexPoolerWeb.Telemetry do
         unit: {:millisecond, :second},
         tags: [:source, :outcome],
         tag_values: &ConvergenceTelemetry.tag_values/1,
-        description: "Applied-to-lifecycle saved-reset latency observed on scraped web nodes.",
+        description:
+          "Applied-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
+            "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
+            "are absent; read the saved-reset audit trail.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       counter("codex_pooler.gateway.routing.circuit.transition.count",

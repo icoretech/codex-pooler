@@ -32,7 +32,7 @@ monitoring:
     scrapeTimeout: 5s
 ```
 
-The `release` label and scrape interval should match your own Prometheus Operator selectors and scrape budget. For fast OOM investigations, prefer a short interval for the app ServiceMonitor and keep broader Kubernetes collectors at their normal cadence. Worker and scheduler roles don't start the Prometheus reporter because they don't expose `/metrics`; use Kubernetes cgroup metrics and sampler logs for those pods.
+The `release` label and scrape interval should match your own Prometheus Operator selectors and scrape budget. For fast OOM investigations, prefer a short interval for the app ServiceMonitor and keep broader Kubernetes collectors at their normal cadence. Worker and scheduler roles don't start the Prometheus reporter because they don't expose `/metrics`; use Kubernetes cgroup metrics and sampler logs for those pods. That also makes a few application counters partial rather than complete, because part of what they count happens in background jobs: pre-attempt reservation releases (the `stale_sweep` phase), saved-reset convergence, quota cycle decisions, and the `interrupted` slice of gateway stream outcomes. Each is documented with the durable rows to read instead, and a flat graph for one of them says nothing about how often the behaviour occurs.
 
 ## Runtime triage dashboard
 
