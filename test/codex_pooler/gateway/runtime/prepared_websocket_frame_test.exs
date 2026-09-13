@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
   use CodexPooler.DataCase, async: false
 
+  import CodexPooler.PoolerFixtures
+
   import ExUnit.CaptureLog, only: [with_log: 1]
 
   alias CodexPooler.Accounting.Request
@@ -414,8 +416,13 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     refute_received :request_options_built
     row_count = Repo.aggregate(Request, :count)
 
+    # response.processed is authorized against a real API key before it is forwarded
+    # (findings#197), so the control path needs an authorization context to reach the forward.
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    auth = %{pool: pool, api_key: api_key, key_prefix: api_key.key_prefix}
+
     assert {:error, %{code: "upstream_websocket_forward_failed"}} =
-             Service.execute_prepared_websocket_response(%{}, prepared)
+             Service.execute_prepared_websocket_response(auth, prepared)
 
     refute_received :request_options_built
     assert Repo.aggregate(Request, :count) == row_count
