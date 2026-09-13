@@ -9,14 +9,13 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Access
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Pools.Routing, as: PoolRouting
-
-  @overload_code "server_is_overloaded"
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
@@ -288,7 +287,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
         Map.merge(
           %{
             "message" => message,
-            "type" => client_error_type(code),
+            "type" => ErrorClassification.error_type(code, status),
             "code" => to_string(code),
             "param" => Map.get(error, :param)
           },
@@ -309,9 +308,6 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   def send_error(conn, %{code: code, message: message}) do
     send_error(conn, %{status: 401, code: code, message: message})
   end
-
-  defp client_error_type(@overload_code), do: "server_error"
-  defp client_error_type(_code), do: "invalid_request_error"
 
   defp forwarded_headers(conn) do
     provider_session_header_names = TransportEnvelope.provider_session_header_names()

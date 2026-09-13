@@ -148,10 +148,17 @@ defmodule CodexPooler.Gateway.Websocket.AdapterTest do
              "error" => %{"code" => "websocket_request_failed", "type" => "server_error"}
            } = Adapter.websocket_error(:closed)
 
-    # An error that declares itself non-retryable stays terminal for the client
-    # even at 503; its recovery fields, not a retry, are the way out.
+    # findings#191: this used to be `invalid_request_error`, taken from the
+    # error's own `retryable: false`. That field says Codex Pooler will not route
+    # around the denial itself, not that the caller must change the request --
+    # the recorded operator action is to wait for the pinned upstream to recover
+    # and then restart -- and reading it as a client class also mistyped a 500
+    # pre-attempt reservation failure, which carries the same flag. The coarse
+    # SDK signal follows the 503; the `recovery` contract in the same envelope
+    # carries the precise instruction.
     assert error["retryable"] == false
-    assert error["type"] == "invalid_request_error"
+    assert error["recovery_kind"] == "restart_with_full_context"
+    assert error["type"] == "server_error"
   end
 
   # findings#184: `error_type/1` special-cased one code and defaulted the rest to

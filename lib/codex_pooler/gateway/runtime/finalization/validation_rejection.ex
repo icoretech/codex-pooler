@@ -35,6 +35,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   Pooler-side limit for a provider that offered no alternatives.
   """
 
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
 
@@ -47,7 +48,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
     string_above_max_length
   )
   @supported_values_codes ~w(unsupported_value invalid_value)
-  @error_type "invalid_request_error"
+  # The provider's own vocabulary, used only to recognise the rejection. It is
+  # deliberately not the type Codex Pooler then writes: the relayed envelope is
+  # Codex Pooler-authored, so its type comes from the shared classification
+  # (findings#191). The two agree today only because a relayed rejection is
+  # always a 400.
+  @provider_error_type "invalid_request_error"
+  @rejection_status 400
   @body_max_bytes 65_536
   @message_max_bytes 2_048
   @supported_values_max 12
@@ -72,9 +79,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   def supported_values_codes, do: @supported_values_codes
 
   @spec fetch(Req.Response.t(), RequestOptions.t() | term()) :: rejection() | nil
-  def fetch(%Req.Response{status: 400} = response, %RequestOptions{} = request_options) do
+  def fetch(
+        %Req.Response{status: @rejection_status} = response,
+        %RequestOptions{} = request_options
+      ) do
     with true <- Metadata.ordinary_responses_route?(request_options),
-         %{code: code, type: @error_type} = rejection when code in @relayable_codes <-
+         %{code: code, type: @provider_error_type} = rejection when code in @relayable_codes <-
            Metadata.rejection_error(response) do
       outcome = response_supported_values_outcome(code, response)
 
@@ -120,7 +130,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
     param = public_param(Map.get(rejection, :param), param_mapper)
 
     %{
-      "type" => @error_type,
+      "type" => ErrorClassification.error_type(code, @rejection_status),
       "code" => code,
       "param" => param,
       "message" => message(code, param, Map.get(rejection, :supported_values))

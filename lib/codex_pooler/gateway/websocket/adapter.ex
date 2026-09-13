@@ -2,65 +2,15 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   @moduledoc false
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
-  alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.DownstreamSession
-
-  @overload_code "server_is_overloaded"
-
-  # An OpenAI-compatible SDK branches on `type`, not on `status`:
-  # `invalid_request_error` is the terminal, do-not-retry class, and it used to
-  # be this renderer's default for everything except the overload code. That
-  # inverted findings#168's classification at the last step — an owner-lifecycle
-  # 503 told the client never to retry the one case that should be (findings#184)
-  # — and a default is how it happened, so the vocabulary is enumerated instead.
-  #
-  # Server class: the turn failed for a reason on this side of the wire and the
-  # same request can succeed on a retry. `owner_busy` is backpressure and
-  # `stale_owner` is a lease that moved, so both belong here even at 409.
-  # `upstream_websocket_terminal_delivery_timeout` is a vocabulary name that is
-  # never emitted as a wire code (it renders as `upstream_stream_error`); it is
-  # classified so the exhaustiveness check below covers the whole vocabulary.
-  @server_error_codes [
-    @overload_code,
-    "owner_busy",
-    "owner_crashed",
-    "owner_drained",
-    "owner_forward_timeout",
-    "owner_forwarding_disabled",
-    "owner_unavailable",
-    "server_error",
-    "stale_owner",
-    "upstream_stream_error",
-    "upstream_websocket_terminal_delivery_timeout",
-    "websocket_request_failed"
-  ]
-
-  # Client class: this connection is the problem, and retrying the same frame on
-  # it cannot work. A downstream that was replaced or is speaking on a
-  # superseded epoch was superseded by the client's own newer connection, and
-  # `client_disconnected` cannot reach a live client at all.
-  @client_error_codes [
-    "client_disconnected",
-    "duplicate_downstream",
-    "stale_downstream"
-  ]
-
-  @unclassified_owner_error_codes OwnerErrorVocabulary.owner_error_codes() --
-                                    (@server_error_codes ++ @client_error_codes)
-
-  if @unclassified_owner_error_codes != [] do
-    raise "websocket owner error codes are unclassified in Adapter.error_type/3: " <>
-            Enum.join(@unclassified_owner_error_codes, ", ") <>
-            ". Classify each one as server or client class rather than letting it " <>
-            "inherit a default (findings#184)."
-  end
 
   @type socket_state :: map()
 
@@ -271,7 +221,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     Map.merge(
       %{
         "message" => message,
-        "type" => error_type(code, status, Map.get(reason, :retryable)),
+        "type" => ErrorClassification.error_type(code, status),
         "code" => to_string(code),
         "param" => Map.get(reason, :param)
       },
@@ -285,28 +235,10 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   defp error_payload(reason, _status) do
     %{
       "message" => "websocket request failed: #{ErrorSanitizer.safe_reason(reason)}",
-      "type" => "server_error",
+      "type" => ErrorClassification.server_error_type(),
       "code" => ErrorCodes.websocket_request_failed_code(),
       "param" => nil
     }
-  end
-
-  # The enumerated vocabulary decides first. Anything outside it is classified
-  # from what the error itself carries rather than from a constant: an error
-  # that already declares `retryable: false` (the hard pinned-continuation
-  # recoveries) is terminal for this request whatever its status, and a
-  # remaining 5xx is a server-side failure. Only a non-5xx, non-vocabulary code
-  # — a relayed provider or local validation rejection — is a client error.
-  defp error_type(code, status, retryable) do
-    code = to_string(code)
-
-    cond do
-      code in @server_error_codes -> "server_error"
-      code in @client_error_codes -> "invalid_request_error"
-      retryable == false -> "invalid_request_error"
-      is_integer(status) and status >= 500 -> "server_error"
-      true -> "invalid_request_error"
-    end
   end
 
   defp metadata_endpoint(%RequestOptions{transport: %{upstream_endpoint: endpoint}})

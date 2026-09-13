@@ -422,18 +422,25 @@ not promise cross-ID concurrency or fairness. `previous_response_id` controls
 conversation lineage independently. REST `POST /v1/responses`, native backend
 WebSockets, Chat, compact, and batches do not accept this field.
 
-### Websocket error frame types
+### Error types on errors Codex Pooler authors
 
-Error frames that Codex Pooler itself authors on `GET /v1/responses` carry an
-`error.type` that says whether the failure is worth retrying. Server-side
-failures, including the ones raised while the server hands a turn between
-connections, use `server_error`; the same request can succeed on a retry.
-`invalid_request_error` is reserved for frames the client must change before
-retrying, and for a connection that its own newer replacement superseded.
+Errors that Codex Pooler itself authors carry an `error.type` that says whether
+the failure is worth retrying. The same classification applies to HTTP error
+bodies on `/v1/*` and `/backend-api/codex/*` and to error frames on
+`GET /v1/responses`, so one code has one type on every surface.
+
+- `server_error`: the failure is on the server side, including failures raised
+  while the server hands a turn between connections. The same request can
+  succeed on a retry.
+- `rate_limit_error`: the request was throttled with HTTP `429`. Retry after
+  backing off.
+- `invalid_request_error`: the client must change the request before retrying,
+  or the connection was superseded by its own newer replacement.
 
 Branch on `error.type` for retry decisions and treat `error.code` as an open
-string, as described below. The HTTP status on the frame agrees with the type:
-a `5xx` frame is never typed `invalid_request_error`.
+string, as described below. The status agrees with the type: a `5xx` response
+or frame is never typed `invalid_request_error`. Errors relayed from the Codex
+backend follow the rules in the next section.
 
 ### Relayed terminal errors
 

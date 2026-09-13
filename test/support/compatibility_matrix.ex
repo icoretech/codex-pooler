@@ -293,6 +293,29 @@ defmodule CodexPooler.CompatibilityMatrix do
         "an ordinary Responses or Chat HTTP request whose upstream answers HTTP 400 with a direct error object of type invalid_request_error and an allowlisted parameter-validation code relays type, code, a bounded field-path param or null, and a Pooler-authored message built from code and param, never the provider message, which for unsupported_value and invalid_value may append at most 12 identifier-shaped supported values taken only from a strictly shaped trailing provider list with every earlier quoted value, including the rejected value, excluded; translated Chat Completions map the param back to the Chat field the client sent only for renames the adapter performs; a native streaming request receives that native JSON error envelope instead of an empty body while a materialized native body keeps its existing passthrough, and public /v1 Responses and Chat Completions receive the same OpenAI error object; every other status, type, code, detail body, the explicit Full override, compact routes, model-unavailability and misalignment projections, and websocket frames keep their existing behavior, while accounting codes, retries, routing health, and metrics are unchanged"
     },
     %{
+      slug: :pooler_authored_error_type,
+      status: :supported,
+      current: :classified_from_code_vocabulary_and_status,
+      categories: [:error, :route, :overload, :ownership],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :post, path: "/backend-api/codex/responses/compact"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :post, path: "/backend-api/files"},
+        %{method: :post, path: "/v1/responses", translation: "backend_responses"},
+        %{
+          method: :get,
+          path: "/v1/responses",
+          transport: "websocket",
+          translation: "backend_responses"
+        }
+      ],
+      future_routes: [],
+      fixture: :pooler_authored_error_type,
+      contract:
+        "every error envelope Codex Pooler authors itself, on the HTTP relay and on the websocket surface alike, takes its error type from one shared classification rather than from a per-renderer default: an enumerated code vocabulary decides first, so owner-lifecycle and overload codes carry server_error even at status 409 where owner_busy is backpressure and stale_owner is a lease that moved, while a replaced or stale downstream and a disconnected client carry invalid_request_error; a code outside that vocabulary takes its class from its status, so a 429 carries rate_limit_error, a 5xx carries server_error, and only a remaining 4xx carries invalid_request_error; an error map retryable field is never consulted, because it states that Codex Pooler will not route around the failure rather than that the caller must change the request; a compile-time guard fails the build when an owner error code is added without a class; the runtime ingress plug, the native previous-response-not-found canonical event, and the relayed upstream parameter-validation rejection author their envelopes through the same classification instead of naming a type; and the net invariant on both surfaces is that a 5xx response or frame is never typed invalid_request_error, while provider error objects relayed whole keep the type the provider wrote"
+    },
+    %{
       slug: :backend_fast_service_tier,
       status: :supported,
       current: :canonical_priority_routing_alias,
@@ -385,7 +408,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :websocket_turn,
       contract:
-        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; strict native turn-identity precedence validates client_metadata.turn_id, canonical client metadata, turn_id, then request_id without falling through a present invalid source, retaining only an opaque session-scoped SHA-256 semantic key and full claim key; a same active non-cancelled replay is suppressed without new work, while a cancelled predecessor with a different valid native identity can enter one bounded cancellation handoff with a one-second soft boundary and five-second absolute boundary, then starts only after matching fenced readiness; cancelled equal, noncancelled different, missing, public, non-native, and response.processed reconnect candidates fail bounded busy, while generate:false prewarm stays local, row-free, and neutral; predecessor, replacement, and later turn each settle exactly once, replacement uses a new connection generation, and the later turn reuses it; mixed-release behavior is identity-aware only when both current proxy and owner support the control path, a current proxy fails before accounting against a previous owner, and older callers retain their legacy behavior; no hidden automatic replay occurs; native anchor, compact, and final frames share one semantic client turn but create three distinct accounting lifecycles on one physical websocket generation; a first full-history compact uses the ordinary durable turn claim, while mid-turn compact and final transitions require a one-shot owner capability plus sealed runtime proof and can never be authorized by payload shape or client metadata alone; rejected capability frames create no rows, upstream calls, saved-reset probe or redeem activity, retry, replay, or fallback; public /v1 never inherits the native owner capability or proof and retains its existing replay, bridge, byte, and terminal-shape semantics; an unresolved previous-response alias retains the current authenticated runtime and emits no owner-outage error; successful native turns register hashed previous-response aliases independent of retained-body completeness; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed, carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns; an owner-forwarded native turn instead delivers the owner's single relayed status-502 server_error frame and the socket authors no second error frame for that turn, so a native turn reaches the client with at most one error frame while a success terminal followed by a settlement failure still receives its error frame; every frame authored through the shared websocket error envelope classifies its error type from an enumerated code vocabulary instead of a catch-all default, so owner-lifecycle and overload codes carry error type server_error while a replaced or stale downstream carries invalid_request_error, and a code outside that vocabulary carries invalid_request_error when its reason declares itself non-retryable and otherwise follows its status class, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed with error type server_error when its reason has no code and message; public /v1 terminal masking and shape remain unchanged; a native backend websocket response.create turn uses the upstream websocket whether its stream flag is true or omitted and never falls back to the HTTP Responses endpoint, an explicit stream false is rejected before admission, accounting, or upstream work with status 400 wire code invalid_request and param stream because the provider websocket rejects it, and a websocket turn without a websocket upstream path fails closed before reservation with one type:error frame carrying status 500 and wire code websocket_transport_required; model streaming-capability checks in pre-dispatch and candidate eligibility treat every websocket turn as streaming, so a stream-less websocket turn on a non-streaming model receives the same local 400 unsupported_model_capability param stream rejection as stream true"
+        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; strict native turn-identity precedence validates client_metadata.turn_id, canonical client metadata, turn_id, then request_id without falling through a present invalid source, retaining only an opaque session-scoped SHA-256 semantic key and full claim key; a same active non-cancelled replay is suppressed without new work, while a cancelled predecessor with a different valid native identity can enter one bounded cancellation handoff with a one-second soft boundary and five-second absolute boundary, then starts only after matching fenced readiness; cancelled equal, noncancelled different, missing, public, non-native, and response.processed reconnect candidates fail bounded busy, while generate:false prewarm stays local, row-free, and neutral; predecessor, replacement, and later turn each settle exactly once, replacement uses a new connection generation, and the later turn reuses it; mixed-release behavior is identity-aware only when both current proxy and owner support the control path, a current proxy fails before accounting against a previous owner, and older callers retain their legacy behavior; no hidden automatic replay occurs; native anchor, compact, and final frames share one semantic client turn but create three distinct accounting lifecycles on one physical websocket generation; a first full-history compact uses the ordinary durable turn claim, while mid-turn compact and final transitions require a one-shot owner capability plus sealed runtime proof and can never be authorized by payload shape or client metadata alone; rejected capability frames create no rows, upstream calls, saved-reset probe or redeem activity, retry, replay, or fallback; public /v1 never inherits the native owner capability or proof and retains its existing replay, bridge, byte, and terminal-shape semantics; an unresolved previous-response alias retains the current authenticated runtime and emits no owner-outage error; successful native turns register hashed previous-response aliases independent of retained-body completeness; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed, carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns; an owner-forwarded native turn instead delivers the owner's single relayed status-502 server_error frame and the socket authors no second error frame for that turn, so a native turn reaches the client with at most one error frame while a success terminal followed by a settlement failure still receives its error frame; every frame authored through the shared websocket error envelope classifies its error type from the same enumerated code vocabulary the HTTP relay uses instead of a catch-all default, so owner-lifecycle and overload codes carry error type server_error while a replaced or stale downstream carries invalid_request_error, and a code outside that vocabulary follows its status class alone, carrying rate_limit_error at 429 and server_error at any 5xx whatever the reason declares about its own retryability, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed with error type server_error when its reason has no code and message; public /v1 terminal masking and shape remain unchanged; a native backend websocket response.create turn uses the upstream websocket whether its stream flag is true or omitted and never falls back to the HTTP Responses endpoint, an explicit stream false is rejected before admission, accounting, or upstream work with status 400 wire code invalid_request and param stream because the provider websocket rejects it, and a websocket turn without a websocket upstream path fails closed before reservation with one type:error frame carrying status 500 and wire code websocket_transport_required; model streaming-capability checks in pre-dispatch and candidate eligibility treat every websocket turn as streaming, so a stream-less websocket turn on a non-streaming model receives the same local 400 unsupported_model_capability param stream rejection as stream true"
     },
     %{
       slug: :reasoning_minimal,
@@ -1108,6 +1131,40 @@ defmodule CodexPooler.CompatibilityMatrix do
       accounting_error_code: "upstream_status",
       retry: false,
       routing_health: :unchanged
+    },
+    pooler_authored_error_type: %{
+      authority: "CodexPooler.Gateway.ErrorClassification",
+      surfaces: ["http_relay", "runtime_ingress", "websocket"],
+      vocabulary_overrides: %{
+        server_error: [
+          "owner_busy",
+          "owner_crashed",
+          "owner_drained",
+          "owner_forward_timeout",
+          "owner_forwarding_disabled",
+          "owner_unavailable",
+          "server_error",
+          "server_is_overloaded",
+          "stale_owner",
+          "upstream_stream_error",
+          "upstream_websocket_terminal_delivery_timeout",
+          "websocket_request_failed"
+        ],
+        invalid_request_error: [
+          "client_disconnected",
+          "duplicate_downstream",
+          "stale_downstream"
+        ]
+      },
+      status_classes: %{
+        "429" => "rate_limit_error",
+        "5xx" => "server_error",
+        "other_4xx" => "invalid_request_error"
+      },
+      retryable_field_consulted: false,
+      exhaustiveness_guard: "compile_time_over_owner_error_vocabulary",
+      invariant: "no_5xx_typed_invalid_request_error",
+      relayed_provider_error_objects: "unchanged"
     },
     responses_chat: %{
       routes: ["/v1/responses", "/v1/chat/completions"],

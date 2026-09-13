@@ -635,9 +635,17 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
 
   defp assert_openai_error(conn, status, opts) do
     assert %{"error" => error} = json_response(conn, status)
-    assert error["type"] == "invalid_request_error"
+    assert error["type"] == Keyword.get(opts, :type, public_error_type(status))
     assert error["code"] == Keyword.fetch!(opts, :code)
     assert error["message"] == Keyword.fetch!(opts, :message)
     assert error["param"] == Keyword.get(opts, :param)
   end
+
+  # The public contract for errors the Pooler authors: a 5xx is never typed as a
+  # client error, and a 429 is a throttle (findings#191). This helper used to
+  # assert `invalid_request_error` for every status, which pinned the defect for
+  # the 502 upload failures rather than describing them.
+  defp public_error_type(status) when status >= 500, do: "server_error"
+  defp public_error_type(429), do: "rate_limit_error"
+  defp public_error_type(_status), do: "invalid_request_error"
 end

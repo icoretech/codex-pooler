@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonicalization do
   @moduledoc false
 
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary
@@ -229,12 +230,21 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     end
   end
 
+  # findings#191: a Codex Pooler-authored envelope that named its own type could
+  # not follow the classification either surface applies, so it is derived from
+  # the same status this event already declares.
+  @native_previous_response_not_found_status 400
+
   defp native_previous_response_not_found_event do
     %{
       "type" => "error",
-      "status" => 400,
+      "status" => @native_previous_response_not_found_status,
       "error" => %{
-        "type" => "invalid_request_error",
+        "type" =>
+          ErrorClassification.error_type(
+            "previous_response_not_found",
+            @native_previous_response_not_found_status
+          ),
         "code" => "previous_response_not_found",
         "message" => @native_previous_response_not_found_message
       }

@@ -334,6 +334,20 @@ defmodule CodexPooler.FakeUpstream do
     {:file_protocol, opts |> file_protocol_config() |> Map.put(:mode, :non_json_error)}
   end
 
+  @doc """
+  A file create that the upstream refuses with `status`.
+
+  The file bridge relays an upstream create status verbatim, so this is the
+  boundary where a throttled or unavailable upstream becomes a Codex
+  Pooler-authored error envelope at that same status (findings#191).
+  """
+  def file_protocol_create_error(status, opts \\ []) when is_integer(status) do
+    {:file_protocol,
+     opts
+     |> file_protocol_config()
+     |> Map.merge(%{mode: :create_error, create_error_status: status})}
+  end
+
   def file_protocol_finalize_retry(opts \\ []) do
     {:file_protocol, opts |> file_protocol_config() |> Map.put(:mode, :finalize_retry)}
   end
@@ -1472,7 +1486,10 @@ defmodule CodexPooler.FakeUpstream do
       upload_body: Map.get(opts, :upload_body, ""),
       unauthorized_payload:
         Map.get(opts, :unauthorized_payload, %{"error" => %{"code" => "invalid_api_key"}}),
-      error_body: Map.get(opts, :error_body, "fake upstream file finalize failure")
+      error_body: Map.get(opts, :error_body, "fake upstream file finalize failure"),
+      create_error_status: Map.get(opts, :create_error_status, 429),
+      create_error_payload:
+        Map.get(opts, :create_error_payload, %{"error" => %{"code" => "rate_limit_exceeded"}})
     }
   end
 
@@ -1480,6 +1497,16 @@ defmodule CodexPooler.FakeUpstream do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(401, CodexPooler.JSON.encode!(payload))
+  end
+
+  defp file_protocol_create_response(conn, %{
+         mode: :create_error,
+         create_error_status: status,
+         create_error_payload: payload
+       }) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
   defp file_protocol_create_response(conn, %{mode: :non_json_error, error_body: body}) do

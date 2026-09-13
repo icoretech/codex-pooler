@@ -3245,12 +3245,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           "stream" => stream?
         })
 
+      # findings#191: a 502 is a failure on this side of the wire. Typing it as
+      # the terminal client class told an SDK the caller's own request was
+      # malformed and would fail identically forever.
       assert %{
                "error" => %{
                  "code" => "invalid_compaction_response",
                  "message" =>
                    "upstream compact response did not include encrypted compaction content",
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                }
              } = json_response(response, 502)
 

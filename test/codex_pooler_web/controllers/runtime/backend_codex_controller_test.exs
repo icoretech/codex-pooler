@@ -10837,7 +10837,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                  "code" => "no_eligible_backend",
                  "message" => "no healthy eligible backend is currently available",
                  "param" => "model",
-                 "type" => "invalid_request_error"
+                 # findings#191: a 503 is retryable once a backend recovers, and
+                 # the terminal client class said the opposite.
+                 "type" => "server_error"
                }
              })
 

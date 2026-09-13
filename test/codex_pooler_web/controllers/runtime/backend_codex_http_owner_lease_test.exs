@@ -574,7 +574,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     try do
       response = Task.await(task, @detection_budget)
 
-      assert %{"error" => %{"code" => "owner_unavailable"}} = json_response(response, 503)
+      # findings#191: the status is only half the answer. An SDK branches on
+      # `type`, so a lifecycle 503 typed as the terminal class tells the client
+      # not to retry the one failure that is worth retrying.
+      assert %{"error" => %{"code" => "owner_unavailable", "type" => "server_error"}} =
+               json_response(response, 503)
+
       refute Process.alive?(heartbeat)
       assert_receive {:DOWN, ^heartbeat_ref, :process, ^heartbeat, _reason}, @detection_budget
       assert_backend_released!(observer, waiter_backend)
@@ -631,6 +636,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       assert %{
                "error" => %{
                  "code" => "owner_unavailable",
+                 "type" => "server_error",
                  "message" => "session owner lease is unavailable"
                }
              } = json_response(response, 503)
@@ -763,7 +769,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       send(task_pid, {:runtime_authorization_release, barrier_ref})
 
       response = Task.await(task, @detection_budget)
-      assert %{"error" => %{"code" => "stale_owner"}} = json_response(response, 409)
+      # findings#191: a lease that moved is backpressure, not a malformed
+      # request; the same submission succeeds once the new owner is reached.
+      assert %{"error" => %{"code" => "stale_owner", "type" => "server_error"}} =
+               json_response(response, 409)
+
       assert_zero_work!(setup)
       assert FakeUpstream.count(upstream) == 0
 
@@ -805,7 +815,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
       response = Task.await(task, @detection_budget)
 
-      assert %{"error" => %{"code" => "owner_unavailable"}} = json_response(response, 503)
+      assert %{"error" => %{"code" => "owner_unavailable", "type" => "server_error"}} =
+               json_response(response, 503)
+
       assert_zero_work!(setup)
       assert FakeUpstream.count(upstream) == 0
     end

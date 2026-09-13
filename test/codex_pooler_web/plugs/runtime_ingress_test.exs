@@ -406,7 +406,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                  "code" => "settings_unavailable",
                  "message" => "runtime settings are temporarily unavailable",
                  "param" => nil,
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                }
              }
 
@@ -941,7 +941,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                  "code" => "settings_unavailable",
                  "message" => "runtime settings are temporarily unavailable",
                  "param" => nil,
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                }
              }
 

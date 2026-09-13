@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   alias CodexPooler.Access
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPoolerWeb.GatewayControllerHelpers
@@ -14,7 +15,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   alias Plug.Conn.Query
   alias Plug.Conn.Utils
 
-  @json_error_type "invalid_request_error"
   @parser_settings_private_key :codex_pooler_runtime_ingress_settings
   @parser_error_scope_private_key :codex_pooler_json_parse_error_scope
 
@@ -476,11 +476,15 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     send_runtime_error(conn, reason.status, reason.code, reason.message)
   end
 
+  # findings#191: this plug answers before the controller does, so it authors
+  # its own envelope. It used to hardcode the client class, which typed the
+  # `settings_unavailable` 503 as the caller's fault; the classification is
+  # shared with every other Codex Pooler-authored error instead.
   defp send_runtime_error(conn, status, code, message) do
     body = %{
       "error" => %{
         "message" => message,
-        "type" => @json_error_type,
+        "type" => ErrorClassification.error_type(code, status),
         "code" => to_string(code),
         "param" => nil
       }

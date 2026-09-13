@@ -391,20 +391,28 @@ The source map for this claim is
 `test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs`, and
 `test/codex_pooler_web/controllers/runtime/backend_codex_websocket/socket_lifecycle_test.exs`.
 
-## Websocket error classification
+## Error type classification
 
-Public docs may state that every error frame Codex Pooler itself authors on a
-websocket carries an `error.type` that classifies retryability from an
-enumerated code vocabulary rather than a default: owner-lifecycle and overload
-codes and any other server-side failure use `server_error`, while a replaced or
-stale downstream and genuine request rejections use `invalid_request_error`.
-Do not publish the internal owner-lifecycle code list, owner identifiers, lease
-tokens, or frame contents.
+Public docs may state that every error Codex Pooler itself authors carries an
+`error.type` that classifies retryability from an enumerated code vocabulary
+rather than a default, and that the same classification applies to HTTP error
+bodies on `/v1/*` and `/backend-api/codex/*` and to error frames on
+`GET /v1/responses`: owner-lifecycle and overload codes and any other
+server-side failure use `server_error`, an HTTP `429` Codex Pooler authors uses
+`rate_limit_error`, and a replaced or stale downstream and genuine request
+rejections use `invalid_request_error`. Docs may state that a `5xx` response or
+frame is never typed `invalid_request_error`. Do not publish the internal
+owner-lifecycle code list, owner identifiers, lease tokens, or frame contents,
+and do not describe how an error map's internal `retryable` field is treated.
 
 The source map for this claim is
+`lib/codex_pooler/gateway/error_classification.ex`,
 `lib/codex_pooler/gateway/websocket/adapter.ex`,
+`lib/codex_pooler_web/controllers/gateway_controller_helpers.ex`,
 `lib/codex_pooler/gateway/transports/websocket/owner_error_vocabulary.ex`,
+`test/codex_pooler/gateway/error_classification_test.exs`,
 `test/codex_pooler/gateway/websocket/adapter_test.exs`,
+`test/codex_pooler_web/controllers/gateway_controller_helpers_test.exs`,
 `test/codex_pooler_web/codex_responses_socket_owner_liveness_discard_test.exs`,
 and `test/support/compatibility_matrix.ex`.
 

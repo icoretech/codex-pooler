@@ -2306,7 +2306,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
          "code" => "invalid_upstream_response",
          "message" => "upstream response was not valid json",
          "param" => nil,
-         "type" => "invalid_request_error"
+         "type" => "server_error"
        }},
       {FakeUpstream.json_response(%{
          "id" => "resp_missing_encrypted_content",
@@ -2317,7 +2317,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
          "code" => "invalid_compaction_response",
          "message" => "upstream compact response did not include encrypted compaction content",
          "param" => nil,
-         "type" => "invalid_request_error"
+         "type" => "server_error"
        }}
     ]
 
@@ -2526,7 +2526,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                "code" => "invalid_compaction_response",
                "message" => "upstream compact stream was invalid",
                "param" => nil,
-               "type" => "invalid_request_error"
+               "type" => "server_error"
              }
            } = json_response(response, 502)
 

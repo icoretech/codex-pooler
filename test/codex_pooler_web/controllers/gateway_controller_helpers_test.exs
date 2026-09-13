@@ -169,11 +169,17 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
     end
   end
 
+  # findings#191: the 503 in this list used to render `invalid_request_error`
+  # alongside the 400s, because the renderer defaulted every code but one to the
+  # terminal class. Its expected type moves with its status now.
   test "send_error leaves unrelated error shapes without recovery fields" do
-    for error <- [
-          %{status: 503, code: "session_assignment_unavailable", message: "session unavailable"},
-          %{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
-          %{status: 400, code: "invalid_request", message: "request invalid"}
+    for {error, type} <- [
+          {%{status: 503, code: "session_assignment_unavailable", message: "session unavailable"},
+           "server_error"},
+          {%{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
+           "invalid_request_error"},
+          {%{status: 400, code: "invalid_request", message: "request invalid"},
+           "invalid_request_error"}
         ] do
       conn = GatewayControllerHelpers.send_error(Phoenix.ConnTest.build_conn(), error)
       body = json_response(conn, error.status)
@@ -183,7 +189,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
       assert body == %{
                "error" => %{
                  "message" => error.message,
-                 "type" => "invalid_request_error",
+                 "type" => type,
                  "code" => error.code,
                  "param" => nil
                }

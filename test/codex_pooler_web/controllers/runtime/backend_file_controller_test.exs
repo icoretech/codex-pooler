@@ -35,6 +35,51 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
     :ok
   end
 
+  # findings#191: the file bridge relays an upstream create status verbatim, so
+  # this is the real path on which Codex Pooler authors an error envelope at a
+  # status it did not choose. Every one of these used to render
+  # `invalid_request_error` -- the terminal class -- including the throttle and
+  # the two server-side failures, which is the whole defect the ticket names.
+  @tag :file_bridge_error_classification
+  test "a relayed upstream file-create status renders the class that status implies",
+       %{conn: conn} do
+    for {upstream_status, expected_type} <- [
+          {429, "rate_limit_error"},
+          {502, "server_error"},
+          {503, "server_error"},
+          {403, "invalid_request_error"}
+        ] do
+      setup = active_api_key_fixture()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.file_protocol_create_error(upstream_status,
+            file_id: "file_relayed_#{upstream_status}"
+          )
+        )
+
+      active_upstream_assignment_fixture(setup.pool, %{
+        chatgpt_account_id: "acct_file_relayed_#{upstream_status}",
+        metadata: %{"base_url" => FakeUpstream.url(upstream)},
+        access_token: "file-relayed-#{upstream_status}-token"
+      })
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> post(~p"/backend-api/files", %{"file_name" => "sample.txt", "file_size" => 12})
+
+      assert %{"error" => %{"code" => code, "type" => type}} =
+               json_response(conn, upstream_status)
+
+      assert code == "upstream_file_bridge_failed"
+
+      assert type == expected_type,
+             "upstream #{upstream_status} rendered #{type}, expected #{expected_type}"
+    end
+  end
+
   @tag :schema_bridge_metadata
   @tag :json_upstream_bridge_happy_path
   test "creates bridge metadata only and finalizes it idempotently", %{conn: conn} do

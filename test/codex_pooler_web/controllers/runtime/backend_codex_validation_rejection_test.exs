@@ -160,7 +160,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     conn: conn
   } do
     # A 401 exhausts the auth-refresh path into its fixed 503 error; a 429 keeps
-    # the rate-limited status with no relayed body.
+    # the rate-limited status with no relayed body. That 503 is a server-side
+    # failure whose own message says to retry, so it is `server_error`: a 5xx the
+    # Pooler authors is never typed as a client error (findings#191).
     cases = [
       {401, 503,
        {:ok,
@@ -169,7 +171,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
             "code" => "upstream_unauthorized",
             "message" => "upstream authentication failed; retry the request",
             "param" => nil,
-            "type" => "invalid_request_error"
+            "type" => "server_error"
           }
         }}},
       {429, 429, {:error, {:unexpected_end, 0}}}
