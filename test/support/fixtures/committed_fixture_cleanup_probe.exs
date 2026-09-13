@@ -14,6 +14,10 @@ ExUnit.start(autorun: false, capture_log: true)
 Ecto.Adapters.SQL.Sandbox.mode(CodexPooler.Repo, :manual)
 
 defmodule CodexPooler.CommittedFixtureCleanupProbe do
+  # This file deliberately does not end in `_test.exs`, which is what the check objects to.
+  # Naming it so would make the `mix test` alias collect it, and that alias drops and recreates
+  # the test database the parent test is currently using. It is run through `mix run` instead.
+  # credo:disable-for-this-file Credo.Check.Warning.WrongTestFilename
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountingTestSupport
@@ -21,6 +25,7 @@ defmodule CodexPooler.CommittedFixtureCleanupProbe do
 
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   test "scoped cleanup" do
     fixture = commit_fixture!("scoped")
@@ -52,15 +57,21 @@ defmodule CodexPooler.CommittedFixtureCleanupProbe do
       mode: mode,
       pool_id: setup.pool.id,
       pricing_snapshot_id: setup.pricing.id,
-      price_version: setup.pricing.price_version
+      price_version: setup.pricing.price_version,
+      identity_id: setup.identity.id
     })
 
     setup
   end
 
+  # Everything `accounting_setup/1` commits, not only the row this probe is about. A partial
+  # delete leaves upstream accounts and identities behind, and the suites that assert absolute
+  # identity counts then fail in files that have nothing to do with this one -- which is the
+  # very defect this probe exists to demonstrate.
   defp delete_fixture!(setup) do
     Repo.delete_all(from pool in Pool, where: pool.id == ^setup.pool.id)
     Repo.delete_all(from pricing in PricingSnapshot, where: pricing.id == ^setup.pricing.id)
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^setup.identity.id)
     :ok
   end
 

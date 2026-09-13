@@ -16,6 +16,7 @@ defmodule CodexPooler.CommittedFixtureCleanupTest do
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
 
   import Ecto.Query
@@ -99,13 +100,20 @@ defmodule CodexPooler.CommittedFixtureCleanupTest do
     |> Enum.map(& &1.price_version)
   end
 
+  # The scoped arm is *expected* to leave its rows behind -- that is what the assertion above
+  # reads -- so this has to remove everything the probe committed, not only the pricing snapshot
+  # the probe is nominally about. Deleting a subset leaves the upstream identity rows
+  # outside the sandbox, and suites asserting absolute identity counts then fail in files
+  # unrelated to this one: the exact cascade this test exists to prevent.
   defp delete_fixtures!(fixtures) do
     pool_ids = Enum.map(fixtures, & &1["pool_id"])
     pricing_ids = Enum.map(fixtures, & &1["pricing_snapshot_id"])
+    identity_ids = Enum.map(fixtures, & &1["identity_id"])
 
     Sandbox.unboxed_run(Repo, fn ->
       Repo.delete_all(from pool in Pool, where: pool.id in ^pool_ids)
       Repo.delete_all(from pricing in PricingSnapshot, where: pricing.id in ^pricing_ids)
+      Repo.delete_all(from identity in UpstreamIdentity, where: identity.id in ^identity_ids)
     end)
 
     :ok
