@@ -580,8 +580,9 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &pre_attempt_release_tag_values/1,
         description:
           "Reservations released with no attempt row, by bounded pre-attempt phase and transport. " <>
-            "The stale_sweep phase is only scraped where the six-hour sweeper shares a node with " <>
-            "the Prometheus reporter (OBAN_MODE=all); elsewhere read it from the release ledger."
+            "The stale_sweep phase is only scraped where the runtime cleanup job (every 15 minutes, " <>
+            "releasing reservations older than six hours) shares a node with the Prometheus " <>
+            "reporter (OBAN_MODE=all); elsewhere read it from the release ledger."
       ),
       counter("codex_pooler.gateway.routing.affinity.stale_write.count",
         event_name: [:codex_pooler, :gateway, :routing, :affinity, :stale_write],
