@@ -621,6 +621,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp reset_first_event_retry_state(conn) do
     conn
+    |> Map.delete(:responses_api_tools_state)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> put_usage_state(StreamUsageObserver.new())

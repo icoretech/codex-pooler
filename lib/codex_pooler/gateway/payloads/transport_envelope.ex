@@ -162,7 +162,23 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   @spec headers(UpstreamIdentity.t(), String.t(), [{String.t(), String.t()}], keyword()) :: [
           {String.t(), String.t()}
         ]
-  def headers(identity, token, headers, opts \\ []) do
+  def headers(identity, token, headers, opts \\ [])
+
+  def headers(
+        %UpstreamIdentity{credential_provenance: "responses_api_key"},
+        token,
+        headers,
+        _opts
+      ) do
+    [
+      {"authorization", "Bearer #{String.trim(token)}"}
+      | Enum.filter(headers, fn {name, _value} ->
+          String.downcase(name) in ["accept", "content-type"]
+        end)
+    ]
+  end
+
+  def headers(identity, token, headers, opts) do
     token = String.trim(token)
 
     [

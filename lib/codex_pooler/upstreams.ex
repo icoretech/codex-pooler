@@ -50,6 +50,11 @@ defmodule CodexPooler.Upstreams do
   @type oauth_flow_completion_result :: OAuth.completion_result()
   @type oauth_flow_summary :: OAuth.safe_flow_summary()
 
+  @doc "Import an API-key upstream that implements the stateless Responses API."
+  defdelegate import_responses_api(scope, pool, attrs),
+    to: CodexPooler.Upstreams.ResponsesAPI,
+    as: :import_account
+
   @spec list_upstream_identities(keyword()) :: [UpstreamIdentity.t()]
   def list_upstream_identities(opts \\ []) do
     status = Keyword.get(opts, :status)

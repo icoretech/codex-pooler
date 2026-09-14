@@ -1,6 +1,7 @@
 defmodule CodexPooler.Upstreams.EndpointMetadata do
   @moduledoc false
 
+  alias CodexPooler.Upstreams.ResponsesAPI
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @production_default_base_url "https://chatgpt.com"
@@ -41,6 +42,17 @@ defmodule CodexPooler.Upstreams.EndpointMetadata do
         ) ::
           {:ok, String.t()} | {:error, :invalid_upstream_base_url}
   def endpoint_url(identity, assignment, endpoint, default \\ :configured) do
+    with {:ok, endpoint} <- provider_endpoint(identity, endpoint) do
+      build_endpoint_url(identity, assignment, endpoint, default)
+    end
+  end
+
+  defp provider_endpoint(%UpstreamIdentity{credential_provenance: "responses_api_key"}, endpoint),
+    do: ResponsesAPI.endpoint(endpoint)
+
+  defp provider_endpoint(_identity, endpoint), do: {:ok, endpoint}
+
+  defp build_endpoint_url(identity, assignment, endpoint, default) do
     case base_url(identity, assignment, default) do
       base when is_binary(base) and base != "" ->
         base = normalize_base_url(base)

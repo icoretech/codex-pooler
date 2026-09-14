@@ -460,6 +460,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         body: body,
         decode_body: false,
         retry: false,
+        redirect: not UpstreamIdentity.responses_api?(identity),
         headers: upstream_header_list
       ]
       |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))

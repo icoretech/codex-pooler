@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
   alias CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
+  alias CodexPooler.Upstreams.ResponsesAPICompaction
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   require Logger
@@ -161,7 +162,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
              context.identity,
              context.assignment,
              context.request_options.transport.upstream_endpoint
-           ) do
+           ),
+         {:ok, upstream_payload, context} <-
+           ResponsesAPICompaction.prepare(upstream_payload, context) do
       request_options = context.request_options
 
       {upstream_payload, request_options} =

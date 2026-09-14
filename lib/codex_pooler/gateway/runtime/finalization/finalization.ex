@@ -220,6 +220,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
   @spec handle_dispatch_error(term(), SelectedCandidateContext.t(), non_neg_integer()) ::
           {:error, map()} | {:retry, term()}
+  def handle_dispatch_error(
+        %{status: 400, code: "previous_response_not_found" = code, message: message},
+        %SelectedCandidateContext{} = context,
+        latency
+      ) do
+    attrs =
+      SettlementAttrs.failure(context, 400, code, message, %{"error_code" => code},
+        latency_ms: latency,
+        before_finalize: fn -> DispatchLifecycle.neutral_completion(context) end
+      )
+
+    case AttemptSettlement.finalize_failure(
+           context.reserved.request,
+           context.attempt,
+           attrs,
+           context.request_options.runtime.session_owner_witness
+         ) do
+      {:stale_generation, finalized} -> {:ok, finalized}
+      {:ok, _finalized} -> {:error, error(400, code, message, "previous_response_id")}
+      {:error, gateway_error} -> {:error, gateway_error}
+    end
+  end
+
   def handle_dispatch_error(reason, %SelectedCandidateContext{} = context, latency) do
     %{
       request_options: request_options

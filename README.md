@@ -1,5 +1,10 @@
 <h1 align="center">Codex Pooler</h1>
 
+This fork adds optional Responses API-key upstream support. See
+[Responses API upstreams](docs-site/src/content/docs/operators/responses-api-upstreams.mdx)
+for configuration and compatibility boundaries. The original Elastic License 2.0
+and copyright notices remain in force.
+
 <p align="center">
   <strong>The full featured self-hosted Codex gateway, for teams, agents and you. Works with:</strong><br>
   <br>

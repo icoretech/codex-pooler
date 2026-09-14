@@ -5,6 +5,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
 
   defstruct media_upload: nil,
+            responses_api_tools: %{},
+            responses_api_history: nil,
             forced_transcription_model: nil,
             native_image_request?: false,
             masked_image_request?: false,
@@ -18,6 +20,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
             native_codex_turn_metadata: nil
 
   @type t :: %__MODULE__{
+          responses_api_tools: map(),
+          responses_api_history: map() | nil,
           media_upload: map() | nil,
           forced_transcription_model: String.t() | nil,
           native_image_request?: boolean(),
