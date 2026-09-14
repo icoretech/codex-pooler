@@ -90,11 +90,13 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   end
 
   defp account_availability(payload, account_windows) do
+    rate_limit_signal = rate_limit_signal(payload)
+
     signals =
       [
-        rate_limit_signal(payload),
+        rate_limit_signal,
         credits_signal(payload),
-        spend_control_signal(payload),
+        account_spend_control_signal(payload, rate_limit_signal),
         reached_type_signal(payload),
         window_signal(account_windows),
         additional_integrity_signal(payload)
@@ -111,6 +113,13 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       |> AccountAvailability.new!(basis, account_windows)
     end
   end
+
+  # Spend control governs whether this member may consume additional credits;
+  # it does not revoke quota already included in the subscription. Keep it as
+  # a fail-closed account signal when included-quota permission is absent, but
+  # never let it override the provider's explicit affirmative rate-limit state.
+  defp account_spend_control_signal(_payload, :affirmative), do: nil
+  defp account_spend_control_signal(payload, _rate_limit_signal), do: spend_control_signal(payload)
 
   # This is a distinct provider meter, not a label-derived model exemption.
   # Bind its grant to this complete usage observation; account-wide blockers
