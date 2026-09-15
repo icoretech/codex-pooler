@@ -71,7 +71,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
       case Req.get(url,
              retry: false,
              receive_timeout: 30_000,
-             finch: OutboundHTTP.pool_options(),
+             finch: OutboundHTTP.pool_options_for_url(url),
              headers:
                CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
            )

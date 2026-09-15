@@ -8,6 +8,7 @@ defmodule CodexPooler.Status.FeedClient do
   @spec fetch(map(), keyword()) :: {:ok, map()} | {:not_modified, map()} | {:error, map()}
   def fetch(state \\ %{}, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 10_000)
+    url = Keyword.get(opts, :url, @url)
 
     headers =
       []
@@ -15,14 +16,15 @@ defmodule CodexPooler.Status.FeedClient do
       |> maybe_header("if-modified-since", Map.get(state, :last_modified))
 
     request = [
-      url: Keyword.get(opts, :url, @url),
+      url: url,
       headers: headers,
       decode_body: false,
       retry: false,
       receive_timeout: timeout,
       # Req refuses `connect_options` together with `finch`, so the connect
       # timeout travels as Finch `conn_opts` next to the idle bound.
-      finch: [conn_opts: [transport_opts: [timeout: timeout]]] ++ OutboundHTTP.pool_options(),
+      finch:
+        OutboundHTTP.pool_options_for_url(url, transport_opts: [timeout: timeout]),
       redirect: false
     ]
 

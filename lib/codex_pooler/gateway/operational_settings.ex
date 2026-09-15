@@ -202,12 +202,30 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   Finch HTTP/1 pool options for gateway Req requests, built by
   `OutboundHTTP.pool_options/1` from this snapshot's idle bound: dispatch
   through `TransportEnvelope.req_timeout_options/1` and the file bridge upload
-  PUT. Callers outside the gateway use `OutboundHTTP.pool_options/0`, which
-  reads the same Instance Setting.
+  PUT. Callers outside the gateway use `OutboundHTTP.pool_options_for_url/2`,
+  which reads the same Instance Setting. The URL-aware helpers include the
+  proxy selected for the target and apply `no_proxy`.
   """
   @spec upstream_http_pool_options() :: OutboundHTTP.pool_options()
   def upstream_http_pool_options do
     OutboundHTTP.pool_options(current().upstream_conn_max_idle_time_ms)
+  end
+
+  @spec upstream_http_pool_options(keyword()) :: OutboundHTTP.pool_options()
+  def upstream_http_pool_options(conn_opts) when is_list(conn_opts) do
+    OutboundHTTP.pool_options_with_conn_opts(
+      current().upstream_conn_max_idle_time_ms,
+      conn_opts
+    )
+  end
+
+  @spec upstream_http_pool_options(String.t(), keyword()) :: OutboundHTTP.pool_options()
+  def upstream_http_pool_options(url, conn_opts) when is_binary(url) and is_list(conn_opts) do
+    OutboundHTTP.pool_options_for_url(
+      url,
+      current().upstream_conn_max_idle_time_ms,
+      conn_opts
+    )
   end
 
   @spec firewall_enabled?(t()) :: boolean()

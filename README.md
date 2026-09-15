@@ -2165,6 +2165,13 @@ the database:
 - `CODEX_POOLER_UPSTREAM_SECRET_KEY` and
   `CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION`, upstream secret encryption root
   and version; the key must be 32 raw bytes or base64-encoded 32 bytes
+- `http_proxy` and `https_proxy`, optional `http://` proxy URLs selected by the
+  outbound target scheme, including WebSocket traffic; optional URL credentials
+  use HTTP Basic proxy authentication
+- `no_proxy`, an optional comma-separated bypass list supporting exact hosts,
+  domain suffixes, IP addresses, CIDR ranges, optional ports, and `*`; lowercase variables
+  take precedence over the uppercase `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`
+  variants
 
 Operational controls such as file limits, ingress trust, gateway diagnostics,
 route-class admission, circuit thresholds, metrics auth, operator email, model

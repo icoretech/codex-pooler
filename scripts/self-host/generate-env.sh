@@ -25,6 +25,9 @@ cat > "$target" <<EOF
 CODEX_POOLER_IMAGE=${CODEX_POOLER_IMAGE:-ghcr.io/icoretech/codex-pooler}
 CODEX_POOLER_IMAGE_TAG=${CODEX_POOLER_IMAGE_TAG:-latest}
 CODEX_POOLER_HTTP_PORT=${http_port}
+http_proxy=${http_proxy:-${HTTP_PROXY:-}}
+https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
+no_proxy=${no_proxy:-${NO_PROXY:-}}
 
 PHX_HOST=${phx_host}
 OBAN_MODE=${OBAN_MODE:-all}
