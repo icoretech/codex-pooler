@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade do
   @moduledoc false
 
+  alias CodexPooler.Platform.OutboundHTTP
+
   @type request_caller :: {pid(), reference()} | nil
   @type upgrade_response :: %{status: non_neg_integer() | nil, headers: Mint.Types.headers()}
   @connect_ready_tag :upstream_websocket_connect_ready
@@ -37,28 +39,47 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
   end
 
   defp connect_websocket(%{connect_scheme: :http} = target, timeouts, request_caller) do
-    connect_in_task(target, timeouts, request_caller)
+    proxy_options = OutboundHTTP.proxy_options_for_url(target.uri)
+    connect_in_task(target, timeouts, request_caller, proxy_options)
   end
 
   defp connect_websocket(%{connect_scheme: :https} = target, timeouts, request_caller) do
-    raw_target = %{target | connect_scheme: :http}
+    proxy_options = OutboundHTTP.proxy_options_for_url(target.uri)
 
-    with {:ok, raw_conn} <- connect_in_task(raw_target, timeouts, request_caller) do
-      upgrade_tls_connection(raw_conn, target, timeouts, request_caller)
+    if proxy_options == [] do
+      raw_target = %{target | connect_scheme: :http}
+
+      with {:ok, raw_conn} <- connect_in_task(raw_target, timeouts, request_caller, []) do
+        upgrade_tls_connection(raw_conn, target, timeouts, request_caller)
+      end
+    else
+      # Mint performs CONNECT and the TLS handshake as one proxied connection.
+      connect_in_task(target, timeouts, request_caller, proxy_options)
     end
   end
 
-  defp connect_in_task(target, timeouts, request_caller) do
+  defp connect_in_task(target, timeouts, request_caller, proxy_options) do
     parent = self()
 
     {:ok, connect_pid} =
       Task.start(fn ->
         parent_monitor = Process.monitor(parent)
 
-        result =
-          Mint.HTTP.connect(target.connect_scheme, target.host, target.port,
+        connect_options =
+          [
             protocols: [:http1],
             transport_opts: websocket_transport_opts(target, timeouts)
+          ]
+
+        connect_options =
+          connect_options ++ proxy_options_with_connect_timeout(proxy_options, timeouts)
+
+        result =
+          Mint.HTTP.connect(
+            target.connect_scheme,
+            target.host,
+            target.port,
+            connect_options
           )
 
         send(parent, {@connect_ready_tag, self(), result})
@@ -80,6 +101,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
 
     connect_monitor = Process.monitor(connect_pid)
     await_connect(connect_pid, connect_monitor, timeouts, request_caller)
+  end
+
+  defp proxy_options_with_connect_timeout(proxy_options, timeouts) do
+    Enum.map(proxy_options, fn
+      {:proxy, {scheme, host, port, _opts}} ->
+        {:proxy, {scheme, host, port, [transport_opts: [timeout: timeouts.connect_timeout_ms]]}}
+
+      option ->
+        option
+    end)
   end
 
   defp upgrade_tls_connection(raw_conn, target, timeouts, request_caller) do
@@ -326,7 +357,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
       path = websocket_path(uri)
 
       {:ok,
-       %{connect_scheme: connect_scheme, ws_scheme: ws_scheme, host: host, port: port, path: path}}
+       %{
+         connect_scheme: connect_scheme,
+         ws_scheme: ws_scheme,
+         host: host,
+         port: port,
+         path: path,
+         uri: uri
+       }}
     else
       _invalid -> {:error, :invalid_upstream_websocket_url}
     end

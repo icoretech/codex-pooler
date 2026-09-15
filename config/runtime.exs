@@ -14,6 +14,9 @@ config :codex_pooler,
        CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,
        mode: native_compaction_trace_mode
 
+config :codex_pooler, CodexPooler.Platform.OutboundHTTP,
+  proxy_config: CodexPooler.Platform.OutboundHTTP.proxy_config_from_env!()
+
 if System.get_env("PHX_SERVER") in ~w(true 1) do
   config :codex_pooler, CodexPoolerWeb.Endpoint, server: true
 end

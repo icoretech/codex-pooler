@@ -64,7 +64,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
            decode_body: false,
            receive_timeout: :timer.seconds(30),
            retry: false,
-           finch: OutboundHTTP.pool_options()
+           finch: OutboundHTTP.pool_options_for_url(url)
          ) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_binary(body) ->
         {:ok, body}

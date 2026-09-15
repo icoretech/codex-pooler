@@ -2029,6 +2029,10 @@ user-agent 历史。
 - `CODEX_POOLER_UPSTREAM_SECRET_KEY` 和
   `CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION`，上游密钥加密根和版本；key 必须是
   32 raw bytes 或 base64-encoded 32 bytes
+- `http_proxy` 和 `https_proxy`，按出站目标协议选择的可选 `http://` 代理 URL，
+  同时适用于 WebSocket；URL 中可选的凭据使用 HTTP Basic 代理认证
+- `no_proxy`，可选的逗号分隔绕过列表，支持精确主机、域名后缀、IP 地址、CIDR、
+  可选端口和 `*`；小写变量优先于大写的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`
 
 文件限制、入口信任、网关诊断、路由类别准入、熔断阈值、指标认证、运营者邮箱、
 模型元数据、上游超时、OpenAI 价格 catalog URL 和 SMTP 投递等运营控制项位于

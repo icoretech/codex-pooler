@@ -86,6 +86,125 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
     assert_raise FunctionClauseError, fn -> OutboundHTTP.pool_options(-1) end
   end
 
+  test "parse_proxy_url!/1 accepts an HTTP proxy and optional Basic credentials" do
+    assert OutboundHTTP.parse_proxy_url!(nil) == []
+    assert OutboundHTTP.parse_proxy_url!("") == []
+
+    assert OutboundHTTP.parse_proxy_url!("http://proxy.example.com:3128") ==
+             [proxy: {:http, "proxy.example.com", 3128, []}]
+
+    assert OutboundHTTP.parse_proxy_url!("http://user:p%40ss@proxy.example.com/") ==
+             [
+               proxy: {:http, "proxy.example.com", 80, []},
+               proxy_headers: [{"proxy-authorization", "Basic " <> Base.encode64("user:p@ss")}]
+             ]
+  end
+
+  test "parse_proxy_url!/1 rejects unsupported or ambiguous proxy URLs" do
+    for value <- [
+          "https://proxy.example.com",
+          "socks5://proxy.example.com:1080",
+          "http://proxy.example.com/path",
+          "http://proxy.example.com?mode=test",
+          "http://proxy.example.com:65536",
+          "proxy.example.com:3128"
+        ] do
+      assert_raise ArgumentError, fn -> OutboundHTTP.parse_proxy_url!(value) end
+    end
+  end
+
+  test "pool options select proxies by target scheme and merge connection options" do
+    Application.put_env(:codex_pooler, OutboundHTTP,
+      proxy_config: %{
+        http: [proxy: {:http, "http-proxy.example.com", 8080, []}],
+        https: [
+          proxy: {:http, "proxy.example.com", 3128, []},
+          proxy_headers: [{"proxy-authorization", "Basic dXNlcjpwYXNz"}]
+        ],
+        no_proxy: []
+      }
+    )
+
+    assert OutboundHTTP.pool_options_for_url(
+             "https://api.example.com",
+             30_000,
+             transport_opts: [timeout: 2_000]
+           ) == [
+             conn_opts: [
+               proxy:
+                 {:http, "proxy.example.com", 3128,
+                  [transport_opts: [timeout: 2_000]]},
+               proxy_headers: [{"proxy-authorization", "Basic dXNlcjpwYXNz"}],
+               transport_opts: [timeout: 2_000]
+             ],
+             conn_max_idle_time: 30_000
+           ]
+
+    assert OutboundHTTP.proxy_options_for_url("http://api.example.com") ==
+             [proxy: {:http, "http-proxy.example.com", 8080, []}]
+  end
+
+  test "no_proxy bypasses domains, ports, IPs, CIDRs, and all hosts" do
+    proxy = [proxy: {:http, "proxy.example.com", 3128, []}]
+
+    Application.put_env(:codex_pooler, OutboundHTTP,
+      proxy_config: %{
+        http: proxy,
+        https: proxy,
+        no_proxy: [
+          "localhost",
+          ".example.com",
+          "api.internal:8443",
+          "127.0.0.1",
+          "10.0.0.0/8",
+          "2001:db8::/32"
+        ]
+      }
+    )
+
+    assert OutboundHTTP.proxy_options_for_url("http://localhost/health") == []
+    assert OutboundHTTP.proxy_options_for_url("https://example.com/v1") == []
+    assert OutboundHTTP.proxy_options_for_url("https://sub.example.com/v1") == []
+    assert OutboundHTTP.proxy_options_for_url("https://api.internal:8443/v1") == []
+    assert OutboundHTTP.proxy_options_for_url("http://127.0.0.1/v1") == []
+    assert OutboundHTTP.proxy_options_for_url("http://10.23.45.67/v1") == []
+    assert OutboundHTTP.proxy_options_for_url("http://[2001:db8::1234]/v1") == []
+
+    assert OutboundHTTP.proxy_options_for_url("https://api.internal/v1") == proxy
+    assert OutboundHTTP.proxy_options_for_url("https://notexample.com/v1") == proxy
+
+    Application.put_env(:codex_pooler, OutboundHTTP,
+      proxy_config: %{http: proxy, https: proxy, no_proxy: ["*"]}
+    )
+
+    assert OutboundHTTP.proxy_options_for_url("https://any.example/v1") == []
+  end
+
+  test "Req sends outbound HTTP through the configured proxy" do
+    {:ok, proxy} = FakeUpstream.start_link({:raw_body, 204, "", []})
+    on_exit(fn -> FakeUpstream.stop(proxy) end)
+    proxy_uri = URI.parse(FakeUpstream.url(proxy))
+
+    Application.put_env(:codex_pooler, OutboundHTTP,
+      conn_max_idle_time_ms: 45_000,
+      proxy_config: %{
+        http: [proxy: {:http, proxy_uri.host, proxy_uri.port, []}],
+        https: [],
+        no_proxy: []
+      }
+    )
+
+    url = "http://unresolvable.invalid/proxy-check"
+
+    assert {:ok, %Req.Response{status: 204}} =
+             Req.get(url,
+               retry: false,
+               finch: OutboundHTTP.pool_options_for_url(url)
+             )
+
+    assert FakeUpstream.count(proxy) == 1
+  end
+
   # Req 0.7.4 hashes the complete `finch:` pool option tuple into one Finch
   # instance under `Req.FinchSupervisor`; `pool_timeout`, `receive_timeout`,
   # `request_timeout`, and `pool_strategy` are per-request options outside the
@@ -175,7 +294,7 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
 
   defp plain_request!(url) do
     assert {:ok, %Req.Response{status: 304}} =
-             Req.get(url: url, retry: false, finch: OutboundHTTP.pool_options())
+             Req.get(url: url, retry: false, finch: OutboundHTTP.pool_options_for_url(url))
   end
 
   defp feed_request!(url) do
@@ -183,7 +302,7 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
   end
 
   defp gateway_request!(url) do
-    options = TransportEnvelope.req_timeout_options(TimeoutConfig.build([]))
+    options = TransportEnvelope.req_timeout_options(TimeoutConfig.build([]), url)
     assert {:ok, %Req.Response{status: 304}} = Req.get(url, [retry: false] ++ options)
   end
 

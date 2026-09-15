@@ -401,7 +401,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             ])
           )
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
     result = Req.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
@@ -462,7 +462,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         retry: false,
         headers: upstream_header_list
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
     request_options =
       if streaming_request?(payload, opts) do

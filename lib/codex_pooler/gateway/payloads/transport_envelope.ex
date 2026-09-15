@@ -74,15 +74,22 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   # `pool_max_idle_time` stays unset: stopping an idle per-origin pool can race
   # a request that has just looked it up, and stale connections are already
   # dropped at checkout.
-  @spec req_timeout_options(TimeoutConfig.t() | timeout_settings()) :: keyword()
-  def req_timeout_options(timeouts) do
+  @spec req_timeout_options(TimeoutConfig.t() | timeout_settings(), String.t() | nil) :: keyword()
+  def req_timeout_options(timeouts, url \\ nil) do
+    pool_options =
+      if is_binary(url) do
+        OperationalSettings.upstream_http_pool_options(url,
+          transport_opts: [timeout: timeouts.connect_timeout_ms]
+        )
+      else
+        OperationalSettings.upstream_http_pool_options(
+          transport_opts: [timeout: timeouts.connect_timeout_ms]
+        )
+      end
+
     [
       receive_timeout: timeouts.receive_timeout_ms,
-      finch:
-        [
-          pool_timeout: timeouts.pool_timeout_ms,
-          conn_opts: [transport_opts: [timeout: timeouts.connect_timeout_ms]]
-        ] ++ OperationalSettings.upstream_http_pool_options()
+      finch: [pool_timeout: timeouts.pool_timeout_ms] ++ pool_options
     ]
   end
 

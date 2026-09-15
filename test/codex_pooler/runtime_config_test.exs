@@ -128,6 +128,45 @@ defmodule CodexPooler.RuntimeConfigTest do
     end)
   end
 
+  test "standard proxy environment variables are parsed without retaining credentials in errors" do
+    env =
+      @required_env
+      |> Map.put("http_proxy", "http://http-proxy.example.com:8080")
+      |> Map.put("https_proxy", "http://user:p%40ss@proxy.example.com:3128")
+      |> Map.put("no_proxy", "localhost,.example.com")
+      |> Map.put("HTTP_PROXY", "http://ignored.example.com:9000")
+      |> Map.put("HTTPS_PROXY", "http://ignored.example.com:9001")
+      |> Map.put("NO_PROXY", "ignored.example.com")
+
+    with_env(env, fn ->
+      config = Config.Reader.read!("config/runtime.exs", env: :prod)
+
+      assert config[:codex_pooler][CodexPooler.Platform.OutboundHTTP][:proxy_config] == %{
+               http: [proxy: {:http, "http-proxy.example.com", 8080, []}],
+               https: [
+                 proxy: {:http, "proxy.example.com", 3128, []},
+                 proxy_headers: [
+                   {"proxy-authorization", "Basic " <> Base.encode64("user:p@ss")}
+                 ]
+               ],
+               no_proxy: ["localhost", ".example.com"]
+             }
+    end)
+
+    invalid_proxy = "https://secret:password@proxy.example.com"
+    env = Map.put(@required_env, "https_proxy", invalid_proxy)
+
+    with_env(env, fn ->
+      error =
+        assert_raise ArgumentError, fn ->
+          Config.Reader.read!("config/runtime.exs", env: :prod)
+        end
+
+      refute Exception.message(error) =~ invalid_proxy
+      refute Exception.message(error) =~ "password"
+    end)
+  end
+
   defp with_env(env, fun) do
     previous = Map.new(env, fn {key, _value} -> {key, System.get_env(key)} end)
 

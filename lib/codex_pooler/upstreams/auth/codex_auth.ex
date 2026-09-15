@@ -332,13 +332,15 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
 
     @spec request_device_code() :: CodexAuth.device_code_response()
     def request_device_code do
+      url = CodexAuth.issuer() <> "/api/accounts/deviceauth/usercode"
+
       case Req.post(
-             CodexAuth.issuer() <> "/api/accounts/deviceauth/usercode",
+             url,
              headers: [{"content-type", "application/json"} | browser_request_headers()],
              body: CodexPooler.JSON.encode_to_iodata!(%{client_id: CodexAuth.client_id()}),
              retry: false,
              receive_timeout: 30_000,
-             finch: OutboundHTTP.pool_options()
+             finch: OutboundHTTP.pool_options_for_url(url)
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           decode_device_code(body)
@@ -361,13 +363,14 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     @spec poll_device_authorization(map()) :: CodexAuth.token_response()
     def poll_device_authorization(state) do
       body = %{device_auth_id: state["device_auth_id"], user_code: state["user_code"]}
+      url = CodexAuth.issuer() <> "/api/accounts/deviceauth/token"
 
-      case Req.post(CodexAuth.issuer() <> "/api/accounts/deviceauth/token",
+      case Req.post(url,
              headers: [{"content-type", "application/json"} | browser_request_headers()],
              body: CodexPooler.JSON.encode_to_iodata!(body),
              retry: false,
              receive_timeout: 30_000,
-             finch: OutboundHTTP.pool_options()
+             finch: OutboundHTTP.pool_options_for_url(url)
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           case body do
@@ -391,6 +394,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     end
 
     defp request_tokens_for_authorization_code(code, verifier, redirect_uri) do
+      url = CodexAuth.issuer() <> "/oauth/token"
+
       form = [
         grant_type: "authorization_code",
         code: code,
@@ -399,12 +404,12 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
         code_verifier: verifier
       ]
 
-      case Req.post(CodexAuth.issuer() <> "/oauth/token",
+      case Req.post(url,
              headers: browser_request_headers(),
              form: form,
              retry: false,
              receive_timeout: 30_000,
-             finch: OutboundHTTP.pool_options()
+             finch: OutboundHTTP.pool_options_for_url(url)
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           decode_authorization_code_token_response(body)
@@ -441,7 +446,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
              form: form,
              retry: false,
              receive_timeout: receive_timeout,
-             finch: OutboundHTTP.pool_options()
+             finch: OutboundHTTP.pool_options_for_url(token_url)
            ) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
           decode_refresh_token_response(body)

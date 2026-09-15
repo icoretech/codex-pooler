@@ -316,7 +316,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
       headers: CloudflareCookies.request_headers(url, headers),
       retry: false,
       receive_timeout: timeout,
-      finch: OutboundHTTP.pool_options(),
+      finch: OutboundHTTP.pool_options_for_url(url),
       decode_body: false
     )
     |> decode_usage_response()

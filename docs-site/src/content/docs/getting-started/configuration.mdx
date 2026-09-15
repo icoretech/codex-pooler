@@ -31,6 +31,12 @@ as `https://localhost`; the port mapping is the local URL to open.
 
 Set release environment variables for values the app needs before it can read database settings.
 
+Set `http_proxy` and `https_proxy` to `http://` proxy URLs to route outbound
+HTTP, HTTPS, and WebSocket traffic by target scheme. Credentials embedded in a
+proxy URL are sent as HTTP Basic proxy authentication. Use the comma-separated
+`no_proxy` list for exact hosts, domain suffixes, IP addresses, CIDR ranges,
+optional ports, or `*`. Lowercase variables take precedence over their uppercase variants.
+
 <table>
   <thead>
     <tr>
@@ -50,6 +56,18 @@ Set release environment variables for values the app needs before it can read da
     <tr>
       <td><code>CODEX_POOLER_HTTP_PORT</code></td>
       <td>Local host port, default <code>4000</code></td>
+    </tr>
+    <tr>
+      <td><code>http_proxy</code> / <code>HTTP_PROXY</code></td>
+      <td>Optional proxy for HTTP and WS targets; lowercase takes precedence</td>
+    </tr>
+    <tr>
+      <td><code>https_proxy</code> / <code>HTTPS_PROXY</code></td>
+      <td>Optional HTTP CONNECT proxy for HTTPS and WSS targets; lowercase takes precedence</td>
+    </tr>
+    <tr>
+      <td><code>no_proxy</code> / <code>NO_PROXY</code></td>
+      <td>Optional comma-separated proxy bypass list; lowercase takes precedence</td>
     </tr>
     <tr>
       <td><code>DATABASE_URL</code></td>

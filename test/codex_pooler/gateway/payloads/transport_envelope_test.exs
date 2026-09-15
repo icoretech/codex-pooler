@@ -91,7 +91,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
             Req.get(
               url,
               [decode_body: false, retry: false] ++
-                TransportEnvelope.req_timeout_options(timeouts)
+                TransportEnvelope.req_timeout_options(timeouts, url)
             )
 
           result

@@ -85,7 +85,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
              into: &collect_bounded_body/2,
              retry: false,
              receive_timeout: timeout,
-             finch: OutboundHTTP.pool_options()
+             finch: OutboundHTTP.pool_options_for_url(url)
            ) do
         {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
           handle_successful_reset_credits_response(url, response, observed_at)

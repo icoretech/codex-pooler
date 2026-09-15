@@ -181,7 +181,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
       decode_body: false,
       receive_timeout: @receive_timeout_ms,
       retry: false,
-      finch: OutboundHTTP.pool_options()
+      finch: OutboundHTTP.pool_options_for_url(url)
     )
   rescue
     exception in [
