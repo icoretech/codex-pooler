@@ -218,35 +218,32 @@ defmodule CodexPooler.Accounting.UsageReadModel do
   defp v1_total_cost_usd(%{total_cost_usd: %Decimal{} = value}), do: Decimal.to_float(value)
   defp v1_total_cost_usd(_usage), do: 0.0
 
+  # The same rows qualify as under the former `occurred_at::date BETWEEN`
+  # predicate, whose UTC calendar days the half-open range reproduces exactly;
+  # the dates are still computed in UTC. `entry_kind` and `usage_status` are
+  # rendered as literals, not bind parameters, so
+  # `ledger_entries_api_key_known_settlement_occurred_idx` can be proven in a
+  # generic cached plan.
   defp rolling_api_key_cost_summary(pool_id, api_key_id, as_of) do
     start_date = as_of |> DateTime.add(-27, :day) |> DateTime.to_date()
     end_date = DateTime.to_date(as_of)
+    start_at = DateTime.new!(start_date, ~T[00:00:00.000000], "Etc/UTC")
+    end_before = DateTime.new!(Date.add(end_date, 1), ~T[00:00:00.000000], "Etc/UTC")
 
-    rows =
-      Repo.all(
+    {count, cost_micros} =
+      Repo.one(
         from entry in LedgerEntry,
           join: request in Request,
           on: request.id == entry.request_id,
           where:
             request.pool_id == ^pool_id and entry.api_key_id == ^api_key_id and
-              entry.entry_kind == ^@entry_settlement and entry.usage_status == ^@usage_known and
-              fragment("?::date", entry.occurred_at) >= ^start_date and
-              fragment("?::date", entry.occurred_at) <= ^end_date and
+              entry.entry_kind == @entry_settlement and entry.usage_status == @usage_known and
+              entry.occurred_at >= ^start_at and entry.occurred_at < ^end_before and
               not is_nil(fragment("?->>?", entry.details, "settled_cost_micros")),
-          select: entry.settled_cost_micros
+          select: {count(entry.id), type(coalesce(sum(entry.settled_cost_micros), 0), :decimal)}
       )
 
-    Enum.reduce(
-      rows,
-      %{priced_settlement_count: 0, priced_settled_cost_micros: Decimal.new(0)},
-      fn cost, acc ->
-        %{
-          priced_settlement_count: acc.priced_settlement_count + 1,
-          priced_settled_cost_micros:
-            Decimal.add(acc.priced_settled_cost_micros, cost || Decimal.new(0))
-        }
-      end
-    )
+    %{priced_settlement_count: count, priced_settled_cost_micros: cost_micros}
   end
 
   defp id_for(%{id: id}), do: id

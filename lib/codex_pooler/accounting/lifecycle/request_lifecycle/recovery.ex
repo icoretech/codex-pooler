@@ -163,7 +163,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
         on: request.id == attempt.request_id,
         where:
           request.status in ^@terminal_request_statuses and
-            attempt.status in ^@open_attempt_statuses and attempt.started_at <= ^cutoff,
+            attempt.status in @open_attempt_statuses and attempt.started_at <= ^cutoff,
         order_by: [asc: attempt.started_at, asc: attempt.id],
         limit: ^limit,
         select: {request.id, attempt.id}
