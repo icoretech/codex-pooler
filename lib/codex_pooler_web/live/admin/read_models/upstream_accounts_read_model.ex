@@ -174,8 +174,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     identities =
       scope
-      |> Upstreams.list_visible_upstream_identities()
-      |> Enum.filter(&Map.has_key?(assignments, &1.id))
+      |> Upstreams.list_visible_upstream_identities(
+        pool_ids: Enum.map(pools, & &1.id),
+        include_unassigned: Map.get(filters, "pool_id") in [nil, ""]
+      )
       |> narrow_to_identity(identity_id)
 
     assignments = narrow_assignments_to_identities(assignments, identities)

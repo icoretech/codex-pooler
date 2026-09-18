@@ -82,9 +82,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         </div>
       </div>
 
-      <%!-- Unreachable through load_visible, which only projects identities
-      holding a visible-pool assignment; kept as a guard for cockpits built
-      from other account snapshots. --%>
       <div :if={@cockpit.assignments.empty?} class="p-4">
         <AdminComponents.empty_state
           id="upstream-assignments-empty"

@@ -74,33 +74,35 @@ defmodule CodexPooler.Upstreams do
     end
   end
 
-  @spec list_visible_upstream_identities(Scope.t()) :: [UpstreamIdentity.t()]
-  def list_visible_upstream_identities(%Scope{} = scope) do
-    pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
+  @spec list_visible_upstream_identities(Scope.t(), keyword()) :: [UpstreamIdentity.t()]
+  def list_visible_upstream_identities(scope, opts \\ [])
 
-    case pool_ids do
-      [] ->
-        []
+  def list_visible_upstream_identities(%Scope{} = scope, opts) do
+    visible_pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
+    selected_pool_ids = Keyword.get(opts, :pool_ids, visible_pool_ids)
+    pool_ids = Enum.filter(visible_pool_ids, &(&1 in selected_pool_ids))
+    include_unassigned? = Keyword.get(opts, :include_unassigned, true) and Pools.owner?(scope)
 
-      _ ->
-        Repo.all(
-          from identity in UpstreamIdentity,
-            join: assignment in PoolUpstreamAssignment,
-            on: assignment.upstream_identity_id == identity.id,
-            where: assignment.pool_id in ^pool_ids,
-            where: assignment.status != ^@assignment_deleted,
-            where: identity.status != ^@deleted,
-            distinct: true,
-            order_by: [
-              asc: identity.account_label,
-              asc: identity.chatgpt_account_id,
-              asc: identity.created_at
-            ]
-        )
-    end
+    Repo.all(
+      from identity in UpstreamIdentity,
+        left_join: assignment in PoolUpstreamAssignment,
+        on:
+          assignment.upstream_identity_id == identity.id and
+            assignment.status != ^@assignment_deleted,
+        where:
+          assignment.pool_id in ^pool_ids or
+            (^include_unassigned? and is_nil(assignment.id)),
+        where: identity.status != ^@deleted,
+        distinct: true,
+        order_by: [
+          asc: identity.account_label,
+          asc: identity.chatgpt_account_id,
+          asc: identity.created_at
+        ]
+    )
   end
 
-  def list_visible_upstream_identities(_scope), do: []
+  def list_visible_upstream_identities(_scope, _opts), do: []
 
   @spec get_upstream_identity(term()) :: UpstreamIdentity.t() | nil
   def get_upstream_identity(id) when is_binary(id), do: Repo.get(UpstreamIdentity, id)

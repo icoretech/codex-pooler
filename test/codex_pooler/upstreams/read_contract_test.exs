@@ -73,6 +73,7 @@ defmodule CodexPooler.Upstreams.ReadContractTest do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     scope = Scope.for_user(owner)
     upstream_assignment_fixture()
+    upstream_identity_fixture()
 
     Repo.update_all(from(m in Membership, where: m.user_id == ^owner.id),
       set: [status: "revoked", revoked_at: DateTime.utc_now()]
@@ -86,6 +87,7 @@ defmodule CodexPooler.Upstreams.ReadContractTest do
 
   test "missing scopes cannot list management or visible account options" do
     upstream_assignment_fixture()
+    upstream_identity_fixture()
 
     for scope <- [nil, %{}, %Scope{}] do
       assert Upstreams.list_visible_upstream_identities(scope) == []

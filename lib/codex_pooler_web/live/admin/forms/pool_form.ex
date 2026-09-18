@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.OptionLoaderFallback
 
@@ -214,9 +215,14 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   end
 
   def upstream_identity_options(scope) do
-    case Upstreams.list_upstream_identities_for_pool_management(scope, status: "active") do
+    case Upstreams.list_upstream_identities_for_pool_management(scope) do
       {:ok, identities} ->
-        {Enum.map(identities, &upstream_identity_option/1), []}
+        options =
+          identities
+          |> Enum.reject(&(&1.status == UpstreamIdentity.deleted_status()))
+          |> Enum.map(&upstream_identity_option/1)
+
+        {options, []}
 
       {:error, reason} ->
         empty_admin_options(:upstream_identity_options, reason, %{
