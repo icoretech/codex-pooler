@@ -17,6 +17,70 @@ defmodule CodexPoolerWeb.Admin.UnassignedUpstreamsLiveTest do
 
   setup :register_and_log_in_user
 
+  for status <- ["active", "paused", "reauth_required"] do
+    @status status
+    test "unassigned #{@status} accounts disable pool-dependent actions with an explanation", %{
+      conn: conn,
+      scope: scope
+    } do
+      %{identity: identity} =
+        upstream_assignment_fixture(pool_fixture(), %{
+          identity_status: @status,
+          assignment_status: "deleted"
+        })
+
+      reason = "Assign this account to a Pool before using account actions."
+      assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+
+      for action <- [:rename, :pause, :reactivate, :refresh_token, :delete] do
+        assert %{available?: false, reason: ^reason} = Map.fetch!(cockpit.actions, action)
+      end
+
+      {:ok, list_view, _html} = live(conn, ~p"/admin/upstreams")
+
+      assert has_element?(
+               list_view,
+               "#upstream-account-actions-menu-#{identity.id}[title='#{reason}']"
+             )
+
+      for action <- ~w(rename pause reactivate refresh saved-reset-policy delete) do
+        assert has_element?(
+                 list_view,
+                 "##{action}-upstream-account-#{identity.id}[disabled][title='#{reason}']"
+               )
+      end
+
+      {:ok, detail_view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+      for action <- ~w(rename pause reactivate refresh delete) do
+        assert has_element?(
+                 detail_view,
+                 "#cockpit-#{action}-upstream-account-#{identity.id}[disabled][title='#{reason}']"
+               )
+      end
+
+      assert has_element?(detail_view, "#saved-reset-policy-submit[disabled][title='#{reason}']")
+
+      if @status in ["paused", "reauth_required"] do
+        assert cockpit.actions.replace_auth_json.available?
+
+        assert has_element?(
+                 detail_view,
+                 "#cockpit-replace-auth-json-upstream-account-#{identity.id}:not([disabled])"
+               )
+      end
+
+      for event <-
+            ~w(open_rename_account pause_account reactivate_account refresh_account open_delete_account) do
+        html = render_click(detail_view, event, %{"id" => identity.id})
+        assert has_element?(detail_view, "#flash-error", reason)
+        refute html =~ "pool assignment was not found"
+      end
+
+      assert Repo.reload!(identity) == identity
+    end
+  end
+
   test "removing the last of two pool assignments keeps the paused account visible", %{
     conn: conn,
     scope: scope
@@ -213,6 +277,31 @@ defmodule CodexPoolerWeb.Admin.UnassignedUpstreamsLiveTest do
         :previous_pool -> assert assignment.id == previous_assignment.id
         :new_pool -> assert Repo.reload!(previous_assignment).status == "deleted"
       end
+
+      assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+      assert cockpit.actions.rename.available?
+      assert cockpit.actions.reactivate.available?
+      assert cockpit.actions.delete.available?
+      refute cockpit.actions.pause.available?
+
+      {:ok, detail_view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+      for action <- ~w(rename reactivate delete) do
+        assert has_element?(
+                 detail_view,
+                 "#cockpit-#{action}-upstream-account-#{identity.id}:not([disabled])"
+               )
+
+        assert has_element?(
+                 view,
+                 "##{action}-upstream-account-#{identity.id}:not([disabled])"
+               )
+      end
+
+      assert {:ok, _result} =
+               Upstreams.rename_account_for_scope(scope, identity, %{account_label: "Reattached"})
+
+      assert Repo.reload!(identity).account_label == "Reattached"
     end
   end
 end

@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.Format
+  alias CodexPoolerWeb.Admin.UpstreamAccountActions
 
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.{
     QuotaLimitRow,
@@ -601,6 +602,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp upstream_account_actions(assigns) do
     assigns =
       assign(assigns,
+        assignment_unavailable_reason:
+          UpstreamAccountActions.assignment_unavailable_reason(assigns.account.assignments),
         recovery_eligible?: recovery_eligible?(assigns.account),
         recovery_default_pool_id: recovery_default_pool_id(assigns.account),
         recovery_reinvite_path: ReinviteLink.path_for_account(assigns.account),
@@ -619,6 +622,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
         aria-label={"Actions for #{@account.label}"}
+        title={@assignment_unavailable_reason}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
       </button>
@@ -633,7 +637,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             label="Rename"
             phx-click="open_rename_account"
             phx-value-id={@account.identity.id}
-            disabled={@account.identity.status == "deleted"}
+            disabled={@assignment_unavailable_reason != nil or @account.identity.status == "deleted"}
+            title={@assignment_unavailable_reason}
           />
         </li>
         <li>
@@ -644,7 +649,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             variant={:warning}
             phx-click="pause_account"
             phx-value-id={@account.identity.id}
-            disabled={!pausable?(@account.identity.status)}
+            disabled={@assignment_unavailable_reason != nil or !pausable?(@account.identity.status)}
+            title={@assignment_unavailable_reason}
           />
         </li>
         <li>
@@ -655,7 +661,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             variant={:positive}
             phx-click="reactivate_account"
             phx-value-id={@account.identity.id}
-            disabled={!reactivatable?(@account.identity.status)}
+            disabled={
+              @assignment_unavailable_reason != nil or !reactivatable?(@account.identity.status)
+            }
+            title={@assignment_unavailable_reason}
           />
         </li>
         <li :if={@recovery_eligible?}>
@@ -702,7 +711,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             label="Refresh token"
             phx-click="refresh_account"
             phx-value-id={@account.identity.id}
-            disabled={!refreshable?(@account.identity.status)}
+            disabled={
+              @assignment_unavailable_reason != nil or !refreshable?(@account.identity.status)
+            }
+            title={@assignment_unavailable_reason}
           />
         </li>
         <li>
@@ -712,7 +724,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             label="Saved resets"
             phx-click="open_saved_reset_policy"
             phx-value-id={@account.identity.id}
-            disabled={@account.identity.status == "deleted"}
+            disabled={@assignment_unavailable_reason != nil or @account.identity.status == "deleted"}
+            title={@assignment_unavailable_reason}
           />
         </li>
         <li>
@@ -723,7 +736,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             variant={:danger}
             phx-click="open_delete_account"
             phx-value-id={@account.identity.id}
-            disabled={@account.identity.status == "deleted"}
+            disabled={@assignment_unavailable_reason != nil or @account.identity.status == "deleted"}
+            title={@assignment_unavailable_reason}
           />
         </li>
       </ul>

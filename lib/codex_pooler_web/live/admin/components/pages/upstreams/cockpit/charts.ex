@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.UpstreamAccountActions
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.{QuotaLimitRow, SavedResetMeter}
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
@@ -147,6 +148,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
               icon="hero-check"
               type="submit"
               variant={:primary}
+              disabled={@cockpit.assignments.empty?}
+              title={UpstreamAccountActions.assignment_unavailable_reason(@cockpit.assignments.items)}
             />
           </div>
         </.form>

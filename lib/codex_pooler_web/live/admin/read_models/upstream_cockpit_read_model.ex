@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPoolerWeb.Admin.UpstreamAccountActions
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
@@ -735,12 +736,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     redeem_saved_reset = redeem_saved_reset_action(account, header)
 
     %{
-      rename: action(status != "deleted", "deleted accounts cannot be renamed"),
+      rename:
+        assignment_action(account, status != "deleted", "deleted accounts cannot be renamed"),
       pause:
-        action(status in ["active", "refresh_due", "refresh_failed"], "account is not pausable"),
-      reactivate: action(status in @reactivatable_statuses, "account is not reactivatable"),
+        assignment_action(
+          account,
+          status in ["active", "refresh_due", "refresh_failed"],
+          "account is not pausable"
+        ),
+      reactivate:
+        assignment_action(
+          account,
+          status in @reactivatable_statuses,
+          "account is not reactivatable"
+        ),
       refresh_token:
-        action(
+        assignment_action(
+          account,
           status in ["active", "refresh_due", "refresh_failed"],
           "token refresh is unavailable"
         ),
@@ -756,7 +768,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           recovery_eligible? and account.assignments != [],
           "reinvite requires a Pool assignment"
         ),
-      delete: action(status != "deleted", "account is already deleted"),
+      delete: assignment_action(account, status != "deleted", "account is already deleted"),
       empty?: false,
       degraded?: recovery_eligible?
     }
@@ -792,6 +804,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   defp action(true, _reason), do: %{available?: true, reason: nil}
   defp action(false, reason), do: %{available?: false, reason: reason}
+
+  defp assignment_action(account, available?, reason) do
+    available?
+    |> action(reason)
+    |> UpstreamAccountActions.require_assignment(account.assignments)
+  end
 
   defp sections(flags, assignments, charts, recent_events, actions) do
     %{
