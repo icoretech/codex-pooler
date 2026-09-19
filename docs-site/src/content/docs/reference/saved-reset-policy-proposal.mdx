@@ -1,0 +1,76 @@
+---
+title: Optional Saved Reset policy proposal
+description: Discussion draft for opt-in active-work protection and expiration rescue.
+---
+
+Status: discussion draft, not an implemented feature or an activation change.
+
+## Goal
+
+Reduce quota interruptions while an agent is doing useful work. When the
+account serving that work approaches a limit that a Saved Reset can restore,
+redeem an available reset early enough to leave time for provider processing
+and confirmation. A spare account in the pool should not by itself prevent
+this explicitly selected mode from protecting the working account.
+
+This is a best-effort timing goal. Delayed quota reports, provider failures,
+and the provider's treatment of in-flight requests can still cause an
+interruption. It is not a claim that Saved Resets restore every five-hour,
+weekly, or model-specific limit.
+
+## Proposed opt-in behavior
+
+1. **Active-work protection.** Track the account actually serving an unfinished
+   request or turn, including long HTTP streams and WebSocket turns. Recheck
+   fresh quota evidence during that work, and redeem before exhaustion when
+   the configured headroom is reached. Idle accounts do not trigger this
+   policy. A near natural reset should not force an active agent to wait if
+   its remaining quota would run out first.
+2. **Expiration rescue.** Independently consider an available credit close to
+   expiration even when its account has no traffic. Keep a configured reserve;
+   do not assume a zero-use account has quota to restore. Prefer the earliest
+   valid expiration where the provider supports selecting an exact credit,
+   without claiming that the Codex endpoint supports a client-selected credit
+   ID or guarantees that ordering.
+
+Both additions would be disabled by default. Existing blocked/threshold
+policies and explicit account choices would retain their current behavior.
+The new controls could be separate modes or extensions to the existing
+settings, depending on the maintainer's preferred public interface.
+
+## Configuration and implementation constraints
+
+- Support per-account opt-in and overrides, with explicit inheritance from
+  deployment defaults that can also be supplied through Helm.
+- Make the near-limit threshold, active check interval, and expiration horizon
+  configurable. Example values such as 95%, 30 seconds, and 90 minutes are
+  starting points for discussion, not fixed requirements or activated defaults.
+- Reuse the canonical reconciliation and redemption paths. Do not add a second
+  credential refresh owner or provider calls from UI rendering or scraping.
+- Keep current provider-permission semantics and discuss which evidence should
+  trigger early redemption while the provider still permits requests.
+- Recheck the selected account, active work, credential generation, and policy
+  before an irreversible consume. Concurrent requests and replicas must not
+  spend multiple credits for the same recovery.
+- Preserve reservation, exact-target binding where supported, ambiguous-result
+  recovery, post-consume confirmation, reserve and cooldown protections.
+
+Before implementation is considered complete, test busy versus idle accounts,
+an active account near its limit with a spare sibling, long HTTP/WS turns,
+completion/cancellation/reassignment, multiple pools and replicas, stale API
+evidence, expiration boundaries, and ambiguous provider outcomes. A real
+provider test is still required to establish how timely redemption affects an
+already running turn.
+
+## Questions for the maintainer
+
+1. Would you accept this direction as optional behavior? Would you prefer new
+   modes in the existing policy or separate enable switches?
+2. For active-work protection, which quota/permission signals and lifecycle
+   integration would you recommend to act early without wasting credits?
+3. Are independent expiration rescue and inherited Helm defaults a good fit,
+   or would you prefer a smaller first contribution?
+
+The intention is to agree on the public behavior and implementation boundaries
+before expanding a code patch. A local prototype can be adapted to that
+feedback; this draft deliberately does not enable policies or consume credits.
