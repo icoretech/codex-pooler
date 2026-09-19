@@ -2,7 +2,7 @@
   "dependencies": {
     "apexcharts": "7.4.0",
     "cally": "0.9.2",
-    "daisyui": "5.7.40",
+    "daisyui": "5.7.42",
     "topbar": "3.0.1",
     "uqr": "0.1.3"
   }
