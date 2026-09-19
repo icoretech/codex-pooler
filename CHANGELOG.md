@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.8.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.0...codex-pooler-v0.8.1) (2026-09-19)
+
+
+### Features
+
+* **admin:** distinguish plan badges with satin palettes and activity shine ([8bb63c9](https://github.com/icoretech/codex-pooler/commit/8bb63c966f86ae6375550f9bc623d6fe4d71c87a))
+
+
+### Bug Fixes
+
+* **admin:** keep saved reset controls inside upstream cards ([12bd4a9](https://github.com/icoretech/codex-pooler/commit/12bd4a97c84c31d7008a9ff031127a6039b2ddef))
+* **admin:** keep upstream card headers compact on mobile ([9db21f6](https://github.com/icoretech/codex-pooler/commit/9db21f6fe90a6db2b2aa4d1aa47dbf6be808740c))
+* **resets:** recover eligible long-window accounts across mixed exclusions ([da2ed3f](https://github.com/icoretech/codex-pooler/commit/da2ed3f1714178ffa81749596a02f3404eb0215a))
+* **streaming:** scan unselected strings and SSE delimiters in spans ([c26b2c2](https://github.com/icoretech/codex-pooler/commit/c26b2c255cd41ee54e8ab93dd9f6763bd71b8e2f))
+
+
+### Tests
+
+* **admin:** assert compact upstream card header layout ([a4179f3](https://github.com/icoretech/codex-pooler/commit/a4179f3ef3dd3775a20b5fc7c8f1507bbc677131))
+* **admin:** assert satin plan badge in pool creation ([abbc1a8](https://github.com/icoretech/codex-pooler/commit/abbc1a864eebdc95199e367ad52b600ea2dec584))
+* **gateway:** observe lock relations and isolate cleanup registries ([ab89188](https://github.com/icoretech/codex-pooler/commit/ab89188d0d0744d2c11b67338448bee0a568adca))
+
 ## [0.8.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.8...codex-pooler-v0.8.0) (2026-09-19)
 
 
