@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.1...codex-pooler-v0.8.2) (2026-09-20)
+
+
+### Bug Fixes
+
+* **deps:** update dependency daisyui to v5.7.42 ([#411](https://github.com/icoretech/codex-pooler/issues/411)) ([20bfcd2](https://github.com/icoretech/codex-pooler/commit/20bfcd2a433b7d2f754aa7a99f9b0b3f3e8f5b08))
+* **dev:** delete leased request graphs before fixture parents ([df4e036](https://github.com/icoretech/codex-pooler/commit/df4e036efd9b3163ba7c7be37e77f0ac04cc8391))
+* **gateway:** support unmarked compaction and new public websocket sessions ([a717973](https://github.com/icoretech/codex-pooler/commit/a7179735b4cb83fcd1d0478f338b2763c98219aa))
+* **streaming:** reuse decoded native SSE blocks through downstream delivery ([8f30484](https://github.com/icoretech/codex-pooler/commit/8f30484fa5c049b1dc7ef9c6531f0221d3c0b49b))
+* **streaming:** scan ignored SSE lines and capped event labels in spans ([776b549](https://github.com/icoretech/codex-pooler/commit/776b5493806f38daca58935fcaf70eb92757903d))
+* **websocket:** contain control-path failures and defer slow cleanup ([f71adb4](https://github.com/icoretech/codex-pooler/commit/f71adb4e34064d401fb3bf18bef9e9b194a49a87))
+
 ## [0.8.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.0...codex-pooler-v0.8.1) (2026-09-19)
 
 
