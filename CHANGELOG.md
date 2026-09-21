@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.8.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.2...codex-pooler-v0.8.3) (2026-09-21)
+
+
+### Features
+
+* **access:** add optional active request limit per API key ([233b911](https://github.com/icoretech/codex-pooler/commit/233b911a789b7526594d0f959b9c590ab0463264))
+* **accounting:** enforce fleet-wide API key active request limits ([76064c2](https://github.com/icoretech/codex-pooler/commit/76064c288322aeb7b44fa707ddbe2757ec63ab85))
+* **admin:** expose active request limits and provisional budget usage ([cc9ea24](https://github.com/icoretech/codex-pooler/commit/cc9ea243ea60669dada66fe3fdc8a476cbe9aced))
+
+
+### Bug Fixes
+
+* **accounting:** keep pending terminal lookups parameterized ([b25d0c4](https://github.com/icoretech/codex-pooler/commit/b25d0c4134895d6449c831fc1abd89d99352d603))
+* **accounting:** persist HTTP 401 for runtime key lifecycle denials ([650c8f6](https://github.com/icoretech/codex-pooler/commit/650c8f6562ea8e3d0cd30470cfeefc697c132685))
+* **accounting:** preserve nil active limits for minimal key contexts ([4ac983a](https://github.com/icoretech/codex-pooler/commit/4ac983ae9045d2b89ea5bf854289bd309037b211))
+* **accounting:** preserve token pressure across window boundaries ([611b321](https://github.com/icoretech/codex-pooler/commit/611b3219a51a3557da2fe35f19c047c7cf4ad57e))
+* **accounting:** sample budget enforcement time under the key lock ([f2d1898](https://github.com/icoretech/codex-pooler/commit/f2d18984a68f130ab7cd8f0ffe9fbd7dee544e4f))
+* **admin:** describe API key output estimate floors accurately ([d9d4f33](https://github.com/icoretech/codex-pooler/commit/d9d4f33acb13c23d434659c93c5cabf6272e4fbc))
+* **admin:** highlight upstream accounts without pool assignments ([80f5264](https://github.com/icoretech/codex-pooler/commit/80f5264172b053b91d5083cd5532e0c759db2f6e))
+* **deps:** upgrade Mint to 1.10.1 ([ce16fd5](https://github.com/icoretech/codex-pooler/commit/ce16fd5e497e3585aad111103ad1cb6685d9629d))
+* **gateway:** preserve concurrency denial for retry successors ([a3e0e9b](https://github.com/icoretech/codex-pooler/commit/a3e0e9b7922433e2cc80da32c52d649d53fb3394))
+* **gateway:** preserve retryable key concurrency denials across transports ([af40edc](https://github.com/icoretech/codex-pooler/commit/af40edcb7866e25306dc3001983a36752d2c2655))
+* **migrations:** backfill API key usage components online ([c3ea594](https://github.com/icoretech/codex-pooler/commit/c3ea5941a46bd17fb1a0d945c979b2168f113bc5))
+* **migrations:** bound active request cap schema lock waits ([b102eec](https://github.com/icoretech/codex-pooler/commit/b102eecdac664d880512810095aa8d431f7c3046))
+* **upstreams:** normalize saved-reset persistence timestamp precision ([725260e](https://github.com/icoretech/codex-pooler/commit/725260e99f8962141a021520c0437a6bd1bc401e))
+* **usage:** distinguish measured tokens from budget pressure ([6810726](https://github.com/icoretech/codex-pooler/commit/6810726103272639fbba2de7ece40b274cd79392))
+* **websocket:** fail over exhausted accounts without dropping client sessions ([0c8b628](https://github.com/icoretech/codex-pooler/commit/0c8b62870534c762e507edb7848d03a10c82a3d7))
+
+
+### Performance Improvements
+
+* **accounting:** restore API key admission throughput ([3094615](https://github.com/icoretech/codex-pooler/commit/309461586a699441525da4fcc84abf9975b8a9ad))
+
+
+### Tests
+
+* **accounting:** account for retry enforcement clock queries ([2685a66](https://github.com/icoretech/codex-pooler/commit/2685a66df398570f9e2f251e8d8d7ba76bd07552))
+* **accounting:** batch retained history fixtures ([6df7f0d](https://github.com/icoretech/codex-pooler/commit/6df7f0df5c3c18c33da618020fd2ee1e7e1f0a8a))
+* **admin:** assert bounded API key budget usage reads ([fcee006](https://github.com/icoretech/codex-pooler/commit/fcee0068db3f4676228399d19b759d6cc4e7e02a))
+* await websocket owner shutdown before sandbox teardown ([e4c919a](https://github.com/icoretech/codex-pooler/commit/e4c919acc799b1208aee16a61f6a7a3cf00d2290))
+* **gateway:** cover ephemeral fork cache identity and session isolation ([73f8557](https://github.com/icoretech/codex-pooler/commit/73f85575311ad4153e54569fd19b52cce966c0fe))
+* match websocket terminal ledger rows by kind ([5b7da84](https://github.com/icoretech/codex-pooler/commit/5b7da840e7a309ced9c1b3be86606d2162f0acb6))
+* **platform:** refresh peer activity snapshots ([151155f](https://github.com/icoretech/codex-pooler/commit/151155fbbabf04cc9b7f5ad36080ff9a2bb80043))
+* **telemetry:** own requeue samples before relay teardown ([3640644](https://github.com/icoretech/codex-pooler/commit/3640644695d51b4d6e5260377f840f1eed3b3de7))
+* **websocket:** stop active response tasks before sandbox teardown ([3b39f01](https://github.com/icoretech/codex-pooler/commit/3b39f01bd45c3ba82d8c44b2b1311bb751d39b8e))
+
+
+### Miscellaneous Chores
+
+* **deps:** lock file maintenance ([9fa3da8](https://github.com/icoretech/codex-pooler/commit/9fa3da830d7761b3ac7197e1a790c0510e76ab91))
+* **deps:** update node.js to v26.9.0 ([#419](https://github.com/icoretech/codex-pooler/issues/419)) ([64fa5fb](https://github.com/icoretech/codex-pooler/commit/64fa5fb8509d1a0b0132d8980abf05c06259d90e))
+
 ## [0.8.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.1...codex-pooler-v0.8.2) (2026-09-20)
 
 
