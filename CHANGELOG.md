@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.8.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.4...codex-pooler-v0.8.5) (2026-09-21)
+
+
+### Features
+
+* **admin:** draw the OAuth callback copy-and-paste step ([c41746b](https://github.com/icoretech/codex-pooler/commit/c41746b620bb08060611e0578e152761133f2bf2))
+
+
+### Bug Fixes
+
+* **admin:** include deferred events in cockpit metrics type ([ad7dd14](https://github.com/icoretech/codex-pooler/commit/ad7dd14b3762f61ee34e921e4a47ac488d892e31))
+* **websocket:** restore declared custom tool namespaces per public turn ([a925cbb](https://github.com/icoretech/codex-pooler/commit/a925cbb1b8897cb30806fd8a70c305d9d2ac0f07))
+
+
+### Tests
+
+* enforce local duration budgets and remove obsolete rehearsals ([bccc932](https://github.com/icoretech/codex-pooler/commit/bccc93201edf1b43609341d08462ed2e471f6f6e))
+
+
+### Miscellaneous Chores
+
+* **deps:** update apexcharts to 7.5.1 ([f418683](https://github.com/icoretech/codex-pooler/commit/f41868334ab92092e5cb50f8467c2cca455d8c5e))
+
 ## [0.8.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.3...codex-pooler-v0.8.4) (2026-09-21)
 
 
