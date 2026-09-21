@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.3...codex-pooler-v0.8.4) (2026-09-21)
+
+
+### Bug Fixes
+
+* **admin:** defer expensive account usage reads ([73e4d82](https://github.com/icoretech/codex-pooler/commit/73e4d82d7e3f0efaf945b7daea21975d9a3e6334))
+* **admin:** preserve fresh cockpit lifecycle events ([2e843a6](https://github.com/icoretech/codex-pooler/commit/2e843a6c2b8b7c59e73d9f4727cc8fcbcf6680d5))
+* **platform:** unbound migration task connection timeouts ([2dbfb62](https://github.com/icoretech/codex-pooler/commit/2dbfb623115b958f2180a0244f882a009b10acd3))
+
+
+### Tests
+
+* **accounting:** bound retained-history seed statements ([6e1061e](https://github.com/icoretech/codex-pooler/commit/6e1061eb62f9ae2df6851499d900d347676b1626))
+* **dev:** recognize the release migration runner ([27e6792](https://github.com/icoretech/codex-pooler/commit/27e67924b7f15e7afe0bd74f4cd1e1e397e173c5))
+
 ## [0.8.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.2...codex-pooler-v0.8.3) (2026-09-21)
 
 
