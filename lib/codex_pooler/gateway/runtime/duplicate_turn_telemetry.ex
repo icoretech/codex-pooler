@@ -3,8 +3,9 @@ defmodule CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry do
 
   # A `409 duplicate_turn` refusal is client-visible, but none of the stages
   # that answer it writes a request row for the refused request: the replay
-  # preflight, the websocket and native HTTP turn claims, the native replay
-  # dispatch, and the client-retry and compaction-retry claims. Request-log
+  # preflight, the owner-forwarded replay preflight refusing a resend of the
+  # turn its owner holds, the websocket and native HTTP turn claims, the native
+  # replay dispatch, and the client-retry and compaction-retry claims. Request-log
   # counts, admin stats and every other database-derived signal therefore never
   # see one, and the only trace was an info-level log line (findings#225).
   #
@@ -16,6 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry do
   @event [:codex_pooler, :gateway, :duplicate_turn, :refused]
   @stages ~w(
     runtime_replay_preflight
+    owner_replay_preflight
     websocket_turn_claim
     native_replay_dispatch
     native_http_turn_claim

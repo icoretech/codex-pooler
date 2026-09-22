@@ -668,7 +668,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
       |> MapSet.new()
 
     assert stage_values == MapSet.new(DuplicateTurnTelemetry.stages())
-    assert MapSet.size(stage_values) * length(DuplicateTurnTelemetry.transports()) == 12
+    assert MapSet.size(stage_values) * length(DuplicateTurnTelemetry.transports()) == 14
   end
 
   test "keeps the fenced-affinity label set bounded at 12 series per app pod" do

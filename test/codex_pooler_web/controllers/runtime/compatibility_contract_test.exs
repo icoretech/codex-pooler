@@ -2704,6 +2704,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  public_response_create: "owner_busy",
                  non_native_active_descriptor: "owner_busy",
                  response_processed: "owner_busy"
+               },
+               owner_replay_preflight: %{
+                 new_turn_refused_by_occupied_owner: "owner_error_payload_not_duplicate_turn",
+                 resend_of_recorded_turn: "duplicate_turn_counted_as_owner_replay_preflight"
                }
              }
 

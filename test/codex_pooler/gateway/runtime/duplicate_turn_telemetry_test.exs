@@ -25,6 +25,9 @@ defmodule CodexPooler.Gateway.Runtime.DuplicateTurnTelemetryTest do
     assert :ok = DuplicateTurnTelemetry.emit_refused("runtime_replay_preflight", "websocket")
     assert_received {:refused, %{count: 1}, %{stage: "runtime_replay_preflight", transport: "websocket"}}
 
+    assert :ok = DuplicateTurnTelemetry.emit_refused("owner_replay_preflight", "websocket")
+    assert_received {:refused, %{count: 1}, %{stage: "owner_replay_preflight", transport: "websocket"}}
+
     for transport <- ["http_json", "http_sse", "http_compact_json"] do
       assert :ok = DuplicateTurnTelemetry.emit_refused("native_http_turn_claim", transport)
       assert_received {:refused, %{count: 1}, %{stage: "native_http_turn_claim", transport: "http"}}

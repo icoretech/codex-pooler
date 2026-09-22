@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.SessionContinuity
+  alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -2450,14 +2451,34 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     reject_prepared_response(public_replay_error(reason), state)
   end
 
-  defp apply_replay_preflight_result({:error, reason}, _prepared, state, _intent, _ref) do
+  defp apply_replay_preflight_result({:error, reason}, _prepared, state, intent, _ref) do
     log_replay_rejection(state, reason, :replay_preflight)
-    reject_prepared_response(public_replay_error(reason), state)
+    reject_prepared_response(owner_replay_refusal(reason, intent), state)
   end
 
-  defp apply_replay_preflight_result(_result, _prepared, state, _intent, _ref) do
+  defp apply_replay_preflight_result(_result, _prepared, state, intent, _ref) do
     log_replay_rejection(state, :owner_busy, :replay_preflight)
-    reject_prepared_response(public_replay_error(:owner_busy), state)
+    reject_prepared_response(owner_replay_refusal(:owner_busy, intent), state)
+  end
+
+  # A fresh intent without a predecessor lifecycle means the runtime preflight
+  # matched no recorded turn: the owner refused a new turn because it is still
+  # running or holding the previous one. That is not a duplicate, so the
+  # client gets the owner's own bounded refusal (503 owner_unavailable, 409
+  # owner_busy), which the released Codex client retries exactly as it retries
+  # a 409, and the duplicate-turn counter does not see it. Every other intent
+  # is a resend of a turn already recorded, and stays a counted
+  # `duplicate_turn` (findings#225).
+  defp owner_replay_refusal(reason, %{intent: :fresh, lifecycle: nil}) do
+    case WebsocketOwnerContract.safe_error_payload(reason, nil) do
+      {:ok, payload} -> payload
+      {:error, _unknown} -> owner_error(:owner_unavailable)
+    end
+  end
+
+  defp owner_replay_refusal(reason, _intent) do
+    :ok = DuplicateTurnTelemetry.emit_refused("owner_replay_preflight", "websocket")
+    public_replay_error(reason)
   end
 
   defp fresh_owner_binding?(binding, state) when is_map(binding) do
