@@ -322,6 +322,7 @@ defmodule CodexPooler.PoolerFixtures do
       pool_id: pool.id,
       upstream_model_id: Map.get(attrs, :upstream_model_id, "upstream-#{exposed_model_id}"),
       exposed_model_id: exposed_model_id,
+      pricing_ref: Map.get(attrs, :pricing_ref),
       display_name: Map.get(attrs, :display_name, "GPT 5.4 Mini"),
       status: Map.get(attrs, :status, "active"),
       supports_responses: Map.get(attrs, :supports_responses, true),

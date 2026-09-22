@@ -421,7 +421,6 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
       payload
       |> put_in(["models", hd(@removed_identifiers)], payload["models"]["babbage-002"])
       |> put_in(["models", hd(@removed_identifiers), "model"], hd(@removed_identifiers))
-      |> Map.put("models_count", 80)
 
     removal_path = write_json!(removal_mutation)
 

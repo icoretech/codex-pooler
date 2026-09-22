@@ -60,10 +60,12 @@ defmodule CodexPooler.Accounting.PricingTest do
     test "explicit pricing refs price models from imported snapshots" do
       setup = accounting_setup()
 
+      # Only the pricing ref names the imported snapshot: neither the served upstream id nor
+      # the requested model has a price of its own, so a priced reservation proves the ref.
       priced_model =
         model_fixture(setup.pool, %{
-          exposed_model_id: "gpt-priced-ref",
-          upstream_model_id: "gpt-priced-ref",
+          exposed_model_id: "gpt-priced-exposed",
+          upstream_model_id: "provider-gpt-priced-upstream",
           pricing_ref: "gpt-priced-ref"
         })
 
