@@ -30,6 +30,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
+  @raw_websocket_peer_terminal_then_control_modes [
+    :terminal_then_coalesced_close,
+    :terminal_then_coalesced_ping,
+    :terminal_then_delayed_close
+  ]
+
   # Detection budget for observing a call the session itself already bounds by
   # @timeouts. It has to stay above those scenario timeouts, or a loaded run
   # gives up on a request that was still allowed to be in flight.
@@ -3457,6 +3463,78 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  for {close_arrival, response_mode} <- [
+        {"coalesced with the terminal in one read", :terminal_then_coalesced_close},
+        {"in a read of its own after the terminal", :terminal_then_delayed_close}
+      ] do
+    @response_mode response_mode
+
+    test "answers an upstream close that arrives #{close_arrival} and reconnects for the next request" do
+      peer =
+        start_raw_websocket_peer(
+          response_mode: @response_mode,
+          upgrade_headers: [{"x-upgrade-witness", "present"}]
+        )
+
+      {:ok, session} = UpstreamWebsocketSession.start_link([])
+
+      on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+      request = raw_websocket_request(peer.url, self())
+      initial_lifecycle = lifecycle_state(session)
+
+      assert {:ok, %{terminal: "response.completed", status: 200, headers: headers}} =
+               UpstreamWebsocketSession.request(session, request)
+
+      # The peer closed the same connection that carried the terminal, so the
+      # success result still has to name the upgrade response it was read from.
+      assert {"x-upgrade-witness", "present"} in headers
+
+      established_lifecycle = %{initial_lifecycle | generation: 1}
+
+      # Below the peer loop's own 1 s receive timeout: past that the peer tears
+      # the connection down itself and the witness stops discriminating.
+      assert :closed = wait_for_raw_websocket_connection_closed(1, 500)
+      assert_disconnected_lifecycle(session, established_lifecycle)
+
+      set_raw_websocket_peer_response_mode(peer, :terminal)
+
+      assert {:ok, %{terminal: "response.completed", status: 200}} =
+               UpstreamWebsocketSession.request(session, request)
+
+      assert lifecycle_state(session) == %{initial_lifecycle | generation: 2}
+      connection_count = raw_websocket_peer_connection_count(peer)
+      cleanup = stop_raw_websocket_peer(peer)
+
+      assert cleanup.alive_tasks == []
+      assert cleanup.client_socket_count == 0
+      assert connection_count == 2
+    end
+  end
+
+  test "pongs an upstream ping coalesced behind the terminal in one read" do
+    peer = start_raw_websocket_peer(response_mode: :terminal_then_coalesced_ping)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = raw_websocket_request(peer.url, self())
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:raw_upstream_websocket_control, :pong, 1, _ping_count, 14}, 1_000
+
+    # A ping behind the terminal is answered without retiring the connection:
+    # the next request still reuses it.
+    set_raw_websocket_peer_response_mode(peer, :terminal)
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert raw_websocket_peer_connection_count(peer) == 1
+  end
+
   @tag :upstream_websocket_pong_liveness
   test "opens a new upstream websocket connection after missing keepalive pong deadline" do
     with_short_keepalive(keepalive_interval_ms: 80, keepalive_pong_timeout_ms: 35)
@@ -5793,7 +5871,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
       :peer_close ->
         send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
-        :ok = :gen_tcp.send(socket, <<0x88, 2, 1000::16>>)
+        :ok = :gen_tcp.send(socket, raw_websocket_server_close_frame(1000))
+
+      mode when mode in @raw_websocket_peer_terminal_then_control_modes ->
+        send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
+        response = %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
+
+        send_raw_websocket_peer_terminal_then_control(
+          mode,
+          socket,
+          CodexPooler.JSON.encode!(response)
+        )
 
       :unexpected_binary ->
         send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
@@ -5816,6 +5904,50 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         response = %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
         :gen_tcp.send(socket, raw_websocket_server_text_frame(CodexPooler.JSON.encode!(response)))
     end
+  end
+
+  # The three arms of the coalesced-frame probe: what the peer writes after the
+  # terminal, and whether it shares the terminal's TCP segment
+  # (icoretech/codex-pooler-findings#251).
+  defp send_raw_websocket_peer_terminal_then_control(
+         :terminal_then_coalesced_close,
+         socket,
+         terminal
+       ) do
+    # One `send`: the terminal frame and the peer Close leave in the same TCP
+    # segment, so the session decodes both out of a single read and the Close
+    # sits behind the terminal in one batch.
+    :ok =
+      :gen_tcp.send(socket, [
+        raw_websocket_server_text_frame(terminal),
+        raw_websocket_server_close_frame(1000)
+      ])
+  end
+
+  defp send_raw_websocket_peer_terminal_then_control(
+         :terminal_then_coalesced_ping,
+         socket,
+         terminal
+       ) do
+    # A control frame behind the terminal that is not a Close: the Pong is owed
+    # and the connection stays reusable.
+    :ok =
+      :gen_tcp.send(socket, [
+        raw_websocket_server_text_frame(terminal),
+        raw_websocket_server_ping_frame("p2-ping-behind")
+      ])
+  end
+
+  defp send_raw_websocket_peer_terminal_then_control(
+         :terminal_then_delayed_close,
+         socket,
+         terminal
+       ) do
+    # The control arm: the same two frames, two reads. The session has always
+    # answered this one, through its idle path.
+    :ok = :gen_tcp.send(socket, raw_websocket_server_text_frame(terminal))
+    Process.sleep(50)
+    :ok = :gen_tcp.send(socket, raw_websocket_server_close_frame(1000))
   end
 
   defp maybe_send_raw_websocket_peer_pong(state, socket, payload, first_ping_payload) do
@@ -5891,6 +6023,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp raw_websocket_server_pong_frame(payload) when byte_size(payload) < 126 do
     <<0x8A, byte_size(payload), payload::binary>>
+  end
+
+  defp raw_websocket_server_close_frame(code) when is_integer(code) do
+    <<0x88, 2, code::16>>
+  end
+
+  defp raw_websocket_server_ping_frame(payload) when byte_size(payload) < 126 do
+    <<0x89, byte_size(payload), payload::binary>>
   end
 
   defp set_raw_websocket_peer_pong_mode(%{state: state}, mode) do

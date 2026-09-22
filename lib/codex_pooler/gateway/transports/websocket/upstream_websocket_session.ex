@@ -1596,20 +1596,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         receive_events(state, %{receive_state | transport_signal: nil})
 
       {:terminal, state, receive_state, terminal} ->
-        result =
-          %{
-            body: terminal_body(receive_state),
-            terminal: terminal,
-            response_usage: receive_state.response_usage,
-            status: 200,
-            headers: Map.get(state, :headers, []),
-            upstream_error_code: receive_state.terminal_upstream_error_code,
-            upstream_error_param: receive_state.terminal_upstream_error_param,
-            websocket_frame_headers: receive_state.websocket_frame_headers
-          }
-          |> maybe_put_success_response_id(terminal, receive_state.response_id)
+        finish_terminal_result(state, receive_state, terminal, [])
 
-        {{:ok, result}, maybe_retire_exhausted_connection(state, receive_state)}
+      {:terminal, state, receive_state, terminal, trailing_frames} ->
+        finish_terminal_result(state, receive_state, terminal, trailing_frames)
 
       {:failure, state, receive_state, reason} ->
         next_state =
@@ -1629,6 +1619,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             native_client_retry_observation: final_client_retry_observation(receive_state)
           }}, next_state}
     end
+  end
+
+  # A peer may coalesce its Close with the terminal frame in a single TCP write,
+  # and `Mint.WebSocket.decode/2` then hands this session both frames in one
+  # decoded batch. The terminal ends the request, so every frame decoded behind
+  # it used to be discarded and a coalesced Close was never answered: the peer
+  # waited on an acknowledgement that never arrived, and the next request reused
+  # a socket the peer had already closed
+  # (icoretech/codex-pooler-findings#251). The trailing frames now go through
+  # the same `handle_async_frames/2` the idle path uses, so a Close closes the
+  # connection and takes it out of reuse, and a Ping still gets its Pong,
+  # exactly as when either arrives in a read of its own. The success result is
+  # built from the pre-drain state so the upgrade response headers survive the
+  # close. Trailing data frames keep the behaviour they have always had: a text
+  # or binary frame decoded after the terminal is not mapped, not written
+  # downstream, not appended to the retained body, and not counted.
+  defp finish_terminal_result(state, receive_state, terminal, trailing_frames) do
+    result =
+      %{
+        body: terminal_body(receive_state),
+        terminal: terminal,
+        response_usage: receive_state.response_usage,
+        status: 200,
+        headers: Map.get(state, :headers, []),
+        upstream_error_code: receive_state.terminal_upstream_error_code,
+        upstream_error_param: receive_state.terminal_upstream_error_param,
+        websocket_frame_headers: receive_state.websocket_frame_headers
+      }
+      |> maybe_put_success_response_id(terminal, receive_state.response_id)
+
+    state = handle_async_frames(state, trailing_frames)
+
+    {{:ok, result}, maybe_retire_exhausted_connection(state, receive_state)}
   end
 
   defp maybe_retire_exhausted_connection(state, receive_state) do
@@ -1661,6 +1684,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp reduce_receive_result({:continue, _state, _receive_state} = result), do: {:cont, result}
 
   defp reduce_receive_result({:terminal, _state, _receive_state, _terminal} = result),
+    do: {:halt, result}
+
+  defp reduce_receive_result({:terminal, _state, _receive_state, _terminal, _trailing} = result),
     do: {:halt, result}
 
   defp reduce_receive_result({:failure, _state, _receive_state, _reason} = result),
@@ -1726,52 +1752,76 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp handle_frames(state, frames, %ReceiveState{} = receive_state) do
-    Enum.reduce_while(frames, {:continue, state, receive_state}, fn
-      {:text, raw_text}, {:continue, state, receive_state} ->
-        raw_decoded = decode_text_frame(raw_text)
+    reduce_frames(frames, {:continue, state, receive_state})
+  end
 
-        {mapped_text, mapped_decoded} =
-          map_message(raw_text, raw_decoded, receive_state.message_mapper)
+  # Folded by hand rather than with `Enum.reduce_while/3` so the terminal can
+  # hand the frames decoded behind it in the same read to the caller instead of
+  # dropping them (icoretech/codex-pooler-findings#251); `finish_terminal_result/4`
+  # drains them. Every other halt ends the receive for a reason that retires or
+  # invalidates the connection anyway, so it carries nothing.
+  defp reduce_frames([], result), do: result
 
-        handle_text_frame(
-          state,
-          receive_state,
-          raw_text,
-          raw_decoded,
-          mapped_text,
-          mapped_decoded
-        )
+  defp reduce_frames([frame | trailing_frames], {:continue, _state, _receive_state} = result) do
+    case handle_frame(frame, result) do
+      {:cont, next_result} ->
+        reduce_frames(trailing_frames, next_result)
 
-      {:ping, payload}, {:continue, state, receive_state} ->
-        case send_frame(state, {:pong, payload}) do
-          {:ok, state} ->
-            {:cont, {:continue, state, receive_state}}
+      {:halt, {:terminal, state, receive_state, terminal}} ->
+        {:terminal, state, receive_state, terminal, trailing_frames}
 
-          {:error, reason, state} ->
-            receive_state = %{
-              receive_state
-              | termination_source: :websocket_control_send_error
-            }
+      {:halt, halted_result} ->
+        halted_result
+    end
+  end
 
-            {:halt, {:failure, state, receive_state, {:websocket_control_send_failed, reason}}}
-        end
+  defp handle_frame({:text, raw_text}, {:continue, state, receive_state}) do
+    raw_decoded = decode_text_frame(raw_text)
 
-      {:pong, payload}, {:continue, state, receive_state} ->
-        {:cont, {:continue, clear_matching_pong(state, payload), receive_state}}
+    {mapped_text, mapped_decoded} =
+      map_message(raw_text, raw_decoded, receive_state.message_mapper)
 
-      {:close, code, reason}, {:continue, state, receive_state} ->
+    handle_text_frame(
+      state,
+      receive_state,
+      raw_text,
+      raw_decoded,
+      mapped_text,
+      mapped_decoded
+    )
+  end
+
+  defp handle_frame({:ping, payload}, {:continue, state, receive_state}) do
+    case send_frame(state, {:pong, payload}) do
+      {:ok, state} ->
+        {:cont, {:continue, state, receive_state}}
+
+      {:error, reason, state} ->
         receive_state = %{
           receive_state
-          | peer_close_metadata: TransportFailureReason.peer_close_metadata(code, reason),
-            termination_source: :peer_close_frame
+          | termination_source: :websocket_control_send_error
         }
 
-        {:halt, {:failure, state, receive_state, :upstream_websocket_closed_before_terminal}}
+        {:halt, {:failure, state, receive_state, {:websocket_control_send_failed, reason}}}
+    end
+  end
 
-      {:binary, _data}, {:continue, state, receive_state} ->
-        receive_state = %{receive_state | termination_source: :unexpected_binary_frame}
-        {:halt, {:failure, state, receive_state, :unexpected_upstream_websocket_binary}}
-    end)
+  defp handle_frame({:pong, payload}, {:continue, state, receive_state}),
+    do: {:cont, {:continue, clear_matching_pong(state, payload), receive_state}}
+
+  defp handle_frame({:close, code, reason}, {:continue, state, receive_state}) do
+    receive_state = %{
+      receive_state
+      | peer_close_metadata: TransportFailureReason.peer_close_metadata(code, reason),
+        termination_source: :peer_close_frame
+    }
+
+    {:halt, {:failure, state, receive_state, :upstream_websocket_closed_before_terminal}}
+  end
+
+  defp handle_frame({:binary, _data}, {:continue, state, receive_state}) do
+    receive_state = %{receive_state | termination_source: :unexpected_binary_frame}
+    {:halt, {:failure, state, receive_state, :unexpected_upstream_websocket_binary}}
   end
 
   defp append_receive_body(
