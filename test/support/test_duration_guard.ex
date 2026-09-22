@@ -184,12 +184,17 @@ defmodule CodexPooler.TestDurationGuard do
       IO.puts(:stderr, "test duration guard failed:\n" <> Enum.map_join(failures, "\n", &render/1))
 
       # Let Mix finish coverage and the test task drop its owned database before
-      # returning failure. This also applies to ExUnit's plain autorun mode.
-      System.at_exit(fn _status -> exit({:shutdown, 1}) end)
+      # returning failure. This also applies to ExUnit's plain autorun mode. A
+      # run that already fails with a higher status (ExUnit's 2 for a failing
+      # test) keeps it, so 1 still means a duration violation alone.
+      System.at_exit(fn status -> exit({:shutdown, failure_status(status)}) end)
     end
 
     :ok
   end
+
+  defp failure_status(status) when is_integer(status) and status > 1, do: status
+  defp failure_status(_status), do: 1
 
   defp render({_kind, nil, text}), do: "  " <> text
   defp render({_kind, location, text}), do: "  #{location} #{text}"

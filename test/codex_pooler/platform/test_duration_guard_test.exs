@@ -67,7 +67,9 @@ defmodule CodexPooler.TestDurationGuardTest do
         {"setup", 1, "exceeds 1.0ms"},
         {"invalid", 1, "reason must be a nonempty string"},
         {"hard", 1, "slow tags cannot waive it"},
-        {"missing", 1, "formatter missing or incomplete"}
+        {"missing", 1, "formatter missing or incomplete"},
+        # A failing test outranks a duration violation: ExUnit's status 2 stays.
+        {"slow_assertion", 2, "exceeds 1.0ms"}
       ] do
     @tag slow: "boots an isolated BEAM VM to verify ExUnit exit status and teardown"
     test "#{mode} subprocess enforces #{scenario} and completes teardown" do
@@ -153,10 +155,10 @@ defmodule CodexPooler.TestDurationGuardTest do
     assert output =~ "guard receipts remaining=0", output
   end
 
-  for mode <- [[], ["--trace"]] do
+  for mode <- [[], ["--trace"]], {failing?, expected_exit} <- [{false, 1}, {true, 2}] do
     @tag :tmp_dir
     @tag slow: "boots an isolated Mix project to verify CLI failure after test cleanup"
-    test "mix test #{inspect(mode)} fails its exit status after duration violation", %{
+    test "mix test #{inspect(mode)} exits #{expected_exit} after a duration violation#{if failing?, do: " and a failing test"}", %{
       tmp_dir: dir
     } do
       File.mkdir_p!(Path.join(dir, "test"))
@@ -183,6 +185,8 @@ defmodule CodexPooler.TestDurationGuardTest do
           after
             20 -> :ok
           end
+
+          refute #{unquote(failing?)}, "synthetic assertion failure"
         end
       end
       """)
@@ -194,7 +198,7 @@ defmodule CodexPooler.TestDurationGuardTest do
           stderr_to_stdout: true
         )
 
-      assert exit_code == 1, output
+      assert exit_code == unquote(expected_exit), output
       assert output =~ "test duration guard failed:", output
       assert output =~ "exceeds 1.0ms", output
       assert output =~ "probe teardown completed", output

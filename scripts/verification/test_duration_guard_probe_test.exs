@@ -63,13 +63,13 @@ defmodule CodexPooler.TestDurationGuardProbe do
   end
 
   test "duration scenario" do
-    if @scenario in ["ordinary", "allowed", "hard"] do
+    if @scenario in ["ordinary", "allowed", "hard", "slow_assertion"] do
       receive do
       after
         20 -> :ok
       end
     end
 
-    refute @scenario == "assertion", "synthetic assertion failure"
+    refute @scenario in ["assertion", "slow_assertion"], "synthetic assertion failure"
   end
 end
