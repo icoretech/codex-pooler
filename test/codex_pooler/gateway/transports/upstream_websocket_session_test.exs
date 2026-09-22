@@ -402,6 +402,64 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              |> Map.drop([:compact_runtime_proof_redeemed, :final_runtime_proof_redeemed])
   end
 
+  describe "direct native compaction admission clear reasons" do
+    @short_receive_timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 150}
+
+    # findings#258 row 258-60: every clear on the direct upstream session names
+    # its cause instead of defaulting to `:request_rejected`, the one reason that
+    # stays reserved for the runtime's explicit clear after it rejected the
+    # request. One node, direct topology, raw websocket peer, Full.
+    test "an unsuccessful compact-phase exchange clears as compact_failure" do
+      %{session: session, peer: peer, binding: binding, lifecycle: lifecycle} = armed_direct_admission()
+      attach_direct_admission_clear_observer(binding.lifecycle_id)
+
+      capability = reserve_and_start_direct(session, :compact, binding)
+      set_raw_websocket_peer_response_mode(peer, :hold)
+
+      assert {:error, _reason} =
+               UpstreamWebsocketSession.request(session, %{
+                 raw_websocket_request(peer.url, self())
+                 | native_compaction_capability: capability,
+                   expected_connection_lifecycle: lifecycle,
+                   timeouts: @short_receive_timeouts
+               })
+
+      assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
+      # The receive timeout retires the connection first; the exchange's own
+      # clear then names the failed compact phase.
+      assert drain_direct_admission_clear_reasons() == [:connection_closed, :compact_failure]
+    end
+
+    test "an unsuccessful final-phase exchange clears as final_failure" do
+      %{session: session, peer: peer, binding: binding, lifecycle: lifecycle} = armed_direct_admission()
+      attach_direct_admission_clear_observer(binding.lifecycle_id)
+
+      final_binding = confirm_direct_compact(session, peer, binding, lifecycle)
+      final_capability = reserve_and_start_direct(session, :final, final_binding)
+      set_raw_websocket_peer_response_mode(peer, :hold)
+
+      assert {:error, _reason} =
+               UpstreamWebsocketSession.request(session, %{
+                 raw_websocket_request(peer.url, self())
+                 | native_compaction_capability: final_capability,
+                   expected_connection_lifecycle: lifecycle,
+                   timeouts: @short_receive_timeouts
+               })
+
+      assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
+      assert drain_direct_admission_clear_reasons() == [:connection_closed, :final_failure]
+    end
+
+    test "the explicit clear control is the one request_rejected clear" do
+      %{session: session, binding: binding} = armed_direct_admission()
+      attach_direct_admission_clear_observer(binding.lifecycle_id)
+
+      capability = reserve_and_start_direct(session, :compact, binding)
+      assert :ok = UpstreamWebsocketSession.clear_compaction_admission(session, capability)
+      assert [:request_rejected] = drain_direct_admission_clear_reasons()
+    end
+  end
+
   test "direct admission failures and replay emit no successful transition facts" do
     observer = attach_native_compaction_observer()
     peer = start_raw_websocket_peer(response_mode: :terminal)
@@ -6262,6 +6320,140 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp safe_tcp_close(socket) when is_port(socket), do: :gen_tcp.close(socket)
   defp safe_tcp_close(_socket), do: :ok
+
+  defp armed_direct_admission do
+    peer = start_raw_websocket_peer(response_mode: :terminal)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, %{terminal: "response.completed", ordinary_success_result: ordinary_receipt}} =
+             UpstreamWebsocketSession.request(
+               session,
+               ordinary_request(raw_websocket_request(peer.url, self()))
+             )
+
+    lifecycle = UpstreamWebsocketSession.connection_lifecycle_snapshot(session)
+    binding = direct_admission_binding(lifecycle, ordinary_receipt)
+
+    assert :ok =
+             UpstreamWebsocketSession.arm_compact(
+               session,
+               binding,
+               System.system_time(:millisecond) + 30_000,
+               ordinary_receipt
+             )
+
+    %{session: session, peer: peer, binding: binding, lifecycle: lifecycle}
+  end
+
+  defp reserve_and_start_direct(session, phase, binding) do
+    assert {:ok, %Capability{} = capability} =
+             UpstreamWebsocketSession.reserve_compaction(
+               session,
+               phase,
+               binding,
+               make_ref(),
+               System.system_time(:millisecond)
+             )
+
+    assert :ok =
+             UpstreamWebsocketSession.mark_compaction_accounting_started(
+               session,
+               capability,
+               System.system_time(:millisecond)
+             )
+
+    capability
+  end
+
+  # Runs a successful compact exchange and its confirmation, and returns the
+  # binding the final phase reserves against.
+  defp confirm_direct_compact(session, peer, binding, lifecycle) do
+    control_ref = make_ref()
+
+    assert {:ok, %Capability{} = capability} =
+             UpstreamWebsocketSession.reserve_compaction(
+               session,
+               :compact,
+               binding,
+               control_ref,
+               System.system_time(:millisecond)
+             )
+
+    assert :ok =
+             UpstreamWebsocketSession.mark_compaction_accounting_started(
+               session,
+               capability,
+               System.system_time(:millisecond)
+             )
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, %{
+               raw_websocket_request(peer.url, self())
+               | native_compaction_capability: capability,
+                 expected_connection_lifecycle: lifecycle
+             })
+
+    digest = :crypto.hash(:sha256, "synthetic-clear-reason-compaction-item")
+
+    confirmation = %Confirmation{
+      source_phase: :compact,
+      source_control_ref: control_ref,
+      binding: %{binding | compaction_item_digest: digest}
+    }
+
+    assert :ok =
+             UpstreamWebsocketSession.acknowledge_compact_finalization(
+               session,
+               {:success, digest, confirmation, System.system_time(:millisecond) + 30_000}
+             )
+
+    assert :pending_final = UpstreamWebsocketSession.compaction_admission_phase(session)
+
+    %{
+      binding
+      | window_digest: :crypto.hash(:sha256, "clear-reason-next-window"),
+        context_digest: :crypto.hash(:sha256, "clear-reason-next-context"),
+        window_number: binding.window_number + 1,
+        compaction_item_digest: digest
+    }
+  end
+
+  defp attach_direct_admission_clear_observer(lifecycle_id) do
+    handler_id = "direct-admission-clear-reason-#{System.unique_integer([:positive])}"
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :native_compaction, :lifecycle],
+        &__MODULE__.forward_direct_admission_clear/4,
+        %{test: self(), lifecycle_id: lifecycle_id}
+      )
+  end
+
+  @doc false
+  # A clear of an admission that an earlier clear already removed carries no
+  # lifecycle id; the module is synchronous, so such a clear can only come from
+  # the session under test and is forwarded too.
+  def forward_direct_admission_clear(
+        _event,
+        _measurements,
+        %{operation: :clear, native_lifecycle_id: observed, topology: :direct} = observation,
+        %{test: test, lifecycle_id: lifecycle_id}
+      )
+      when observed in [lifecycle_id, nil],
+      do: send(test, {:direct_admission_clear, observation.reason})
+
+  def forward_direct_admission_clear(_event, _measurements, _observation, _config), do: :ok
+
+  defp drain_direct_admission_clear_reasons(reasons \\ []) do
+    receive do
+      {:direct_admission_clear, reason} -> drain_direct_admission_clear_reasons([reason | reasons])
+    after
+      0 -> Enum.reverse(reasons)
+    end
+  end
 
   defp attach_native_compaction_observer do
     handler_id = "direct-native-compaction-#{System.unique_integer([:positive])}"

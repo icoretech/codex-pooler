@@ -591,8 +591,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   def handle_call({:acknowledge_final_response, :failure}, _from, state),
     do: {:reply, :ok, clear_admission(state, :final_failure)}
 
+  # The explicit clear control: the runtime rejected the request the
+  # admission was reserved for (`Service.clear_native_compaction_admission`).
   def handle_call(:clear_compaction_admission, _from, state),
-    do: {:reply, :ok, clear_admission(state)}
+    do: {:reply, :ok, clear_admission(state, :request_rejected)}
 
   def handle_call({:clear_compaction_admission, %Capability{} = capability}, _from, state) do
     case NativeCompactionAdmission.clear_owned(admission_state(state), capability) do
@@ -985,7 +987,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
         state =
           state
-          |> clear_admission()
+          |> clear_admission(:send_failure)
           |> Map.put(:transport_failure_phase, :send_payload)
           |> Map.put(:transport_failure_source, :payload_send_error)
 
@@ -1093,11 +1095,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
            forwarded_owner_send_handoff: nil
          }
        ) do
-    if expected_lifecycle == connection_lifecycle_state(state) and
-         FirstCompactCollection.valid?(provenance) do
-      {:ok, state, {:first_full_history_compact, provenance}}
-    else
-      {:error, clear_admission(state, :request_rejected)}
+    cond do
+      expected_lifecycle != connection_lifecycle_state(state) ->
+        {:error, clear_admission(state, :stale_capability)}
+
+      FirstCompactCollection.valid?(provenance) ->
+        {:ok, state, {:first_full_history_compact, provenance}}
+
+      true ->
+        {:error, clear_admission(state, :invalid_input)}
     end
   end
 
@@ -1145,7 +1151,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp finalize_consumed_request(state, {:ok, _result}, :compact, _request) do
     case NativeCompactionAdmission.record_compact_collected(admission_state(state)) do
       {:ok, admission} -> put_admission(state, admission)
-      {:error, _reason} -> clear_admission(state)
+      {:error, reason} -> clear_admission(state, reason)
     end
   end
 
@@ -1173,14 +1179,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
            provenance
          ) do
       {:ok, admission} -> put_admission(state, admission)
-      {:error, _reason} -> clear_admission(state)
+      {:error, reason} -> clear_admission(state, collection_clear_reason(reason))
       {:error, _reason, admission} -> put_admission(state, admission)
     end
   end
 
-  defp finalize_consumed_request(state, {:error, _result}, phase, _request)
-       when phase in [:compact, :final],
-       do: clear_admission(state)
+  defp finalize_consumed_request(state, {:error, _result}, :compact, _request),
+    do: clear_admission(state, :compact_failure)
+
+  defp finalize_consumed_request(state, {:error, _result}, :final, _request),
+    do: clear_admission(state, :final_failure)
 
   defp finalize_consumed_request(
          state,
@@ -1188,9 +1196,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          {:first_full_history_compact, %FirstCompactCollection{}},
          _request
        ),
-       do: clear_admission(state)
+       do: clear_admission(state, :compact_failure)
 
   defp finalize_consumed_request(state, _result, nil, _request), do: state
+
+  defp collection_clear_reason(:invalid_provenance), do: :invalid_input
+  defp collection_clear_reason(reason), do: reason
 
   defp maybe_record_successful_serving_mode(
          %{conn: _conn} = state,
@@ -2682,7 +2693,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
-  defp clear_admission(state, reason \\ :request_rejected) do
+  # No default reason: every clear names its cause, so a lifecycle `:clear`
+  # observation never reports a request rejection that did not happen
+  # (findings#258 rows 258-50/258-60).
+  defp clear_admission(state, reason) do
     next =
       state
       |> Map.delete(:native_compaction_admission)
