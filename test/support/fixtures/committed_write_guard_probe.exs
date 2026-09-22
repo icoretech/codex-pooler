@@ -170,6 +170,27 @@ defmodule CodexPooler.CommittedWriteGuardProbe.SandboxedCaseTest do
   end
 end
 
+defmodule CodexPooler.CommittedWriteGuardProbe.TimestampChangeTest do
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.UnboxedFixture
+
+  # Two committed timestamp-only changes the guard must tell apart: one that names an event, and
+  # one that is bookkeeping. Neither changes a row count, so only the content comparison can see
+  # either of them.
+  test "completes the committed bootstrap singleton and never restores it" do
+    run_unboxed(fn ->
+      Repo.query!("UPDATE platform_bootstrap_state SET completed_at = now() WHERE status = 'pending'")
+    end)
+  end
+
+  # `updated_at` alone: no restore is registered, because the guard is documented not to report it
+  # and nothing in the suite reads it.
+  test "bumps only the committed instance settings updated_at" do
+    run_unboxed(fn -> Repo.query!("UPDATE instance_settings SET updated_at = now()") end)
+  end
+end
+
 defmodule CodexPooler.CommittedWriteGuardProbe.AutoModeTest do
   use ExUnit.Case, async: false
   use CodexPooler.CommittedWriteGuard

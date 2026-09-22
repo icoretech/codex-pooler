@@ -606,15 +606,13 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
   defp cleanup_fixture_owner_graph!(%{created_owner?: false}), do: :ok
 
   defp cleanup_fixture_owner_graph!(%{created_owner?: true, owner_id: owner_id}) do
-    {deleted_bootstrap_state_count, _nil} =
-      Repo.delete_all(
-        from state in PlatformBootstrapState,
-          where: state.owner_user_id == ^owner_id
-      )
-
-    if deleted_bootstrap_state_count == 1 do
-      Repo.insert!(%PlatformBootstrapState{singleton: true, status: "pending"})
-    end
+    # Restored in place, the way `AccountsFixtures.delete_user_graph!/1` does it: deleting the
+    # committed singleton and inserting another one leaves a row with a different `created_at`,
+    # which is a committed change no later test puts back.
+    Repo.update_all(
+      from(state in PlatformBootstrapState, where: state.owner_user_id == ^owner_id),
+      set: [status: "pending", owner_user_id: nil, completed_at: nil]
+    )
 
     Repo.delete_all(from event in AuditEvent, where: event.actor_user_id == ^owner_id)
     Repo.delete_all(from membership in Membership, where: membership.user_id == ^owner_id)

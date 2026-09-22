@@ -9,8 +9,12 @@ defmodule CodexPooler.CommittedWriteGuard do
   Every table of the schema is watched, so rows no user path reaches, such as an identity created
   without a creator or a pricing snapshot, count as much as an owner's graph. Every watched
   table is also compared by normalized content, so updates that nothing puts back fail even
-  when row counts stay constant. Timestamp-typed columns are excluded from that comparison;
-  `lock_version` remains included.
+  when row counts stay constant. Every column is compared, `lock_version` and the timestamps that
+  carry meaning (`platform_bootstrap_state.completed_at`, `openai_status_feed_states.last_*_at`)
+  included; only `updated_at` is excluded, as bookkeeping a restore through the domain API
+  rewrites without changing what the row says. Comparing the timestamps costs nothing: 8.9 ms
+  against 9.5 ms p50 for the same query without them (n=200 each, `SAMPLES=200 mix run
+  --no-start` over this database's 67 base tables).
 
   ## Cost on the sandboxed path
 
@@ -84,8 +88,12 @@ defmodule CodexPooler.CommittedWriteGuard do
   # one is exactly the findings#188 failure.
   @harness_tables []
 
-  # Columns a restore through the domain API rewrites without changing what the row says.
-  @bookkeeping_columns []
+  # Columns a restore through the domain API rewrites without changing what the row says. Only
+  # `updated_at` qualifies: every other timestamp column names an event, so a test that moves one
+  # and leaves it has changed the committed state. A restore through the domain API also bumps
+  # `lock_version`, which is compared, so excluding `updated_at` spares only a raw restore that
+  # puts the content back without the bookkeeping.
+  @bookkeeping_columns ["updated_at"]
 
   @connection_keys [
     :hostname,
@@ -339,8 +347,8 @@ defmodule CodexPooler.CommittedWriteGuard do
     conn
   end
 
-  # Every table is compared by normalized row content, excluding timestamp-typed columns.
-  # lock_version remains included.
+  # Every table is compared by normalized row content, excluding only `@bookkeeping_columns`.
+  # `lock_version` and every timestamp that names an event remain included.
   # This catches updates to non-singleton rows as well as singleton state changes.
   defp watched_tables!(conn) do
     %Postgrex.Result{rows: rows} =
@@ -351,7 +359,7 @@ defmodule CodexPooler.CommittedWriteGuard do
                bool_or(c.column_name = 'singleton'),
                coalesce(
                  array_agg(c.column_name::text ORDER BY c.column_name)
-                   FILTER (WHERE c.data_type LIKE 'timestamp%' OR c.column_name = ANY ($1)),
+                   FILTER (WHERE c.column_name = ANY ($1)),
                  ARRAY[]::text[]
                )
         FROM information_schema.tables t

@@ -36,6 +36,8 @@ defmodule CodexPooler.CommittedWriteGuardTest do
              "test commits an identity and registers its removal first" => {"passed", "none", []},
              "test commits through a connection it starts with DBConnection.start_link/2" => {"failed", "during", ["instance_presences"]},
              "test updates the committed instance settings singleton and never restores it" => {"failed", "during", ["instance_settings"]},
+             "test completes the committed bootstrap singleton and never restores it" => {"failed", "during", ["platform_bootstrap_state"]},
+             "test bumps only the committed instance settings updated_at" => {"passed", "none", []},
              "test leaves a pricing snapshot behind in auto mode" => {"failed", "during", ["pricing_snapshots"]},
              "test commits an identity without the guard" => {"passed", "none", []},
              "test starts after rows an unguarded test committed" => {"failed", "before", ["upstream_identities"]},
@@ -44,7 +46,7 @@ defmodule CodexPooler.CommittedWriteGuardTest do
            },
            probe.output
 
-    assert probe.summary == %{"stage" => "probe", "total" => 11, "failures" => 6}, probe.output
+    assert probe.summary == %{"stage" => "probe", "total" => 13, "failures" => 7}, probe.output
 
     assert probe.output =~
              ~r/committed rows changed during .*test fails in its body after leaking a committed identity.*\n  upstream_identities: \d+ -> \d+ \(\+1\)/,
@@ -106,6 +108,10 @@ defmodule CodexPooler.CommittedWriteGuardTest do
         "UPDATE instance_settings SET metadata = metadata - 'committed_write_guard_probe' " <>
           "WHERE metadata ? 'committed_write_guard_probe'"
       )
+
+      # Only a bootstrap this probe completed: a row a real bootstrap test left completed carries
+      # another status and is not touched.
+      Repo.query!("UPDATE platform_bootstrap_state SET completed_at = NULL WHERE status = 'pending'")
     end)
 
     :ok

@@ -731,15 +731,13 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
 
   defp cleanup_unboxed_model_serving_fixture!(fixture) do
     Sandbox.unboxed_run(Repo, fn ->
-      {deleted_bootstrap_state_count, _nil} =
-        Repo.delete_all(
-          from state in PlatformBootstrapState,
-            where: state.owner_user_id == ^fixture.owner.id
-        )
-
-      if deleted_bootstrap_state_count == 1 do
-        Repo.insert!(%PlatformBootstrapState{singleton: true, status: "pending"})
-      end
+      # Restored in place, the way `AccountsFixtures.delete_user_graph!/1` does it: deleting the
+      # committed singleton and inserting another one leaves a row with a different `created_at`,
+      # which is a committed change no later test puts back.
+      Repo.update_all(
+        from(state in PlatformBootstrapState, where: state.owner_user_id == ^fixture.owner.id),
+        set: [status: "pending", owner_user_id: nil, completed_at: nil]
+      )
 
       CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
