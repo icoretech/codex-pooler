@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
   alias CodexPooler.Access
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
 
   alias CodexPooler.Gateway.Persistence.{
@@ -27,6 +28,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPoolerWeb.CodexResponsesSocket
+
+  # Detection budget for a server-side connection teardown the test only
+  # observes, never a scenario timeout.
+  @connection_shutdown_timeout_ms 15_000
 
   @tag :bridge_ring
   test "websocket response dispatch keeps DB-backed sticky affinity for a persisted session" do
@@ -1414,6 +1419,174 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
 
     assert [%BridgeOwnerLease{owner_instance_id: "node-b", status: "active"}] =
              Repo.all(from lease in BridgeOwnerLease, where: lease.codex_session_id == ^replacement.id)
+  end
+
+  # The released Codex client (0.155.1, observed on the wire) never sends
+  # `x-codex-turn-state` on a websocket upgrade: that token is server-issued,
+  # and every connection of one thread carries the same `session-id`,
+  # `thread-id` and `x-codex-window-id`. The Pooler still issues a turn state
+  # per upgrade, and that issued value must not outrank the window when the
+  # session is keyed, or the websocket loses the lease-expiry recreation the
+  # HTTP transport has (findings#255). A reconnect while the lease is live
+  # rejoining the same session is pinned by the ephemeral fork test in
+  # `handshake_test.exs`.
+  @tag :websocket_window_session_key
+  test "released-client websocket reconnect on one window recreates the window session after lease expiry" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    thread = "synthetic-thread-#{System.unique_integer([:positive])}"
+    window = thread <> ":0"
+    window_key = "x-codex-window-id:" <> Base.encode16(:crypto.hash(:sha256, window), case: :lower)
+
+    first = released_client_websocket_turn!(port, setup, thread, window)
+    # The assignment is bound in the same transaction that renews the owner
+    # lease for this turn, so once it is visible nothing of this turn renews
+    # the lease again.
+    first_session = await_session_assignment!(first.request_metadata["codex_session_id"])
+    assert first_session.session_key == window_key
+    assert first_session.pool_upstream_assignment_id == setup.assignment.id
+
+    # The downstream is gone; let the owner lease lapse as if the idle window
+    # had elapsed.
+    expired_at = DateTime.add(DateTime.utc_now(), -30, :second) |> DateTime.truncate(:microsecond)
+
+    first_session
+    |> Ecto.Changeset.change(%{owner_lease_expires_at: expired_at})
+    |> Repo.update!()
+
+    recreated = released_client_websocket_turn!(port, setup, thread, window)
+    recreated_session = await_session_assignment!(recreated.request_metadata["codex_session_id"])
+
+    refute recreated_session.id == first_session.id
+    assert recreated_session.session_key == window_key
+    assert Repo.get!(CodexSession, first_session.id).status == "closed"
+  end
+
+  @tag :websocket_window_session_key
+  test "a turn state the client sends on the websocket upgrade still keys the session ahead of the window" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    thread = "synthetic-thread-#{System.unique_integer([:positive])}"
+    client_turn_state = "synthetic-client-turn-state-#{System.unique_integer([:positive])}"
+
+    request =
+      released_client_websocket_turn!(port, setup, thread, thread <> ":0", [
+        {"x-codex-turn-state", client_turn_state}
+      ])
+
+    session = Repo.get!(CodexSession, request.request_metadata["codex_session_id"])
+
+    assert session.session_key ==
+             "x-codex-turn-state:" <> Base.encode16(:crypto.hash(:sha256, client_turn_state), case: :lower)
+  end
+
+  defp released_client_websocket_turn!(port, setup, thread, window, extra_headers \\ []) do
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
+
+    headers =
+      [
+        {"authorization", setup.authorization},
+        {"session-id", thread},
+        {"thread-id", thread},
+        {"x-client-request-id", thread},
+        {"x-codex-window-id", window}
+      ] ++ extra_headers
+
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, "/backend-api/codex/responses", headers)
+    {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
+    {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
+    turn_id = Ecto.UUID.generate()
+
+    try do
+      payload =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "prompt_cache_key" => thread,
+          "input" => native_text_input("synthetic window reconnect"),
+          "stream" => true,
+          "client_metadata" => %{
+            "session_id" => thread,
+            "thread_id" => thread,
+            "turn_id" => turn_id,
+            "x-codex-window-id" => window,
+            "x-codex-turn-metadata" =>
+              CodexPooler.JSON.encode!(%{
+                "session_id" => thread,
+                "thread_id" => thread,
+                "turn_id" => turn_id,
+                "window_id" => window,
+                "window_number" => 0,
+                "request_kind" => "turn"
+              })
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert CodexPooler.JSON.decode!(frame)["type"] == "response.completed"
+
+      assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                     @connection_shutdown_timeout_ms
+    after
+      Mint.HTTP.close(conn)
+    end
+
+    Repo.one!(
+      from request in Request,
+        where: request.pool_id == ^setup.pool.id,
+        order_by: [desc: request.admitted_at],
+        limit: 1
+    )
+  end
+
+  # The response task binds the session's assignment after the request row is
+  # finalized, so `request_finalized` does not order it; poll the row.
+  defp await_session_assignment!(session_id, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + @connection_shutdown_timeout_ms
+    session = Repo.get!(CodexSession, session_id)
+
+    cond do
+      is_binary(session.pool_upstream_assignment_id) ->
+        session
+
+      System.monotonic_time(:millisecond) < deadline ->
+        receive do
+        after
+          10 -> await_session_assignment!(session_id, deadline)
+        end
+
+      true ->
+        flunk("expected the websocket turn to bind its codex session to an assignment")
+    end
   end
 
   defp mark_pinned_assignment_reauth_required!(setup) do

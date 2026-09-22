@@ -32,7 +32,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     :request_claim_key,
     :replay_claim_digest,
     :authenticated_owner_attach,
-    upstream_previous_response_id?: false
+    upstream_previous_response_id?: false,
+    pooler_issued_turn_state?: false
   ]
 
   @type t :: %__MODULE__{
@@ -54,7 +55,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
           request_claim_key: String.t() | nil,
           replay_claim_digest: <<_::256>> | nil,
           authenticated_owner_attach: boolean(),
-          upstream_previous_response_id?: boolean()
+          upstream_previous_response_id?: boolean(),
+          pooler_issued_turn_state?: boolean()
         }
 
   @spec build(map() | keyword()) :: t()
@@ -79,15 +81,25 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       request_claim_key: request_claim_key(Map.get(opts, :request_claim_key)),
       replay_claim_digest: digest(Map.get(opts, :replay_claim_digest)),
       authenticated_owner_attach: Map.get(opts, :authenticated_owner_attach, false) == true,
-      upstream_previous_response_id?: false
+      upstream_previous_response_id?: false,
+      pooler_issued_turn_state?: false
     }
   end
 
+  # `pooler_issued_turn_state?` marks an `accepted_turn_state` the Pooler
+  # minted for a websocket upgrade that carried none. The released Codex client
+  # never sends that token on an upgrade (it is server-issued), so the issued
+  # value names the connection, not the client's continuity, and must not
+  # outrank the window when the session is keyed. Any other turn state put
+  # later comes from the client's own frame, so an update that replaces
+  # `accepted_turn_state` with a different value and does not restate the
+  # marker clears it; restating the same value keeps it.
   @spec update(t(), map() | keyword()) :: t()
   def update(%__MODULE__{} = continuity, updates) do
     updates
     |> Map.new()
     |> Map.drop([:codex_turn_id])
+    |> clear_issued_turn_state_marker(continuity)
     |> Normalization.normalize_optional_update(
       :bridge_owner_lease_ttl_seconds,
       &Normalization.optional_positive_integer/1
@@ -102,8 +114,20 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     |> Normalization.normalize_optional_update(:request_claim_key, &request_claim_key/1)
     |> Normalization.normalize_optional_update(:replay_claim_digest, &digest/1)
     |> Normalization.normalize_optional_update(:upstream_previous_response_id?, &(&1 == true))
+    |> Normalization.normalize_optional_update(:pooler_issued_turn_state?, &(&1 == true))
     |> then(&struct!(continuity, &1))
   end
+
+  defp clear_issued_turn_state_marker(%{pooler_issued_turn_state?: _marker} = updates, _continuity),
+    do: updates
+
+  defp clear_issued_turn_state_marker(%{accepted_turn_state: value} = updates, %__MODULE__{accepted_turn_state: value}),
+    do: updates
+
+  defp clear_issued_turn_state_marker(%{accepted_turn_state: _other} = updates, _continuity),
+    do: Map.put(updates, :pooler_issued_turn_state?, false)
+
+  defp clear_issued_turn_state_marker(updates, _continuity), do: updates
 
   @spec session_header_source(term()) :: String.t() | nil
   def session_header_source(value) when is_atom(value) do

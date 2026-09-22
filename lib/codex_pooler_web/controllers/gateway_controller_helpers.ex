@@ -184,6 +184,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
           conn()
   def upgrade_responses_websocket(conn, auth, opts \\ []) do
     turn_state = websocket_turn_state(conn)
+    continuity_turn_state = websocket_continuity_turn_state(opts, turn_state)
 
     request_options =
       conn
@@ -191,7 +192,10 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       |> RequestOptions.for_websocket()
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
       |> maybe_put_websocket_openai_compatibility(opts)
-      |> RequestOptions.put_continuity(accepted_turn_state: websocket_continuity_turn_state(opts, turn_state))
+      |> RequestOptions.put_continuity(
+        accepted_turn_state: continuity_turn_state,
+        pooler_issued_turn_state?: pooler_issued_turn_state?(conn, turn_state, continuity_turn_state)
+      )
       |> maybe_mark_websocket_openai_origin(opts)
 
     case maybe_put_websocket_models_etag(conn, auth, request_options) do
@@ -346,7 +350,14 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     |> blank_to_nil()
   end
 
+  # The released Codex client never sends `x-codex-turn-state` on an upgrade:
+  # the token is server-issued, so a websocket upgrade without one gets a fresh
+  # value echoed on the upgrade response (findings#255).
   defp websocket_turn_state(conn), do: accepted_turn_state(conn) || Ecto.UUID.generate()
+
+  defp pooler_issued_turn_state?(conn, issued_turn_state, continuity_turn_state) do
+    continuity_turn_state == issued_turn_state and is_nil(accepted_turn_state(conn))
+  end
 
   defp websocket_continuity_turn_state(opts, turn_state) do
     case Keyword.fetch(opts, :accepted_turn_state) do

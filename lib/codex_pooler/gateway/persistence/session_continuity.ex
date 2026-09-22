@@ -714,13 +714,32 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     end
   end
 
+  # A turn state the client sent outranks every other identity. One the Pooler
+  # issued for a websocket upgrade that carried none only names that
+  # connection, so the client's window or session header outranks it and a
+  # reconnect on the same window keys the same session, as HTTP does
+  # (findings#255); it still keys a connection that sent no identity at all.
   defp session_key(%RequestOptions{} = request_options) do
     request_options
-    |> turn_state_session_key()
+    |> client_turn_state_session_key()
     |> Kernel.||(session_header_session_key(request_options))
+    |> Kernel.||(issued_turn_state_session_key(request_options))
     |> Kernel.||(request_options.continuity.session_key |> blank_to_nil())
     |> Kernel.||(Ecto.UUID.generate())
   end
+
+  @spec client_turn_state_session_key(RequestOptions.t()) :: String.t() | nil
+  defp client_turn_state_session_key(%RequestOptions{continuity: %{pooler_issued_turn_state?: true}}),
+    do: nil
+
+  defp client_turn_state_session_key(%RequestOptions{} = request_options),
+    do: turn_state_session_key(request_options)
+
+  @spec issued_turn_state_session_key(RequestOptions.t()) :: String.t() | nil
+  defp issued_turn_state_session_key(%RequestOptions{continuity: %{pooler_issued_turn_state?: true}} = request_options),
+    do: turn_state_session_key(request_options)
+
+  defp issued_turn_state_session_key(%RequestOptions{}), do: nil
 
   @spec turn_state_session_key(RequestOptions.t()) :: String.t() | nil
   defp turn_state_session_key(%RequestOptions{continuity: %{accepted_turn_state: turn_state}}) do

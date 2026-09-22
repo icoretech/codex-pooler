@@ -2589,6 +2589,30 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "section updaters" do
+    # findings#255: the marker names a turn state the Pooler issued for a
+    # websocket upgrade; a different turn state put later comes from the
+    # client's frame and must not inherit it.
+    test "keeps the issued turn state marker only while the issued value stands" do
+      issued =
+        %{}
+        |> RequestOptions.for_websocket()
+        |> RequestOptions.put_continuity(accepted_turn_state: "issued-turn-state", pooler_issued_turn_state?: true)
+
+      assert issued.continuity.pooler_issued_turn_state? == true
+
+      restated = RequestOptions.put_continuity(issued, accepted_turn_state: "issued-turn-state")
+      assert restated.continuity.pooler_issued_turn_state? == true
+
+      unrelated = RequestOptions.put_continuity(issued, previous_response_id: "resp_example")
+      assert unrelated.continuity.pooler_issued_turn_state? == true
+
+      replaced = RequestOptions.put_continuity(issued, accepted_turn_state: "client-turn-state")
+      assert replaced.continuity.accepted_turn_state == "client-turn-state"
+      assert replaced.continuity.pooler_issued_turn_state? == false
+
+      assert RequestOptions.for_websocket(%{accepted_turn_state: "client-turn-state"}).continuity.pooler_issued_turn_state? == false
+    end
+
     # The socket drain budgets are transport knobs so tests can shorten the
     # post-cleanup response task drains without changing production defaults;
     # only positive integers are carried, anything else falls back to nil.
