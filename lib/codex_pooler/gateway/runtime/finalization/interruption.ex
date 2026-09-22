@@ -84,7 +84,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       case direct_interrupt_clause(session, request, receipt) do
         :matched ->
           request = mark_pre_attempt_owner_drain(request, receipt, reason)
-          interrupt_direct_locked(session, request, reason)
+          interrupt_direct_locked(:session, session, request, reason)
+
+        :matched_superseded ->
+          log_direct_interrupt_superseded(receipt, reason)
+          request = mark_pre_attempt_owner_drain(request, receipt, reason)
+          interrupt_direct_locked(:request, session, request, reason)
 
         {:not_matched, clause} ->
           log_direct_interrupt_not_matched(receipt, reason, clause)
@@ -118,11 +123,27 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       request.status not in ["accepted", "in_progress"] ->
         {:not_matched, "request_already_terminal"}
 
-      replacement_turn_active?(receipt.session_id, receipt.request_id) ->
-        {:not_matched, "replacement_turn_active"}
-
       true ->
-        pre_attempt_owner_clause(session, request, receipt)
+        admitted_direct_interrupt_scope(session, request, receipt)
+    end
+  end
+
+  # A turn of the same session that is already `in_progress` is a successor,
+  # not a reason to abandon this request. Refusing the whole finalization left
+  # the interrupted request `in_progress` with its reservation outstanding and
+  # nothing else ever settled it, because every other settler is gated on the
+  # same session state (icoretech/codex-pooler-findings#252). The successor now
+  # narrows the finalization to what the refusal was always protecting the
+  # session from -- the session row itself and any turn that is not this
+  # request's -- while this request, its own turn and its own attempt settle
+  # exactly as they do without a successor. The provenance clauses still run
+  # first in both scopes, so a receipt that cannot prove its owner settles
+  # nothing either way.
+  defp admitted_direct_interrupt_scope(session, request, receipt) do
+    with :matched <- pre_attempt_owner_clause(session, request, receipt) do
+      if replacement_turn_active?(receipt.session_id, receipt.request_id),
+        do: :matched_superseded,
+        else: :matched
     end
   end
 
@@ -204,8 +225,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   @routine_not_matched_clauses [
     "missing_session",
     "missing_request",
-    "request_already_terminal",
-    "replacement_turn_active"
+    "request_already_terminal"
   ]
 
   defp log_direct_interrupt_not_matched(receipt, reason, clause) do
@@ -219,6 +239,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     if clause in @routine_not_matched_clauses,
       do: Logger.debug(message),
       else: Logger.info(message)
+
+    :ok
+  end
+
+  # An admitted finalization that had to narrow its scope. It is not a refusal,
+  # so it does not belong in the gate's refusal line, and it is the only record
+  # that this request settled while its session kept serving a successor. Every
+  # value is a trusted internal correlator or a fixed internal token.
+  defp log_direct_interrupt_superseded(receipt, reason) do
+    Logger.debug(
+      "websocket direct interrupt narrowed to the request " <>
+        "codex_session_id=#{safe_log_value(Map.get(receipt, :session_id))} " <>
+        "request_id=#{safe_log_value(Map.get(receipt, :request_id))} " <>
+        "interrupt_reason=#{safe_log_value(reason)} " <>
+        "interrupt_scope=replacement_turn_active"
+    )
 
     :ok
   end
@@ -251,7 +287,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp mark_pre_attempt_owner_drain(request, _receipt, _reason), do: request
 
-  defp interrupt_direct_locked(session, request, reason) do
+  defp interrupt_direct_locked(scope, session, request, reason) do
     turn = Repo.get_by(CodexTurn, request_id: request.id)
     attempt = latest_attempt_for_update(request.id)
 
@@ -260,7 +296,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         [marker]
 
       :not_recovered ->
-        do_interrupt_direct_locked(session, request, turn, attempt, reason)
+        do_interrupt_direct_locked(scope, session, request, turn, attempt, reason)
     end
   end
 
@@ -273,7 +309,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp recover_proven_dead_direct_request(_request, _attempt), do: :not_recovered
 
-  defp do_interrupt_direct_locked(session, request, turn, attempt, reason) do
+  defp do_interrupt_direct_locked(scope, session, request, turn, attempt, reason) do
     case {request.status, turn, attempt} do
       {"accepted", nil, _} ->
         request
@@ -306,16 +342,48 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       _ ->
         opts = RequestOptions.for_websocket(%{request_id: request.correlation_id, reason: reason})
+        interrupt_direct_attempted_turn(scope, session, request, opts, reason)
+    end
+  end
 
-        case interrupt_codex_turn(session, opts) do
-          {:ok, result} ->
-            Map.get(result, :after_commit_markers, [])
+  defp interrupt_direct_attempted_turn(:session, session, _request, opts, _reason) do
+    case interrupt_codex_turn(session, opts) do
+      {:ok, result} ->
+        Map.get(result, :after_commit_markers, [])
 
-          {:error, {:deferred_after_commit, public_error, markers}} ->
-            Repo.rollback(public_error: public_error, interrupted_outcomes: markers)
+      {:error, {:deferred_after_commit, public_error, markers}} ->
+        Repo.rollback(public_error: public_error, interrupted_outcomes: markers)
 
-          {:error, error} ->
-            Repo.rollback(error)
+      {:error, error} ->
+        Repo.rollback(error)
+    end
+  end
+
+  # The request-scoped half of `interrupt_selected_session_turn/2`: the same
+  # turn resolution and the same writes to this request, its attempt and its
+  # turn, without the session row update that the active successor still owns.
+  # The turn is named by the receipt's own request id, never by a selector that
+  # could widen onto the successor's turn.
+  defp interrupt_direct_attempted_turn(:request, _session, request, opts, reason) do
+    now = now()
+
+    case Repo.get_by(CodexTurn, request_id: request.id) do
+      nil ->
+        []
+
+      %CodexTurn{} = turn ->
+        case preserve_succeeded_turn(turn, now) do
+          :preserved ->
+            []
+
+          :continue ->
+            # `interrupt_direct_request/2` hands these to
+            # `finalize_marker_transaction/1`, which defers them past the commit
+            # exactly as `finalize_transaction/1` does for the session scope.
+            {_interrupted_turn_count, interrupted_outcomes} =
+              interrupt_selected_turn(turn, opts, reason, now, Repo.in_transaction?())
+
+            interrupted_outcomes
         end
     end
   end
