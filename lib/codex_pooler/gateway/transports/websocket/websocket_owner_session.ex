@@ -1571,9 +1571,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
             |> Map.put(:downstream, nil)
             |> reconcile_disconnected_provisional()
 
+          # The client left: after a post-turn compaction the admission is
+          # still `pending_final`, and its clear is a detach, not a rejected
+          # request (findings#258 row 258-23).
           state =
             state
-            |> clear_native_compaction_admission()
+            |> clear_native_compaction_admission(:downstream_detached)
             |> maybe_settle_cancelled_without_pending_handoff(:client_disconnected)
 
           reply_or_retire(state, :ok)
@@ -1607,7 +1610,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           |> Map.put(:downstream, nil)
 
         state =
-          state |> clear_native_compaction_admission() |> settle_cancelled_active_turn(reason)
+          state
+          |> clear_native_compaction_admission(:downstream_cancelled)
+          |> settle_cancelled_active_turn(reason)
 
         reply_or_retire(state, :ok)
 

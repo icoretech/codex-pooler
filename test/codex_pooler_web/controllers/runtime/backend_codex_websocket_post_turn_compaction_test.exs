@@ -4,12 +4,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
   @moduletag capture_log: true
 
   import Ecto.Query
+  import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [cleanup_local_owner_sessions: 0]
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Persistence.CodexTurn
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   # Codex rust-v0.156.0 (openai/codex#46541) runs an opt-in compaction right
@@ -127,6 +129,87 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
         Mint.HTTP.close(conn)
       end
     end
+  end
+
+  # After a post-turn compaction the owner keeps the native compaction
+  # admission in `pending_final` for the next turn. The released client then
+  # exits, and the detach clears that admission; its lifecycle observation must
+  # name the detach, not `request_rejected` (findings#258 row 258-23, seen in
+  # every real-client arm of the 0.156.0 post-turn run).
+  test "owner_forwarded socket close after a post-turn compaction clears the admission as a downstream detach" do
+    put_owner_forwarding!(true)
+    compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-post-turn-detach"}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create"}], respond: completed_frames(@anchor_response_id)),
+          FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create", "input.0.type" => "compaction_trigger"}], respond: compaction_frames(compact_item))
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+    {conn, websocket, ref} = post_turn_compacted_socket!(port, setup, "post-turn-detach")
+
+    [session] = Repo.all(from(session in CodexSession, where: session.pool_id == ^setup.pool.id))
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(session.id)
+    # The lifecycle observation is a debug line of the owner module; raise
+    # only that module's level, restored before the next test.
+    on_exit(fn -> Logger.delete_module_level(WebsocketOwnerSession) end)
+    :ok = Logger.put_module_level(WebsocketOwnerSession, :debug)
+
+    log =
+      capture_log([level: :debug], fn ->
+        _websocket = websocket
+        _ref = ref
+        Mint.HTTP.close(conn)
+        await_owner_detached!(owner_pid)
+      end)
+
+    Logger.delete_module_level(WebsocketOwnerSession)
+
+    clears = log |> String.split("\n") |> Enum.filter(&(&1 =~ "native compaction lifecycle" and &1 =~ "operation: :clear"))
+    assert Enum.any?(clears, &(&1 =~ "reason: :downstream_detached" and &1 =~ "phase_from: :pending_final")), inspect(clears)
+    refute Enum.any?(clears, &(&1 =~ "reason: :request_rejected"))
+  end
+
+  defp post_turn_compacted_socket!(port, setup, turn_state) do
+    {conn, websocket, ref, _headers} =
+      public_websocket_connect_with_request_headers!(
+        port,
+        setup,
+        turn_state,
+        "/backend-api/codex/responses",
+        [{"session-id", @session_id}, {"thread-id", @thread_id}, {"x-client-request-id", @thread_id}]
+      )
+
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, turn_frame(setup))
+    {conn, websocket, _created} = public_websocket_receive_text!(conn, websocket, ref)
+    {conn, websocket, _completed} = public_websocket_receive_text!(conn, websocket, ref)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, post_turn_frame(setup))
+    {conn, websocket, _done} = public_websocket_receive_text!(conn, websocket, ref)
+    {conn, websocket, terminal} = public_websocket_receive_text!(conn, websocket, ref)
+    assert %{"type" => "response.completed", "response" => %{"status" => "completed"}} = CodexPooler.JSON.decode!(terminal)
+    {conn, websocket, ref}
+  end
+
+  # The socket detaches from the owner in its terminate callback; the owner's
+  # downstream becomes nil once the detach call ran (authoritative state, no
+  # completion signal to wait on).
+  defp await_owner_detached!(owner_pid) do
+    deadline = System.monotonic_time(:millisecond) + 15_000
+
+    Stream.repeatedly(fn -> :sys.get_state(owner_pid).downstream end)
+    |> Enum.reduce_while(nil, fn
+      nil, _acc ->
+        {:halt, :ok}
+
+      _attached, _acc ->
+        if System.monotonic_time(:millisecond) > deadline, do: flunk("owner never saw the downstream detach")
+        Process.sleep(10)
+        {:cont, nil}
+    end)
   end
 
   defp put_owner_forwarding!(enabled?) do

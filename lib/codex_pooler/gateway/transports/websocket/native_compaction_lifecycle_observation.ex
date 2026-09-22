@@ -33,7 +33,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObse
     :final_failure,
     :compact_failure,
     :send_failure,
-    :caller_exit
+    :caller_exit,
+    :downstream_detached,
+    :downstream_cancelled
   ]
   @phases [
     :ordinary_success,
@@ -78,6 +80,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObse
           | :compact_failure
           | :send_failure
           | :caller_exit
+          | :downstream_detached
+          | :downstream_cancelled
           | :unknown
   @type topology :: :direct | :forwarded | :unknown
   @type t :: %{
