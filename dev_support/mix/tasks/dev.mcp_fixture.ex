@@ -14,6 +14,7 @@ defmodule Mix.Tasks.Dev.McpFixture do
   use Mix.Task
 
   alias CodexPooler.Dev.MCPFixture
+  alias CodexPooler.Dev.QaBackgroundWorkers
 
   @requirements ["app.config"]
   @shortdoc "Manage the reversible local MCP smoke fixture"
@@ -49,9 +50,13 @@ defmodule Mix.Tasks.Dev.McpFixture do
 
   defp maybe_start_application(:status), do: :ok
 
+  # The fixture VM boots the application only to write its lease; Oban queues,
+  # plugins and the stager stay off so it never runs jobs against the database
+  # it leases, and the running instance is verified before any write.
   defp maybe_start_application(_action) do
+    :ok = QaBackgroundWorkers.disable_before_boot!()
     Mix.Task.run("app.start")
-    :ok
+    QaBackgroundWorkers.verify_disabled!()
   end
 
   defp run_action(:acquire, options), do: MCPFixture.acquire(options)

@@ -277,6 +277,29 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
     end
   end
 
+  # The fixture VM boots the application only to write its lease; it must not
+  # also start Oban queues, plugins or the stager against the database it
+  # leases (232-24). `status` never boots the application.
+  test "the Mix task disables background jobs before it boots the application for acquire and release" do
+    CodexPooler.TestAppEnv.restore_on_exit(Oban)
+
+    for action <- ["acquire", "release"] do
+      enabled = Keyword.merge(Application.fetch_env!(:codex_pooler, Oban), queues: [default: 1], plugins: [Oban.Pruner], stager: [interval: 1_000])
+      Application.put_env(:codex_pooler, Oban, enabled)
+
+      assert_raise Mix.Error, "MCP fixture runs only with MIX_ENV=dev", fn -> MCPFixtureTask.run([action]) end
+
+      config = Application.fetch_env!(:codex_pooler, Oban)
+      assert {config[:queues], config[:plugins], config[:stager]} == {false, false, false}, action
+    end
+
+    enabled = Keyword.merge(Application.fetch_env!(:codex_pooler, Oban), queues: [default: 1], plugins: [Oban.Pruner], stager: [interval: 1_000])
+    Application.put_env(:codex_pooler, Oban, enabled)
+
+    assert_raise Mix.Error, "MCP fixture runs only with MIX_ENV=dev", fn -> MCPFixtureTask.run(["status", "--allow-isolated-dev-database"]) end
+    assert Application.fetch_env!(:codex_pooler, Oban) == enabled
+  end
+
   defp fixture_options(path) do
     [environment: :test, allow_test_database: true, receipt_path: path]
   end
