@@ -28,6 +28,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     :owner_instance_id,
     :proxy_instance_id,
     :rejection_stage,
+    :public_code,
     :downstream_epoch
   ]
   @reconnect_event_keys [:reconnect_disposition, :handoff_outcome]
@@ -101,8 +102,16 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     )
   end
 
-  @spec log_replay_rejection(event_metadata(), term(), term()) :: :ok
-  def log_replay_rejection(metadata, stage, reason) do
+  @doc """
+  Logs a websocket replay rejection with its stage and the owner's reason.
+
+  `public_code` is the error code the client actually received, which can
+  differ from the reason (an owner `owner_unavailable` refusal of a recorded
+  turn's resend reaches the client as `duplicate_turn`); like the runtime
+  preflight line, the line carries both (findings#217 row 217-63).
+  """
+  @spec log_replay_rejection(event_metadata(), term(), term(), term()) :: :ok
+  def log_replay_rejection(metadata, stage, reason, public_code \\ nil) do
     case fixed_vocabulary(stage, @replay_rejection_stages) do
       nil ->
         :ok
@@ -112,6 +121,8 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
           metadata
           |> normalize_metadata()
           |> Map.put(:rejection_stage, rejection_stage)
+          |> Map.delete("public_code")
+          |> Map.put(:public_code, public_code)
           |> put_native_reason_code(reason)
 
         log_event(:info, @replay_rejection_message, metadata, reason)
@@ -273,7 +284,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   defp fixed_vocabulary(_value, _vocabulary), do: nil
 
-  defp safe_log_value(key, value) when key in [:error_code, :reason_code, :reason_class],
+  defp safe_log_value(key, value) when key in [:error_code, :reason_code, :reason_class, :public_code],
     do: DiagnosticTaxonomy.identifier(value) || "unknown"
 
   defp safe_log_value(_key, value), do: safe_log_value(value)

@@ -84,6 +84,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
       assert new_error["error"]["code"] == busy_code
       assert new_log =~ "rejection_stage=replay_preflight"
       assert new_log =~ "reason_code=owner_busy"
+      # The line names the code the client received next to the owner's reason
+      # (findings#217 row 217-63).
+      assert new_log =~ "public_code=#{busy_code}"
       refute new_log =~ "reconnect_disposition=identity_rejected"
       refute_received {:duplicate_turn_refused, _stage, _transport}
 
@@ -102,6 +105,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
       assert race_error["status"] == 409
       assert race_error["error"]["code"] == "duplicate_turn"
       assert race_log =~ "reason_code=duplicate_active_turn"
+      assert race_log =~ "public_code=duplicate_turn"
       assert_received {:duplicate_turn_refused, "owner_replay_preflight", "websocket"}
       refute_received {:duplicate_turn_refused, _stage, _transport}
 

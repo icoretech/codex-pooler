@@ -442,7 +442,41 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
 
       assert line =~ "rejection_stage=owner_preflight"
       assert line =~ "reason_code=sha256_"
+      refute line =~ "public_code="
       refute log =~ "malformed provider reason"
+    end
+
+    test "names the code the client received next to the owner's reason, bounded like the reason" do
+      log =
+        capture_lifecycle_log(fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_replay_rejection(
+                     reconnect_metadata("PUBLIC_CODE_PRIVATE_SENTINEL"),
+                     :replay_preflight,
+                     :owner_unavailable,
+                     "duplicate_turn"
+                   )
+
+          assert :ok =
+                   WebsocketConnectionLogger.log_replay_rejection(
+                     reconnect_metadata("PUBLIC_CODE_PRIVATE_SENTINEL"),
+                     :replay_preflight,
+                     :owner_busy,
+                     "malformed public code sentinel"
+                   )
+        end)
+
+      [first, second] =
+        log
+        |> String.split("\n", trim: true)
+        |> Enum.filter(&(&1 =~ WebsocketConnectionLogger.replay_rejection_message()))
+
+      assert first =~ "rejection_stage=replay_preflight"
+      assert first =~ "reason_code=owner_unavailable"
+      assert first =~ "public_code=duplicate_turn"
+      assert second =~ "public_code=sha256_"
+      refute log =~ "malformed public code sentinel"
+      refute log =~ "PUBLIC_CODE_PRIVATE_SENTINEL"
     end
 
     test "emits every fixed reconnect disposition with safe correlators only" do

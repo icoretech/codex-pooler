@@ -2332,8 +2332,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # returns for the identical condition; the two routes used to disagree, and
   # this one answered `400 invalid_request` (findings#168).
   defp reject_deferred_native_compaction(state) do
-    log_replay_rejection(state, :owner_unavailable, :native_compaction_deferral)
-    reject_prepared_response(owner_error(:owner_unavailable), state)
+    refusal = owner_error(:owner_unavailable)
+    log_replay_rejection(state, :owner_unavailable, :native_compaction_deferral, refusal)
+    reject_prepared_response(refusal, state)
   end
 
   defp pending_native_compaction_deferral?(%PreparedWebsocketFrame{
@@ -2491,13 +2492,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp apply_replay_preflight_result({:error, reason}, _prepared, state, intent, _ref) do
-    log_replay_rejection(state, reason, :replay_preflight)
-    reject_prepared_response(owner_replay_refusal(reason, intent), state)
+    refusal = owner_replay_refusal(reason, intent)
+    log_replay_rejection(state, reason, :replay_preflight, refusal)
+    reject_prepared_response(refusal, state)
   end
 
   defp apply_replay_preflight_result(_result, _prepared, state, intent, _ref) do
-    log_replay_rejection(state, :owner_busy, :replay_preflight)
-    reject_prepared_response(owner_replay_refusal(:owner_busy, intent), state)
+    refusal = owner_replay_refusal(:owner_busy, intent)
+    log_replay_rejection(state, :owner_busy, :replay_preflight, refusal)
+    reject_prepared_response(refusal, state)
   end
 
   # A fresh intent without a predecessor lifecycle means the runtime preflight
@@ -2715,9 +2718,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp reject_owner_preflight(reason, state) do
-    log_replay_rejection(state, reason, :owner_preflight)
+    refusal = owner_error(reason)
+    log_replay_rejection(state, reason, :owner_preflight, refusal)
     log_reconnect_disposition(state, :owner_busy)
-    reject_prepared_response(owner_error(reason), state)
+    reject_prepared_response(refusal, state)
   end
 
   # A replay intent reauthorizes the key after the socket's own frame check, so
@@ -2935,11 +2939,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> WebsocketConnectionLogger.log_handoff_outcome(outcome)
   end
 
-  defp log_replay_rejection(state, reason, stage) do
+  defp log_replay_rejection(state, reason, stage, refusal) do
     state
     |> reconnect_log_metadata()
-    |> WebsocketConnectionLogger.log_replay_rejection(stage, reason)
+    |> WebsocketConnectionLogger.log_replay_rejection(stage, reason, refusal_public_code(refusal))
   end
+
+  # The code of the refusal the client receives, for the rejection line
+  # (findings#217 row 217-63).
+  defp refusal_public_code(%{code: code}), do: code
+  defp refusal_public_code(%{"code" => code}), do: code
+  defp refusal_public_code(_refusal), do: nil
 
   defp reconnect_log_metadata(state) do
     state
@@ -3283,11 +3293,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       reason: DiagnosticTaxonomy.identifier(error)
     })
 
-    log_replay_rejection(state, reason, :discarded_submission)
+    public_error = Adapter.websocket_error(error)
+    log_replay_rejection(state, reason, :discarded_submission, public_error["error"])
 
     payload =
-      error
-      |> Adapter.websocket_error()
+      public_error
       |> maybe_put_public_stream_id(discarded_submission_stream_id(prepared))
       |> CodexPooler.JSON.encode!()
 
