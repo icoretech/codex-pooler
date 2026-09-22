@@ -187,6 +187,8 @@ Common upstream states are:
 
 Readiness is intentionally conservative. Missing, stale, unknown, malformed, credential-mismatched, or exhausted quota evidence can keep an account out of routing even when the card still exists and the account is assigned to a Pool. A no-window account is routeable only through the narrow provider-attested state described above.
 
+When every observation of a quota window has gone stale, for example because usage reads keep failing, the card shows the last value reported for the cycle that is still running. An observation whose reset time has already passed describes a cycle that has ended, so it never sets the displayed value while another observation of the same window reports a reset in the future. The scheduled runtime cleanup removes observations whose reset time passed more than 30 days ago, so a window the provider no longer reports eventually leaves the card instead of showing its last value indefinitely. Observations that saved-reset automatic confirmation still references are kept.
+
 ### Provider-Requested Polling Pauses
 
 Codex Pooler reads an account's usage endpoints on a short cycle to keep quota evidence fresh. If the provider answers one of those reads with `429 Too Many Requests` or `503 Service Unavailable` and a `Retry-After` header it can act on, Codex Pooler stops reading that account's usage endpoints until the time the provider named.
