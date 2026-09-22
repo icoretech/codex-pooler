@@ -627,7 +627,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       owner = self()
 
       runtime =
-        start_supervised!({RelayRuntime, enabled: true, role: "worker", start_paused: true, name: {:global, {__MODULE__, make_ref()}}, flush_ms: 60_000, drain_ms: 60_000})
+        start_supervised!({RelayRuntime, enabled: true, role: "worker", start_paused: true, name: :"relay-contract-test-#{System.unique_integer([:positive])}", flush_ms: 60_000, drain_ms: 60_000})
 
       Sandbox.allow(Repo, owner, runtime)
       :ok = GenServer.call(runtime, :activate)

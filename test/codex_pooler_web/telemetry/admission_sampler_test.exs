@@ -322,5 +322,5 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
     |> Map.put(route_class, %{running: running, queued: queued})
   end
 
-  defp unique_name(kind), do: {:global, {kind, System.unique_integer([:positive])}}
+  defp unique_name(kind), do: :"#{kind}-#{System.unique_integer([:positive])}"
 end

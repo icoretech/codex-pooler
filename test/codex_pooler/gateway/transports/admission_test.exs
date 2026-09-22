@@ -152,7 +152,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
   end
 
   test "saturation distinguishes timeout from an unavailable server" do
-    name = {:global, {:blocking_saturation, System.unique_integer([:positive])}}
+    name = :"blocking-saturation-#{System.unique_integer([:positive])}"
     {:ok, _pid} = start_supervised({BlockingSaturationServer, name: name})
 
     assert {:error, :timeout} = Admission.saturation(name, 1)

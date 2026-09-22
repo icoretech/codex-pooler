@@ -528,13 +528,13 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Runtim
   end
 
   defp start_activity_registry! do
-    name = {:global, {__MODULE__, :activity_registry, make_ref()}}
+    name = :"native-compaction-activity-registry-#{System.unique_integer([:positive])}"
     start_supervised!({ActivityRegistry, name: name})
     name
   end
 
   defp start_admission_server! do
-    name = {:global, {__MODULE__, :admission, make_ref()}}
+    name = :"native-compaction-admission-#{System.unique_integer([:positive])}"
     start_supervised!({Admission, name: name})
     name
   end

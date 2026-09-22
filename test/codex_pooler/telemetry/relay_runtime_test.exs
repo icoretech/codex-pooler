@@ -11,7 +11,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
       enabled: true,
       role: "worker",
       start_paused: true,
-      name: {:global, {__MODULE__, make_ref()}},
+      name: :"relay-runtime-test-#{System.unique_integer([:positive])}",
       flush_ms: 60_000,
       drain_ms: 60_000
     ]
@@ -576,7 +576,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
          [
            enabled: true,
            start_paused: true,
-           name: {:global, {__MODULE__, make_ref()}},
+           name: :"relay-runtime-test-#{System.unique_integer([:positive])}",
            cleanup_interval_ms: 1,
            cleanup_fun: fn ->
              attempts = Process.get(:cleanup_attempts, 0) + 1
