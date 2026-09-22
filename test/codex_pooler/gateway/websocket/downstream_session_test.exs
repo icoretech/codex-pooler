@@ -309,6 +309,53 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
     assert Repo.get!(BridgeOwnerLease, fixture.owner_lease.id).status == "active"
   end
 
+  # A client that reconnects while the owner still holds its interrupted
+  # predecessor gets a socket marked as an active-turn reconnect. When the owner
+  # refuses that socket's only frame and the client drops it, the socket never
+  # started a turn and holds no cleanup witness, so its owner-scoped interrupt
+  # can only roll back `stale_owner_cleanup`: routine, logged at info, the
+  # production shape of findings#225 row 225-95 (remote owner, successor
+  # refused `owner_unavailable`, predecessor already settled 499).
+  test "detach of a refused reconnect socket that never started a turn logs its no-op cleanup at info", fixture do
+    predecessor = active_turn_fixture(fixture, "websocket")
+    finalize_turn(predecessor, "failed", "client_disconnected")
+
+    successor_state =
+      fixture.state
+      |> Map.put(:codex_session, fixture.session)
+      |> Map.put(:websocket_owner_active_turn_reconnect?, true)
+
+    log = capture_info_log(fn -> assert :ok = DownstreamSession.cleanup(successor_state) end)
+
+    refute log =~ "[warning]"
+    refute log =~ "websocket interrupt cleanup failed"
+    assert log =~ "[info] websocket interrupt cleanup skipped"
+    assert log =~ "codex_session_id=#{fixture.session.id} cleanup_path=owner_detach reason_code=no_cleanup_witness"
+
+    assert Repo.get!(Request, predecessor.request.id).status == "failed"
+    assert Repo.get!(CodexSession, fixture.session.id).status == "active"
+    assert_lease_preserved!(fixture)
+  end
+
+  # A socket that still tracks a response task of its own but holds no cleanup
+  # witness for it is not that routine shape: the turn it started cannot be
+  # cleaned up from here, so the detach keeps the warning.
+  test "detach of a socket with its own response task but no cleanup witness still warns", fixture do
+    predecessor = active_turn_fixture(fixture, "websocket")
+    finalize_turn(predecessor, "failed", "client_disconnected")
+
+    state =
+      fixture.state
+      |> Map.put(:codex_session, fixture.session)
+      |> Map.put(:tasks, MapSet.new([self()]))
+
+    log = capture_info_log(fn -> assert :ok = DownstreamSession.cleanup(state) end)
+
+    assert log =~ "[warning] websocket interrupt cleanup failed"
+    assert log =~ "codex_session_id=#{fixture.session.id} failure_reason=stale_owner_cleanup cleanup_path=owner_detach"
+    refute log =~ "websocket interrupt cleanup skipped"
+  end
+
   test "successful detach preserves a failed terminal winner and its single settlement",
        fixture do
     turn = active_turn_fixture(fixture, "websocket")

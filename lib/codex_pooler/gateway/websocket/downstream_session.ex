@@ -635,6 +635,12 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   defp recover_leftovers(_result, _state), do: :ok
 
   defp idle_without_cleanup_authority?(state) do
+    no_turn_of_its_own?(state) and Map.get(state, :websocket_owner_active_turn_reconnect?, false) != true
+  end
+
+  # The socket never started a turn: no cleanup witness, no task, no bound
+  # reconnect turn, no handoff and nothing queued or awaiting direct cleanup.
+  defp no_turn_of_its_own?(state) do
     Enum.all?(
       [
         :websocket_owner_cleanup_witness,
@@ -644,7 +650,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
         :public_response_task_pid
       ],
       &is_nil(Map.get(state, &1))
-    ) and Map.get(state, :websocket_owner_active_turn_reconnect?, false) != true and
+    ) and
       MapSet.size(Map.get(state, :tasks, MapSet.new())) == 0 and
       map_size(Map.get(state, :direct_cleanup_contexts, %{})) == 0 and
       map_size(Map.get(state, :direct_cleanup_receipts, %{})) == 0 and
@@ -793,7 +799,28 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     :ok
   end
 
-  defp log_interrupt_failure({:error, reason}, state) do
+  # A socket that reconnected while the owner still held its predecessor, had
+  # its only frame refused and left: the reconnect flag is its only cleanup
+  # authority, it holds no witness, so the owner-scoped interrupt can only roll
+  # back as stale. Nothing of its own was left behind (findings#225, row
+  # 225-95); the owner settles its own turn through its downstream monitor.
+  defp log_interrupt_failure({:error, :stale_owner_cleanup} = result, state) do
+    if no_turn_of_its_own?(state) do
+      Logger.info(
+        "websocket interrupt cleanup skipped " <>
+          "codex_session_id=#{codex_session_id(state)} " <>
+          "cleanup_path=owner_detach reason_code=no_cleanup_witness"
+      )
+
+      :ok
+    else
+      log_interrupt_failure_warning(result, state)
+    end
+  end
+
+  defp log_interrupt_failure(result, state), do: log_interrupt_failure_warning(result, state)
+
+  defp log_interrupt_failure_warning({:error, reason}, state) do
     Logger.warning(
       "websocket interrupt cleanup failed " <>
         "codex_session_id=#{codex_session_id(state)} " <>
