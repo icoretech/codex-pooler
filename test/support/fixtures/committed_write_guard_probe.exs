@@ -44,6 +44,20 @@ defmodule CodexPooler.CommittedWriteGuardProbe do
 
     instance_id
   end
+
+  # An in-place update of rows this probe committed: no row count moves, so only a content
+  # comparison can see it.
+  def touch_presences!(conn) do
+    %Postgrex.Result{num_rows: updated} =
+      Postgrex.query!(
+        conn,
+        "UPDATE instance_presences SET last_seen_at = last_seen_at + interval '1 second' " <>
+          "WHERE instance_id LIKE 'committed-write-guard-probe-%'",
+        []
+      )
+
+    updated
+  end
 end
 
 ExUnit.start(
@@ -249,15 +263,32 @@ defmodule CodexPooler.CommittedWriteGuardProbe.AfterUnguardedTest do
   end
 end
 
+defmodule CodexPooler.CommittedWriteGuardProbe.UntracedRowLeakTest do
+  use CodexPooler.DataCase, async: false
+
+  alias CodexPooler.CommittedWriteGuardProbe, as: Probe
+
+  # The connection was opened before the guard started, so no counter the guard reads moves for it
+  # and no node is connected: only the row count this test ends with can charge the row to it.
+  test "commits a row through a connection opened before the guard started" do
+    Probe.insert_presence!(Probe.untraced_connection(), "untraced-leak")
+  end
+
+  test "writes nothing after that untraced leak" do
+    assert true
+  end
+end
+
 defmodule CodexPooler.CommittedWriteGuardProbe.LastUntracedTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.CommittedWriteGuardProbe, as: Probe
 
-  # No counter moves and no node is connected, so the test's own verification cannot see the row;
-  # only the count after the suite can.
-  test "commits through a connection opened before the guard started, as the last test" do
-    Probe.insert_presence!(Probe.untraced_connection(), "untraced")
+  # The documented limit: an in-place update through a channel the guard cannot see moves no row
+  # count either, so the content is never compared for this test. Only the check after the suite
+  # sees it, and being the last test there is no later one to report it.
+  test "updates a committed row through that connection, as the last test" do
+    assert Probe.touch_presences!(Probe.untraced_connection()) > 0
   end
 end
 

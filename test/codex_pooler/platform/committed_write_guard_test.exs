@@ -42,21 +42,25 @@ defmodule CodexPooler.CommittedWriteGuardTest do
              "test commits an identity without the guard" => {"passed", "none", []},
              "test starts after rows an unguarded test committed" => {"failed", "before", ["upstream_identities"]},
              "test starts after that failure has been reported" => {"passed", "none", []},
-             "test commits through a connection opened before the guard started, as the last test" => {"passed", "none", []}
+             "test commits a row through a connection opened before the guard started" => {"failed", "during", ["instance_presences"]},
+             "test writes nothing after that untraced leak" => {"passed", "none", []},
+             "test updates a committed row through that connection, as the last test" => {"passed", "none", []}
            },
            probe.output
 
-    assert probe.summary == %{"stage" => "probe", "total" => 13, "failures" => 7}, probe.output
+    assert probe.summary == %{"stage" => "probe", "total" => 15, "failures" => 8}, probe.output
 
     assert probe.output =~
              ~r/committed rows changed during .*test fails in its body after leaking a committed identity.*\n  upstream_identities: \d+ -> \d+ \(\+1\)/,
            "the original test failure must not hide the guard diagnostic\n#{probe.output}"
 
     assert probe.exit_code != 0,
-           "rows committed after the last verification must fail the run\n#{probe.output}"
+           "rows changed after the last verification must fail the run\n#{probe.output}"
 
+    # The last test changed content without changing a count, so only the after-suite content
+    # comparison can name it.
     assert probe.output =~
-             ~r/after the guard last verified them.*\n  instance_presences: \d+ -> \d+ \(\+1\)/s,
+             ~r/after the guard last verified them.*\n  instance_presences: content changed \(\d+ rows\)/s,
            probe.output
   end
 
