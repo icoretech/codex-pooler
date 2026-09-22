@@ -4406,57 +4406,64 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert Repo.aggregate(Request, :count) == 0
     end
 
-    @tag :stale_consuming_recovery
-    test "simultaneous canonical and sibling reconcilers enqueue one recovery job" do
-      release_ref = make_ref()
+    for first <- [:sibling, :canonical] do
+      @tag :stale_consuming_recovery
+      @tag settles_first: first
+      test "simultaneous canonical and sibling reconcilers enqueue one recovery job (#{first} settles first)", %{settles_first: first} do
+        release_ref = make_ref()
 
-      response =
-        FakeUpstream.barrier_json_response(usage_payload(),
-          notify: self(),
-          release_ref: release_ref
-        )
+        response =
+          FakeUpstream.barrier_json_response(usage_payload(),
+            notify: self(),
+            release_ref: release_ref
+          )
 
-      upstream =
-        start_upstream({:path_json, %{"/backend-api/wham/usage" => response}})
+        upstream =
+          start_upstream({:path_json, %{"/backend-api/wham/usage" => response}})
 
-      {canonical_pool, canonical_assignment} = active_usage_probe_assignment(upstream)
-      identity = Repo.get!(UpstreamIdentity, canonical_assignment.upstream_identity_id)
+        {canonical_pool, canonical_assignment} = active_usage_probe_assignment(upstream)
+        identity = Repo.get!(UpstreamIdentity, canonical_assignment.upstream_identity_id)
 
-      {sibling_pool, sibling_assignment} =
-        active_assignment_for_identity_fixture(identity,
-          assignment_label: "Concurrent stale recovery sibling",
-          created_at: DateTime.add(canonical_assignment.created_at, 60, :second),
-          metadata: %{"base_url" => FakeUpstream.url(upstream)}
-        )
+        {sibling_pool, sibling_assignment} =
+          active_assignment_for_identity_fixture(identity,
+            assignment_label: "Concurrent stale recovery sibling",
+            created_at: DateTime.add(canonical_assignment.created_at, 60, :second),
+            metadata: %{"base_url" => FakeUpstream.url(upstream)}
+          )
 
-      attempt_id = Ecto.UUID.generate()
-      put_stale_consuming_redemption!(identity, attempt_id, 11)
+        attempt_id = Ecto.UUID.generate()
+        put_stale_consuming_redemption!(identity, attempt_id, 11)
 
-      tasks =
-        Enum.map(
-          [
-            {sibling_pool, sibling_assignment},
-            {canonical_pool, canonical_assignment}
-          ],
-          fn {pool, assignment} ->
-            start_allowed_task(fn ->
-              perform_job(
-                AccountReconciliationWorker,
-                scheduled_identity_reconciliation_args(pool, assignment, identity)
-              )
-            end)
-          end
-        )
+        # Both reconcilers are in flight at once, each parked on its usage request
+        # before either writes. Their writes then settle one after the other in a
+        # fixed order, the only order two tasks on one shared sandbox connection
+        # have: letting both write at once only queued each behind the other's
+        # transaction until a checkout was dropped under load.
+        in_flight =
+          Map.new([sibling: {sibling_pool, sibling_assignment}, canonical: {canonical_pool, canonical_assignment}], fn {role, {pool, assignment}} ->
+            task =
+              start_allowed_task(fn ->
+                perform_job(
+                  AccountReconciliationWorker,
+                  scheduled_identity_reconciliation_args(pool, assignment, identity)
+                )
+              end)
 
-      barriers = Enum.map(tasks, fn _task -> await_upstream_barrier(release_ref) end)
-      Enum.each(barriers, &release_upstream_barrier(&1, release_ref))
+            {role, {task, await_upstream_barrier(release_ref)}}
+          end)
 
-      assert Enum.map(tasks, &Task.await(&1, 10_000)) == [:ok, :ok]
-      assert [job] = stale_consuming_recovery_jobs()
-      assert job.args["pool_upstream_assignment_id"] == canonical_assignment.id
-      assert job.args["attempt_id"] == attempt_id
-      assert Repo.aggregate(Request, :count) == 0
-      assert scheduled_consume_count(upstream) == 0
+        for role <- if(first == :sibling, do: [:sibling, :canonical], else: [:canonical, :sibling]) do
+          {task, barrier} = Map.fetch!(in_flight, role)
+          release_upstream_barrier(barrier, release_ref)
+          assert Task.await(task, 10_000) == :ok
+        end
+
+        assert [job] = stale_consuming_recovery_jobs()
+        assert job.args["pool_upstream_assignment_id"] == canonical_assignment.id
+        assert job.args["attempt_id"] == attempt_id
+        assert Repo.aggregate(Request, :count) == 0
+        assert scheduled_consume_count(upstream) == 0
+      end
     end
 
     @tag :stale_consuming_recovery
