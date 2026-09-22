@@ -512,6 +512,32 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     assert assignment.metadata["quota_priming"]["status"] == "unknown"
   end
 
+  test "completed onboarding hands out the documented Codex provider config for the deployment's public origin" do
+    CodexPooler.TestAppEnv.restore_on_exit(CodexPoolerWeb.OnboardingLive.Invite)
+    Application.put_env(:codex_pooler, CodexPoolerWeb.OnboardingLive.Invite, public_origin: "https://pooler.example.test/")
+    configure_codex_auth_client!(%{poll_result: {:ok, token_payload()}})
+
+    {token, _pool} = invite_fixture()
+    {:ok, view, _html} = live(build_conn(), ~p"/onboarding/invites/#{token}")
+
+    view
+    |> element("#device-onboarding-button")
+    |> render_click()
+
+    send_current_device_poll(view)
+
+    assert has_element?(view, "#invite-accepted")
+    document = view |> render() |> LazyHTML.from_fragment()
+    [copy_text] = document |> LazyHTML.query("#invite-config-copy") |> LazyHTML.attribute("data-copy-text")
+    shown_text = document |> LazyHTML.query("#invite-config-toml") |> LazyHTML.text()
+
+    expected = documented_codex_provider_config("https://pooler.example.test")
+
+    assert copy_text == expected
+    assert shown_text == expected
+    assert has_element?(view, "#invite-config-features-hint", "[features]")
+  end
+
   test "restricted invite rejects a different authorized Codex email without side effects" do
     configure_codex_auth_client!(%{
       poll_result: {:ok, token_payload(%{"email" => "other@example.com"})}
@@ -770,6 +796,19 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
 
     {:ok, %{token: token}} = Access.create_invite(scope, pool, attrs)
     {token, pool}
+  end
+
+  # The published Codex client page is the contract for the provider block the
+  # invite page hands out; the page's placeholder host becomes the deployment's
+  # public origin.
+  defp documented_codex_provider_config(origin) do
+    page = Path.expand("../../../../docs-site/src/content/docs/clients/codex-cli-desktop.mdx", __DIR__)
+
+    [block] =
+      Regex.run(~r/```toml title="CODEX_HOME\/config\.toml" frame="code"\n(.*?)\n```/s, File.read!(page), capture: :all_but_first)
+
+    assert block =~ "model_provider = \"codex-pooler-ws\""
+    String.replace(block, "https://codex-pooler.example.com", origin)
   end
 
   defp configure_codex_auth_client!(attrs) do

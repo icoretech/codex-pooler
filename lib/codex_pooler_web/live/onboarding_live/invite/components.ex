@@ -253,6 +253,9 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   id="invite-config-toml"
                   class="mt-4 overflow-x-auto rounded-box bg-base-200 p-3 text-xs leading-5 text-base-content"
                 ><code>{@completed_onboarding.config_text}</code></pre>
+                <p id="invite-config-features-hint" class="mt-3 text-xs text-base-content/65">
+                  If your config.toml already has a <code>[features]</code> table, add <code>api_key_model_discovery = true</code> to it instead of starting a second one.
+                </p>
               </div>
             </div>
 

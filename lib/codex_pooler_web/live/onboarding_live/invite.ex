@@ -107,7 +107,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
          {:ok, completed} <- InviteOnboarding.poll_device(socket.assigns.invite_token, account_id) do
       socket
       |> put_flash(:info, "Codex account connected")
-      |> transition_accepted(completed_response(completed, codex_base_url(socket)))
+      |> transition_accepted(completed_response(completed, public_origin(socket)))
     else
       nil ->
         transition_device_error(socket, "Start device authorization again.")
@@ -304,45 +304,52 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
   defp error_message(_reason),
     do: "Onboarding could not continue. Try again or ask for a fresh invite."
 
-  defp completed_response(completed, base_url) do
+  defp completed_response(completed, origin) do
     completed.info.email
-    |> completed_onboarding(base_url)
+    |> completed_onboarding(origin)
     |> Map.merge(%{
       upstream_identity_id: completed.identity.id,
       pool_upstream_assignment_id: completed.assignment.id
     })
   end
 
-  defp completed_onboarding(account_email, base_url) do
+  defp completed_onboarding(account_email, origin) do
     %{
       account_email: account_email,
-      config_text: codex_config_toml(base_url)
+      config_text: codex_config_toml(origin)
     }
   end
 
-  defp codex_config_toml(base_url) do
+  # The websocket provider block the Codex client page documents, with the
+  # deployment's public origin in place of the page's placeholder host. From
+  # Codex 0.156.0 an env_key provider reads the Pool catalog only through an
+  # absolute model_catalog_url with api_key_model_discovery enabled; earlier
+  # releases ignore both keys. `name = "OpenAI"` is what enables Codex's
+  # OpenAI-family behaviour (remote compaction, request compression).
+  defp codex_config_toml(origin) do
     """
-    model = "gpt-5"
-    model_provider = "codex-pooler"
+    model_provider = "codex-pooler-ws"
 
-    [model_providers.codex-pooler]
-    name = "Codex Pooler"
-    base_url = "#{base_url}"
+    [model_providers.codex-pooler-ws]
+    name = "OpenAI"
+    base_url = "#{origin}/backend-api/codex"
+    model_catalog_url = "#{origin}/backend-api/codex/models"
     env_key = "CODEX_POOLER_API_KEY"
     wire_api = "responses"
+    supports_websockets = true
     requires_openai_auth = true
-    supports_websockets = false
+
+    [features]
+    api_key_model_discovery = true
     """
     |> String.trim_trailing()
   end
-
-  defp codex_base_url(socket), do: public_origin(socket) <> "/backend-api/codex"
 
   defp refresh_completed_config(%{assigns: %{completed_onboarding: nil}} = socket), do: socket
 
   defp refresh_completed_config(socket) do
     update(socket, :completed_onboarding, fn completed_onboarding ->
-      Map.put(completed_onboarding, :config_text, codex_config_toml(codex_base_url(socket)))
+      Map.put(completed_onboarding, :config_text, codex_config_toml(public_origin(socket)))
     end)
   end
 
