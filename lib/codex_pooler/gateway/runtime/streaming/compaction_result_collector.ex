@@ -198,7 +198,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
        when is_map(item) and is_map(response) do
     {:ok,
      response
-     |> Map.take(["id", "usage"])
+     |> Map.take(["id", "usage", "created_at", "model"])
      |> Map.put("status", "completed")
      |> Map.put("output", [item])}
   end

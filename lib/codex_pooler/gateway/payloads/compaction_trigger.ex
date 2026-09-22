@@ -423,17 +423,42 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp nonblank_compaction_content?(content), do: String.trim(content) != ""
 
+  # Every public compaction output item carries a string id: the SDK stream
+  # helpers and types require one (openai-node refuses an empty id, and
+  # `@ai-sdk/openai` and openai-python type it as a string), and the provider's
+  # own public stream always sends a `cmp_` id. When the upstream item has
+  # none, the id is derived from the encrypted content, so it is stable for the
+  # item and recognizable on replay, where the `/v1` input adapter drops it
+  # again and the upstream receives the item as it produced it (findings#254).
   defp normalize_public_compaction_item(source_item) do
-    item = %{
-      "type" => "compaction",
-      "encrypted_content" => source_item["encrypted_content"]
-    }
+    encrypted_content = source_item["encrypted_content"]
 
-    case Map.fetch(source_item, "id") do
-      {:ok, id} when is_nil(id) or is_binary(id) -> Map.put(item, "id", id)
-      _result -> item
-    end
+    id =
+      case Map.get(source_item, "id") do
+        id when is_binary(id) -> if String.trim(id) == "", do: public_compaction_item_id(encrypted_content), else: id
+        _absent_or_null -> public_compaction_item_id(encrypted_content)
+      end
+
+    %{"type" => "compaction", "encrypted_content" => encrypted_content, "id" => id}
   end
+
+  @doc false
+  @spec public_compaction_item_id(String.t()) :: String.t()
+  def public_compaction_item_id(encrypted_content) when is_binary(encrypted_content) do
+    digest =
+      :crypto.hash(:sha256, ["codex-pooler/public-compaction-item/v1\n", encrypted_content])
+      |> Base.encode16(case: :lower)
+
+    "cmp_" <> binary_part(digest, 0, 40)
+  end
+
+  @doc false
+  @spec derived_public_compaction_item_id?(term(), term()) :: boolean()
+  def derived_public_compaction_item_id?(id, encrypted_content)
+      when is_binary(id) and is_binary(encrypted_content),
+      do: id == public_compaction_item_id(encrypted_content)
+
+  def derived_public_compaction_item_id?(_id, _encrypted_content), do: false
 
   @doc false
   @spec normalize_native_item(payload()) :: payload()
@@ -488,7 +513,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     %{
       status: 200,
       headers: stream_headers(result),
-      raw_body: sse_body(decoded, item, &public_response/2)
+      raw_body: public_sse_body(decoded, item)
     }
   end
 
@@ -530,7 +555,52 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     }
   end
 
-  defp public_response(decoded, item), do: Map.put(response(decoded, item), "object", "response")
+  # The public stream follows the Responses streaming grammar the official
+  # SDK stream helpers enforce, as the provider's own compaction stream does:
+  # the response opens with an empty output, the item is announced at its
+  # output index before it is closed, and one response id runs throughout.
+  defp public_sse_body(decoded, item) do
+    response = public_response(decoded, item)
+    opening = %{response | "status" => "in_progress", "output" => []} |> Map.delete("usage")
+
+    [
+      {"response.created", %{"response" => opening}},
+      {"response.output_item.added", %{"output_index" => 0, "item" => item}},
+      {"response.output_item.done", %{"output_index" => 0, "item" => item}},
+      {"response.completed", %{"response" => response}}
+    ]
+    |> Enum.with_index()
+    |> Enum.map(fn {{type, event}, sequence_number} ->
+      sse_block(type, event |> Map.put("type", type) |> Map.put("sequence_number", sequence_number))
+    end)
+    |> Kernel.++(["data: [DONE]\n\n"])
+    |> IO.iodata_to_binary()
+  end
+
+  defp public_response(decoded, item) do
+    decoded
+    |> response(item)
+    |> Map.put("object", "response")
+    |> maybe_put_response_identity(decoded)
+  end
+
+  # The creation time and model the upstream response states, when it states
+  # them; neither is invented.
+  defp maybe_put_response_identity(response, decoded) do
+    response
+    |> then(fn response ->
+      case Map.get(decoded, "created_at") do
+        created_at when is_integer(created_at) and created_at >= 0 -> Map.put(response, "created_at", created_at)
+        _absent -> response
+      end
+    end)
+    |> then(fn response ->
+      case Map.get(decoded, "model") do
+        model when is_binary(model) and model != "" -> Map.put(response, "model", model)
+        _absent -> response
+      end
+    end)
+  end
 
   defp response(decoded, item) do
     %{

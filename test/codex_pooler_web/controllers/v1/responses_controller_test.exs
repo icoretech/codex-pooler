@@ -61,6 +61,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Transports.Admission
@@ -3268,15 +3269,27 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
           events = public_sse_events(response.resp_body)
 
+          # The public stream follows the Responses grammar the SDK stream
+          # helpers enforce: opened, item announced, item closed, completed,
+          # under one response id (findings#254).
           assert Enum.map(events, & &1["event"]) == [
+                   "response.created",
+                   "response.output_item.added",
                    "response.output_item.done",
                    "response.completed"
                  ]
 
-          done_item = get_in(List.first(events), ["data", "item"])
+          assert Enum.map(events, &get_in(&1, ["data", "sequence_number"])) == [0, 1, 2, 3]
+          assert get_in(hd(events), ["data", "response", "id"]) == response_id
+          assert get_in(hd(events), ["data", "response", "output"]) == []
+          added_item = get_in(Enum.at(events, 1), ["data", "item"])
+          done_item = get_in(Enum.at(events, 2), ["data", "item"])
+          assert get_in(Enum.at(events, 2), ["data", "output_index"]) == 0
           completed_item = List.first(get_in(List.last(events), ["data", "response", "output"]))
+          assert added_item == done_item
           assert done_item == completed_item
           assert get_in(List.last(events), ["data", "response", "object"]) == "response"
+          assert get_in(List.last(events), ["data", "response", "id"]) == response_id
 
           assert response.resp_body =~ "data: [DONE]\n\n"
           [done_item, completed_item]
@@ -3292,14 +3305,23 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           [item]
         end
 
+      # The upstream item had a null id; the public item carries the id
+      # derived from its encrypted content, and replaying it strips that id
+      # again so the upstream receives the item as it produced it.
+      encrypted_content = "synthetic-public-trigger-encrypted-#{stream?}"
+      derived_id = CompactionTrigger.public_compaction_item_id(encrypted_content)
+      assert "cmp_" <> _digest = derived_id
+
       for item <- public_items do
         assert item == %{
                  "type" => "compaction",
-                 "encrypted_content" => "synthetic-public-trigger-encrypted-#{stream?}",
-                 "id" => nil
+                 "encrypted_content" => encrypted_content,
+                 "id" => derived_id
                }
 
-        assert {:ok, %{payload: %{"input" => [^item]}}} =
+        replayed = Map.delete(item, "id")
+
+        assert {:ok, %{payload: %{"input" => [^replayed]}}} =
                  Responses.coerce(%{
                    "model" => setup.model.exposed_model_id,
                    "input" => [item]
@@ -3394,11 +3416,17 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     events = public_sse_events(response_body)
 
     assert Enum.map(events, & &1["event"]) == [
+             "response.created",
+             "response.output_item.added",
              "response.output_item.done",
              "response.completed"
            ]
 
     assert get_in(List.last(events), ["data", "response", "object"]) == "response"
+
+    assert get_in(Enum.at(events, 2), ["data", "item", "id"]) ==
+             CompactionTrigger.public_compaction_item_id(encrypted_content)
+
     assert response_body =~ "data: [DONE]\n\n"
 
     assert [captured] = FakeUpstream.requests(upstream)

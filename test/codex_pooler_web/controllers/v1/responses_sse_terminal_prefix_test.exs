@@ -10,7 +10,7 @@ defmodule CodexPoolerWeb.V1.ResponsesSSETerminalPrefixTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [auth: 2, gateway_setup: 1, start_upstream: 1]
+    only: [auth: 2, gateway_setup: 1, gateway_setup: 2, start_upstream: 1]
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools.ModelServingOverride
@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.V1.ResponsesSSETerminalPrefixTest do
   @created_at 1_790_000_000
   @upstream_model "provider-gpt-test-model"
   @marker "synthetic terminal-only marker"
+  @compaction_content "synthetic-opaque-compaction-content"
 
   test "a terminal-only upstream stream reaches the client as a complete Responses grammar (Full)" do
     upstream = start_upstream(FakeUpstream.sse_stream([completed([message("msg_prefix_full", @marker)])]))
@@ -127,6 +128,111 @@ defmodule CodexPoolerWeb.V1.ResponsesSSETerminalPrefixTest do
     assert grammar.text == %{{0, 0} => @marker}
   end
 
+  # A `/v1/responses` stream whose input ends in `compaction_trigger` is
+  # collected from the upstream compaction and replayed to the client as its
+  # own stream; it follows the same grammar, as the provider's public stream
+  # does (created, output_item.added, output_item.done, completed).
+  test "a compaction trigger stream announces its compaction item and opens with the upstream identity" do
+    upstream = start_upstream(FakeUpstream.compaction_stream(compaction_payload(%{"id" => "cmp_upstream_fixture"})))
+    setup = gateway_setup(upstream, compact?: true)
+
+    body = stream_body!(setup, compaction_trigger_payload(setup))
+    events = parse_events(body)
+    grammar = assert_responses_grammar!(events)
+
+    assert event_types(events) == [
+             "response.created",
+             "response.output_item.added",
+             "response.output_item.done",
+             "response.completed"
+           ]
+
+    assert sequence_numbers(events) == [0, 1, 2, 3]
+
+    [%{data: created} | _rest] = events
+
+    assert created["response"] == %{
+             "id" => @response_id,
+             "object" => "response",
+             "status" => "in_progress",
+             "created_at" => @created_at,
+             "model" => @upstream_model,
+             "output" => []
+           }
+
+    compaction = %{"type" => "compaction", "encrypted_content" => @compaction_content, "id" => "cmp_upstream_fixture"}
+    assert grammar.items == [compaction]
+
+    %{data: terminal} = List.last(events)
+    assert terminal["response"]["id"] == @response_id
+    assert terminal["response"]["output"] == [compaction]
+    assert terminal["response"]["usage"]["total_tokens"] == 8
+    assert List.last(String.split(body, "\n\n", trim: true)) == "data: [DONE]"
+  end
+
+  test "an id-less upstream compaction item gets a derived id that replay strips before the upstream" do
+    for source_id <- [:absent, nil, ""] do
+      payload =
+        case source_id do
+          :absent -> compaction_payload(%{})
+          id -> compaction_payload(%{"id" => id})
+        end
+
+      upstream = start_upstream(FakeUpstream.compaction_stream(payload))
+      setup = gateway_setup(upstream, compact?: true)
+
+      events = stream_events!(setup, compaction_trigger_payload(setup))
+      grammar = assert_responses_grammar!(events)
+
+      assert [%{"type" => "compaction", "id" => derived}] = grammar.items
+      assert "cmp_" <> suffix = derived
+      assert suffix =~ ~r/\A[0-9a-f]{40}\z/
+      assert List.last(events).data["response"]["output"] == hd(grammar.items) |> List.wrap()
+
+      # The same item replayed as input reaches the upstream as it produced it.
+      replay_upstream = start_upstream(FakeUpstream.sse_stream([completed([message("msg_after_compaction", @marker)])]))
+      replay_setup = gateway_setup(replay_upstream)
+
+      conn =
+        build_conn()
+        |> auth(replay_setup)
+        |> post("/v1/responses", %{
+          "model" => replay_setup.model.exposed_model_id,
+          "stream" => true,
+          "store" => false,
+          "input" => [
+            hd(grammar.items),
+            %{"role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]}
+          ]
+        })
+
+      assert conn.status == 200
+      assert [captured] = FakeUpstream.requests(replay_upstream)
+      assert [replayed, _user] = captured.json["input"]
+      assert replayed == %{"type" => "compaction", "encrypted_content" => @compaction_content}
+    end
+  end
+
+  test "a provider compaction id is replayed unchanged" do
+    upstream = start_upstream(FakeUpstream.sse_stream([completed([message("msg_after_provider_compaction", @marker)])]))
+    setup = gateway_setup(upstream)
+    item = %{"type" => "compaction", "encrypted_content" => @compaction_content, "id" => "cmp_provider_assigned"}
+
+    conn =
+      build_conn()
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "stream" => true,
+        "store" => false,
+        "input" => [item, %{"role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]}]
+      })
+
+    assert conn.status == 200
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert hd(captured.json["input"]) == item
+  end
+
   defp assert_canonical_message_prefix!(events, item_id) do
     grammar = assert_responses_grammar!(events)
 
@@ -231,21 +337,25 @@ defmodule CodexPoolerWeb.V1.ResponsesSSETerminalPrefixTest do
 
   defp apply_grammar_event!(_type, _data, acc), do: acc
 
-  defp stream_events!(setup) do
-    conn =
-      build_conn()
-      |> auth(setup)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "input" => "synthetic terminal prefix request",
-        "stream" => true
-      })
+  defp stream_events!(setup, payload \\ nil) do
+    payload =
+      payload ||
+        %{"model" => setup.model.exposed_model_id, "input" => "synthetic terminal prefix request", "stream" => true}
+
+    setup |> stream_body!(payload) |> parse_events()
+  end
+
+  defp stream_body!(setup, payload) do
+    conn = build_conn() |> auth(setup) |> post("/v1/responses", payload)
 
     assert conn.status == 200
     assert [content_type] = get_resp_header(conn, "content-type")
     assert content_type =~ "text/event-stream"
-
     conn.resp_body
+  end
+
+  defp parse_events(body) do
+    body
     |> String.split("\n\n", trim: true)
     |> Enum.flat_map(fn block ->
       fields = block |> String.split("\n") |> Map.new(&List.to_tuple(String.split(&1, ": ", parts: 2)))
@@ -255,6 +365,30 @@ defmodule CodexPoolerWeb.V1.ResponsesSSETerminalPrefixTest do
         _done -> []
       end
     end)
+  end
+
+  defp compaction_trigger_payload(setup) do
+    %{
+      "model" => setup.model.exposed_model_id,
+      "stream" => true,
+      "store" => false,
+      "previous_response_id" => "resp_terminal_prefix_previous",
+      "input" => [
+        %{"type" => "function_call_output", "call_id" => "call_compaction_fixture", "output" => "synthetic tool output"},
+        %{"type" => "compaction_trigger"}
+      ]
+    }
+  end
+
+  defp compaction_payload(item_fields) do
+    %{
+      "id" => @response_id,
+      "object" => "response",
+      "created_at" => @created_at,
+      "model" => @upstream_model,
+      "output" => [Map.merge(%{"type" => "compaction", "encrypted_content" => @compaction_content}, item_fields)],
+      "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+    }
   end
 
   defp event_types(events), do: Enum.map(events, & &1.event)

@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Audio
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.InstructionLifter
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.ToolResultShape
 
   @metadata_passthrough_key "internal_chat_message_metadata_passthrough"
@@ -258,6 +259,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     else
       {:ok, Map.delete(item, @metadata_passthrough_key)}
     end
+  end
+
+  # A compaction id the public surface derived for an upstream item that had
+  # none is dropped on replay, so the upstream receives the item as it
+  # produced it (findings#254).
+  defp normalize_input_item(%{"type" => "compaction", "id" => id, "encrypted_content" => content} = item) do
+    if CompactionTrigger.derived_public_compaction_item_id?(id, content),
+      do: {:ok, Map.delete(item, "id")},
+      else: {:ok, item}
   end
 
   defp normalize_input_item(%{"type" => "compaction"} = item), do: {:ok, item}

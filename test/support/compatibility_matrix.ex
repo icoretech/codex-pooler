@@ -1784,7 +1784,13 @@ defmodule CodexPooler.CompatibilityMatrix do
             upstream: "responses_sse",
             downstream: %{
               http_json: ["response"],
-              http_sse: ["response.output_item.done", "response.completed", "[DONE]"],
+              http_sse: [
+                "response.created",
+                "response.output_item.added",
+                "response.output_item.done",
+                "response.completed",
+                "[DONE]"
+              ],
               responses_websocket: [
                 "response.created",
                 "response.output_item.done",
@@ -1793,7 +1799,12 @@ defmodule CodexPooler.CompatibilityMatrix do
             }
           },
           public_compact_route_supported: false,
-          hidden_replay: false
+          hidden_replay: false,
+          public_item_id: %{
+            upstream_nonblank_string: "preserved",
+            absent_null_or_blank: "cmp_ plus 40 hex of a domain-separated SHA-256 of encrypted_content",
+            replay: "a derived id is dropped before upstream dispatch"
+          }
         },
         anchor_lineage_and_smoke: %{
           explicit_anchor: "preserve_nonblank_opaque_top_level_anchor_semantically",

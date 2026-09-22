@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
@@ -2303,13 +2304,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
         assert done_item == completed_item
 
+        # The upstream item had a null id; the public item carries the id
+        # derived from its encrypted content, which replay strips again
+        # (findings#254).
+        encrypted_content = "synthetic-websocket-trigger-encrypted-#{mode}"
+
         assert done_item == %{
                  "type" => "compaction",
-                 "encrypted_content" => "synthetic-websocket-trigger-encrypted-#{mode}",
-                 "id" => nil
+                 "encrypted_content" => encrypted_content,
+                 "id" => CompactionTrigger.public_compaction_item_id(encrypted_content)
                }
 
-        assert {:ok, %{payload: %{"input" => [^done_item]}}} =
+        replayed_item = Map.delete(done_item, "id")
+
+        assert {:ok, %{payload: %{"input" => [^replayed_item]}}} =
                  ResponsesCompat.coerce(%{
                    "model" => setup.model.exposed_model_id,
                    "input" => [done_item]

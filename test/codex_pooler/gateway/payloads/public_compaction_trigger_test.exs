@@ -144,11 +144,16 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
     end
   end
 
-  test "public modes preserve ID absence, null, or binary exactly" do
+  # Every public compaction item carries a string id, as the SDK types and
+  # stream helpers require: a nonblank upstream id is kept byte for byte,
+  # anything else gets the id derived from the encrypted content, which the
+  # `/v1` input adapter drops again on replay (findings#254).
+  test "public modes keep a nonblank upstream item id and derive one otherwise" do
     for {id_name, source_id, expected_id} <- [
-          {:absent, :absent, :absent},
-          {:null, nil, nil},
-          {:empty, "", ""},
+          {:absent, :absent, :derived},
+          {:null, nil, :derived},
+          {:empty, "", :derived},
+          {:blank, " \t", :derived},
           {:binary, " opaque item id ", " opaque item id "}
         ] do
       source_item =
@@ -163,8 +168,17 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
 
       item = adapted.raw_body |> CodexPooler.JSON.decode!() |> get_in(["output", Access.at(0)])
 
-      if expected_id == :absent do
-        refute Map.has_key?(item, "id")
+      if expected_id == :derived do
+        derived = CompactionTrigger.public_compaction_item_id("opaque-#{id_name}")
+        assert Map.fetch!(item, "id") == derived
+        assert derived =~ ~r/\Acmp_[0-9a-f]{40}\z/
+        assert CompactionTrigger.derived_public_compaction_item_id?(derived, "opaque-#{id_name}")
+        refute CompactionTrigger.derived_public_compaction_item_id?(derived, "opaque-other")
+
+        assert {:ok, %{payload: %{"input" => [replayed]}}} =
+                 Responses.coerce(%{"model" => "gpt-public-compaction-fixture", "input" => [item]})
+
+        assert replayed == Map.delete(item, "id")
       else
         assert Map.fetch!(item, "id") == expected_id
       end
@@ -352,9 +366,24 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
   end
 
   defp public_result(%{raw_body: body}, :public_sse) do
-    [done, completed] = sse_events(body)
+    assert String.ends_with?(body, "data: [DONE]\n\n")
+    [created, added, done, completed] = sse_events(body)
+
+    assert Enum.map([created, added, done, completed], &{&1["type"], &1["sequence_number"]}) == [
+             {"response.created", 0},
+             {"response.output_item.added", 1},
+             {"response.output_item.done", 2},
+             {"response.completed", 3}
+           ]
+
     response = completed["response"]
-    {response, [done["item"] | response["output"]]}
+
+    assert created["response"] ==
+             response |> Map.delete("usage") |> Map.merge(%{"status" => "in_progress", "output" => []})
+
+    assert added["output_index"] == 0
+    assert done["output_index"] == 0
+    {response, [added["item"], done["item"] | response["output"]]}
   end
 
   defp public_result(%{websocket_messages: [created, done, completed]}, :websocket) do
