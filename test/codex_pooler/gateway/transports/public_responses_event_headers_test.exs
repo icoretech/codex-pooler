@@ -5,10 +5,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesEventHeadersTest do
   alias CodexPooler.Gateway.Websocket.Adapter
 
   # findings#239: the public normalisers drop provider event header objects
-  # (`headers`, `response.headers`) from every relayed event. The one
-  # exemption is `codex.response.metadata`, whose header object is the
-  # event's payload: an owner-forwarded public turn relays the Pooler ETag
-  # event through the same websocket normaliser.
+  # (`headers`, `response.headers`) from every relayed event.
 
   @created %{
     "type" => "response.created",
@@ -25,17 +22,15 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesEventHeadersTest do
     "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")}
   }
 
-  test "the public websocket normaliser keeps codex.response.metadata headers and drops the rest" do
+  # findings#254 row 254-14: the public /v1 websocket relays only the public
+  # Responses vocabulary, so the owner-forwarded `codex.response.metadata`
+  # ETag event, which only Codex clients on /backend-api consume, is dropped
+  # before it takes a sequence number.
+  test "the public websocket normaliser drops codex.response.metadata and strips header objects from public events" do
     state = Adapter.public_responses_turn_state()
 
-    assert {:push, metadata_frame, state} =
+    assert {:drop, state} =
              Adapter.downstream_response_chunk(CodexPooler.JSON.encode!(@metadata), state)
-
-    assert CodexPooler.JSON.decode!(metadata_frame) == %{
-             "type" => "codex.response.metadata",
-             "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")},
-             "sequence_number" => 0
-           }
 
     assert {:push, created_frame, _state} =
              Adapter.downstream_response_chunk(CodexPooler.JSON.encode!(@created), state)
@@ -43,7 +38,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesEventHeadersTest do
     assert CodexPooler.JSON.decode!(created_frame) == %{
              "type" => "response.created",
              "response" => %{"id" => "resp_public_event_headers", "status" => "in_progress"},
-             "sequence_number" => 1
+             "sequence_number" => 0
            }
 
     refute created_frame =~ ~s("headers")
