@@ -200,17 +200,54 @@ defmodule CodexPooler.Release.MigrationLockBudget do
     {listed, rest} = Enum.split(blockers, @max_listed_blockers)
     described = Enum.map_join(listed, "; ", &describe_blocker/1)
 
-    case length(rest) do
-      0 -> described
-      more -> "#{described}; and #{more} more"
-    end
+    described =
+      case length(rest) do
+        0 -> described
+        more -> "#{described}; and #{more} more"
+      end
+
+    described <> visibility_note(listed)
   end
 
-  defp describe_blocker(blocker) do
-    "pid=#{blocker.pid} application_name=#{quote_text(blocker.application_name)} " <>
-      "backend_type=#{quote_text(blocker.backend_type)} state=#{quote_text(blocker.state)} " <>
-      "transaction_age_s=#{blocker.transaction_age_s || "unknown"} holds_snapshot=#{blocker.holds_snapshot}"
+  # PostgreSQL shows another role's session state, transaction start and snapshot only to
+  # superusers, members of pg_read_all_stats and that role itself (findings#255 row 255-63): the
+  # message says so instead of printing a bare `unknown`.
+  defp visibility_note(blockers) do
+    notes =
+      [
+        Enum.any?(blockers, &(Map.get(&1, :visibility) == :hidden)) &&
+          " (fields shown as hidden belong to a session of another database role: PostgreSQL shows its state, " <>
+            "backend type and transaction start only to superusers, members of pg_read_all_stats and that role; " <>
+            "grant pg_read_all_stats to the migration role to see them)",
+        Enum.any?(blockers, &(Map.get(&1, :visibility) == :ended)) &&
+          " (state=ended: the session was no longer in pg_stat_activity when it was described)"
+      ]
+
+    notes |> Enum.filter(&is_binary/1) |> Enum.join()
   end
+
+  # `backend_xmin` stays readable for another role's session (observed on PostgreSQL 18), so
+  # `holds_snapshot` is reported; `backend_type`, `state` and the transaction start are not.
+  defp describe_blocker(%{visibility: :hidden} = blocker) do
+    "pid=#{blocker.pid} role=#{quote_text(blocker.role)} application_name=#{quote_text(blocker.application_name)} " <>
+      "backend_type=#{hidden_text(blocker.backend_type)} state=hidden transaction_age_s=hidden " <>
+      "holds_snapshot=#{describe_snapshot(blocker.holds_snapshot)}"
+  end
+
+  defp describe_blocker(%{visibility: :ended} = blocker),
+    do: "pid=#{blocker.pid} state=ended"
+
+  defp describe_blocker(blocker) do
+    "pid=#{blocker.pid} role=#{quote_text(Map.get(blocker, :role))} application_name=#{quote_text(blocker.application_name)} " <>
+      "backend_type=#{quote_text(blocker.backend_type)} state=#{quote_text(blocker.state)} " <>
+      "transaction_age_s=#{blocker.transaction_age_s || "unknown"} holds_snapshot=#{describe_snapshot(blocker.holds_snapshot)}"
+  end
+
+  defp hidden_text(nil), do: "hidden"
+  defp hidden_text(text), do: quote_text(text)
+
+  defp describe_snapshot(nil), do: "unknown"
+  defp describe_snapshot(value) when is_boolean(value), do: Atom.to_string(value)
 
   defp quote_text(nil), do: "unknown"
 
@@ -453,16 +490,19 @@ defmodule CodexPooler.Release.MigrationLockBudget do
     end
   end
 
-  defp unknown_blocker(pid), do: %{pid: pid, application_name: nil, backend_type: nil, state: nil, transaction_age_s: nil, holds_snapshot: nil}
+  defp unknown_blocker(pid),
+    do: %{pid: pid, role: nil, application_name: nil, backend_type: nil, state: nil, transaction_age_s: nil, holds_snapshot: nil, visibility: :ended}
 
-  defp blocker_from_row([pid, application_name, backend_type, state, transaction_age_s, holds_snapshot]) do
+  defp blocker_from_row([pid, role, application_name, backend_type, state, transaction_age_s, holds_snapshot, visible?]) do
     %{
       pid: pid,
+      role: role,
       application_name: application_name,
       backend_type: backend_type,
       state: state,
       transaction_age_s: transaction_age_s,
-      holds_snapshot: holds_snapshot
+      holds_snapshot: holds_snapshot,
+      visibility: if(visible?, do: :visible, else: :hidden)
     }
   end
 
@@ -493,26 +533,34 @@ defmodule CodexPooler.Release.MigrationLockBudget do
 
   defp blockers_sql do
     """
-    SELECT a.pid, a.application_name, a.backend_type, a.state,
+    SELECT a.pid, a.usename, a.application_name, a.backend_type, a.state,
            (extract(epoch FROM clock_timestamp() - a.xact_start))::bigint,
-           a.backend_xmin IS NOT NULL
+           a.backend_xmin IS NOT NULL,
+           #{visible_sql()}
     FROM pg_stat_activity a
     WHERE a.pid = ANY($1::int[])
     ORDER BY a.xact_start NULLS LAST, a.pid
     """
   end
 
+  # Whether this connection's role can read the session's state, transaction start and snapshot.
+  defp visible_sql do
+    "(a.usesysid IS NOT DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = current_user) " <>
+      "OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER'))"
+  end
+
   defp open_transactions_sql do
     """
-    SELECT a.pid, a.application_name, a.backend_type, a.state,
+    SELECT a.pid, a.usename, a.application_name, a.backend_type, a.state,
            (extract(epoch FROM clock_timestamp() - a.xact_start))::bigint,
-           a.backend_xmin IS NOT NULL
+           a.backend_xmin IS NOT NULL,
+           #{visible_sql()}
     FROM pg_stat_activity a
     WHERE a.datname = current_database()
       AND a.pid <> $1
-      AND a.xact_start IS NOT NULL
-      AND a.application_name <> '#{@watch_application_name}'
-    ORDER BY a.xact_start, a.pid
+      AND (a.xact_start IS NOT NULL OR NOT #{visible_sql()})
+      AND a.application_name IS DISTINCT FROM '#{@watch_application_name}'
+    ORDER BY a.xact_start NULLS LAST, a.pid
     LIMIT #{@max_listed_blockers}
     """
   end

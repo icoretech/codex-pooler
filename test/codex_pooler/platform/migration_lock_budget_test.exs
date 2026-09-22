@@ -36,6 +36,19 @@ defmodule CodexPooler.Release.MigrationLockBudgetTest do
     end
   end
 
+  # A migration connection (and so a watcher) logged in as a role without superuser or
+  # pg_read_all_stats, like the production migration role; its credentials come from the
+  # application environment so that `config/0`, which the watcher reads, sees them too.
+  defmodule UnprivilegedRepo do
+    use Ecto.Repo, otp_app: :codex_pooler, adapter: Ecto.Adapters.Postgres
+
+    @impl true
+    def init(_type, config) do
+      connection = Keyword.take(CodexPooler.Repo.config(), [:hostname, :port, :database, :socket_dir])
+      {:ok, config |> Keyword.merge(connection) |> Keyword.merge(pool_size: 2, parameters: [application_name: "migration_lock_budget_unprivileged"])}
+    end
+  end
+
   setup do
     suffix = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
     table = "migration_lock_budget_probe_#{suffix}"
@@ -101,7 +114,7 @@ defmodule CodexPooler.Release.MigrationLockBudgetTest do
     assert is_integer(blocker.transaction_age_s)
 
     message = Exception.message(error)
-    assert message =~ "pid=#{holder_pid} application_name=\"#{context.holder_name}\""
+    assert message =~ ~r/pid=#{holder_pid} role="[^"]+" application_name="#{context.holder_name}"/
     assert message =~ "holds_snapshot=true"
     assert message =~ "does not block application reads or writes"
     refute message =~ "migration-lock-budget-query-marker"
@@ -188,6 +201,37 @@ defmodule CodexPooler.Release.MigrationLockBudgetTest do
     await_holder_released!(holder)
   end
 
+  # findings#255 row 255-63: production runs migrations as the application role, which is neither
+  # superuser nor a member of pg_read_all_stats, so a blocker of another role (a backup or a psql
+  # session run as the superuser) has its state, transaction start and snapshot hidden.
+  test "names a blocker of another database role as hidden and says why", context do
+    %{repo: repo, table: table, index: index} = unprivileged_migration_target!()
+    %{holder: holder, pid: holder_pid} = hold!(context.holder_name, ["SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", "SELECT 1"])
+
+    error =
+      assert_raise MigrationLockBudget.Error, fn ->
+        MigrationLockBudget.run(
+          repo,
+          fn -> repo.query!("CREATE INDEX CONCURRENTLY #{index} ON #{table} (id)", [], log: false, timeout: :infinity) end,
+          lock_wait_ms: @holder_budget_ms,
+          transaction_wait_ms: 400,
+          poll_interval_ms: 50
+        )
+      end
+
+    assert error.reason == :transaction_wait
+    assert [%{pid: ^holder_pid, visibility: :hidden, state: nil, transaction_age_s: nil, holds_snapshot: true} = blocker] = error.blockers
+    assert blocker.application_name == context.holder_name
+
+    message = Exception.message(error)
+    assert message =~ "pid=#{holder_pid} role=\"#{blocker.role}\" application_name=\"#{context.holder_name}\""
+    assert message =~ "backend_type=hidden state=hidden transaction_age_s=hidden holds_snapshot=true"
+    assert message =~ "grant pg_read_all_stats to the migration role"
+    refute message =~ "state=\"unknown\""
+    send(holder, :release)
+    await_holder_released!(holder)
+  end
+
   # findings#255 row 255-61: the watcher's cancel must land only on the wait it sampled. A waiter
   # session stands in for the migration backend: it waits for a table lock, then (once the holder
   # releases) runs its next statement, which a late unconditional cancel would interrupt.
@@ -238,6 +282,46 @@ defmodule CodexPooler.Release.MigrationLockBudgetTest do
     after
       @holder_budget_ms -> flunk("waiter session did not start")
     end
+  end
+
+  # A throwaway login role without privileges, a table it owns (only the owner may index it) and
+  # `UnprivilegedRepo` started as that role; everything is dropped when the test ends.
+  defp unprivileged_migration_target! do
+    suffix = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+    role = "migration_lock_budget_role_#{suffix}"
+    password = Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+    table = "migration_lock_budget_owned_#{suffix}"
+
+    on_exit(fn ->
+      Application.delete_env(:codex_pooler, UnprivilegedRepo)
+      {:ok, conn} = Postgrex.start_link(connect_options("migration_lock_budget_cleanup"))
+
+      try do
+        Postgrex.query!(conn, "DROP TABLE IF EXISTS #{table}", [])
+
+        Postgrex.query!(
+          conn,
+          "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '#{role}') THEN EXECUTE 'DROP OWNED BY #{role}'; END IF; END $$",
+          []
+        )
+
+        Postgrex.query!(conn, "DROP ROLE IF EXISTS #{role}", [])
+      after
+        GenServer.stop(conn)
+      end
+    end)
+
+    MigrationRepo.query!("CREATE ROLE #{role} LOGIN NOSUPERUSER NOINHERIT PASSWORD '#{password}'", [], log: false)
+    MigrationRepo.query!("GRANT USAGE, CREATE ON SCHEMA public TO #{role}", [], log: false)
+    MigrationRepo.query!("CREATE TABLE #{table} (id bigint)", [], log: false)
+    MigrationRepo.query!("ALTER TABLE #{table} OWNER TO #{role}", [], log: false)
+    Application.put_env(:codex_pooler, UnprivilegedRepo, username: role, password: password)
+    start_supervised!(UnprivilegedRepo)
+
+    [[false, false]] =
+      UnprivilegedRepo.query!("SELECT rolsuper, pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER') FROM pg_roles WHERE rolname = current_user", [], log: false).rows
+
+    %{repo: UnprivilegedRepo, table: table, index: "#{table}_id_idx"}
   end
 
   defp run_waiter(conn, table, test) do
