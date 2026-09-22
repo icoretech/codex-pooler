@@ -9,195 +9,175 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
   @receipt_poll_interval_ms 20
 
   test "test-fast starts EPMD before partition processes" do
-    unless partitioned_child?() do
-      fixture = start_fixture!()
-      epmd_port = available_tcp_port()
-      epmd_port_string = Integer.to_string(epmd_port)
+    fixture = start_fixture!()
+    epmd_port = available_tcp_port()
+    epmd_port_string = Integer.to_string(epmd_port)
 
-      on_exit(fn ->
-        System.cmd("epmd", ["-kill"], env: [{"ERL_EPMD_PORT", epmd_port_string}])
-      end)
+    on_exit(fn ->
+      System.cmd("epmd", ["-kill"], env: [{"ERL_EPMD_PORT", epmd_port_string}])
+    end)
 
-      assert {output, 0} =
-               run_make(fixture, 2,
-                 TEST_FAST_RELEASE: "1",
-                 TEST_FAST_REQUIRE_EPMD: "1",
-                 ERL_EPMD_PORT: epmd_port_string
-               )
+    assert {output, 0} =
+             run_make(fixture, 2,
+               TEST_FAST_RELEASE: "1",
+               TEST_FAST_REQUIRE_EPMD: "1",
+               ERL_EPMD_PORT: epmd_port_string
+             )
 
-      assert output =~ "test-fast: PASS (2/2 partitions)"
-    end
+    assert output =~ "test-fast: PASS (2/2 partitions)"
   end
 
   test "N=4 partitions share the host scheduler budget without dropping existing ERL flags" do
-    unless partitioned_child?() do
-      fixture = start_fixture!()
+    fixture = start_fixture!()
 
-      assert {output, 0} =
-               run_make(fixture, 4,
-                 TEST_FAST_CAPTURE_SCHEDULERS: "1",
-                 TEST_FAST_LOGICAL_CPUS: "12",
-                 TEST_FAST_RELEASE: "1",
-                 ERL_FLAGS: "+sbwt none"
-               )
+    assert {output, 0} =
+             run_make(fixture, 4,
+               TEST_FAST_CAPTURE_SCHEDULERS: "1",
+               TEST_FAST_LOGICAL_CPUS: "12",
+               TEST_FAST_RELEASE: "1",
+               ERL_FLAGS: "+sbwt none"
+             )
 
-      assert output =~ "test-fast: PASS (4/4 partitions)"
+    assert output =~ "test-fast: PASS (4/4 partitions)"
 
-      fixture.directory
-      |> await_receipts!("run-", 4)
-      |> Enum.each(fn receipt ->
-        contents = File.read!(Path.join(fixture.directory, receipt))
+    fixture.directory
+    |> await_receipts!("run-", 4)
+    |> Enum.each(fn receipt ->
+      contents = File.read!(Path.join(fixture.directory, receipt))
 
-        assert contents =~ "schedulers=3"
-        assert contents =~ "erl_flags=+sbwt none +S 3:3"
-        assert contents =~ ~r/candidates=\S+\/duration-[1-4]\.tsv/
-      end)
+      assert contents =~ "schedulers=3"
+      assert contents =~ "erl_flags=+sbwt none +S 3:3"
+      assert contents =~ ~r/candidates=\S+\/duration-[1-4]\.tsv/
+    end)
 
-      refute Enum.any?(File.ls!(fixture.directory), &String.starts_with?(&1, "confirm-"))
-    end
+    refute Enum.any?(File.ls!(fixture.directory), &String.starts_with?(&1, "confirm-"))
   end
 
   test "two simultaneous N=4 invocations overlap with distinct namespaces and clean exact databases" do
-    unless partitioned_child?() do
-      fixture = start_fixture!()
+    fixture = start_fixture!()
 
-      first = Task.async(fn -> run_make(fixture, 4) end)
-      second = Task.async(fn -> run_make(fixture, 4) end)
+    first = Task.async(fn -> run_make(fixture, 4) end)
+    second = Task.async(fn -> run_make(fixture, 4) end)
 
-      started = await_receipts!(fixture.directory, "run-", 8)
-      File.touch!(fixture.release_path)
+    started = await_receipts!(fixture.directory, "run-", 8)
+    File.touch!(fixture.release_path)
 
-      assert {first_output, 0} = Task.await(first, @timeout_ms)
-      assert {second_output, 0} = Task.await(second, @timeout_ms)
-      assert first_output =~ "test-fast: PASS (4/4 partitions)"
-      assert second_output =~ "test-fast: PASS (4/4 partitions)"
+    assert {first_output, 0} = Task.await(first, @timeout_ms)
+    assert {second_output, 0} = Task.await(second, @timeout_ms)
+    assert first_output =~ "test-fast: PASS (4/4 partitions)"
+    assert second_output =~ "test-fast: PASS (4/4 partitions)"
 
-      assert_namespace_partitions(started, 2, 1..4)
+    assert_namespace_partitions(started, 2, 1..4)
 
-      dropped = await_receipts!(fixture.directory, "drop-", 8)
-      assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
-    end
+    dropped = await_receipts!(fixture.directory, "drop-", 8)
+    assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
   end
 
   test "a failing partition is attributed, propagated, and cleaned" do
-    unless partitioned_child?() do
-      fixture = start_fixture!()
+    fixture = start_fixture!()
 
-      assert {output, exit_code} =
-               run_make(fixture, 2, TEST_FAST_FAIL_PARTITION: "2", TEST_FAST_RELEASE: "1")
+    assert {output, exit_code} =
+             run_make(fixture, 2, TEST_FAST_FAIL_PARTITION: "2", TEST_FAST_RELEASE: "1")
 
-      assert exit_code != 0
-      assert output =~ "partition 2/2 FAIL (exit 17)"
-      assert output =~ "test-fast: FAIL (1/2 partitions)"
+    assert exit_code != 0
+    assert output =~ "partition 2/2 FAIL (exit 17)"
+    assert output =~ "test-fast: FAIL (1/2 partitions)"
 
-      started = await_receipts!(fixture.directory, "run-", 2)
-      dropped = await_receipts!(fixture.directory, "drop-", 2)
-      assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
-    end
+    started = await_receipts!(fixture.directory, "run-", 2)
+    dropped = await_receipts!(fixture.directory, "drop-", 2)
+    assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
   end
 
   test "duration candidates are re-measured alone and pass when they fit" do
-    unless partitioned_child?() do
-      fixture = start_fixture!()
+    fixture = start_fixture!()
 
-      assert {output, 0} =
-               run_make(fixture, 2,
-                 TEST_FAST_RELEASE: "1",
-                 TEST_FAST_LOGICAL_CPUS: "4",
-                 ERL_FLAGS: "",
-                 TEST_FAST_CANDIDATES: "test/b_test.exs:9 test/a_test.exs:3",
-                 TEST_FAST_CANDIDATE_PARTITION: "2"
-               )
+    assert {output, 0} =
+             run_make(fixture, 2,
+               TEST_FAST_RELEASE: "1",
+               TEST_FAST_LOGICAL_CPUS: "4",
+               ERL_FLAGS: "",
+               TEST_FAST_CANDIDATES: "test/b_test.exs:9 test/a_test.exs:3",
+               TEST_FAST_CANDIDATE_PARTITION: "2"
+             )
 
-      assert output =~ "test-fast: 2 tests exceeded the duration limits beside the other partitions; re-measuring them alone"
-      assert output =~ "test-fast: all 2 re-measured within the duration limits (1/3 runs)"
-      assert output =~ "test-fast: PASS (2/2 partitions)"
+    assert output =~ "test-fast: 2 tests exceeded the duration limits beside the other partitions; re-measuring them alone"
+    assert output =~ "test-fast: all 2 re-measured within the duration limits (1/3 runs)"
+    assert output =~ "test-fast: PASS (2/2 partitions)"
 
-      started = await_receipts!(fixture.directory, "run-", 2)
-      [namespace] = started |> Enum.map(&(&1 |> String.split("-") |> Enum.at(1))) |> Enum.uniq()
+    started = await_receipts!(fixture.directory, "run-", 2)
+    [namespace] = started |> Enum.map(&(&1 |> String.split("-") |> Enum.at(1))) |> Enum.uniq()
 
-      assert confirm_rounds(fixture, namespace) == [
-               "namespace=#{namespace} partition=1 erl_flags=+S 2:2 candidates=set args=test/a_test.exs:3 test/b_test.exs:9"
-             ]
+    assert confirm_rounds(fixture, namespace) == [
+             "namespace=#{namespace} partition=1 erl_flags=+S 2:2 candidates=set args=test/a_test.exs:3 test/b_test.exs:9"
+           ]
 
-      dropped = await_receipts!(fixture.directory, "drop-", 2)
-      assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
-    end
+    dropped = await_receipts!(fixture.directory, "drop-", 2)
+    assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
   end
 
   test "a candidate that exceeds its limits in every run on its own fails the invocation" do
-    unless partitioned_child?() do
-      fixture = start_fixture!()
+    fixture = start_fixture!()
 
-      assert {output, exit_code} =
-               run_make(fixture, 2,
-                 TEST_FAST_RELEASE: "1",
-                 TEST_FAST_CANDIDATES: "test/a_test.exs:3 test/b_test.exs:9",
-                 TEST_FAST_CANDIDATE_PARTITION: "1",
-                 TEST_FAST_CONFIRM_KEEP: "test/b_test.exs:9"
-               )
+    assert {output, exit_code} =
+             run_make(fixture, 2,
+               TEST_FAST_RELEASE: "1",
+               TEST_FAST_CANDIDATES: "test/a_test.exs:3 test/b_test.exs:9",
+               TEST_FAST_CANDIDATE_PARTITION: "1",
+               TEST_FAST_CONFIRM_KEEP: "test/b_test.exs:9"
+             )
 
-      assert exit_code != 0
-      assert output =~ "test-fast: FAIL (duration: 1 of 2 tests exceeded the limits in 3 runs on their own)"
-      assert output =~ "test/b_test.exs:9 synthetic still over its limit"
-      refute output =~ "test-fast: PASS"
+    assert exit_code != 0
+    assert output =~ "test-fast: FAIL (duration: 1 of 2 tests exceeded the limits in 3 runs on their own)"
+    assert output =~ "test/b_test.exs:9 synthetic still over its limit"
+    refute output =~ "test-fast: PASS"
 
-      started = await_receipts!(fixture.directory, "run-", 2)
-      [namespace] = started |> Enum.map(&(&1 |> String.split("-") |> Enum.at(1))) |> Enum.uniq()
+    started = await_receipts!(fixture.directory, "run-", 2)
+    [namespace] = started |> Enum.map(&(&1 |> String.split("-") |> Enum.at(1))) |> Enum.uniq()
 
-      assert fixture |> confirm_rounds(namespace) |> Enum.map(&(&1 |> String.split("args=") |> List.last())) == [
-               "test/a_test.exs:3 test/b_test.exs:9",
-               "test/b_test.exs:9",
-               "test/b_test.exs:9"
-             ]
+    assert fixture |> confirm_rounds(namespace) |> Enum.map(&(&1 |> String.split("args=") |> List.last())) == [
+             "test/a_test.exs:3 test/b_test.exs:9",
+             "test/b_test.exs:9",
+             "test/b_test.exs:9"
+           ]
 
-      dropped = await_receipts!(fixture.directory, "drop-", 2)
-      assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
-    end
+    dropped = await_receipts!(fixture.directory, "drop-", 2)
+    assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
   end
 
   test "a re-measurement that fails on its own fails the invocation" do
-    unless partitioned_child?() do
-      fixture = start_fixture!()
+    fixture = start_fixture!()
 
-      assert {output, exit_code} =
-               run_make(fixture, 2,
-                 TEST_FAST_RELEASE: "1",
-                 TEST_FAST_CANDIDATES: "test/a_test.exs:3",
-                 TEST_FAST_CANDIDATE_PARTITION: "1",
-                 TEST_FAST_CONFIRM_EXIT: "2"
-               )
+    assert {output, exit_code} =
+             run_make(fixture, 2,
+               TEST_FAST_RELEASE: "1",
+               TEST_FAST_CANDIDATES: "test/a_test.exs:3",
+               TEST_FAST_CANDIDATE_PARTITION: "1",
+               TEST_FAST_CONFIRM_EXIT: "2"
+             )
 
-      assert exit_code != 0
-      assert output =~ "test-fast: FAIL (duration re-measurement 1/3 exited 2)"
-      refute output =~ "test-fast: PASS"
-    end
+    assert exit_code != 0
+    assert output =~ "test-fast: FAIL (duration re-measurement 1/3 exited 2)"
+    refute output =~ "test-fast: PASS"
   end
 
   for {signal, make_exit} <- [{"INT", 130}, {"TERM", 143}] do
     test "#{signal} stops children and cleans only the interrupted invocation databases" do
-      unless partitioned_child?() do
-        fixture = start_fixture!()
-        port = open_make_port(fixture, 2, unquote(signal))
+      fixture = start_fixture!()
+      port = open_make_port(fixture, 2, unquote(signal))
 
-        started = await_receipts!(fixture.directory, "run-", 2)
+      started = await_receipts!(fixture.directory, "run-", 2)
 
-        interrupt_port(port, unquote(signal))
+      interrupt_port(port, unquote(signal))
 
-        {output, exit_code} = collect_port(port)
+      {output, exit_code} = collect_port(port)
 
-        assert exit_code != 0
-        assert output =~ "test-fast: interrupted; stopping partitions"
-        assert output =~ "Error #{unquote(make_exit)}"
+      assert exit_code != 0
+      assert output =~ "test-fast: interrupted; stopping partitions"
+      assert output =~ "Error #{unquote(make_exit)}"
 
-        dropped = await_receipts!(fixture.directory, "drop-", 2)
-        assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
-      end
+      dropped = await_receipts!(fixture.directory, "drop-", 2)
+      assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
     end
-  end
-
-  defp partitioned_child? do
-    is_binary(System.get_env("CODEX_POOLER_TEST_RUN_NAMESPACE"))
   end
 
   defp start_fixture! do
@@ -310,8 +290,9 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
         args: script_args(make, partitions),
         cd: File.cwd!(),
         env:
-          Enum.map(make_env(fixture, []), fn {key, value} ->
-            {to_charlist(key), to_charlist(value)}
+          Enum.map(make_env(fixture, []), fn
+            {key, nil} -> {to_charlist(key), false}
+            {key, value} -> {to_charlist(key), to_charlist(value)}
           end)
       ]
     )
@@ -327,8 +308,9 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
         args: ["--no-print-directory", "test-fast", "N=#{partitions}"],
         cd: File.cwd!(),
         env:
-          Enum.map(make_env(fixture, []), fn {key, value} ->
-            {to_charlist(key), to_charlist(value)}
+          Enum.map(make_env(fixture, []), fn
+            {key, nil} -> {to_charlist(key), false}
+            {key, value} -> {to_charlist(key), to_charlist(value)}
           end)
       ]
     )
@@ -355,8 +337,15 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
     {_output, 0} = signal_term(os_pid)
   end
 
+  # The recipe generates its own run namespace and gives each child its own
+  # partition and candidate file. Clearing the invoking test run's values keeps
+  # this acceptance identical with or without a namespace, which every focused
+  # run sets.
   defp make_env(fixture, extra_env) do
     [
+      {"CODEX_POOLER_TEST_RUN_NAMESPACE", nil},
+      {"MIX_TEST_PARTITION", nil},
+      {"CODEX_POOLER_TEST_DURATION_CANDIDATES", nil},
       {"TEST_FAST_ACCEPTANCE_DIR", fixture.directory},
       {"TEST_FAST_COMMAND", "#{fixture.helper_path} run"},
       {"TEST_FAST_DROP_COMMAND", "#{fixture.helper_path} drop"}
