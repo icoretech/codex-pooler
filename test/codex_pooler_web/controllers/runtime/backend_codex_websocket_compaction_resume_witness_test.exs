@@ -3,8 +3,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
   # mid-turn websocket compaction admitted through the native compaction
   # admission, then the resume of the SAME turn. The resume carries the
   # compaction's turn_id, so it is not an explicit turn claim: it is admitted by
-  # redeeming the runtime proof the prepared frame was sealed with, which mints
-  # a UUID correlation and takes no turn claim. Until 8d999798 that reservation
+  # redeeming the runtime proof the prepared frame was sealed with, which minted
+  # a UUID correlation and took no turn claim (row 225-87 made it take the
+  # durable resume claim as well). Until 8d999798 that reservation
   # insert stored no native client-retry witness, so an identical resend of an
   # interrupted resume could only be refused as `missing_witness`. The existing
   # final-frame witness assertion sends a new turn_id and takes the claim path
@@ -23,7 +24,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
 
   @moduletag capture_log: true
   @detection_timeout_ms 15_000
-  @uuid ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
 
   # The released client names its thread in the turn metadata; the duplicate
   # turn claim is scoped on it (findings#250), and the compaction admission must
@@ -133,7 +133,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
       assert compact_row.endpoint == "/backend-api/codex/responses/compact"
       assert resume_row.endpoint == "/backend-api/codex/responses"
       assert resume_row.transport == "websocket"
-      assert resume_row.correlation_id =~ @uuid
+      # Admitted by the runtime proof, and since row 225-87 it also holds the
+      # durable resume claim an identical resend meets (it was a bare UUID).
+      assert String.starts_with?(resume_row.correlation_id, "codex-resume:")
 
       [compact_turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^compact_row.id))
       [resume_turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^resume_row.id))

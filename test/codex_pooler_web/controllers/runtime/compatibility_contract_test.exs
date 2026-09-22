@@ -166,7 +166,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     mid_turn_transitions: %{
       compact: "owner_capability_plus_sealed_runtime_proof",
       final: "owner_capability_plus_sealed_runtime_proof",
-      payload_shape_or_client_metadata_alone: "never_authoritative"
+      payload_shape_or_client_metadata_alone: "never_authoritative",
+      final_resume_claim: "durable_codex_resume_claim_so_an_identical_resend_is_refused"
     },
     binding: [
       "phase",

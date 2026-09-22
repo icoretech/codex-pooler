@@ -944,6 +944,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   def native_turn_claim_scope(payload, %RequestOptions{} = opts) when is_map(payload),
     do: turn_claim_scope(payload, opts)
 
+  @doc """
+  The durable `codex-resume:` claim of a frame that resumes its turn after a
+  compaction, or nil for any other frame.
+
+  A resume admitted through the native compaction runtime proof is reserved
+  under that proof, but it must still hold this claim: otherwise an identical
+  resend on another socket or over HTTP derives the same claim, finds it free
+  and buys the same history a second time (findings#225, row 225-87).
+  """
+  @spec post_compaction_resume_claim(map(), RequestOptions.t()) :: String.t() | nil
+  def post_compaction_resume_claim(
+        payload,
+        %RequestOptions{continuity: %{semantic_turn_key: semantic_turn_key}} = options
+      )
+      when is_map(payload) and is_binary(semantic_turn_key) do
+    if post_compaction_resume?(payload, options) do
+      {:post_compaction_resume, anchor} = NativeTurnContinuation.turn_role(payload)
+      WebsocketTurnIdentity.resume_claim_key(semantic_turn_key, anchor)
+    end
+  end
+
+  def post_compaction_resume_claim(_payload, %RequestOptions{}), do: nil
+
   defp put_native_turn_identity(%RequestOptions{} = request_options, :missing),
     do: request_options
 

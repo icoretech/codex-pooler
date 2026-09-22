@@ -1724,12 +1724,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp claim_explicit_websocket_turn(
-         _auth,
-         _model,
-         _payload,
-         _endpoint,
+         auth,
+         model,
+         payload,
+         endpoint,
          %RequestOptions{} = request_options,
-         %RouteState{},
+         %RouteState{} = route_state,
          %RuntimeAdmissionProof{} = proof
        ) do
     with {:ok, expected_digest} <-
@@ -1740,7 +1740,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          {:ok, correlation_id} <-
            PreparedFrameCapability.redeem_runtime_admission(proof, expected_digest) do
       :ok = emit_runtime_proof_redeemed(request_options)
-      {:ok, nil, correlation_id}
+      claim_admitted_compaction_resume(auth, model, payload, endpoint, request_options, route_state, correlation_id)
     else
       _invalid -> {:error, invalid_runtime_admission_error()}
     end
@@ -1794,6 +1794,34 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          nil
        ),
        do: {:ok, nil, nil}
+
+  # The resume of a turn after its mid-turn compaction is admitted by the
+  # runtime proof, yet the same resume sent again on another socket or over
+  # HTTP derives the durable `codex-resume:` claim and would find it free, so
+  # the provider would be paid for the same history twice (findings#225, row
+  # 225-87; the fence of findings#250). The admitted resume therefore takes that
+  # claim itself, through the same claim path and resend policy as any native
+  # turn; the reservation keeps the claimed row, and the runtime-proof
+  # correlation still marks the final admission for its window alias.
+  defp claim_admitted_compaction_resume(auth, model, payload, endpoint, request_options, route_state, correlation_id) do
+    case WebsocketCodec.post_compaction_resume_claim(payload, request_options) do
+      resume_claim when is_binary(resume_claim) ->
+        claim_options = RequestOptions.put_continuity(request_options, request_claim_key: resume_claim)
+        attrs = AccountingReservation.attrs(auth, payload, endpoint, claim_options, route_state)
+
+        case Accounting.claim_websocket_turn(auth, model, attrs) do
+          {:ok, %{request: request} = claim} ->
+            maybe_log_client_resend_admitted(claim_options, endpoint, claim)
+            {:ok, request, correlation_id}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      nil ->
+        {:ok, nil, correlation_id}
+    end
+  end
 
   defp redeem_client_retry_runtime_admission(_request_options, nil), do: {:ok, nil, nil}
 
