@@ -112,10 +112,16 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
     {scope, projection_cache} =
       quota_scope_opts_from_cache(pool_id, model, projection_cache)
 
+    served_models = served_models_by_identity(scope, assignments, snapshots_by_identity_id)
+
     assignments =
       Enum.map(assignments, fn row ->
         snapshot = Map.fetch!(snapshots_by_identity_id, row.upstream_identity_id)
-        quota_projection = quota_projection(snapshot, scope)
+
+        quota_projection =
+          snapshot
+          |> scope_snapshot(scope, Map.get(served_models, row.upstream_identity_id, MapSet.new()))
+          |> quota_projection(scope)
 
         Map.merge(row, %{
           model: model,
@@ -215,6 +221,18 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
       window_count: length(RoutingQuotaSnapshot.effective_windows(snapshot)),
       selector_windows: [],
       reason_codes: ["missing_evidence"]
+    }
+  end
+
+  # The rule names a model the Pool's active catalog does not serve: say so
+  # instead of judging quota evidence for a model no request can reach.
+  defp quota_projection(snapshot, {:model_not_served, _model}) do
+    %{
+      state: "model_not_served",
+      routing_usable?: false,
+      window_count: length(RoutingQuotaSnapshot.effective_windows(snapshot)),
+      selector_windows: [],
+      reason_codes: ["model_not_served"]
     }
   end
 
@@ -354,7 +372,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
            normalize_alias(catalog_model.exposed_model_id) == normalized_model
          end) do
       nil ->
-        {[exposed_model_id: normalized_model, upstream_model_id: normalized_model], projection_cache}
+        {{:model_not_served, normalized_model}, projection_cache}
 
       %{exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id} ->
         normalize_catalog_aliases(exposed_model_id, upstream_model_id, projection_cache)
@@ -369,6 +387,58 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
       _malformed_alias -> {:invalid_concrete_model, projection_cache}
     end
   end
+
+  # A rule without a model judges each account by its account windows plus the
+  # model windows of models that one of the account's Pools serves (an active
+  # catalog model of that Pool). Rows of a model no Pool serves any more
+  # (retired, stale or suppressed in the catalog) keep existing until
+  # retention, but must not make the account stale or exhausted for such a
+  # rule. Routing keeps its own request-scoped model filter and is not
+  # changed here; this only narrows the evidence the alert evaluation reads.
+  # Only identities that hold model-scope evidence need the lookup, so a Pool
+  # without such rows pays no extra query.
+  defp served_models_by_identity([], assignments, snapshots_by_identity_id) do
+    assignments
+    |> Enum.map(& &1.upstream_identity_id)
+    |> Enum.uniq()
+    |> Enum.filter(fn identity_id ->
+      snapshots_by_identity_id
+      |> Map.fetch!(identity_id)
+      |> Map.fetch!(:raw_windows)
+      |> Enum.any?(&(&1.quota_scope in ["model", "upstream_model"]))
+    end)
+    |> served_models_for_identities()
+  end
+
+  defp served_models_by_identity(_scope, _assignments, _snapshots_by_identity_id), do: %{}
+
+  defp served_models_for_identities([]), do: %{}
+
+  defp served_models_for_identities(identity_ids) do
+    Repo.all(
+      from assignment in PoolUpstreamAssignment,
+        join: catalog_model in Model,
+        on: catalog_model.pool_id == assignment.pool_id and catalog_model.status == ^@active,
+        where: assignment.upstream_identity_id in ^identity_ids,
+        select: {assignment.upstream_identity_id, catalog_model.exposed_model_id, catalog_model.upstream_model_id}
+    )
+    |> Enum.reduce(%{}, fn {identity_id, exposed_model_id, upstream_model_id}, acc ->
+      tokens = [exposed_model_id, upstream_model_id] |> Enum.map(&normalize_alias/1) |> Enum.reject(&is_nil/1)
+      Map.update(acc, identity_id, MapSet.new(tokens), &Enum.into(tokens, &1))
+    end)
+  end
+
+  defp scope_snapshot(%RoutingQuotaSnapshot{} = snapshot, [], served_models) do
+    %{snapshot | raw_windows: Enum.filter(snapshot.raw_windows, &served_model_window?(&1, served_models))}
+  end
+
+  defp scope_snapshot(snapshot, _scope, _served_models), do: snapshot
+
+  defp served_model_window?(%{quota_scope: scope} = window, served_models) when scope in ["model", "upstream_model"] do
+    Enum.any?([window.model, window.upstream_model], &MapSet.member?(served_models, normalize_alias(&1)))
+  end
+
+  defp served_model_window?(_window, _served_models), do: true
 
   defp normalize_concrete_alias(alias_value) do
     case normalize_alias(alias_value) do

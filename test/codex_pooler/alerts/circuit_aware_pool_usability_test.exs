@@ -80,17 +80,20 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
 
     circuit_fixture(pool, assignment, "missing-model", observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
 
+    # A model the Pool's active catalog does not serve has no usable
+    # assignment: the rule reports `model_not_served` rather than judging
+    # quota evidence, and circuit membership stays inert.
     rule =
       alert_rule_fixture(pool,
-        rule_kind: "pool_low_usable_assignments",
-        model: "missing-model",
-        min_usable_assignments: 2
+        rule_kind: "pool_no_usable_assignments",
+        model: "missing-model"
       )
 
     assert [%{action: :match, match_attrs: match}] =
              Alerts.evaluate_rule(rule, at: observed_at)
 
-    assert match.safe_evidence_snapshot["usable_assignment_count"] == 1
+    assert match.safe_evidence_snapshot["usable_assignment_count"] == 0
+    assert match.safe_evidence_snapshot["state_counts"] == %{"model_not_served" => 1}
     assert match.safe_evidence_snapshot["circuit_blocked_assignment_count"] == 0
     assert match.safe_evidence_snapshot["model_membership_resolved"] == false
   end
