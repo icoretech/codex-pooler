@@ -1567,10 +1567,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         ]
       }
 
-      assert {:ok, %{websocket_messages: [_created, _done, completed]}} =
+      assert {:ok, %{websocket_messages: [created, added, done, completed]}} =
                result_adapter.({:ok, %{status: 200, body: source}})
 
+      assert created["type"] == "response.created"
+      assert %{"type" => "response.output_item.added", "output_index" => 0} = added
+      assert %{"type" => "response.output_item.done", "output_index" => 0} = done
+      assert added["item"] == done["item"]
+      assert "cmp_" <> _derived = done["item"]["id"]
       assert completed["response"]["object"] == "response"
+      assert completed["response"]["output"] == [done["item"]]
     end
 
     test "keeps public Responses websocket creates without stream_id compatible" do
