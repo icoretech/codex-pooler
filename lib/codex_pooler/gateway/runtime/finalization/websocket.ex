@@ -799,10 +799,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   defp last_terminal_frame(body) when is_binary(body) do
     case StreamProtocol.complete_sse_blocks(body, bounded?: false) do
       {[_block | _rest] = blocks, _remaining} ->
-        case StreamProtocol.stream_block_event(List.last(blocks)) do
-          {_event_type, %{} = decoded} -> {:ok, decoded}
-          _other -> :error
-        end
+        {_event_type, decoded} = StreamProtocol.stream_block_event(List.last(blocks))
+        {:ok, decoded}
 
       _other ->
         :error
