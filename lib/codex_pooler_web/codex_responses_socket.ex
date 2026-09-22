@@ -3811,7 +3811,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       MapSet.member?(Map.get(state, :response_task_completed_terminals, MapSet.new()), pid)
 
     if completed? and Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :ok and
-         ActivityRegistry.delivery_target(pid, name: registry) == {:ok, token, pid, :admitted},
+         uncancelled_delivery_target?(state, pid, token, registry),
        do: :completed,
        else: :aborted
   catch
@@ -3819,6 +3819,29 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp response_task_cleanup_outcome(_state, _pid, _token, _ack_pid, _registry), do: :aborted
+
+  # The task itself is the admitted, uncancelled recipient of this token. The
+  # activity registry is the authority for the tasks it tracks; a local owner
+  # task is never registered there, so for it the socket's own state is: the
+  # token it learned from the task and no cancellation recipient recorded for
+  # it. Without the second arm a local owner turn whose completion reached the
+  # socket only while it terminated was always acknowledged `:aborted`, so a
+  # delivered turn retired its execution as `process_down` (findings#217, row
+  # 217-60).
+  defp uncancelled_delivery_target?(state, pid, token, registry) do
+    case ActivityRegistry.delivery_target(pid, name: registry) do
+      {:ok, ^token, ^pid, :admitted} ->
+        true
+
+      :unknown ->
+        Map.get(Map.get(state, :response_task_activities, %{}), pid) == token and
+          not Map.has_key?(Map.get(state, :response_task_delivery_recipients, %{}), pid) and
+          Map.get(Map.get(state, :response_task_delivery_outcomes, %{}), pid) != :aborted
+
+      _cancelled_or_other ->
+        false
+    end
+  end
 
   defp put_response_task_cleanup_result(state, pid, result) do
     if tracked_response_task?(state, pid) do

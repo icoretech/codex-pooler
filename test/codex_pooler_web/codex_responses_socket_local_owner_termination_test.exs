@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.ResponseTask
+  alias CodexPooler.Platform.{ExecutionIdentity, ExecutionRegistry}
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
 
@@ -105,6 +106,89 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
          %{auth: auth, completion_ordering: ordering} do
       assert_late_completion(auth, ordering)
     end
+  end
+
+  # The socket pushed and accepted the turn's `response.completed` before the
+  # client left, but the task's own completion reached the socket only during
+  # the terminate drain (its settlement was slow, as during a database outage).
+  # The terminal was delivered and the result is `:ok`, so the task must be
+  # acknowledged `:completed` and retire its execution as `completed`; a local
+  # owner task is never tracked by the activity registry, so the socket's own
+  # state is the authority for it (findings#217, row 217-60: the outage lane saw
+  # a `process_down` proof for a normally delivered turn).
+  test "a delivered local owner turn whose completion arrives during the terminate drain retires as completed", %{auth: auth} do
+    previous_level = Logger.level()
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+    Logger.configure(level: :info)
+    registry = start_supervised!({ActivityRegistry, name: nil})
+    parent = self()
+
+    socket =
+      spawn(fn ->
+        receive do
+          {:terminate, state} ->
+            {:ok, logs} =
+              ExUnit.CaptureLog.with_log([level: :info], fn ->
+                CodexResponsesSocket.terminate({:error, :closed}, state)
+              end)
+
+            send(parent, {:socket_terminated, logs})
+        end
+      end)
+
+    on_exit(fn -> Process.exit(socket, :kill) end)
+
+    {:ok, task} =
+      ResponseTask.start(
+        socket,
+        :local_owner,
+        fn _task_pid ->
+          send(parent, {:execution, ExecutionIdentity.local()})
+          {:socket_response_result, :owner_completion_pending, :ok}
+        end,
+        fn _task_pid, _reason -> :ok end,
+        activity_registry: registry,
+        before_local_completion_handoff: fn ->
+          send(parent, {:completion_held, self()})
+
+          receive do
+            :release_completion -> :ok
+          end
+        end
+      )
+
+    on_exit(fn -> Process.exit(task, :kill) end)
+    monitor = Process.monitor(task)
+    assert_receive {:execution, execution}, @detection_timeout_ms
+    assert_receive {:completion_held, ^task}, @detection_timeout_ms
+
+    {request, attempt} = receipt_fixture(auth)
+
+    state =
+      local_owner_state(auth, task, registry)
+      |> put_delivery_receipt_context(task, request, attempt)
+      |> Map.put(:response_task_terminals_accepted, MapSet.new([task]))
+      |> Map.put(:response_task_completed_terminals, MapSet.new([task]))
+
+    owner =
+      start_supervised!({WebsocketOwnerSession, codex_session_id: state.codex_session.id, owner_lease_token: state.websocket_owner_lease_token, owner_instance_id: state.codex_session.owner_instance_id})
+
+    assert {:ok, downstream} = WebsocketOwnerSession.attach_downstream(owner, %{pid: socket, correlation_id: "late-delivered-completion"})
+
+    send(socket, {:terminate, %{state | websocket_owner_downstream: downstream}})
+    await_post_cleanup_wait(socket, System.monotonic_time(:millisecond) + @detection_timeout_ms)
+    send(task, :release_completion)
+
+    assert_receive {:DOWN, ^monitor, :process, ^task, :normal}, @detection_timeout_ms
+    assert_receive {:socket_terminated, logs}, @detection_timeout_ms
+
+    assert [proof] = Enum.filter(ExecutionRegistry.pending(10_000), &(&1.owner_execution_id == execution.owner_execution_id))
+    assert proof.end_kind == "completed"
+
+    assert [[receipt]] = Regex.scan(~r/websocket downstream terminal pushed [^\n]*/, logs)
+    assert receipt =~ "outcome=delivered terminal_class=response.completed"
+    assert Repo.get!(Attempt, attempt.id).response_metadata["downstream_delivery"]["outcome"] == "delivered"
+    Logger.configure(level: previous_level)
   end
 
   defp assert_late_completion(auth, ordering) do
