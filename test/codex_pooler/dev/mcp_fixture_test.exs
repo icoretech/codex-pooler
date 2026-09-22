@@ -10,6 +10,7 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings}
   alias CodexPooler.Pools.Membership
   alias CodexPooler.Repo
+  alias Mix.Tasks.Dev.McpFixture, as: MCPFixtureTask
 
   setup do
     Repo.delete_all(OperatorMCPKey)
@@ -202,6 +203,78 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
   test "refuses non-development use without the explicit test allowance", %{path: path} do
     assert {:error, "MCP fixture runs only with MIX_ENV=dev"} =
              MCPFixture.acquire(environment: :test, receipt_path: path)
+  end
+
+  test "allows only an explicitly authorized isolated loopback QA database in development" do
+    isolated = "codex_pooler_relqa_fixture_12345678"
+
+    assert :ok =
+             MCPFixture.validate_environment(
+               environment: :dev,
+               repo_config: [database: "codex_pooler_dev", hostname: "localhost"]
+             )
+
+    for hostname <- ["127.0.0.1", "localhost", "::1"] do
+      assert :ok =
+               MCPFixture.validate_environment(
+                 environment: :dev,
+                 allow_isolated_dev_database: true,
+                 repo_config: [database: isolated, hostname: hostname]
+               )
+    end
+
+    refused = [
+      {false, [database: isolated, hostname: "127.0.0.1"]},
+      {true, [database: "codex_pooler_relqa_short", hostname: "127.0.0.1"]},
+      {true, [database: "codex_pooler_relqa_upper_CASE_12345678", hostname: "127.0.0.1"]},
+      {true, [database: "codex_pooler_relqa_../escape_12345678", hostname: "127.0.0.1"]},
+      {true, [database: "codex_pooler_prod", hostname: "127.0.0.1"]},
+      {true, [database: isolated, hostname: "db.example.com"]},
+      {true, [database: isolated, hostname: "10.0.0.5"]},
+      {true, [database: isolated]},
+      {true, [database: isolated, hostname: "127.0.0.1", url: "ecto://user:pass@db.example.com/#{isolated}"]},
+      {true, [database: isolated, hostname: "127.0.0.1", socket_dir: "/var/run/postgresql"]}
+    ]
+
+    for {allow?, repo_config} <- refused do
+      assert {:error, "MCP fixture requires database codex_pooler_dev"} =
+               MCPFixture.validate_environment(environment: :dev, allow_isolated_dev_database: allow?, repo_config: repo_config)
+    end
+
+    assert {:error, "MCP fixture runs only with MIX_ENV=dev"} =
+             MCPFixture.validate_environment(
+               environment: :test,
+               allow_isolated_dev_database: true,
+               repo_config: [database: isolated, hostname: "127.0.0.1"]
+             )
+  end
+
+  test "an isolated database scopes the receipt so a development lease is never reused" do
+    isolated = "codex_pooler_relqa_fixture_#{System.unique_integer([:positive])}_abcdefgh"
+    options = [environment: :dev, allow_isolated_dev_database: true, repo_config: [database: isolated, hostname: "127.0.0.1"]]
+    scoped_root = Path.join([File.cwd!(), "tmp", "mcp-fixture", isolated])
+    on_exit(fn -> File.rm_rf(scoped_root) end)
+
+    assert {:ok, %{status: "absent", leases: 0, receipt_path: scoped}} = MCPFixture.status(options)
+    assert scoped == Path.join(scoped_root, "setup.json")
+    refute scoped == MCPFixture.receipt_path()
+    refute File.exists?(scoped_root)
+
+    assert {:ok, %{receipt_path: default}} = MCPFixture.status(environment: :dev, repo_config: [database: "codex_pooler_dev", hostname: "localhost"])
+    assert default == MCPFixture.receipt_path()
+
+    assert {:error, "MCP fixture requires database codex_pooler_dev"} =
+             MCPFixture.status(Keyword.put(options, :repo_config, database: isolated, hostname: "db.example.com"))
+  end
+
+  test "the Mix task accepts the isolated database flag and still applies the environment guard" do
+    assert_raise Mix.Error, "MCP fixture runs only with MIX_ENV=dev", fn ->
+      MCPFixtureTask.run(["status", "--allow-isolated-dev-database"])
+    end
+
+    assert_raise Mix.Error, ~r/use acquire, release, or status/, fn ->
+      MCPFixtureTask.run(["status", "--allow-isolated-dev-database", "extra"])
+    end
   end
 
   defp fixture_options(path) do

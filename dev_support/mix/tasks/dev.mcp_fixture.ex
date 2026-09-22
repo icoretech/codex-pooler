@@ -5,6 +5,10 @@ defmodule Mix.Tasks.Dev.McpFixture do
       MIX_ENV=dev mix dev.mcp_fixture acquire
       MIX_ENV=dev mix dev.mcp_fixture status
       MIX_ENV=dev mix dev.mcp_fixture release
+
+  `--allow-isolated-dev-database` lets every action target a disposable
+  isolated QA database (`codex_pooler_relqa_*` over loopback TCP) instead of
+  `codex_pooler_dev`; its receipt then lives below `tmp/mcp-fixture/<database>/`.
   """
 
   use Mix.Task
@@ -16,9 +20,9 @@ defmodule Mix.Tasks.Dev.McpFixture do
 
   @impl Mix.Task
   def run(args) do
-    with {:ok, action} <- parse_args(args),
+    with {:ok, action, options} <- parse_args(args),
          :ok <- maybe_start_application(action),
-         result <- run_action(action) do
+         result <- run_action(action, options) do
       case result do
         {:ok, status} -> Mix.shell().info(CodexPooler.JSON.encode!(status))
         {:error, message} -> Mix.raise(message)
@@ -28,10 +32,20 @@ defmodule Mix.Tasks.Dev.McpFixture do
     end
   end
 
-  defp parse_args(["acquire"]), do: {:ok, :acquire}
-  defp parse_args(["release"]), do: {:ok, :release}
-  defp parse_args(["status"]), do: {:ok, :status}
-  defp parse_args(_args), do: {:error, "use acquire, release, or status"}
+  defp parse_args(args) do
+    case OptionParser.parse(args, strict: [allow_isolated_dev_database: :boolean]) do
+      {options, ["acquire"], []} -> {:ok, :acquire, isolated_option(options)}
+      {options, ["release"], []} -> {:ok, :release, isolated_option(options)}
+      {options, ["status"], []} -> {:ok, :status, isolated_option(options)}
+      _invalid -> {:error, "use acquire, release, or status [--allow-isolated-dev-database]"}
+    end
+  end
+
+  defp isolated_option(options) do
+    if Keyword.get(options, :allow_isolated_dev_database, false),
+      do: [allow_isolated_dev_database: true],
+      else: []
+  end
 
   defp maybe_start_application(:status), do: :ok
 
@@ -40,7 +54,7 @@ defmodule Mix.Tasks.Dev.McpFixture do
     :ok
   end
 
-  defp run_action(:acquire), do: MCPFixture.acquire()
-  defp run_action(:release), do: MCPFixture.release()
-  defp run_action(:status), do: MCPFixture.status()
+  defp run_action(:acquire, options), do: MCPFixture.acquire(options)
+  defp run_action(:release, options), do: MCPFixture.release(options)
+  defp run_action(:status, options), do: MCPFixture.status(options)
 end
