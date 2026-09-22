@@ -347,7 +347,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
         <UsagePollPause.usage_poll_pause
           id_prefix={"upstream-account-#{@account.identity.id}"}
+          account_id={@account.identity.id}
           pause={Map.get(@account, :usage_poll_pause)}
+          clear_unavailable_reason={UpstreamAccountActions.assignment_unavailable_reason(@account.assignments)}
         />
       </div>
       <AdminComponents.card_fact_strip

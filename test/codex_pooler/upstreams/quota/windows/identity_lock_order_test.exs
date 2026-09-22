@@ -47,7 +47,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
-  alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
+  alias CodexPooler.Upstreams.Reconciliation.{PoolReconciliation, UsagePollCooldown}
   alias CodexPooler.Upstreams.SavedResets.{Convergence, ProbeLease, RedemptionLifecycle}
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
@@ -255,6 +255,47 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
 
       assert results == %{row: {:ok, :confirmed}, advisory: {:ok, :unchanged}}
       assert redemption(identity)["phase"] == RedemptionLifecycle.confirmed_by_upstream()
+    end
+  end
+
+  describe "usage polling pause leaf transactions" do
+    setup do
+      identity = unboxed(fn -> upstream_identity_fixture() end)
+      register_unboxed_cleanup!(fn -> Repo.delete!(identity) end)
+      as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      %{
+        identity: identity,
+        origin: UsagePollCooldown.origin_key("https://usage.example.test/backend-api/wham/usage"),
+        as_of: as_of,
+        deadline: DateTime.add(as_of, 3 * 86_400, :second)
+      }
+    end
+
+    test "recording a provider pause locks only the identity row", ctx do
+      results =
+        assert_row_only_leaf(ctx.identity, fn ->
+          UsagePollCooldown.record(ctx.identity.id, 1, ctx.origin, 429, ctx.deadline, ctx.as_of)
+        end)
+
+      assert results == %{row: {:ok, ctx.deadline}, advisory: {:ok, ctx.deadline}}
+    end
+
+    test "the operator's clear locks only the identity row", ctx do
+      record = fn ->
+        {:ok, _deadline} = unboxed(fn -> UsagePollCooldown.record(ctx.identity.id, 1, ctx.origin, 429, ctx.deadline, ctx.as_of) end)
+        :ok
+      end
+
+      results =
+        assert_row_only_leaf(ctx.identity, fn -> UsagePollCooldown.clear(ctx.identity.id, ctx.as_of) end, before_each: record)
+
+      deadline = ctx.deadline
+
+      assert %{
+               row: {:ok, {%UpstreamIdentity{}, [%{not_before: ^deadline}]}},
+               advisory: {:ok, {%UpstreamIdentity{}, [%{not_before: ^deadline}]}}
+             } = results
     end
   end
 

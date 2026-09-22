@@ -1,9 +1,11 @@
 defmodule CodexPoolerWeb.Admin.UpstreamsUsagePollPauseLiveTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
@@ -43,6 +45,45 @@ defmodule CodexPoolerWeb.Admin.UpstreamsUsagePollPauseLiveTest do
     refute html =~ UsagePollCooldown.metadata_key()
     refute html =~ FakeUpstream.url(fake)
     refute html =~ "credential_epoch"
+  end
+
+  test "the operator resumes a multi-day pause from the account card, audited, and the next read reaches the provider", %{conn: conn, user: user} do
+    %{identity: identity, fake: fake} = account = throttled_account!("259-clear")
+    prefix = "upstream-account-#{identity.id}"
+
+    assert {:ok, _result} = reconcile!(account)
+    assert {:ok, _result} = reconcile!(account)
+    # The pause holds: the second cycle never reached the provider.
+    assert length(FakeUpstream.requests(fake)) == 1
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    assert has_element?(view, "##{prefix}-usage-poll-pause")
+    assert has_element?(view, "##{prefix}-usage-poll-pause-clear[phx-click='clear_usage_poll_pause'][data-confirm]")
+
+    view |> element("##{prefix}-usage-poll-pause-clear") |> render_click()
+
+    assert render(view) =~ "Usage polling resumed for this account"
+    refute has_element?(view, "##{prefix}-usage-poll-pause")
+
+    assert [event] =
+             Repo.all(
+               from(event in AuditEvent,
+                 where: event.action == "upstream_account.usage_poll_pause_clear" and event.target_id == ^identity.id
+               )
+             )
+
+    assert event.actor_user_id == user.id
+    assert %{"cleared_pause_count" => 1, "cleared_pause_status_codes" => [429], "trigger_kind" => "admin_upstreams_live"} = event.details
+    refute CodexPooler.JSON.encode!(event.details) =~ FakeUpstream.url(fake)
+
+    # The next cycle reads usage again. The provider still throttles and says so
+    # for another three days, and that instruction is honoured in full.
+    assert {:ok, _result} = reconcile!(account)
+    assert length(FakeUpstream.requests(fake)) == 2
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    assert has_element?(view, "##{prefix}-usage-poll-pause[data-status-code='429']")
+    assert has_element?(view, "##{prefix}-usage-poll-pause-remaining", "in 2d 23h")
   end
 
   test "an account whose usage polling is not paused shows no pause", %{conn: conn} do

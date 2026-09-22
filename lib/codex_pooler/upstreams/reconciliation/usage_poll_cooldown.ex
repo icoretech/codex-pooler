@@ -195,6 +195,38 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   def active_pauses(_metadata, _credential_epoch, %DateTime{}), do: []
 
   @doc """
+  End every pause recorded for the credential this identity holds now.
+
+  This is the operator's exit, never an automatic one: the provider's
+  instruction is removed only because someone asked. It takes the identity row
+  lock `record/6` takes, so the two serialize - a pause committed before the
+  clear is removed with it, and one committed after the clear applies exactly
+  as it would have on an unpaused account, whatever its length. Joins a caller's
+  transaction when there is one, so the caller can record the audit event in
+  the same commit.
+  """
+  @spec clear(Ecto.UUID.t(), DateTime.t()) ::
+          {:ok, {UpstreamIdentity.t(), [active_pause(), ...]}}
+          | {:error, :upstream_identity_not_found | :no_active_usage_poll_pause}
+  def clear(identity_id, %DateTime{} = as_of) do
+    Repo.transaction(fn ->
+      with %UpstreamIdentity{} = identity <- lock_identity(identity_id),
+           [_ | _] = pauses <-
+             active_pauses(identity.metadata, CredentialFencing.credential_epoch(identity), as_of) do
+        cleared =
+          identity
+          |> UpstreamIdentity.changeset(%{metadata: Map.delete(identity.metadata, @metadata_key)})
+          |> Repo.update!()
+
+        {cleared, pauses}
+      else
+        nil -> Repo.rollback(:upstream_identity_not_found)
+        [] -> Repo.rollback(:no_active_usage_poll_pause)
+      end
+    end)
+  end
+
+  @doc """
   The bounded status name for a throttling response, or `nil` for a status that
   carries no pause.
   """

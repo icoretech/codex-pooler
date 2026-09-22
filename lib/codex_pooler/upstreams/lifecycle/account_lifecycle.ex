@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.Lifecycle.{AccountAudit, CredentialFencing}
+  alias CodexPooler.Upstreams.Reconciliation.UsagePollCooldown
   alias CodexPooler.Upstreams.Secrets
 
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -225,6 +226,64 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
 
   def reactivate_account_for_scope(_scope, _identity_or_id, _attrs),
     do: {:error, lifecycle_error(:invalid_request, "user scope is required")}
+
+  @doc """
+  End the provider-requested usage polling pause on one account because an
+  operator asked to.
+
+  Authorized exactly like pause and reactivate. The clear and its audit event
+  commit together, so a pause is never removed without a record of who removed
+  it. Nothing else about the account changes: its status, credential epoch,
+  assignments and quota evidence stay as they are, and the next usage read goes
+  out on the ordinary schedule. A pause the provider asks for after the clear
+  commits is honoured in full.
+  """
+  @spec clear_usage_poll_pause_for_scope(Scope.t(), identity_ref(), map()) :: lifecycle_result()
+  def clear_usage_poll_pause_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
+    with {:ok, identity} <- authorize(scope, identity_or_id) do
+      attrs = atomize_attrs(attrs)
+
+      Repo.transaction(fn -> clear_usage_poll_pause_and_audit(scope, identity, attrs) end)
+      |> tap_upstream_change("upstream_account_usage_poll_pause_cleared")
+    end
+  end
+
+  def clear_usage_poll_pause_for_scope(_scope, _identity_or_id, _attrs),
+    do: {:error, lifecycle_error(:invalid_request, "user scope is required")}
+
+  defp clear_usage_poll_pause_and_audit(scope, identity, attrs) do
+    with {:ok, {cleared_identity, pauses}} <- UsagePollCooldown.clear(identity.id, now()),
+         {:ok, result} <-
+           {:ok, lifecycle_result(:usage_poll_pause_cleared, cleared_identity)}
+           |> AccountAudit.record_change_strict(scope, "upstream_account.usage_poll_pause_clear",
+             previous_status: identity.status,
+             trigger_kind: Map.get(attrs, :reason),
+             details: cleared_pause_details(pauses)
+           ) do
+      result
+    else
+      {:error, reason} -> Repo.rollback(usage_poll_pause_error(reason))
+    end
+  end
+
+  # What the operator overrode, in the bounded vocabulary the pause itself
+  # stores: how many usage hosts, the latest deadline, and the statuses that
+  # caused them. The origin digests identify nothing an auditor needs.
+  defp cleared_pause_details([longest | _others] = pauses) do
+    %{
+      cleared_pause_count: length(pauses),
+      cleared_paused_until: DateTime.to_iso8601(longest.not_before),
+      cleared_pause_status_codes: pauses |> Enum.map(& &1.status_code) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort()
+    }
+  end
+
+  defp usage_poll_pause_error(:no_active_usage_poll_pause),
+    do: lifecycle_error(:no_active_usage_poll_pause, "usage polling is not paused for this account")
+
+  defp usage_poll_pause_error(:upstream_identity_not_found),
+    do: lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")
+
+  defp usage_poll_pause_error(reason), do: reason
 
   @spec soft_delete_account(identity_ref(), map()) :: lifecycle_result()
   defp soft_delete_account(identity_or_id, attrs) do

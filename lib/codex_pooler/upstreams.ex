@@ -211,6 +211,9 @@ defmodule CodexPooler.Upstreams do
     UsagePollCooldown.active_pauses(identity.metadata, CredentialFencing.credential_epoch(identity), as_of)
   end
 
+  @spec clear_usage_poll_pause_for_scope(Scope.t(), identity_ref(), map()) :: lifecycle_result()
+  defdelegate clear_usage_poll_pause_for_scope(scope, identity_or_id, attrs), to: AccountLifecycle
+
   @spec enqueue_token_refresh_for_scope(Scope.t(), identity_ref(), keyword()) ::
           {:ok, map()} | {:error, lifecycle_error() | Ecto.Changeset.t()}
   defdelegate enqueue_token_refresh_for_scope(scope, identity_or_id, opts \\ []),
