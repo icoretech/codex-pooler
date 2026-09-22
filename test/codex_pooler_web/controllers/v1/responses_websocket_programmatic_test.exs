@@ -2287,11 +2287,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
         assert Enum.map(frames, & &1["type"]) == [
                  "response.created",
+                 "response.output_item.added",
                  "response.output_item.done",
                  "response.completed"
                ]
 
-        assert Enum.map(frames, & &1["sequence_number"]) == [0, 1, 2]
+        assert Enum.map(frames, & &1["sequence_number"]) == [0, 1, 2, 3]
         assert Enum.all?(frames, &(&1["stream_id"] == stream_id))
 
         assert get_in(List.first(frames), ["response", "status"]) == "in_progress"
@@ -2299,10 +2300,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         assert get_in(List.first(frames), ["response", "id"]) ==
                  get_in(List.last(frames), ["response", "id"])
 
-        done_item = get_in(Enum.at(frames, 1), ["item"])
+        added_item = get_in(Enum.at(frames, 1), ["item"])
+        done_item = get_in(Enum.at(frames, 2), ["item"])
         completed_item = get_in(List.last(frames), ["response", "output", Access.at(0)])
 
+        assert Enum.map(Enum.slice(frames, 1, 2), & &1["output_index"]) == [0, 0]
+        assert added_item == done_item
         assert done_item == completed_item
+        refute Map.has_key?(get_in(List.first(frames), ["response"]), "usage")
 
         # The upstream item had a null id; the public item carries the id
         # derived from its encrypted content, which replay strips again
@@ -2549,6 +2554,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
       assert Enum.map(compact_frames, & &1["type"]) == [
                "response.created",
+               "response.output_item.added",
                "response.output_item.done",
                "response.completed"
              ]

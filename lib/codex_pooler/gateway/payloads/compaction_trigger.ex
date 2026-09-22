@@ -527,20 +527,13 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     }
   end
 
+  # The same item grammar as the public SSE body; the downstream socket stamps
+  # sequence numbers and the stream id on each message itself (findings#254).
   defp adapted_result(result, decoded, item, :websocket) do
-    response = public_response(decoded, item)
-
     %{
       status: 200,
       headers: json_headers(result),
-      websocket_messages: [
-        %{
-          "type" => "response.created",
-          "response" => %{response | "status" => "in_progress", "output" => []}
-        },
-        %{"type" => "response.output_item.done", "output_index" => 0, "item" => item},
-        %{"type" => "response.completed", "response" => response}
-      ]
+      websocket_messages: Enum.map(public_stream_events(decoded, item), fn {type, event} -> Map.put(event, "type", type) end)
     }
   end
 
@@ -559,7 +552,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   # SDK stream helpers enforce, as the provider's own compaction stream does:
   # the response opens with an empty output, the item is announced at its
   # output index before it is closed, and one response id runs throughout.
-  defp public_sse_body(decoded, item) do
+  # Public SSE and the public websocket emit the same events.
+  defp public_stream_events(decoded, item) do
     response = public_response(decoded, item)
     opening = %{response | "status" => "in_progress", "output" => []} |> Map.delete("usage")
 
@@ -569,6 +563,11 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
       {"response.output_item.done", %{"output_index" => 0, "item" => item}},
       {"response.completed", %{"response" => response}}
     ]
+  end
+
+  defp public_sse_body(decoded, item) do
+    decoded
+    |> public_stream_events(item)
     |> Enum.with_index()
     |> Enum.map(fn {{type, event}, sequence_number} ->
       sse_block(type, event |> Map.put("type", type) |> Map.put("sequence_number", sequence_number))

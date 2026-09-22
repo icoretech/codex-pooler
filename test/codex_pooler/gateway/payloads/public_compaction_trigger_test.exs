@@ -386,12 +386,26 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
     {response, [added["item"], done["item"] | response["output"]]}
   end
 
-  defp public_result(%{websocket_messages: [created, done, completed]}, :websocket) do
+  # The public websocket speaks the same item grammar as the public SSE body:
+  # the downstream socket stamps sequence numbers and the stream id itself
+  # (findings#254).
+  defp public_result(%{websocket_messages: [created, added, done, completed] = messages}, :websocket) do
+    assert Enum.map(messages, & &1["type"]) == [
+             "response.created",
+             "response.output_item.added",
+             "response.output_item.done",
+             "response.completed"
+           ]
+
+    refute Enum.any?(messages, &Map.has_key?(&1, "sequence_number"))
     response = completed["response"]
-    assert created["type"] == "response.created"
-    assert created["response"] == %{response | "status" => "in_progress", "output" => []}
+
+    assert created["response"] ==
+             response |> Map.delete("usage") |> Map.merge(%{"status" => "in_progress", "output" => []})
+
+    assert added["output_index"] == 0
     assert done["output_index"] == 0
-    {response, [done["item"] | response["output"]]}
+    {response, [added["item"], done["item"] | response["output"]]}
   end
 
   defp maybe_put_source_id(item, :absent), do: item

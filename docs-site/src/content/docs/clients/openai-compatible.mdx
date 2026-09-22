@@ -280,7 +280,7 @@ const compaction = result.content.find(
 
 The serialized request must contain visible input followed by exactly one final `{"type":"compaction_trigger"}` item. Non-terminal, duplicate, trigger-only, hidden-only, or otherwise malformed placement returns an OpenAI-shaped `400 invalid_request` on `input` before upstream dispatch.
 
-Successful non-streaming HTTP returns a completed Responses JSON object containing the normalized compaction item. Public SSE emits `response.output_item.done`, then `response.completed`, then `[DONE]`. Narrow Responses websocket completion emits the same two Responses events without the HTTP `[DONE]` sentinel. Direct `POST /v1/responses/compact` remains unsupported.
+Successful non-streaming HTTP returns a completed Responses JSON object containing the normalized compaction item. Public SSE follows the Responses streaming grammar the official SDK stream helpers expect: `response.created` with an empty output, `response.output_item.added` and `response.output_item.done` for the compaction item at `output_index` 0, then `response.completed` and `[DONE]`. Narrow Responses websocket completion emits the same four Responses events without the HTTP `[DONE]` sentinel. Direct `POST /v1/responses/compact` remains unsupported.
 
 If upstream compact output is malformed JSON or does not contain nonblank encrypted compaction content, Codex Pooler returns a sanitized `502 invalid_compaction_response`. Other provider failures follow the public error rules documented below.
 
@@ -288,7 +288,7 @@ If upstream compact output is malformed JSON or does not contain nonblank encryp
 
 When a compaction turn returns an encrypted `type: "compaction"` output item, submit that item unchanged at the start of the next `POST /v1/responses` input, followed by the new user input. Start a new chain by omitting `previous_response_id`; the compact response envelope id is not a replay anchor.
 
-The stable public replay fields are `type`, a nonblank opaque `encrypted_content` string, and optional `id`. The `id` key may be absent, a string, or explicitly `null`, and its presence is preserved. JSON, SSE, and narrow Responses websocket surfaces return the same normalized item. Native-only metadata and unknown fields are removed from output; unknown replay fields or malformed values are rejected before upstream dispatch. Treat `encrypted_content` as opaque and do not log or persist it in application telemetry.
+The stable public replay fields are `type`, a nonblank opaque `encrypted_content` string, and a string `id`. When the upstream item carries no usable id, Codex Pooler returns a derived `cmp_` id and removes that derived id again when the item is replayed, so the upstream receives the item as it produced it; a provider id is forwarded unchanged. JSON, SSE, and narrow Responses websocket surfaces return the same normalized item. Native-only metadata and unknown fields are removed from output; unknown replay fields or malformed values are rejected before upstream dispatch. Treat `encrypted_content` as opaque and do not log or persist it in application telemetry.
 
 ## Supported or translated route support
 

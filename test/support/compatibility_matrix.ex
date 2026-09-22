@@ -1793,6 +1793,7 @@ defmodule CodexPooler.CompatibilityMatrix do
               ],
               responses_websocket: [
                 "response.created",
+                "response.output_item.added",
                 "response.output_item.done",
                 "response.completed"
               ]
