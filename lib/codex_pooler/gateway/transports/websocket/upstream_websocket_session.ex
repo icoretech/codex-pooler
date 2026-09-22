@@ -1683,9 +1683,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp reduce_receive_result({:continue, _state, _receive_state} = result), do: {:cont, result}
 
-  defp reduce_receive_result({:terminal, _state, _receive_state, _terminal} = result),
-    do: {:halt, result}
-
+  # Only `handle_part/2` folds through here, so every terminal that reaches
+  # this function came from `reduce_frames/2` and carries the frames decoded
+  # behind it in the same read. The four-element terminal exists solely for
+  # `guard_connection_bound_continuation/3`, which hands its synthetic terminal
+  # straight to `finish_receive_result/1` and never passes through this fold.
   defp reduce_receive_result({:terminal, _state, _receive_state, _terminal, _trailing} = result),
     do: {:halt, result}
 
