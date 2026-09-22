@@ -55,6 +55,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
       |> Enum.map(fn candidates ->
         candidates
         |> reject_prior_cycle_windows(as_of)
+        |> reject_expired_behind_running_cycle(as_of)
         |> reject_exhaustion_overridden_by_confirmed_usage(as_of)
         |> best_logical_window(as_of)
       end)
@@ -131,6 +132,23 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
       (reject_fresh? or not fresh?(window, as_of)) and match?(%DateTime{}, window.reset_at) and
         DateTime.diff(newest, window.reset_at, :second) > @prior_cycle_margin_seconds
     end)
+  end
+
+  # A row whose reset has passed describes a cycle that has ended, so while any
+  # sibling still reports a reset in the future it has nothing left to say
+  # about the running cycle. The prior-cycle filter above only anchors on fresh
+  # or provider-confirmed resets, so when the Usage API poll stops succeeding
+  # and every row ages past the freshness TTL, an expired row at 100% would
+  # otherwise win the merge by pressure and show the ended cycle's exhaustion
+  # as the account's current state. A fresh row never loses to an expired one
+  # anyway (an expired row is never fresh), so this changes the winner only in
+  # that all-stale case. A group whose rows have all expired is left untouched.
+  defp reject_expired_behind_running_cycle(candidates, as_of) do
+    if Enum.any?(candidates, &(reset_bearing?(&1) and not expired?(&1, as_of))) do
+      Enum.reject(candidates, &expired?(&1, as_of))
+    else
+      candidates
+    end
   end
 
   # Evidence observed after the evaluation instant did not exist in that form

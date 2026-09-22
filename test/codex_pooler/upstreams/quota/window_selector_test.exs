@@ -171,6 +171,37 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
            ]
   end
 
+  test "an expired exhausted row loses to a stale row of the running cycle in both candidate orders" do
+    # Usage polling failed: every row is stale, and the rate-limit-event row
+    # still describes a cycle that ended weeks ago at 100%.
+    expired_exhausted =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_rate_limit_event",
+        merge_precedence: 90,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(@as_of, -60, :day),
+        observed_at: DateTime.add(@as_of, -67, :day)
+      )
+
+    stale_running =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("30"),
+        reset_at: DateTime.add(@as_of, 3, :day),
+        observed_at: DateTime.add(@as_of, -2, :hour)
+      )
+
+    for windows <- [[expired_exhausted, stale_running], [stale_running, expired_exhausted]] do
+      assert WindowSelector.logical_windows(windows, @as_of) == [stale_running]
+    end
+
+    # With no running-cycle row left, the expired row is the only evidence and stays.
+    assert WindowSelector.logical_windows([expired_exhausted], @as_of) == [expired_exhausted]
+  end
+
   test "same-cycle rows with countdown jitter are not rejected" do
     # Resets within the margin describe the same running cycle.
     fresh_zero =
