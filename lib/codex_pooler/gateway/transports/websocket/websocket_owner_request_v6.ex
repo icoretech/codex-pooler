@@ -169,7 +169,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6 do
     map_size(compaction) == 6 and trigger in [:auto, :manual] and
       reason in [:user_requested, :context_limit, :model_downshift, :comp_hash_changed] and
       implementation in [:responses, :responses_compaction_v2, :responses_compact] and
-      phase in [:standalone_turn, :pre_turn, :mid_turn] and
+      phase in [:standalone_turn, :pre_turn, :mid_turn, :post_turn] and
       strategy in [:memento, :prefix_compaction]
   end
 

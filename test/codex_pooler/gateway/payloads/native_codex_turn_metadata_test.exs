@@ -137,7 +137,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
         "comp_hash_changed"
       ],
       "implementation" => ["responses", "responses_compaction_v2", "responses_compact"],
-      "phase" => ["standalone_turn", "pre_turn", "mid_turn"],
+      "phase" => ["standalone_turn", "pre_turn", "mid_turn", "post_turn"],
       "strategy" => ["memento", "prefix_compaction"]
     }
 

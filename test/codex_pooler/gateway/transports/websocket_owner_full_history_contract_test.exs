@@ -465,6 +465,24 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
     end
   end
 
+  test "v6 carries the post_turn phase and an owner that does not know a phase fails closed as owner_unavailable" do
+    post_turn = %{compaction_metadata() | compaction: %{compaction_metadata().compaction | trigger: :auto, reason: :context_limit, phase: :post_turn}}
+    assert {:ok, request} = WebsocketOwnerRequestV6.new(Map.put(attrs(), :native_compaction_metadata, post_turn))
+    assert request.native_compaction_metadata.compaction.phase == :post_turn
+
+    # A node running a release that predates a phase validates the envelope
+    # against its own closed vocabulary. Stand in for it with a phase this
+    # release does not know: the owner answers the retryable owner_unavailable
+    # the socket already maps for an owner without the v6 entrypoint, never a
+    # crash or a terminal refusal.
+    unknown = %{post_turn | compaction: %{post_turn.compaction | phase: :future_phase}}
+    old_node_view = struct!(WebsocketOwnerRequestV6, Map.put(attrs(), :native_compaction_metadata, unknown))
+    downstream = %{pid: self(), epoch: 1, correlation_id: "v6-unknown-phase"}
+
+    assert {:error, :owner_unavailable} =
+             WebsocketOwnerForwarder.remote_submit_request_v6(Ecto.UUID.generate(), downstream, old_node_view)
+  end
+
   defp compaction_metadata do
     %NativeCodexTurnMetadata{
       semantic_turn_key: <<1::256>>,

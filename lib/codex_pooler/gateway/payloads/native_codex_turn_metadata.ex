@@ -14,7 +14,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
             trigger: :auto | :manual,
             reason: :user_requested | :context_limit | :model_downshift | :comp_hash_changed,
             implementation: :responses | :responses_compaction_v2 | :responses_compact,
-            phase: :standalone_turn | :pre_turn | :mid_turn,
+            phase: :standalone_turn | :pre_turn | :mid_turn | :post_turn,
             strategy: :memento | :prefix_compaction
           }
   end
@@ -299,7 +299,11 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
            enum(compaction, "phase", %{
              "standalone_turn" => :standalone_turn,
              "pre_turn" => :pre_turn,
-             "mid_turn" => :mid_turn
+             "mid_turn" => :mid_turn,
+             # Codex >= 0.156.0 opt-in compaction right after the final answer
+             # (`model_post_turn_compact_threshold_percent`, openai/codex#46541):
+             # same socket and turn id, anchored on the turn's response.
+             "post_turn" => :post_turn
            }),
          {:ok, strategy} <-
            enum(compaction, "strategy", %{
