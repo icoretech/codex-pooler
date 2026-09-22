@@ -231,34 +231,7 @@ defmodule CodexPooler.Release.MigrationLockBudgetTest do
     Process.unlink(conn)
     on_exit(fn -> if Process.alive?(conn), do: GenServer.stop(conn) end)
 
-    waiter =
-      spawn(fn ->
-        [[pid]] = Postgrex.query!(conn, "SELECT pg_backend_pid()", []).rows
-        send(test, {:waiter_pid, self(), pid})
-
-        Postgrex.transaction(
-          conn,
-          fn tx ->
-            case Postgrex.query(tx, "LOCK TABLE #{table} IN EXCLUSIVE MODE", []) do
-              {:ok, _result} ->
-                send(test, {:lock_acquired, self()})
-
-                outcome =
-                  case Postgrex.query(tx, "SELECT pg_sleep(0.6)", []) do
-                    {:ok, _result} -> :completed
-                    {:error, %Postgrex.Error{postgres: %{code: code}}} -> code
-                  end
-
-                send(test, {:next_statement, self(), outcome})
-
-              {:error, %Postgrex.Error{postgres: %{code: code}}} ->
-                send(test, {:lock_result, self(), code})
-                Postgrex.rollback(tx, code)
-            end
-          end,
-          timeout: :infinity
-        )
-      end)
+    waiter = spawn(fn -> run_waiter(conn, table, test) end)
 
     receive do
       {:waiter_pid, ^waiter, pid} -> %{waiter: waiter, pid: pid}
@@ -266,6 +239,27 @@ defmodule CodexPooler.Release.MigrationLockBudgetTest do
       @holder_budget_ms -> flunk("waiter session did not start")
     end
   end
+
+  defp run_waiter(conn, table, test) do
+    [[pid]] = Postgrex.query!(conn, "SELECT pg_backend_pid()", []).rows
+    send(test, {:waiter_pid, self(), pid})
+    Postgrex.transaction(conn, &lock_then_sleep(&1, table, test), timeout: :infinity)
+  end
+
+  defp lock_then_sleep(tx, table, test) do
+    case Postgrex.query(tx, "LOCK TABLE #{table} IN EXCLUSIVE MODE", []) do
+      {:ok, _result} ->
+        send(test, {:lock_acquired, self()})
+        send(test, {:next_statement, self(), statement_outcome(Postgrex.query(tx, "SELECT pg_sleep(0.6)", []))})
+
+      {:error, %Postgrex.Error{postgres: %{code: code}}} ->
+        send(test, {:lock_result, self(), code})
+        Postgrex.rollback(tx, code)
+    end
+  end
+
+  defp statement_outcome({:ok, _result}), do: :completed
+  defp statement_outcome({:error, %Postgrex.Error{postgres: %{code: code}}}), do: code
 
   # The waiter's lock wait as the watcher samples it, once PostgreSQL has recorded its start.
   defp sampled_wait!(backend_pid, attempts \\ 100) do
