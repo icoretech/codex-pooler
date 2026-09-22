@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
+  alias CodexPooler.Gateway.Websocket, as: GatewayWebsocket
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -3158,6 +3159,35 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "/v1/responses/compact",
                "/v1/usage"
              ]
+    end
+
+    test "starts a local Codex session in the scope the matrix names for the continuity headers" do
+      fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)
+      owner = CodexPooler.AccountsFixtures.bootstrap_owner_fixture().user
+      pool = pool_fixture(%{created_by_user_id: owner.id})
+      %{api_key: key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
+      %{api_key: other_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
+      [window_header | _] = fixture.continuity_precedence
+      opts = RequestOptions.for_websocket(%{session_header: "window-#{System.unique_integer([:positive])}:0", session_header_source: window_header})
+
+      assert {:ok, session} = GatewayWebsocket.start_codex_session(%{pool: pool, api_key: key}, opts)
+      assert {:ok, same_key} = GatewayWebsocket.start_codex_session(%{pool: pool, api_key: key}, opts)
+      assert {:ok, other} = GatewayWebsocket.start_codex_session(%{pool: pool, api_key: other_key}, opts)
+      assert same_key.id == session.id
+
+      # The client sends the same window and session headers whichever key it
+      # holds, so the scope decides whether a second key of the Pool shares the
+      # first key's session or opens its own (findings#255).
+      case fixture.local_session_scope do
+        "authenticated_pool_and_api_key" ->
+          refute other.id == session.id
+          assert other.api_key_id == other_key.id
+
+        "authenticated_pool" ->
+          assert other.id == session.id
+      end
+
+      assert fixture.local_session_scope == "authenticated_pool_and_api_key"
     end
 
     test "keeps backend transcription fixture independent from v1 Audio compatibility" do

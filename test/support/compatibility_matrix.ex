@@ -3566,6 +3566,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         "session_id",
         "x-codex-conversation-id"
       ],
+      local_session_scope: "authenticated_pool_and_api_key",
       local_continuity_headers_not_forwarded: ["session-id", "x-session-id", "x-session-affinity"],
       public_v1_upstream_session_id: %{
         header: "session-id",
