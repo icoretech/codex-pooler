@@ -384,9 +384,13 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     end
   end
 
+  # `unwrap/1` revalidates the carried admission and answers
+  # `{:error, :invalid_input}` when it no longer holds; every caller must treat
+  # that as no usable admission, never as `:none` (findings#225).
   @spec native_compaction_admission(t()) ::
           {:ok, CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability.t(), NativeCompactionAdmissionContext.owner(), NativeCompactionAdmissionContext.lifecycle()}
           | :none
+          | {:error, :invalid_input}
   def native_compaction_admission(%__MODULE__{
         native_compaction_admission: %NativeCompactionAdmissionContext{} = admission
       }),

@@ -1808,7 +1808,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
         :ok
 
-      :none ->
+      _no_usable_admission ->
         :ok
     end
   end

@@ -879,6 +879,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       {:collect_full_history, :none} ->
         owner_full_history_envelope(attrs, request_data, request_options)
 
+      # Full-history delivery carries no admission; one that is present, or
+      # that no longer validates, cannot be dispatched as if it were absent.
+      {:collect_full_history, _unusable_admission} ->
+        {:error, {:invalid_field, :native_compaction_admission}}
+
       {:collect_compaction, _no_owner_capability} ->
         owner_collect_envelope(attrs, request_data, request_options)
 
@@ -999,15 +1004,30 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> observe_owner_request_submission(request_options)
   end
 
+  # The public outcome stays `owner_unavailable`; the log keeps which envelope
+  # field refused, so a refusal is never indistinguishable from a lost owner.
   defp submit_owner_websocket_request(
-         {:error, _validation_error},
+         {:error, validation_error},
          _session,
          _owner_lease_token,
          _downstream,
          _forwarder_opts,
-         _request_options
-       ),
-       do: {:error, :owner_unavailable}
+         request_options
+       ) do
+    Logger.warning(
+      "websocket owner request refused before submission " <>
+        "reason=#{owner_request_validation_reason(validation_error)} " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(owner_request_id(request_options))}"
+    )
+
+    {:error, :owner_unavailable}
+  end
+
+  defp owner_request_validation_reason({:invalid_field, field}) when is_atom(field),
+    do: "invalid_field:#{DiagnosticTaxonomy.reason_code(field)}"
+
+  defp owner_request_validation_reason({:unknown_fields, _fields}), do: "unknown_fields"
+  defp owner_request_validation_reason(_validation_error), do: "unknown"
 
   defp direct_websocket_request(upstream_request, request_options, _identity, request, attempt) do
     case request_options.transport.upstream_websocket_session do
