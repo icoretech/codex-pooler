@@ -22,6 +22,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -33,6 +35,11 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   @rfc9110_future_years 50
   @statuses %{429 => "throttled", 503 => "unavailable"}
   @source "retry_after"
+  # A pause this long outlasts the quota evidence freshness window several
+  # times over (15 minutes by default), so an idle account leaves routing well
+  # before usage is read again. Fixed rather than configurable: it only decides
+  # whether the operator is told, never how long the pause lasts.
+  @long_pause_seconds 3_600
 
   @type instruction :: {:retry_after, DateTime.t()} | :retry_now | :absent
   @type admission :: :ok | {:deferred, DateTime.t()}
@@ -163,6 +170,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
           Repo.rollback(:upstream_identity_not_found)
       end
     end)
+    |> tap(&maybe_log_long_pause(&1, identity_id, credential_epoch, origin_key, status, not_before, as_of))
   end
 
   def record(_identity_id, _credential_epoch, _origin_key, _status, %DateTime{}, %DateTime{}),
@@ -232,6 +240,25 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   """
   @spec status_name(term()) :: String.t() | nil
   def status_name(status), do: Map.get(@statuses, status)
+
+  # Said once, when the instruction that sets the longer deadline commits: a
+  # shorter or equal one merged into it changes nothing and says nothing. Only
+  # bounded values are logged - the identity id, the origin digest, the status
+  # and the deadline - never the URL or the header as received.
+  defp maybe_log_long_pause({:ok, deadline}, identity_id, credential_epoch, origin_key, status, not_before, as_of) do
+    pause_seconds = DateTime.diff(not_before, as_of, :second)
+
+    if DateTime.compare(deadline, not_before) == :eq and pause_seconds > @long_pause_seconds do
+      Logger.warning(
+        "usage polling paused beyond the long-pause threshold by a provider Retry-After " <>
+          "upstream_identity_id=#{identity_id} credential_epoch=#{credential_epoch} " <>
+          "origin=#{origin_key} status=#{status} paused_until=#{DateTime.to_iso8601(not_before)} " <>
+          "pause_seconds=#{pause_seconds} threshold_seconds=#{@long_pause_seconds}"
+      )
+    end
+  end
+
+  defp maybe_log_long_pause(_result, _identity_id, _credential_epoch, _origin_key, _status, _not_before, _as_of), do: :ok
 
   defp write_deadline(identity, credential_epoch, origin_key, status, not_before, as_of) do
     metadata = identity.metadata || %{}

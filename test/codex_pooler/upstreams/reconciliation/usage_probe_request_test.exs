@@ -2,6 +2,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog, only: [capture_log: 1]
 
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -10,6 +11,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
   alias CodexPooler.UpstreamConnPoolTelemetry
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
+  alias CodexPooler.Upstreams.Reconciliation.UsagePollCooldown
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -107,6 +109,66 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
              )
 
     assert length(FakeUpstream.requests(fake)) == 1
+  end
+
+  # findings#259: an anomalous interval must be noticed, once, when it is the
+  # one that sets the deadline - never for an ordinary short throttle, and never
+  # for an instruction merged into a longer pause that is already running.
+  test "a Retry-After longer than an hour is logged once with bounded fields, a short one is not" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, short} = FakeUpstream.start_link({:path_json, %{"/backend-api/wham/usage" => {:json_headers, 429, %{}, [{"retry-after", "900"}]}}})
+    {:ok, long} = FakeUpstream.start_link({:path_json, %{"/backend-api/wham/usage" => {:json_headers, 503, %{}, [{"retry-after", "259200"}]}}})
+
+    on_exit(fn ->
+      FakeUpstream.stop(short)
+      FakeUpstream.stop(long)
+    end)
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: @account_id,
+        metadata: %{"usage_base_url" => FakeUpstream.url(short)}
+      })
+
+    short_log =
+      capture_log(fn ->
+        assert {:error, {:usage_poll_deferred, _deadline}} =
+                 UsageProbe.fetch_from_identity(identity, assignment, observed_at, [])
+      end)
+
+    refute short_log =~ "long-pause threshold"
+
+    long_assignment = %{assignment | metadata: %{"usage_base_url" => FakeUpstream.url(long)}}
+
+    long_log =
+      capture_log(fn ->
+        assert {:error, {:usage_poll_deferred, deadline}} =
+                 UsageProbe.fetch_from_identity(Repo.get!(UpstreamIdentity, identity.id), long_assignment, observed_at, [])
+
+        send(self(), {:deadline, deadline})
+      end)
+
+    assert_received {:deadline, deadline}
+    assert long_log =~ "usage polling paused beyond the long-pause threshold by a provider Retry-After"
+    assert long_log =~ "upstream_identity_id=#{identity.id} credential_epoch=1"
+    assert long_log =~ "status=503 paused_until=#{DateTime.to_iso8601(deadline)}"
+    assert long_log =~ ~r/pause_seconds=259\d{3} threshold_seconds=3600/
+    refute long_log =~ FakeUpstream.url(long)
+    refute long_log =~ "127.0.0.1"
+
+    # A shorter instruction on the same host merges into the running pause and
+    # sets nothing, so it says nothing either.
+    identity = Repo.get!(UpstreamIdentity, identity.id)
+    origin = UsagePollCooldown.origin_key(FakeUpstream.url(long))
+
+    merged_log =
+      capture_log(fn ->
+        assert {:ok, ^deadline} =
+                 UsagePollCooldown.record(identity.id, 1, origin, 429, DateTime.add(observed_at, 7_200, :second), observed_at)
+      end)
+
+    refute merged_log =~ "long-pause threshold"
   end
 
   test "a throttled read with no usable instruction keeps the existing fallback" do
