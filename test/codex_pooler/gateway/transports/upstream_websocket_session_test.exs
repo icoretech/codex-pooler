@@ -3489,8 +3489,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       request = raw_websocket_request(peer.url, self())
       initial_lifecycle = lifecycle_state(session)
 
-      assert {:ok, %{terminal: "response.completed", status: 200, headers: headers}} =
-               UpstreamWebsocketSession.request(session, request)
+      {result, log} = with_info_log(fn -> UpstreamWebsocketSession.request(session, request) end)
+      assert {:ok, %{terminal: "response.completed", status: 200, headers: headers}} = result
+      assert_coalesced_close_log(log, @response_mode, "terminal", initial_lifecycle)
 
       # The peer closed the same connection that carried the terminal, so the
       # success result still has to name the upgrade response it was read from.
@@ -3537,8 +3538,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       request = raw_websocket_request(peer.url, self())
       initial_lifecycle = lifecycle_state(session)
 
-      assert {:error, %{reason: {:quota_exhausted_first_event, %{code: "usage_limit_reached"}}}} =
-               UpstreamWebsocketSession.request(session, request)
+      {result, log} = with_info_log(fn -> UpstreamWebsocketSession.request(session, request) end)
+      assert {:error, %{reason: {:quota_exhausted_first_event, %{code: "usage_limit_reached"}}}} = result
+      assert_coalesced_close_log(log, @response_mode, "retryable_first_frame", initial_lifecycle)
+      refute log =~ "synthetic quota denial"
 
       refute_received {:upstream_websocket_frame, _frame}
 
@@ -5472,6 +5475,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     name = :"raw_websocket_peer_#{System.unique_integer([:positive])}"
     start_supervised!({Task.Supervisor, name: name})
     name
+  end
+
+  defp with_info_log(fun) do
+    previous_logger_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_logger_level) end)
+
+    try do
+      with_log([level: :info], fun)
+    after
+      Logger.configure(level: previous_logger_level)
+    end
+  end
+
+  # The drain of a Close decoded behind a halting frame leaves exactly one
+  # bounded line naming the halt, the close code and the connection it retired;
+  # a Close read on its own goes through the idle path and leaves none
+  # (icoretech/codex-pooler-findings#225).
+  defp assert_coalesced_close_log(log, response_mode, halt, initial_lifecycle) do
+    if response_mode in [:terminal_then_coalesced_close, :retryable_first_then_coalesced_close] do
+      expected =
+        "upstream websocket coalesced close drained reason_code=peer_close_frame halt=#{halt} " <>
+          "close_code=1000 lifecycle_id=#{initial_lifecycle.lifecycle_id} generation=1"
+
+      assert log =~ expected
+      assert length(String.split(log, "coalesced close drained")) == 2
+      refute log =~ "synthetic-upstream-token"
+    else
+      refute log =~ "coalesced close drained"
+    end
   end
 
   defp raw_websocket_request(url, owner) do

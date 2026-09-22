@@ -1667,11 +1667,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {{:ok, result}, maybe_retire_exhausted_connection(state, receive_state)}
   end
 
-  # Drains the frames decoded behind a halting frame through the idle path.
+  # Drains the frames decoded behind a halting frame through the idle path and,
+  # when one of them is a peer Close, records one bounded info line so an
+  # operator can see the drain run: which halt it followed, the close code and
+  # the connection lifecycle it retired (icoretech/codex-pooler-findings#225).
   defp drain_trailing_frames(state, [], _halt), do: state
 
-  defp drain_trailing_frames(state, trailing_frames, halt) when halt in [:terminal, :retryable_first_frame],
-    do: handle_async_frames(state, trailing_frames)
+  defp drain_trailing_frames(state, trailing_frames, halt) when halt in [:terminal, :retryable_first_frame] do
+    lifecycle = connection_lifecycle_state(state)
+    drained = handle_async_frames(state, trailing_frames)
+
+    case Enum.find(trailing_frames, &match?({:close, _code, _reason}, &1)) do
+      {:close, code, _reason} ->
+        Logger.info(
+          "upstream websocket coalesced close drained reason_code=peer_close_frame " <>
+            "halt=#{halt} close_code=#{coalesced_close_code(code)} " <>
+            "lifecycle_id=#{lifecycle.lifecycle_id} generation=#{lifecycle.generation}"
+        )
+
+      nil ->
+        :ok
+    end
+
+    drained
+  end
+
+  defp coalesced_close_code(code) when is_integer(code) and code in 1000..4999, do: code
+  defp coalesced_close_code(nil), do: "none"
+  defp coalesced_close_code(_code), do: "invalid"
 
   defp maybe_retire_exhausted_connection(state, receive_state) do
     if exhausted_connection?(receive_state),
