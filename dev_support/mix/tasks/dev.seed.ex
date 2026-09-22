@@ -19,13 +19,14 @@ defmodule Mix.Tasks.Dev.Seed do
 
   use Mix.Task
 
-  alias CodexPooler.Dev.Seeds
+  alias CodexPooler.Dev.{QaBackgroundWorkers, Seeds}
 
+  @requirements ["app.config"]
   @shortdoc "Seed idempotent local development data"
 
   @impl Mix.Task
   def run(args) do
-    Mix.Task.run("app.start")
+    QaBackgroundWorkers.start_application!()
 
     case args do
       [] -> seed_compact()
@@ -40,32 +41,24 @@ defmodule Mix.Tasks.Dev.Seed do
   defp seed_compact do
     result = Seeds.compact()
 
-    Mix.shell().info(
-      "seeded compact dev operators owner=#{result.owner.email} operators=#{length(result.operators)} password=#{result.password}"
-    )
+    Mix.shell().info("seeded compact dev operators owner=#{result.owner.email} operators=#{length(result.operators)} password=#{result.password}")
   end
 
   defp seed_full do
     result = Seeds.full()
 
-    Mix.shell().info(
-      "seeded full dev data owner=#{result.owner.email} operators=#{length(result.operators)} pools=#{length(result.pools)} api_keys=#{length(result.api_keys)} upstreams=#{length(result.upstream_identities)} password=#{result.password}"
-    )
+    Mix.shell().info("seeded full dev data owner=#{result.owner.email} operators=#{length(result.operators)} pools=#{length(result.pools)} api_keys=#{length(result.api_keys)} upstreams=#{length(result.upstream_identities)} password=#{result.password}")
   end
 
   defp seed_docs_screenshots do
     result = Seeds.docs_screenshots()
 
-    Mix.shell().info(
-      "seeded documentation screenshot data owner=#{result.owner.email} operators=#{length(result.operators)} pools=#{length(result.pools)} api_keys=#{length(result.api_keys)} upstreams=#{length(result.upstream_identities)} password=#{result.password}"
-    )
+    Mix.shell().info("seeded documentation screenshot data owner=#{result.owner.email} operators=#{length(result.operators)} pools=#{length(result.pools)} api_keys=#{length(result.api_keys)} upstreams=#{length(result.upstream_identities)} password=#{result.password}")
   end
 
   defp seed_perf do
     result = Seeds.perf()
 
-    Mix.shell().info(
-      "seeded perf dev data pool=#{result.pool.slug} api_key_prefix=#{result.api_key.key_prefix} upstreams=#{length(result.upstream_identities)} bootstrap=#{result.bootstrap_dir}"
-    )
+    Mix.shell().info("seeded perf dev data pool=#{result.pool.slug} api_key_prefix=#{result.api_key.key_prefix} upstreams=#{length(result.upstream_identities)} bootstrap=#{result.bootstrap_dir}")
   end
 end

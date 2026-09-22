@@ -21,6 +21,7 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
 
   use Mix.Task
 
+  alias CodexPooler.Dev.QaBackgroundWorkers
   alias CodexPooler.Dev.RoutingStrategyFixture
 
   @private_receipt_env "CODEX_POOLER_ROUTING_STRATEGY_FIXTURE_RECEIPT_PATH"
@@ -168,10 +169,7 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
 
   defp maybe_start_application(:status), do: :ok
 
-  defp maybe_start_application(_action) do
-    Mix.Task.run("app.start")
-    :ok
-  end
+  defp maybe_start_application(_action), do: QaBackgroundWorkers.start_application!()
 
   defp run_action(:acquire, options), do: RoutingStrategyFixture.acquire(options)
   defp run_action(:release, options), do: RoutingStrategyFixture.release(options)

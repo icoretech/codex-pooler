@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Dev.SavedResetConfirmationFixtures do
 
   use Mix.Task
 
+  alias CodexPooler.Dev.QaBackgroundWorkers
   alias CodexPooler.Dev.SavedResetConfirmationFixtures
   alias CodexPooler.MixTasks.TestDatabaseLock
 
@@ -36,7 +37,7 @@ defmodule Mix.Tasks.Dev.SavedResetConfirmationFixtures do
   end
 
   defp run_fixture(action, options) do
-    Mix.Task.run("app.start")
+    QaBackgroundWorkers.start_application!()
 
     case action do
       {:scenario, scenario, browser_auth?} ->
@@ -61,8 +62,7 @@ defmodule Mix.Tasks.Dev.SavedResetConfirmationFixtures do
   end
 
   defp parse_options(options) do
-    case {Keyword.get(options, :scenario), Keyword.get(options, :cleanup),
-          Keyword.get(options, :browser_auth, false)} do
+    case {Keyword.get(options, :scenario), Keyword.get(options, :cleanup), Keyword.get(options, :browser_auth, false)} do
       {scenario, nil, browser_auth?} when is_binary(scenario) and is_boolean(browser_auth?) ->
         {:ok, {:scenario, scenario, browser_auth?}}
 
@@ -103,8 +103,7 @@ defmodule Mix.Tasks.Dev.SavedResetConfirmationFixtures do
       :ok
     else
       _invalid ->
-        {:error,
-         "test fixture mode requires a positive MIX_TEST_PARTITION and a namespaced isolated test database"}
+        {:error, "test fixture mode requires a positive MIX_TEST_PARTITION and a namespaced isolated test database"}
     end
   end
 end

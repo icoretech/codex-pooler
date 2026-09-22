@@ -63,6 +63,47 @@ defmodule CodexPooler.Dev.QaBackgroundWorkersTest do
     end
   end
 
+  # Every development task that boots the application to write fixture or seed
+  # rows keeps Oban queues, plugins and the stager off in its own VM, like
+  # `mix dev.mcp_fixture` (findings#232, 232-24/232-26): each case reaches the
+  # boot and then stops at its own environment guard before any write.
+  for {task, args, error} <- [
+        {Mix.Tasks.Dev.OpenaiV1Fixture, ["acquire"], Mix.Error},
+        {Mix.Tasks.Dev.OpenaiV1Fixture, ["release"], Mix.Error},
+        {Mix.Tasks.Dev.RoutingStrategyFixture, ["acquire"], Mix.Error},
+        {Mix.Tasks.Dev.RoutingStrategyFixture, ["release"], Mix.Error},
+        {Mix.Tasks.Dev.Seed, ["no-such-profile"], Mix.Error},
+        {Mix.Tasks.Dev.SavedResetConfirmationFixtures, ["--scenario", "absent"], Mix.Error},
+        {Mix.Tasks.Dev.SavedResetConfirmationFixtures, ["--cleanup", "tmp/absent-journal.json"], Mix.Error}
+      ] do
+    test "mix #{Mix.Task.task_name(task)} #{hd(args)} disables background jobs before it boots the application" do
+      CodexPooler.TestAppEnv.restore_on_exit(Oban)
+      enabled = Keyword.merge(Application.fetch_env!(:codex_pooler, Oban), queues: [default: 1], plugins: [Oban.Pruner], stager: [interval: 1_000])
+      Application.put_env(:codex_pooler, Oban, enabled)
+
+      assert_raise unquote(error), fn -> unquote(task).run(unquote(args)) end
+
+      config = Application.fetch_env!(:codex_pooler, Oban)
+      assert {config[:queues], config[:plugins], config[:stager]} == {false, false, false}
+    end
+  end
+
+  for task <- [Mix.Tasks.Dev.OpenaiV1Fixture, Mix.Tasks.Dev.RoutingStrategyFixture] do
+    test "mix #{Mix.Task.task_name(task)} status boots nothing and leaves the Oban configuration alone" do
+      CodexPooler.TestAppEnv.restore_on_exit(Oban)
+      enabled = Keyword.merge(Application.fetch_env!(:codex_pooler, Oban), queues: [default: 1], plugins: [Oban.Pruner], stager: [interval: 1_000])
+      Application.put_env(:codex_pooler, Oban, enabled)
+
+      try do
+        unquote(task).run(["status"])
+      rescue
+        Mix.Error -> :ok
+      end
+
+      assert Application.fetch_env!(:codex_pooler, Oban) == enabled
+    end
+  end
+
   defp start_oban!(config) do
     name = Keyword.fetch!(config, :name)
     on_exit(fn -> assert Oban.whereis(name) == nil end)

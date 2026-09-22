@@ -11,6 +11,7 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
   use Mix.Task
 
   alias CodexPooler.Dev.OpenAIV1Fixture
+  alias CodexPooler.Dev.QaBackgroundWorkers
 
   @private_receipt_env "CODEX_POOLER_OPENAI_V1_FIXTURE_RECEIPT_PATH"
   @private_receipt_relative ~r/^tmp\/openai-v1-isolated-fixture\/build-[^\/]+\/fixture\/setup\.json$/
@@ -52,8 +53,7 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
         {:ok, :status, normalize_release_options(options)}
 
       _invalid ->
-        {:error,
-         "use acquire [--upstream-base-url URL] [--request-compression], release, or status"}
+        {:error, "use acquire [--upstream-base-url URL] [--request-compression], release, or status"}
     end
   end
 
@@ -65,10 +65,7 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
 
   defp maybe_start_application(:status), do: :ok
 
-  defp maybe_start_application(_action) do
-    Mix.Task.run("app.start")
-    :ok
-  end
+  defp maybe_start_application(_action), do: QaBackgroundWorkers.start_application!()
 
   defp run_action(:acquire, options), do: OpenAIV1Fixture.acquire(options)
   defp run_action(:release, options), do: OpenAIV1Fixture.release(options)
