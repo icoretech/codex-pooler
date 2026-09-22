@@ -9,6 +9,7 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -365,6 +366,58 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
       assert result.assignment.metadata["quota_priming"]["status"] == "stale"
       assert result.assignment.metadata["quota_priming"]["stale_window_count"] == 1
       assert result.assignment.metadata["quota_priming"]["usable_window_count"] == 0
+    end
+
+    # A rate-limit-event row that still describes a cycle which ended days ago
+    # is superseded by the Usage API row of the running weekly cycle: it is not
+    # the account's state, so it must not turn a weekly-only probe into
+    # `expired` (every read surface folds it away the same way).
+    test "priming ignores an expired row superseded by the running cycle of its window" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {pool, assignment} =
+        active_assignment_fixture(%{
+          "quota_windows" => [
+            %{
+              "window_kind" => "secondary",
+              "window_minutes" => 10_080,
+              "used_percent" => 30,
+              "reset_at" => now |> DateTime.add(3, :day) |> DateTime.to_iso8601(),
+              "source" => "codex_usage_api",
+              "source_precision" => "observed",
+              "freshness_state" => "fresh"
+            }
+          ]
+        })
+
+      ended_cycle_at = DateTime.add(now, -9, :day)
+
+      %AccountQuotaWindow{}
+      |> AccountQuotaWindow.changeset(%{
+        upstream_identity_id: assignment.upstream_identity_id,
+        quota_key: "account",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(now, -2, :day),
+        source: "codex_rate_limit_event",
+        source_precision: "observed",
+        freshness_state: "fresh",
+        last_sync_at: ended_cycle_at,
+        observed_at: ended_cycle_at,
+        metadata: %{},
+        created_at: ended_cycle_at,
+        updated_at: ended_cycle_at
+      })
+      |> Repo.insert!()
+
+      assert {:ok, result} =
+               AccountReconciliation.run(pool.id, assignment.id, "classification_test")
+
+      priming = result.assignment.metadata["quota_priming"]
+      assert priming["status"] == "weekly_only_probe"
+      assert priming["expired_window_count"] == 0
+      assert priming["window_count"] == 2
     end
 
     test "account reconciliation threads its operation timestamp through priming reads and writes" do

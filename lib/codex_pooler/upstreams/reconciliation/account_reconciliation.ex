@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.Windows.Retention
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
@@ -692,8 +693,12 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     assignment
   end
 
+  # Stale and expired evidence is counted on the effective view, the one every
+  # read surface and routing use: a row that still describes an ended cycle
+  # while its logical window reports a running one is superseded, not the
+  # account's state, and a row past retention is ignored as if already pruned.
   defp quota_priming_summary(identity, timestamp) do
-    persisted_windows = QuotaWindows.list_evidence(identity)
+    persisted_windows = identity |> QuotaWindows.list_evidence() |> Retention.reject_past_retention(timestamp)
     effective_windows = QuotaWindows.effective_quota_windows(persisted_windows, timestamp)
 
     %{
@@ -704,13 +709,13 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
       reset_bearing_count: Enum.count(persisted_windows, &Evidence.reset_bearing?/1),
       stale_count:
         Enum.count(
-          persisted_windows,
+          effective_windows,
           &(Evidence.reset_bearing?(&1) and
               not QuotaWindows.fresh_window?(&1, timestamp))
         ),
       expired_count:
         Enum.count(
-          persisted_windows,
+          effective_windows,
           &(Evidence.reset_bearing?(&1) and Evidence.expired?(&1, timestamp))
         )
     }
