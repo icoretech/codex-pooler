@@ -52,6 +52,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamsUsagePollPauseLiveTest do
     refute html =~ "credential_epoch"
   end
 
+  test "the upstream cockpit shows the same read-only pause notice", %{conn: conn} do
+    %{identity: identity, fake: fake} = account = throttled_account!("259-cockpit")
+    assert {:ok, _result} = reconcile!(account)
+
+    [%{not_before: not_before}] =
+      UsagePollCooldown.active_pauses(
+        Repo.get!(UpstreamIdentity, identity.id).metadata,
+        UsagePollCooldown.current_scope(Repo.get!(UpstreamIdentity, identity.id)),
+        DateTime.utc_now()
+      )
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    assert has_element?(
+             view,
+             "#upstream-cockpit-usage-poll-pause[data-role='upstream-usage-poll-pause'][data-paused-until='#{DateTime.to_iso8601(not_before)}'][data-status-code='429']"
+           )
+
+    assert has_element?(view, "#upstream-cockpit-usage-poll-pause-title", "Usage polling paused until")
+    assert has_element?(view, "#upstream-cockpit-usage-poll-pause-remaining", "in 2d 23h")
+    assert has_element?(view, "#upstream-cockpit-usage-poll-pause-origin", "HTTP 429 with Retry-After")
+    refute has_element?(view, "#upstream-cockpit-usage-poll-pause button")
+    refute has_element?(view, "#upstream-cockpit-usage-poll-pause [phx-click]")
+
+    refute html =~ UsagePollCooldown.metadata_key()
+    refute html =~ FakeUpstream.url(fake)
+    refute html =~ "account_key"
+
+    %{identity: unpaused} = active_upstream_assignment_fixture(pool_fixture(), %{account_label: "Unpaused Cockpit Sample"})
+    {:ok, unpaused_view, _html} = live(conn, ~p"/admin/upstreams/#{unpaused.id}")
+    assert has_element?(unpaused_view, "#upstream-cockpit")
+    refute has_element?(unpaused_view, "#upstream-cockpit-usage-poll-pause")
+  end
+
   test "an account whose usage polling is not paused shows no pause", %{conn: conn} do
     %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{account_label: "Unpaused Sample Account"})
 

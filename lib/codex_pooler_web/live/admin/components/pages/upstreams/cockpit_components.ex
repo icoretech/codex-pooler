@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.{Charts, Dialogs, Sections, Summary}
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.UsagePollPause
 
   attr :cockpit, :map, required: true
   attr :auth_json_form, :any, required: true
@@ -83,6 +84,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
             identity_observability={@cockpit.header.identity_observability}
             reauth_required?={@cockpit.flags.reauth_required?}
           />
+
+          <UsagePollPause.usage_poll_pause id_prefix="upstream-cockpit" pause={Map.get(@cockpit, :usage_poll_pause)} />
 
           <div class="grid items-start gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
             <div class="grid gap-4 xl:sticky xl:top-4">
