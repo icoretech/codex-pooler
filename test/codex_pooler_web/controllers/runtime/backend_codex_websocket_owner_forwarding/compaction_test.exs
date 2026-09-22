@@ -575,6 +575,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
       assert String.starts_with?(compact_log.correlation_id, "codex-request:")
       assert String.starts_with?(resume_log.correlation_id, "codex-resume:")
 
+      # Every claimed native websocket request of the turn, including the one
+      # that resumes it from its mid-turn compaction, stores its own native
+      # retry witness. Production images up to afe8dfd9 admitted that resume
+      # with a generated correlation id and no witness (findings#225).
+      for log <- [ordinary_log, compact_log, resume_log] do
+        assert log.native_client_retry_version == 1
+        assert byte_size(log.native_client_retry_digest) == 32
+        assert is_integer(log.native_client_retry_auth_epoch)
+      end
+
       assert length(pool_attempts(setup.pool.id)) == 3
       request_ids = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id))
 
