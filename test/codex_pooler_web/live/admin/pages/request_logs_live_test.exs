@@ -3356,9 +3356,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
                })
     end
 
-    # Longer than the reload debounce, so this refutes a refresh that was never
-    # scheduled rather than one that simply had not fired yet.
-    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+    # Refutes a refresh that was never scheduled, not one that had not fired yet.
+    assert_no_request_log_refresh_pending(view, reload_ref)
     refute has_element?(view, "#request-log-row-#{first.id}")
     refute has_element?(view, "#request-log-row-#{second.id}")
 
@@ -3366,7 +3365,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     # Both arrivals collapse into one refresh, not one apiece.
     assert_request_log_reload(reload_ref, :event_refresh, :selected_pool)
-    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+    assert_no_request_log_refresh_pending(view, reload_ref)
 
     assert has_element?(view, "#request-log-row-#{first.id}")
     assert has_element?(view, "#request-log-row-#{second.id}")
@@ -3382,7 +3381,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     render_hook(view, "set_live_updates", %{"paused" => true})
     render_hook(view, "set_live_updates", %{"paused" => false})
 
-    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+    assert_no_request_log_refresh_pending(view, reload_ref)
   end
 
   test "resuming replays every distinct topic held, not just the first", %{
@@ -3460,7 +3459,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
                status: arrival.status
              })
 
-    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+    assert_no_request_log_refresh_pending(view, reload_ref)
     refute has_element?(view, "#request-log-row-#{arrival.id}")
 
     # And the same join without the param is live, so this is the param working
@@ -3500,6 +3499,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
   defp assert_request_log_reload(telemetry_ref, stage, scope) do
     assert_receive {^telemetry_ref, %{count: 1}, %{stage: ^stage, scope: ^scope}}, 1_000
+  end
+
+  # The page has handled every message sent to it before this call once the
+  # state read returns, including the broadcasts and the replay a resume sends
+  # itself. A refresh they started has therefore reported by the time the list
+  # settles, and one they deferred is still armed as the debounce timer, so
+  # neither can arrive later without showing up here first.
+  defp assert_no_request_log_refresh_pending(view, telemetry_ref) do
+    _ = await_request_logs(view)
+    assert :sys.get_state(view.pid).socket.assigns[:request_logs_reload_timer] == nil
+    refute_received {^telemetry_ref, _measurements, %{stage: :event_refresh}}
   end
 
   defp refute_request_log_reload(telemetry_ref, stage) do
