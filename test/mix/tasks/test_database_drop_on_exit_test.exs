@@ -20,8 +20,16 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
   @moduletag timeout: 300_000
 
   # Failure-detection budget for the drain a leaked owner holds when the run stops the application.
-  # The test configuration's shutdown budget aborts the owner's turn within milliseconds; the
-  # release default would hold it for about 39 s before the owner is even asked to drain.
+  # It covers an owner that answers: the test configuration's shutdown budget aborts its turn
+  # within milliseconds, while the release default would poll it for about 39 s before the owner is
+  # even asked to drain. An owner that receives the call and never answers is bounded by neither.
+  # `WebsocketOwnerSession` calls it with the compile-time 5 s `OwnerDefaults.owner_call_timeout_ms/0`,
+  # and `CodexPooler.Platform.Application` starts `RolloutDrain` with no options, so no runner
+  # setting shortens that wait: measured at 5006 ms and 5071 ms on this tree (n=2, the two
+  # unresponsive arms of `CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest` run with the
+  # shipped owner-task budget instead of their own, `mix test
+  # test/codex_pooler/gateway/transports/websocket_rollout_drain_test.exs`). Those arms pin the
+  # bounded path in process, so this acceptance does not spend five seconds per unresponsive owner.
   @drain_budget_ms 5_000
 
   @receipt_prefix "drop-on-exit-probe "
@@ -91,6 +99,7 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
     %{directory: directory}
   end
 
+  @tag slow: "runs a real namespaced mix test child that creates, migrates and drops its own database"
   test "a failing namespaced run drops its database and reports its outcome",
        %{directory: directory} do
     failing = run_namespaced!(directory, "failing", @failing_test)
@@ -104,6 +113,7 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
            "run-scoped database #{failing.database} survived its run\n#{failing.output}"
   end
 
+  @tag slow: "runs a real namespaced mix test child whose database lifecycle and leaked-owner drain are the property"
   test "a run that leaks a websocket owner drops its database without waiting out the drain",
        %{directory: directory} do
     run = run_namespaced!(directory, "leaked_owner", @leaked_owner_test)

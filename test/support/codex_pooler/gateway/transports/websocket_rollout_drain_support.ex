@@ -378,6 +378,66 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     end
   end
 
+  defmodule UnresponsiveOwner do
+    @moduledoc false
+
+    use GenServer
+
+    # Receives the drain's calls and never answers them, the way an owner wedged on an upstream
+    # socket behaves. `WebsocketOwnerSession.owner_status/1` and `drain_owner/1` call with
+    # `OwnerDefaults.owner_call_timeout_ms/0`, a compile-time 5 s, so the caller waits that long
+    # unless something else bounds it: with `answer_status?: false` the wait happens on the first
+    # `owner_status`, and with `answer_status?: true` on the post-deadline `:drain`. The owner
+    # reports each call it received so a test can tell the two waits apart.
+
+    @spec child_spec(keyword()) :: Supervisor.child_spec()
+    def child_spec(opts) do
+      key = Keyword.fetch!(opts, :key)
+
+      %{
+        id: {__MODULE__, key},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary
+      }
+    end
+
+    @spec start_link(keyword()) :: GenServer.on_start()
+    def start_link(opts) do
+      key = Keyword.fetch!(opts, :key)
+
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
+    end
+
+    @impl GenServer
+    def init(opts) do
+      {:ok,
+       %{
+         answer_status?: Keyword.get(opts, :answer_status?, false),
+         key: Keyword.fetch!(opts, :key),
+         parent: Keyword.fetch!(opts, :parent)
+       }}
+    end
+
+    @impl GenServer
+    def handle_cast(:begin_drain, state) do
+      send(state.parent, {:unresponsive_owner_begin_drain, state.key})
+      {:noreply, state}
+    end
+
+    @impl GenServer
+    def handle_call(:owner_status, _from, %{answer_status?: true} = state) do
+      send(state.parent, {:unresponsive_owner_call, state.key, :owner_status, :answered})
+      {:reply, {:ok, %{active_turn?: true}}, state}
+    end
+
+    # No reply and no stop: the call is received and left unanswered, so only the caller's own
+    # timeout or an outer budget ends it.
+    def handle_call(message, _from, state) do
+      send(state.parent, {:unresponsive_owner_call, state.key, message, :unanswered})
+      {:noreply, state}
+    end
+  end
+
   @spec owner_context() :: owner_context()
   def owner_context do
     %{

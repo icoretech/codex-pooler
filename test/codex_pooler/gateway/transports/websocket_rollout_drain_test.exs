@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     ActiveShutdownProbeOwner,
     DrainProbeOwner,
     SlowFinalStatusOwner,
+    UnresponsiveOwner,
     VirtualDeadline,
     WaitingOwner
   }
@@ -854,6 +855,65 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert VirtualDeadline.waiter_pids(harness.deadline) == []
   end
 
+  # An owner that receives the drain's call and never answers it holds
+  # `WebsocketOwnerSession`'s compile-time owner call timeout, five seconds, which no runner
+  # setting shortens. Only the drain's own owner-task budget bounds it: floor + post-deadline
+  # budget + finish margin, 10 + 100 + 500 ms here. Both arms therefore assert an elapsed time
+  # below that call timeout, which is what a drain waiting for the owner would spend.
+  @unresponsive_owner_budget_ms 100
+  @unresponsive_owner_min_elapsed_ms 600
+  @unresponsive_owner_max_elapsed_ms 2_000
+
+  test "an owner that never answers owner_status fails within the drain's own budget" do
+    %{drain: drain, key: owner_key, owner: owner, ref: owner_ref} =
+      start_unresponsive_owner_drain!("status", answer_status?: false)
+
+    {summary, elapsed_ms} = drain_unresponsive!(drain)
+
+    assert %{
+             result: :error,
+             owners_seen: 1,
+             owners_drained: 0,
+             owners_idle: 0,
+             owners_failed: 1,
+             turns_completed: 0,
+             turns_aborted: 0
+           } = summary
+
+    assert_received {:unresponsive_owner_begin_drain, ^owner_key}
+    assert_received {:unresponsive_owner_call, ^owner_key, :owner_status, :unanswered}
+    refute_received {:unresponsive_owner_call, ^owner_key, :drain, _outcome}
+
+    assert_unresponsive_owner_budget(elapsed_ms)
+    assert_unresponsive_owner_survived(owner, owner_ref, drain)
+  end
+
+  test "an owner that answers owner_status and never drains fails within the drain's own budget" do
+    %{drain: drain, key: owner_key, owner: owner, ref: owner_ref} =
+      start_unresponsive_owner_drain!("drain", answer_status?: true)
+
+    {summary, elapsed_ms} = drain_unresponsive!(drain)
+
+    assert %{
+             result: :error,
+             owners_seen: 1,
+             owners_drained: 0,
+             owners_idle: 0,
+             owners_failed: 1,
+             turns_completed: 0,
+             turns_aborted: 0
+           } = summary
+
+    assert_received {:unresponsive_owner_begin_drain, ^owner_key}
+    assert_received {:unresponsive_owner_call, ^owner_key, :owner_status, :answered}
+
+    assert_received {:unresponsive_owner_call, ^owner_key, :drain, :unanswered},
+                    "the drain never reached the post-deadline drain call it must bound"
+
+    assert_unresponsive_owner_budget(elapsed_ms)
+    assert_unresponsive_owner_survived(owner, owner_ref, drain)
+  end
+
   test "wait callback failure leaves no waiter process or stale elapsed message" do
     parent = self()
     drain_name = :"rollout-drain-wait-error-#{System.unique_integer([:positive])}"
@@ -922,6 +982,56 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
         :erlang.yield()
         await_restarted_coordinator(name, old_pid)
     end
+  end
+
+  defp start_unresponsive_owner_drain!(label, opts) do
+    drain_name = :"rollout-drain-unresponsive-#{label}-#{System.unique_integer([:positive])}"
+
+    start_isolated_rollout_drain!(drain_name,
+      owner_post_deadline_call_budget_ms: @unresponsive_owner_budget_ms
+    )
+
+    key = owner_key()
+    owner = start_supervised!({UnresponsiveOwner, [key: key, parent: self()] ++ opts})
+
+    %{drain: drain_name, key: key, owner: owner, ref: Process.monitor(owner)}
+  end
+
+  defp drain_unresponsive!(drain_name) do
+    started_at = System.monotonic_time(:millisecond)
+
+    summary =
+      RolloutDrain.start_drain(
+        name: drain_name,
+        timeout_ms: 25,
+        deadline_margin_ms: 20,
+        deadline_floor_ms: 10,
+        owner_post_deadline_call_budget_ms: @unresponsive_owner_budget_ms
+      )
+
+    {summary, System.monotonic_time(:millisecond) - started_at}
+  end
+
+  defp assert_unresponsive_owner_budget(elapsed_ms) do
+    owner_call_timeout_ms = WebsocketOwnerContract.default_owner_call_timeout_ms()
+
+    assert elapsed_ms >= @unresponsive_owner_min_elapsed_ms,
+           "the drain returned in #{elapsed_ms} ms, before its own owner task budget"
+
+    assert elapsed_ms < @unresponsive_owner_max_elapsed_ms,
+           "the drain spent #{elapsed_ms} ms on an owner that never answers; its own owner task " <>
+             "budget is #{@unresponsive_owner_min_elapsed_ms} ms and waiting for the owner would " <>
+             "cost the #{owner_call_timeout_ms} ms owner call timeout"
+
+    assert @unresponsive_owner_max_elapsed_ms < owner_call_timeout_ms,
+           "the ceiling must stay below the owner call timeout, or it cannot tell a drain bounded " <>
+             "by its own budget from one that waited for the owner"
+  end
+
+  defp assert_unresponsive_owner_survived(owner, owner_ref, drain_name) do
+    refute_received {:DOWN, ^owner_ref, :process, ^owner, _reason}
+    assert Process.alive?(owner)
+    assert is_pid(GenServer.whereis(drain_name))
   end
 
   defp start_isolated_rollout_drain!(drain_name, opts) do
