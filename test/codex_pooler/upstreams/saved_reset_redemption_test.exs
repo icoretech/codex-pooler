@@ -8454,20 +8454,23 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp cleanup_committed_convergence_race_fixture!(fixture) do
     assert %{circuits: 1, identities: 2, pools: 1} ==
              run_unboxed(fn ->
+               # The circuit row is keyed on the Pool and goes with it, so it is counted first;
+               # the Pool then goes before the identities, while its assignment still names them:
+               # the shared cleanup reads them there to find the saved-reset jobs that name only
+               # the assignment, and to spare an identity another Pool still uses.
                {circuit_count, _rows} =
                  Repo.delete_all(
                    from circuit in RoutingCircuitState,
                      where: circuit.id == ^fixture.circuit_id
                  )
 
+               pool_count = delete_committed_pools!([fixture.pool_id])
+
                {identity_count, _rows} =
                  Repo.delete_all(
                    from identity in UpstreamIdentity,
                      where: identity.id in ^[fixture.identity_id, fixture.sibling_identity_id]
                  )
-
-               {pool_count, _rows} =
-                 Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
 
                %{circuits: circuit_count, identities: identity_count, pools: pool_count}
              end)
@@ -8764,12 +8767,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp cleanup_committed_gateway_auto_cohort_fixture!(fixture) do
     run_unboxed(fn ->
+      # Pools first, so the shared cleanup still sees the assignments that name this cohort's
+      # identities and the saved-reset jobs keyed on them; a sibling cohort's identities and its
+      # jobs stay, because another Pool's assignment still names them.
+      delete_committed_pools!(fixture.pool_ids)
+
       Repo.delete_all(
         from identity in UpstreamIdentity,
           where: identity.id in ^fixture.identity_ids
       )
-
-      Repo.delete_all(from pool in Pool, where: pool.id in ^fixture.pool_ids)
     end)
   end
 

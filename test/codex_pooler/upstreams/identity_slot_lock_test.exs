@@ -437,11 +437,13 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     fixture
   end
 
+  # Reads the Pools that exist rather than demanding both: `Repo.get_by!/2` raises for a fixture
+  # that failed before its second Pool was committed, and that raise would skip the identity
+  # deletion below, leaving committed identities behind for every later test.
   defp delete_graph_fixture!(slugs, labels) do
-    Enum.each(slugs, fn slug ->
-      %{id: id} = Repo.get_by!(Pool, slug: slug)
-      CodexPooler.PoolerFixtures.delete_committed_pools!([id])
-    end)
+    from(pool in Pool, where: pool.slug in ^slugs, select: pool.id)
+    |> Repo.all()
+    |> delete_committed_pools!()
 
     Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label in ^labels)
     :ok

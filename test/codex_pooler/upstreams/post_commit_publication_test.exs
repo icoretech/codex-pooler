@@ -348,13 +348,9 @@ defmodule CodexPooler.Upstreams.PostCommitPublicationTest do
 
     Repo.delete_all(from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id)
 
-    Repo.delete_all(from event in AuditEvent, where: event.pool_id in ^pool_ids)
-
-    for pool_id <- pool_ids do
-      Repo.delete_all(from job in Oban.Job, where: fragment("?->>'pool_id' = ?", job.args, ^pool_id))
-    end
-
-    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id in ^pool_ids)
+    # The shared cleanup also takes the jobs that name only this Pool's assignment or one of its
+    # exclusively owned identities, which a `pool_id` filter alone leaves behind.
+    CodexPooler.PoolerFixtures.delete_committed_pools!(pool_ids)
     :ok
   end
 
