@@ -404,6 +404,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "provider ids and every other id are forwarded unchanged"
     end
 
+    test "states that the public SSE relays only the public Responses stream vocabulary" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+
+      assert feature.contract =~ "relays only the public Responses stream vocabulary, response.* events, the error terminal and keepalive"
+      assert feature.contract =~ "responsesapi.websocket_timing are dropped before sequence numbering"
+    end
+
     test "states that a replayed call item named by its own call_id is dropped before upstream dispatch" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
 

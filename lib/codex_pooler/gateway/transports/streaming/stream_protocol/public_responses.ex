@@ -413,9 +413,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp normalize_public_block(type, decoded, state) when is_binary(type) do
-    if codex_public_event?(type) do
-      {[], state}
-    else
+    if public_stream_event?(type) do
       {block, state, emitted?} = emit_public_sse(type, decoded, state)
 
       state =
@@ -424,6 +422,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           else: state
 
       {block, state}
+    else
+      {[], state}
     end
   end
 
@@ -1151,7 +1151,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp terminal_event?(_type), do: false
 
-  defp codex_public_event?(type) when is_binary(type), do: String.starts_with?(type, "codex.")
+  # The public Responses stream vocabulary is `response.*` plus the `error`
+  # terminal (handled with the terminals) and `keepalive`. Every other type is
+  # backend-internal (`codex.*` controls, the websocket transport's
+  # `responsesapi.websocket_timing`) and is dropped before it takes a sequence
+  # number: openai-node's `responses.stream()` throws `Unhandled response
+  # stream event` on any type outside its vocabulary (findings#225). Unknown
+  # `response.*` types stay relayed so new public events keep flowing.
+  defp public_stream_event?("response." <> _rest), do: true
+  defp public_stream_event?("keepalive"), do: true
+  defp public_stream_event?(_type), do: false
 
   defp stream_block_event(block) do
     data = StreamProtocol.sse_field(block, "data")
