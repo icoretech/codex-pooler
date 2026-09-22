@@ -110,18 +110,25 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   # The join is on the incarnation, not the node name: an attempt with no
   # recorded boot id — every attempt written before incarnations existed — names
   # no incarnation, matches no presence row, and stays with the six-hour sweep.
-  # The liveness guard is handed this pass's window, and it judges a lease by
-  # the VM holding it: a lease held by an incarnation already proved absent is
-  # not live work and cannot shelter the attempt behind it. A successor that
-  # restarted under its predecessor's node name used to renew exactly such a
-  # lease, and this rejection then skipped the orphan.
+  # The liveness guard is handed this pass's window and the candidate attempt,
+  # and it judges a lease by the VM holding it: a lease held by an incarnation
+  # already proved absent is not live work and cannot shelter the attempt
+  # behind it. A successor that restarted under its predecessor's node name
+  # used to renew exactly such a lease, and this rejection then skipped the
+  # orphan. The candidate goes with the question because the session can
+  # outlive the incarnation that dispatched this attempt: a released client
+  # whose owner was killed falls back to another transport, and the live peer
+  # that serves it takes the session over on the same row. Asked about the
+  # session, the guard then answered for a VM that never executed this
+  # attempt, and the orphan was skipped for as long as the client kept any
+  # live turn on that session (findings#253).
   defp absent_instance_attempts(now, cutoff, limit, opts) do
     cutoff
     |> open_attempts_of_absent_incarnations(limit)
     |> still_holding_their_reservation()
     |> Repo.all()
-    |> Enum.reject(fn {request, _attempt} ->
-      RuntimeCleanup.active_runtime_request?(request, now, opts)
+    |> Enum.reject(fn {request, attempt} ->
+      RuntimeCleanup.active_runtime_request?(request, attempt, now, opts)
     end)
   end
 

@@ -128,22 +128,27 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
         limit: ^limit,
         select: request
     )
-    |> Enum.reject(&RuntimeCleanup.active_runtime_request?(&1, now))
+    # The attempt this sweep would settle is also the attempt the liveness
+    # guard has to judge: its own incarnation owns the work, not whichever
+    # incarnation currently holds its session (findings#253). It is read once
+    # here and carried to the settlement.
+    |> Enum.map(&{&1, latest_attempt(&1.id)})
+    |> Enum.reject(fn {request, attempt} ->
+      RuntimeCleanup.active_runtime_request?(request, attempt, now, [])
+    end)
   end
 
-  defp recover_request(request, {:ok, summary}, now) do
-    case latest_attempt(request.id) do
-      nil ->
-        case release_undispatched_request(request, now) do
-          {:ok, _result} -> {:cont, {:ok, increment(summary, :stale_reservations_released)}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
+  defp recover_request({request, nil}, {:ok, summary}, now) do
+    case release_undispatched_request(request, now) do
+      {:ok, _result} -> {:cont, {:ok, increment(summary, :stale_reservations_released)}}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
 
-      %Attempt{} = attempt ->
-        case settle_dispatched_request(request, attempt, now) do
-          {:ok, _result} -> {:cont, {:ok, increment(summary, :stale_reservations_settled)}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
+  defp recover_request({request, %Attempt{} = attempt}, {:ok, summary}, now) do
+    case settle_dispatched_request(request, attempt, now) do
+      {:ok, _result} -> {:cont, {:ok, increment(summary, :stale_reservations_settled)}}
+      {:error, reason} -> {:halt, {:error, reason}}
     end
   end
 

@@ -78,6 +78,86 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     refute RuntimeCleanup.active_runtime_request?(request, now)
   end
 
+  test "an attempt whose incarnation is gone is not sheltered by the live owner of its session" do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    now = InstancePresence.database_now()
+    stale = DateTime.add(now, -10, :minute)
+    node_name = "codex_pooler@10.77.#{System.unique_integer([:positive])}.9"
+    crashed = Identity.new(node_name, Ecto.UUID.generate())
+    successor = Identity.new(node_name, Ecto.UUID.generate())
+    peer = Identity.new("codex_pooler@10.77.#{System.unique_integer([:positive])}.10", Ecto.UUID.generate())
+
+    assert {:ok, _} = InstancePresence.record_heartbeat(crashed, stale)
+    assert {:ok, _} = InstancePresence.record_heartbeat(successor, now)
+    assert {:ok, _} = InstancePresence.record_heartbeat(peer, now)
+    assert {:ok, _} = InstancePresence.record_heartbeat()
+
+    request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    stranded = owned_attempt(request, assignment, crashed)
+    legacy = owned_attempt(request, assignment, Identity.new(node_name, "unused"), boot_id: nil)
+
+    # The live peer took the session over and renewed its lease, which is what
+    # a released client's transport fallback produces on the same session row.
+    session =
+      session_fixture(pool, api_key, assignment, stale,
+        owner_instance_id: peer.node_name,
+        owner_instance_boot_id: peer.boot_id,
+        owner_lease_token: Ecto.UUID.generate(),
+        owner_lease_expires_at: DateTime.add(now, 45, :second),
+        last_heartbeat_at: now
+      )
+
+    _turn = turn_fixture(session, request, stale, status: CodexTurn.in_progress_status())
+
+    refute InstancePresence.absent?(peer, now)
+    assert InstancePresence.superseded?(crashed)
+
+    # The session is held, so the session-scoped question still answers "held"
+    # for this request, and an attempt that names no incarnation keeps that
+    # shelter. Only the attempt whose own incarnation is provably gone loses it.
+    assert RuntimeCleanup.active_runtime_request?(request, now)
+    assert RuntimeCleanup.active_runtime_request?(request, legacy, now, [])
+    refute RuntimeCleanup.active_runtime_request?(request, stranded, now, [])
+  end
+
+  test "a live attempt owner still holds its request" do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    now = InstancePresence.database_now()
+    stale = DateTime.add(now, -10, :minute)
+    owner = Identity.new("codex_pooler@10.77.#{System.unique_integer([:positive])}.11", Ecto.UUID.generate())
+
+    assert {:ok, _} = InstancePresence.record_heartbeat(owner, now)
+    assert {:ok, _} = InstancePresence.record_heartbeat()
+
+    request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    attempt = owned_attempt(request, assignment, owner)
+
+    session =
+      session_fixture(pool, api_key, assignment, stale,
+        owner_instance_id: owner.node_name,
+        owner_instance_boot_id: owner.boot_id,
+        owner_lease_token: Ecto.UUID.generate(),
+        owner_lease_expires_at: DateTime.add(now, 45, :second),
+        last_heartbeat_at: now
+      )
+
+    _turn = turn_fixture(session, request, stale, status: CodexTurn.in_progress_status())
+
+    assert RuntimeCleanup.active_runtime_request?(request, attempt, now, [])
+
+    # And the shelter needs live work, not merely a live owner: once the lease
+    # and the stamp have run out, the same live owner shelters nothing.
+    session
+    |> Ecto.Changeset.change(owner_lease_expires_at: DateTime.add(now, -1, :second))
+    |> Repo.update!()
+
+    refute RuntimeCleanup.active_runtime_request?(request, attempt, now, [])
+  end
+
   test "recover_stale_request_turn/3 interrupts only matching in-progress turns" do
     pool = pool_fixture()
     %{api_key: api_key} = active_api_key_fixture(pool)
@@ -177,6 +257,19 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     assert Repo.reload!(in_progress_key).status == IdempotencyKey.expired_status()
     assert Repo.reload!(succeeded_key).status == IdempotencyKey.expired_status()
     assert Repo.reload!(failed_key).status == IdempotencyKey.failed_status()
+  end
+
+  defp owned_attempt(request, assignment, %Identity{} = owner, opts \\ []) do
+    attempt_fixture(request, assignment, %{
+      status: "in_progress",
+      completed_at: nil,
+      attempt_number: System.unique_integer([:positive])
+    })
+    |> Ecto.Changeset.change(
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: Keyword.get(opts, :boot_id, owner.boot_id)
+    )
+    |> Repo.update!()
   end
 
   defp session_fixture(pool, api_key, assignment, now, attrs \\ []) do

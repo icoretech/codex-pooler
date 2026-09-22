@@ -1007,6 +1007,125 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
              Repo.reload!(turn)
   end
 
+  test "a crashed owner's stranded attempt is recovered after a live peer takes its session over" do
+    setup = accounting_setup()
+    now = InstancePresence.database_now()
+    dispatched_at = DateTime.add(now, -10, :minute)
+    live_until = DateTime.add(now, 45, :second)
+    node_name = "codex_pooler@10.79.#{System.unique_integer([:positive])}.9"
+    crashed = Identity.new(node_name, Ecto.UUID.generate())
+    successor = Identity.new(node_name, Ecto.UUID.generate())
+
+    # The replica the released client's fallback landed on is a different VM
+    # entirely. Only another node can name its own incarnation, so this is the
+    # one owner the test supplies, exactly as owner forwarding supplies it on
+    # takeover.
+    peer =
+      Identity.new("codex_pooler@10.79.#{System.unique_integer([:positive])}.10", Ecto.UUID.generate())
+
+    assert {:ok, _} = InstancePresence.record_heartbeat(crashed, dispatched_at)
+    assert {:ok, _} = InstancePresence.record_heartbeat(successor, now)
+    assert {:ok, _} = InstancePresence.record_heartbeat(peer, now)
+    assert {:ok, _} = InstancePresence.record_heartbeat()
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "stream" => true,
+                 "max_output_tokens" => 10
+               },
+               %{
+                 correlation_id: "corr-cleanup-rehomed-session",
+                 now: dispatched_at,
+                 transport: "websocket"
+               }
+             )
+
+    assert {:ok, attempt} =
+             Accounting.create_attempt(reserved.request, setup.assignment, %{
+               now: dispatched_at,
+               owner_instance_id: crashed.node_name,
+               owner_instance_boot_id: crashed.boot_id
+             })
+
+    session = session_fixture(setup.pool, setup.api_key, setup.assignment, dispatched_at)
+
+    # The fallback turn is served by the live peer on this same session row:
+    # the owner stamp moves to the peer and the lease is renewed into the
+    # future, while the stranded attempt keeps naming the VM that died.
+    session =
+      session
+      |> Ecto.Changeset.change(
+        owner_instance_id: peer.node_name,
+        owner_instance_boot_id: peer.boot_id,
+        owner_lease_expires_at: live_until
+      )
+      |> Repo.update!()
+
+    lease =
+      lease_fixture(session, setup.pool, setup.api_key, setup.assignment, live_until, now)
+
+    lease =
+      lease
+      |> Ecto.Changeset.change(
+        owner_instance_id: peer.node_name,
+        owner_instance_boot_id: peer.boot_id
+      )
+      |> Repo.update!()
+
+    turn = turn_fixture(session, reserved.request, attempt, now)
+
+    # The shelter really is there: the peer is present, it holds an unexpired
+    # stamp and lease on the session, and the session-scoped question still
+    # answers "held" for this request.
+    refute InstancePresence.absent?(peer, now)
+    assert InstancePresence.status(crashed) == :unknown
+    assert InstancePresence.superseded?(crashed)
+    assert RuntimeCleanup.active_runtime_request?(reserved.request, now)
+
+    capture_stream_outcomes(fn ->
+      assert {:ok, summary} = Jobs.cleanup_runtime_state(now)
+      assert summary.absent_instance_attempts_recovered == 1
+      assert summary.dead_execution_attempts_recovered == 0
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      assert_receive {:stream_outcome_transaction, false}
+
+      assert {:ok, repeated} = Jobs.cleanup_runtime_state(now)
+      assert repeated.absent_instance_attempts_recovered == 0
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert %Request{status: "failed", last_error_code: "absent_instance_recovered"} =
+             Repo.reload!(reserved.request)
+
+    assert %Attempt{status: "failed", network_error_code: "absent_instance_recovered"} =
+             Repo.reload!(attempt)
+
+    assert %CodexTurn{status: "interrupted", error_code: "absent_instance_recovered"} =
+             Repo.reload!(turn)
+
+    assert ledger_entries_for_request(reserved.request.id)
+           |> Enum.map(& &1.entry_kind)
+           |> Enum.sort() == ["release", "reservation", "settlement"]
+
+    # Only the dead owner's work was settled: the peer keeps the session it is
+    # serving, with its own incarnation and its lease still active.
+    settled_session = Repo.reload!(session)
+    assert settled_session.owner_instance_boot_id == peer.boot_id
+    assert settled_session.owner_lease_expires_at == session.owner_lease_expires_at
+    assert Repo.reload!(lease).status == "active"
+  end
+
   defp turn_fixture(session, request, attempt, now) do
     timestamp = now |> DateTime.add(-30, :second) |> usec()
 

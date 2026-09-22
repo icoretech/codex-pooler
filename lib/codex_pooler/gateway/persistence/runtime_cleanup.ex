@@ -26,6 +26,12 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   @type request_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()}
   @type attempt_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()} | nil
+  @type attempt_owner_ref ::
+          %{
+            required(:owner_instance_id) => String.t() | nil,
+            required(:owner_instance_boot_id) => String.t() | nil
+          }
+          | nil
   @type expired_owner_candidate :: %{
           required(:session_id) => Ecto.UUID.t(),
           required(:owner_instance_id) => String.t(),
@@ -70,6 +76,41 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   def active_runtime_request?(_request_ref, %DateTime{}, _opts), do: false
 
+  @doc """
+  Whether the work of `attempt` is still held by a live owner.
+
+  The session-scoped question above asks whichever incarnation currently holds
+  the session, which is the wrong incarnation to ask about an attempt a
+  recovery pass is considering. A released client whose owner was killed falls
+  back to another transport within seconds; the live peer that serves it moves
+  the session's owner stamp and renews the lease on the same `codex_sessions`
+  row, and the dead owner's stranded attempt was then sheltered by a VM that
+  never executed it, with no terminal proof to release it either because a
+  `SIGKILL` publishes none (findings#253, findings#217).
+
+  So the attempt's own incarnation decides: an attempt whose owner is provably
+  gone is not live work, whoever holds its session now. A live owner of *this
+  attempt* still vetoes, and the session-scoped evidence still has to show an
+  in-progress turn under an unexpired owner stamp or lease before anything is
+  sheltered — proving an owner gone never creates a shelter, it only removes
+  one.
+
+  The fail-closed rules are those of the session-scoped question: an attempt
+  that names no incarnation — an anonymous owner, or any attempt written
+  before incarnations existed — is an owner this cannot reason about and keeps
+  the shelter, exact reachable VM identity is the normal authority, and a
+  later incarnation under the same non-anonymous node name is the death proof
+  absent-instance recovery accepts.
+  """
+  @spec active_runtime_request?(request_ref(), attempt_owner_ref(), DateTime.t(), keyword()) ::
+          boolean()
+  def active_runtime_request?(request_ref, attempt, %DateTime{} = now, opts) when is_list(opts) do
+    # Asked first: an attempt whose owner is provably gone needs no session
+    # query to answer, and that is the pass this predicate exists to unblock.
+    attempt_owner_may_be_alive?(attempt, opts) and
+      active_runtime_request?(request_ref, now, opts)
+  end
+
   # The session's own owner stamp is still in the future and the VM it names is
   # not provably absent.
   defp held_by_live_session_owner?(request_id, now, opts) do
@@ -113,6 +154,22 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
            InstancePresence.absent?(identity, presence_now, opts) and
            owner_proven_gone?(identity))
   end
+
+  # The attempt's own incarnation, when it names one. Anything else — an
+  # attempt with no boot id, a caller with no attempt in hand — is an owner
+  # this cannot reason about and stays sheltered, the same direction absence
+  # itself is one-directional in.
+  defp attempt_owner_may_be_alive?(
+         %{owner_instance_id: node_name, owner_instance_boot_id: boot_id},
+         opts
+       ) do
+    case InstancePresence.Identity.owner(node_name, boot_id) do
+      nil -> true
+      %InstancePresence.Identity{} -> owner_may_be_alive?({node_name, boot_id}, opts)
+    end
+  end
+
+  defp attempt_owner_may_be_alive?(_attempt, _opts), do: true
 
   defp owner_proven_gone?(identity) do
     case InstancePresence.status(identity) do
