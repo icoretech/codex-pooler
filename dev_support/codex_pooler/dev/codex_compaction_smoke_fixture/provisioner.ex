@@ -17,6 +17,15 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
 
   @model "gpt-5.5"
 
+  # The served catalog entry is this source map verbatim, so it carries every
+  # field Codex's `ModelInfo` (codex-rs/protocol/src/openai_models.rs at
+  # rust-v0.156.0) decodes without a serde default, reasoning levels as
+  # `{effort, description}` presets, and the instructions the catalog decoder
+  # requires (`base_instructions` or `model_messages.instructions_template`).
+  # One undecodable entry makes Codex discard the whole catalog and keep its
+  # bundled one.
+  @base_instructions "You are Codex, a coding agent. Synthetic instructions of the Codex Pooler compaction smoke fixture."
+
   @type provisioned :: %{
           pool: Pool.t(),
           identity: UpstreamIdentity.t(),
@@ -193,6 +202,16 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
         "source_assignment_models" => %{
           assignment.id => %{
             "slug" => @model,
+            "display_name" => "GPT Smoke",
+            "description" => "Codex compaction smoke fixture model",
+            "shell_type" => "shell_command",
+            "visibility" => "list",
+            "supported_in_api" => true,
+            "priority" => 0,
+            "support_verbosity" => false,
+            "truncation_policy" => %{"mode" => "bytes", "limit" => 10_000},
+            "experimental_supported_tools" => [],
+            "base_instructions" => @base_instructions,
             "supports_responses" => true,
             "supports_streaming" => true,
             "supports_tools" => true,
@@ -207,7 +226,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
             "use_responses_lite" => use_responses_lite,
             "input_modalities" => ["text", "image"],
             "supports_image_detail_original" => true,
-            "supported_reasoning_levels" => ["low"],
+            "supported_reasoning_levels" => [%{"effort" => "low", "description" => "Low reasoning effort"}],
             "default_reasoning_level" => "low",
             "context_window" => 128_000,
             "auto_compact_token_limit" => 200

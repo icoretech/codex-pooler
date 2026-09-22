@@ -128,6 +128,26 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
   end
 
   @tag :unix_integration
+  test "the fixture Pool serves a catalog entry Codex can decode as a ModelInfo", context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    assert {:ok, secret} = Journal.read_secret(Journal.paths(context.root, context.run_id), context.run_id)
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_req_header("authorization", "Bearer " <> secret["api_key"])
+      |> Phoenix.ConnTest.dispatch(CodexPoolerWeb.Endpoint, :get, "/backend-api/codex/models")
+
+    assert %{"models" => [model]} = Phoenix.ConnTest.json_response(conn, 200)
+    assert model["slug"] == acquired.model
+    assert codex_model_info_violations(model) == []
+    assert model["context_window"] == 128_000
+    assert model["auto_compact_token_limit"] == 200
+
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+  end
+
+  @tag :unix_integration
   test "release cancels gateway reconciliation for its exact graph and preserves foreign jobs",
        context do
     options = fixture_options(context)
@@ -436,6 +456,32 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     )
 
     Repo.one!(from job in Oban.Job, where: job.args["pool_id"] == ^acquired.pool_id)
+  end
+
+  # What Codex's catalog decoder needs from each entry at rust-v0.156.0
+  # (codex-rs/protocol/src/openai_models.rs): every `ModelInfo` field without a
+  # serde default, in its declared type, plus `base_instructions` or
+  # `model_messages.instructions_template`. A single entry that fails makes the
+  # client discard the Pool catalog and keep its bundled one.
+  defp codex_model_info_violations(model) do
+    checks = [
+      {"slug", &is_binary/1},
+      {"display_name", &is_binary/1},
+      {"shell_type", &(&1 in ~w(unified_exec disabled default local shell_command))},
+      {"visibility", &(&1 in ~w(list hide none))},
+      {"supported_in_api", &is_boolean/1},
+      {"priority", &is_integer/1},
+      {"support_verbosity", &is_boolean/1},
+      {"truncation_policy", &match?(%{"mode" => mode, "limit" => limit} when mode in ["bytes", "tokens"] and is_integer(limit), &1)},
+      {"experimental_supported_tools", &(is_list(&1) and Enum.all?(&1, fn tool -> is_binary(tool) end))},
+      {"supported_reasoning_levels", &(is_list(&1) and Enum.all?(&1, fn level -> match?(%{"effort" => effort, "description" => description} when is_binary(effort) and is_binary(description), level) end))}
+    ]
+
+    field_violations = for {key, valid?} <- checks, not (Map.has_key?(model, key) and valid?.(model[key])), do: key
+
+    instructions? = is_binary(model["base_instructions"]) or is_binary(get_in(model, ["model_messages", "instructions_template"]))
+
+    if instructions?, do: field_violations, else: field_violations ++ ["base_instructions"]
   end
 
   defp fixture_options(context) do
