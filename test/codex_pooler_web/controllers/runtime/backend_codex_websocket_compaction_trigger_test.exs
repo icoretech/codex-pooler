@@ -970,7 +970,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
           frame_turn_state
         ])
 
-        follow_up_payload = ordinary_payload(setup)
+        # The first ordinary turn after the compaction is the admission's final
+        # frame. A released client names it with turn metadata like any turn,
+        # in the same encoding it used for the compact frame.
+        follow_up_turn_id = "turn_native_follow_up_#{fixture.case_id}"
+
+        follow_up_payload =
+          setup
+          |> ordinary_payload(%{
+            "client_metadata" => %{
+              "x-codex-turn-metadata" =>
+                native_turn_metadata(
+                  follow_up_turn_id,
+                  "00000000-0000-4000-8000-000000000786",
+                  :turn
+                )
+            }
+          })
+          |> encode_compaction_metadata(unquote(metadata_encoding))
+
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, follow_up_payload)
 
         {_conn, _websocket, follow_up_frame} =
@@ -996,6 +1014,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert ordinary_log.endpoint == "/backend-api/codex/responses"
         assert ordinary_log.transport == "websocket"
         assert ordinary_log.request_metadata["codex_session_id"] == session_id
+
+        # The final frame after a native compaction stores its own retry witness.
+        # Production images up to `afe8dfd9` stored none for this exact turn on
+        # released Desktop clients (findings#225); the witness is what lets the
+        # released client's identical resend be judged instead of refused as
+        # `missing_witness`.
+        assert ordinary_log.native_client_retry_version == 1
+        assert byte_size(ordinary_log.native_client_retry_digest) == 32
+        assert is_integer(ordinary_log.native_client_retry_auth_epoch)
+
         assert :ok = FakeUpstream.verify!(upstream)
       after
         Mint.HTTP.close(conn)
