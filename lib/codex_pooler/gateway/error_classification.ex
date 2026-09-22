@@ -10,13 +10,17 @@ defmodule CodexPooler.Gateway.ErrorClassification do
   # connection errors, the first two also honouring an `x-should-retry`
   # header. Codex's HTTP client retries 5xx and transport errors only — its
   # provider retry policy sets `retry_429: false` with a `request_max_retries`
-  # default of 4 — and its sampling loop then retries any retryable turn error
-  # (an unexpected status such as 409, a 429 rate limit, a cut stream) up to
-  # `stream_max_retries` (default 5) more times from its own error variant,
+  # default of 4 — and its sampling loop then retries a turn error whose
+  # `CodexErr::retry_delay/1` is some delay (an unexpected status such as 409,
+  # a 429 rate limit, a cut stream; an invalid request or an exhausted quota is
+  # final) up to `stream_max_retries` (default 5) more times, waiting a server
+  # retry delay when the error carries one and its own backoff otherwise,
   # surfacing each as a stream disconnect and falling back from websocket to
-  # HTTPS once that budget is spent (rust-v0.155.1 `codex-client/src/retry.rs`,
-  # `core/src/responses_retry.rs`; findings#221 row 221-100). None of that
-  # reads the type. The type still matters: it is what a person reading the body or
+  # HTTPS once that budget is spent (rust-v0.156.0 `codex-client/src/retry.rs`,
+  # `core/src/responses_retry.rs` `handle_response_stream_error`,
+  # `protocol/src/error.rs` `retry_delay`, `model-provider-info/src/lib.rs`;
+  # findings#221 row 221-100, re-read for findings#258 row 258-21). None of
+  # that reads the type. The type still matters: it is what a person reading the body or
   # frame sees, and it must agree with the status the envelope carries.
   # `invalid_request_error` is the terminal, do-not-retry class: it says the
   # caller's request was malformed and will fail identically forever. Both
