@@ -124,15 +124,27 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     end
   end
 
+  # The reread row replaces the struct the socket holds, which is the one that
+  # carries the virtual `recreated_from_assignment_id` of a session recreated
+  # after owner-lease expiry, so the preference is carried onto it. Routing
+  # reads it only while the row is still unassigned.
   defp attach_existing_codex_session(session_id, request_options) do
     case Repo.get(CodexSession, session_id) do
       %CodexSession{} = session ->
-        attach_session(request_options, session)
+        attach_session(request_options, keep_recreation_preference(session, request_options))
 
       nil ->
         {:ok, request_options}
     end
   end
+
+  defp keep_recreation_preference(%CodexSession{} = session, %RequestOptions{
+         continuity: %{codex_session: %CodexSession{id: session_id, recreated_from_assignment_id: assignment_id}}
+       })
+       when session.id == session_id,
+       do: %{session | recreated_from_assignment_id: assignment_id}
+
+  defp keep_recreation_preference(%CodexSession{} = session, %RequestOptions{}), do: session
 
   @spec attach_file_affinity(auth(), String.t(), payload(), RequestOptions.t()) ::
           {:ok, RequestOptions.t()} | {:error, gateway_error()}

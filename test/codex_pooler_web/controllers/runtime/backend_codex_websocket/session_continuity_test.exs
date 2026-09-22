@@ -1474,6 +1474,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     refute recreated_session.id == first_session.id
     assert recreated_session.session_key == window_key
     assert Repo.get!(CodexSession, first_session.id).status == "closed"
+    # The replacement's first turn routes with the closed session's assignment
+    # as its soft preference, which must survive the turn's session lock.
+    assert recreated.request_metadata["routing"]["session_preference_kind"] == "recreated"
+    assert recreated.request_metadata["routing"]["session_preference_status"] == "applied"
   end
 
   @tag :websocket_window_session_key
