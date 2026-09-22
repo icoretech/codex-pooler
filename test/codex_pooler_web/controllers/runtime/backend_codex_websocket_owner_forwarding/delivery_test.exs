@@ -296,13 +296,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DeliveryTe
         "rate_limits" => %{"primary" => %{"used_percent" => 42}}
       })
 
-    assert {:push, {:text, normalized_frame}, state} =
+    # A backend-internal control never reaches a public client, so it cannot
+    # commit output (findings#254 row 254-14).
+    assert {:ok, state} =
              CodexResponsesSocket.handle_info(
                public_owner_frame(downstream, task_pid, {:data, rate_limit_frame}),
                state
              )
 
-    assert %{"type" => "codex.rate_limits"} = CodexPooler.JSON.decode!(normalized_frame)
     refute state.public_turn_output_committed?
 
     {result, logs} =
@@ -335,19 +336,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DeliveryTe
         "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")}
       })
 
-    assert {:push, {:text, normalized_frame}, state} =
+    # The Codex response metadata control (and the models ETag it carries) is
+    # backend-internal: dropped before sequence numbering on the public surface
+    # (findings#254 row 254-14), so the next public event still takes sequence 0.
+    assert {:ok, state} =
              CodexResponsesSocket.handle_info(
                public_owner_frame(downstream, task_pid, {:data, metadata_frame}),
                state
              )
 
-    assert CodexPooler.JSON.decode!(normalized_frame) == %{
-             "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")},
-             "sequence_number" => 0,
-             "type" => "codex.response.metadata"
-           }
-
     refute state.public_turn_output_committed?
+    assert state.public_responses_websocket_state.max_seen == nil
   end
 
   test "late stale owner epoch data cannot commit the active native turn" do
