@@ -22,6 +22,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
   alias CodexPooler.Accounting.RequestLifecycle.Reservation
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
@@ -144,6 +145,101 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     assert session_lock_index < api_key_lock_index
     assert api_key_lock_index < replay_query_index
     refute Enum.any?(events, &(&1.source == "api_keys" and &1.for_update?))
+  end
+
+  # The recovery the duplicate-turn fence is supposed to leave open. A remote
+  # compaction rotates `x-codex-window-id`, the session key prefers the window
+  # (`6441e83d`), so a client that resends a turn still running upstream arrives
+  # in a DIFFERENT codex session. The replay preflight was scoped on the
+  # session, so it could not see the live predecessor, fell through to the
+  # resend policy and refused the client instead of rejoining it to the turn it
+  # already owns (icoretech/codex-pooler-findings#250).
+  test "a live predecessor is rejoined across a post-compaction window rotation" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    thread = Ecto.UUID.generate()
+    turn_id = "rotation-live-turn"
+
+    assert {:ok, %CodexSession{} = window_one} =
+             Websocket.start_codex_session(auth, window_session_options(auth, setup, thread, 1))
+
+    assert {:ok, %CodexSession{} = window_two} =
+             Websocket.start_codex_session(auth, window_session_options(auth, setup, thread, 2))
+
+    # The rotation really splits the session; that is the precondition, not an
+    # artefact of the test.
+    refute window_one.id == window_two.id
+
+    prepared_predecessor =
+      prepare_rotation_frame(auth, setup, window_one, thread, 1, turn_id, "rotation-predecessor")
+
+    request =
+      CodexPooler.PoolerFixtures.request_fixture(auth, %{
+        model_id: setup.model.id,
+        requested_model: setup.model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil
+      })
+
+    assert {:ok, _turn} =
+             SessionContinuity.start_codex_turn(
+               window_one,
+               request,
+               prepared_predecessor.request_options
+             )
+
+    _attempt =
+      CodexPooler.PoolerFixtures.attempt_fixture(request, setup.assignment, %{
+        status: "in_progress",
+        completed_at: nil,
+        upstream_status_code: nil,
+        usage_status: "usage_pending"
+      })
+
+    # Control: inside the predecessor's own window the live turn was always
+    # rejoinable, so the rotated window is the only variable below.
+    assert {:ok, %{intent: :active_reattach, lifecycle: same_window}} =
+             Service.prepare_replay_intent(auth, prepared_predecessor)
+
+    assert same_window.request_id == request.id
+
+    prepared_resend =
+      prepare_rotation_frame(auth, setup, window_two, thread, 2, turn_id, "rotation-resend")
+
+    assert {:ok, %{intent: :active_reattach, lifecycle: rejoined}} =
+             Service.prepare_replay_intent(auth, prepared_resend)
+
+    assert rejoined.request_id == request.id
+    assert FakeUpstream.count(upstream) == 0
+
+    # A genuinely new turn of the rotated window has nothing to rejoin and is
+    # ordinary fresh work.
+    prepared_successor =
+      prepare_rotation_frame(
+        auth,
+        setup,
+        window_two,
+        thread,
+        2,
+        turn_id <> "-successor",
+        "rotation-successor"
+      )
+
+    assert {:ok, %{intent: :fresh}} = Service.prepare_replay_intent(auth, prepared_successor)
+    assert FakeUpstream.count(upstream) == 0
+
+    # The other transport names the same turn. The released client falls back to
+    # HTTPS when its websocket upgrades are refused, and its native HTTP claim
+    # is derived by the same module, so the digest it produces in the ROTATED
+    # window must reach the live websocket predecessor too.
+    assert {:active_generation_zero, http_lifecycle} =
+             Accounting.replay_preflight_snapshot(http_preflight_input(auth, setup, window_two, thread, 2, turn_id))
+
+    assert http_lifecycle.request_id == request.id
   end
 
   test "prepare_replay_intent classifies active and suspended lifecycle and rejects changed claims" do
@@ -1604,6 +1700,126 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     attrs = AccountingReservation.attrs(auth, payload, @endpoint, request_options)
 
     refute inspect(attrs, limit: :infinity, printable_limit: :infinity) =~ raw_key
+  end
+
+  # What a native HTTP resend of the same turn asks the replay preflight, with
+  # the claim derived by `NativeHttpTurnIdentity` from the header carrier the
+  # released client sends.
+  defp http_preflight_input(auth, setup, session, thread, window_number, turn_id) do
+    {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
+
+    document =
+      CodexPooler.JSON.encode!(%{
+        "session_id" => thread,
+        "thread_id" => thread,
+        "turn_id" => turn_id,
+        "window_id" => "#{thread}:#{window_number}",
+        "window_number" => window_number,
+        "request_kind" => "turn"
+      })
+
+    payload = http_payload(setup.model.exposed_model_id, "post-compaction window rotation sentinel")
+
+    options =
+      %{
+        request_id: "rotation-http-resend",
+        upstream_endpoint: @endpoint,
+        transport: "http_sse",
+        session_header: "#{thread}:#{window_number}",
+        session_header_source: "x-codex-window-id",
+        forwarded_headers: [{"x-codex-turn-metadata", document}]
+      }
+      |> RequestOptions.build(@endpoint, payload)
+      |> RequestOptions.put_routing(
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id,
+        api_key_policy: policy
+      )
+      |> RequestOptions.put_continuity(codex_session: session)
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+
+    assert {:ok, %{semantic_turn_key: digest}} =
+             NativeHttpTurnIdentity.request_claim(options, payload)
+
+    %{
+      codex_session_id: session.id,
+      api_key_id: auth.api_key.id,
+      api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+      pool_id: auth.pool.id,
+      model_id: setup.model.id,
+      model_identifier: setup.model.exposed_model_id,
+      semantic_turn_digest: digest,
+      replay_claim_digest: :crypto.hash(:sha256, "rotation-http-resend")
+    }
+  end
+
+  defp window_session_options(auth, setup, thread, window_number) do
+    {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
+
+    %{
+      request_id: "rotation-session-#{window_number}",
+      upstream_endpoint: @endpoint,
+      transport: "websocket",
+      websocket_writer: fn _frame -> :ok end,
+      session_header: "#{thread}:#{window_number}",
+      session_header_source: "x-codex-window-id"
+    }
+    |> RequestOptions.build(@endpoint, %{})
+    |> RequestOptions.put_routing(
+      requested_model: setup.model.exposed_model_id,
+      effective_model: setup.model.exposed_model_id,
+      api_key_policy: policy
+    )
+  end
+
+  # One native frame of a Codex thread, prepared through the real websocket
+  # codec so the turn claim and the semantic digest are the gateway's own.
+  defp prepare_rotation_frame(auth, setup, session, thread, window_number, turn_id, request_id) do
+    {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
+
+    payload =
+      setup.model.exposed_model_id
+      |> websocket_payload("post-compaction window rotation sentinel")
+      |> Map.put("type", "response.create")
+      |> Map.put("client_metadata", %{
+        "turn_id" => turn_id,
+        "x-codex-turn-metadata" =>
+          CodexPooler.JSON.encode!(%{
+            "session_id" => thread,
+            "thread_id" => thread,
+            "turn_id" => turn_id,
+            "window_id" => "#{thread}:#{window_number}",
+            "window_number" => window_number,
+            "request_kind" => "turn"
+          })
+      })
+
+    options =
+      %{
+        request_id: request_id,
+        upstream_endpoint: @endpoint,
+        transport: "websocket",
+        websocket_writer: fn _frame -> :ok end,
+        session_header: "#{thread}:#{window_number}",
+        session_header_source: "x-codex-window-id"
+      }
+      |> RequestOptions.build(@endpoint, payload)
+      |> RequestOptions.put_routing(
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id,
+        api_key_policy: policy
+      )
+      |> RequestOptions.put_continuity(codex_session: session)
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+
+    assert {:ok, prepared} =
+             Service.prepare_websocket_response(
+               CodexPooler.JSON.encode!(payload),
+               options,
+               fn _frame -> :ok end
+             )
+
+    prepared
   end
 
   defp request_options(auth, payload, model, request_id \\ "pre-attempt-rollback") do

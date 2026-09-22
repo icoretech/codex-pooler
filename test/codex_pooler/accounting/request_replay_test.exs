@@ -80,15 +80,28 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
 
     _entitlement = insert_entitlement!(fixture, %{status: "armed"})
 
+    # A caller of the SAME tenant whose binding went stale is refused rather
+    # than served fresh work: that is the property this row exists for.
     for changed <- [
-          %{fixture.preflight | api_key_id: Ecto.UUID.generate()},
           %{fixture.preflight | api_key_runtime_epoch: 1},
-          %{fixture.preflight | pool_id: Ecto.UUID.generate()},
           %{fixture.preflight | model_id: Ecto.UUID.generate()},
           %{fixture.preflight | model_identifier: "gpt-other"}
         ] do
       assert {:error, :authorization_binding_mismatch} =
                RequestReplay.preflight_snapshot(changed)
+    end
+
+    # Another tenant does not see the lifecycle at all. The lookup stopped
+    # scoping on the codex session -- a compacted thread's successor is in a
+    # different one (icoretech/codex-pooler-findings#250) -- and scopes on the
+    # request's pool and api key instead, so a foreign caller is answered
+    # `:none` and proceeds as its own fresh work rather than being told that
+    # someone else's turn is in flight.
+    for foreign <- [
+          %{fixture.preflight | api_key_id: Ecto.UUID.generate()},
+          %{fixture.preflight | pool_id: Ecto.UUID.generate()}
+        ] do
+      assert :none = RequestReplay.preflight_snapshot(foreign)
     end
   end
 

@@ -1547,6 +1547,90 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  # The same fence, across the one thing that used to move underneath it. After
+  # a remote compaction the released client advances its window
+  # (`compact_remote_v2.rs:323`) and `x-codex-window-id` is
+  # `"{thread_id}:{window_number}"` (`session/mod.rs:4449-4459`), so the resend
+  # of the turn that compacted carries a new window while the thread, the
+  # `turn_id` and the authorized history are unchanged. The session key prefers
+  # the window since `6441e83d`, so that resend landed in a SECOND codex session
+  # where a claim named after the session UUID could not meet its predecessor,
+  # and the provider was asked the same history twice
+  # (icoretech/codex-pooler-findings#250).
+  @tag :post_compaction_window_rotation
+  test "an identical native resend after a window rotation is fenced and buys no second dispatch" do
+    upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_window_rotation_websocket"}))
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    thread = Ecto.UUID.generate()
+
+    {:ok, window_one} = start_window_session(auth, thread, 1)
+    {:ok, window_two} = start_window_session(auth, thread, 2)
+
+    # The rotation really does split the session: this is the precondition the
+    # fence used to lose, not an artefact of the test.
+    refute window_one.id == window_two.id
+
+    turn_id = "post-compaction-window-rotation-turn"
+    opening = post_compaction_turn_payload(setup, thread, 1, turn_id)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               opening,
+               %{request_id: "window-one-connection", codex_session: window_one},
+               fn frame -> send(self(), {:websocket_frame, :opening, frame}) end
+             )
+
+    assert_received {:websocket_frame, :opening, _opening_frame}
+    assert FakeUpstream.count(upstream) == 1
+
+    resend = post_compaction_turn_payload(setup, thread, 2, turn_id)
+
+    {result, log} =
+      with_info_log(fn ->
+        execute_websocket_response(
+          auth,
+          resend,
+          %{request_id: "window-two-connection", codex_session: window_two},
+          fn frame -> send(self(), {:websocket_frame, :resend, frame}) end
+        )
+      end)
+
+    assert {:error, %{status: 409, code: "duplicate_turn"}} = result
+    refute_received {:websocket_frame, :resend, _resend_frame}
+    assert log =~ "reason_code=reservation_duplicate"
+    assert FakeUpstream.count(upstream) == 1
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 1
+
+    # A genuinely new turn of the rotated window is still ordinary work, and it
+    # is still filed under the window's own session: only the claim follows the
+    # thread, routing and affinity keep following the window.
+    successor = post_compaction_turn_payload(setup, thread, 2, turn_id <> "-successor")
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               successor,
+               %{request_id: "window-two-successor-connection", codex_session: window_two},
+               fn frame -> send(self(), {:websocket_frame, :successor, frame}) end
+             )
+
+    assert_received {:websocket_frame, :successor, _successor_frame}
+    assert FakeUpstream.count(upstream) == 2
+
+    assert [window_one.id, window_two.id] ==
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^setup.pool.id,
+                 order_by: [asc: r.admitted_at],
+                 select: fragment("?->>'codex_session_id'", r.request_metadata)
+               )
+             )
+  end
+
   @tag :provider_terminal_resend
   test "byte-identical resend while the first turn is still in progress keeps the duplicate turn fence" do
     release_ref = make_ref()
@@ -2155,6 +2239,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
           "output" => "synthetic tool output sentinel"
         }
       ]
+  end
+
+  defp start_window_session(auth, thread, window_number) do
+    Gateway.start_codex_session(auth, %{
+      session_header: "#{thread}:#{window_number}",
+      session_header_source: "x-codex-window-id"
+    })
+  end
+
+  defp post_compaction_turn_payload(setup, thread, window_number, turn_id) do
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "client_metadata" => %{
+        "turn_id" => turn_id,
+        "x-codex-turn-metadata" =>
+          CodexPooler.JSON.encode!(%{
+            "session_id" => thread,
+            "thread_id" => thread,
+            "turn_id" => turn_id,
+            "window_id" => "#{thread}:#{window_number}",
+            "window_number" => window_number,
+            "request_kind" => "turn"
+          })
+      },
+      "input" => native_text_input("post-compaction window rotation sentinel"),
+      "stream" => true,
+      "generate" => true
+    })
   end
 
   defp tool_continuation_payload(model, turn_id, text) do

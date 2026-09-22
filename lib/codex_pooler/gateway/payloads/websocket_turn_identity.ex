@@ -24,6 +24,11 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   # codec produces those two and keys on that prefix.
   @kind_claim_prefix "codex-kind:"
   @resume_claim_prefix "codex-resume:"
+  # A claim SCOPE, never a claim: it is only ever an input to the digests below
+  # and never reaches `requests.correlation_id`, so it is deliberately absent
+  # from `@native_claim_prefixes`.
+  @thread_scope_prefix "codex-thread:"
+  @thread_scope_domain "native_turn_thread_claim_scope_v1"
   @native_claim_prefixes [
     @claim_prefix,
     @request_claim_prefix,
@@ -52,11 +57,25 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
 
   @type result :: {:ok, identity()} | :missing | {:error, Error.reason()}
 
+  @doc """
+  The identity of a native Codex turn, under the claim scope `claim_scope/2`
+  resolved for the request.
+
+  The scope is an argument rather than the Pooler session id because the
+  session is not stable for the life of a turn's thread: a remote compaction
+  rotates `x-codex-window-id`, the session key prefers the window
+  (`session_continuity.ex`, since `6441e83d`), and an identical post-visible
+  resend of the first post-compaction turn therefore opened a SECOND session,
+  where `f(session_uuid, turn_id)` could not collide with the predecessor's
+  claim and the provider was asked the same history twice
+  (findings#250). `claim_scope/2` keeps the claim on the thread the client
+  never moved, while the session keeps following the window.
+  """
   @spec resolve(map(), String.t()) :: result()
-  def resolve(payload, codex_session_id)
-      when is_map(payload) and is_binary(codex_session_id) and codex_session_id != "" do
+  def resolve(payload, claim_scope)
+      when is_map(payload) and is_binary(claim_scope) and claim_scope != "" do
     with {:ok, raw_turn_id} <- raw_turn_id(payload) do
-      digest = :crypto.hash(:sha256, codex_session_id <> <<0>> <> raw_turn_id)
+      digest = :crypto.hash(:sha256, claim_scope <> <<0>> <> raw_turn_id)
 
       {:ok,
        %{
@@ -66,7 +85,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     end
   end
 
-  def resolve(payload, _codex_session_id) when is_map(payload) do
+  def resolve(payload, _claim_scope) when is_map(payload) do
     case raw_turn_id(payload) do
       :missing ->
         :missing
@@ -82,6 +101,68 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
         error
     end
   end
+
+  @doc """
+  The scope a native Codex turn claim is derived under, for one request.
+
+  The client's thread identity when the request carries one, bound to the
+  tenant that sent it, and the Pooler session id otherwise.
+
+  Why the thread and not the session. `x-codex-window-id` is
+  `"{thread_id}:{window_number}"` and the client bumps the number after a
+  remote compaction (`session/mod.rs:4449-4459`,
+  `compact_remote_v2.rs:323`), so every post-compaction request carries a
+  window the predecessor's never did. The session key prefers that window
+  (`6441e83d`, deliberately: a window is the finest continuity anchor a Codex
+  client offers and two live windows of one `session-id` must not collapse
+  into one session), so the successor opens a NEW session and a duplicate-turn
+  claim built on the session UUID cannot see the predecessor. Scoping the claim
+  on the thread leaves session keying, routing and affinity exactly where
+  `6441e83d` put them and fences the duplicate anyway (findings#250).
+
+  Why the tenant is in the digest. `requests_correlation_id_uq` is a GLOBAL
+  unique index and the thread identity is client-supplied, so a bare digest of
+  it would let one Pool's client name another Pool's claim. The session id it
+  replaces was server-minted and carried that separation implicitly.
+
+  Why an HMAC and not a plain hash. The scope decides a durable claim; keying
+  it to `secret_key_base` under its own domain means the claim of a thread
+  cannot be computed from values a client already knows, which is the property
+  the session UUID had. Without a usable secret the scope falls back to the
+  session id, which is today's behaviour rather than a weaker stand-in.
+  """
+  @spec claim_scope(term(), String.t() | nil) :: String.t() | nil
+  def claim_scope(session, thread_id)
+
+  def claim_scope(
+        %{id: id, pool_id: pool_id, api_key_id: api_key_id},
+        thread_id
+      )
+      when is_binary(id) and is_binary(pool_id) and is_binary(api_key_id) and
+             is_binary(thread_id) and thread_id != "" do
+    case thread_scope_hmac_key() do
+      {:ok, key} ->
+        digest =
+          :crypto.mac(
+            :hmac,
+            :sha256,
+            key,
+            :erlang.term_to_binary(
+              {@thread_scope_domain, pool_id, api_key_id, thread_id},
+              [:deterministic]
+            )
+          )
+
+        @thread_scope_prefix <> Base.url_encode64(digest, padding: false)
+
+      :error ->
+        id
+    end
+  end
+
+  def claim_scope(%{id: id}, _thread_id) when is_binary(id) and id != "", do: id
+
+  def claim_scope(_session, _thread_id), do: nil
 
   @doc "True for a payload-scoped native websocket request claim."
   @spec request_claim?(term()) :: boolean()
@@ -419,6 +500,13 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   defp replay_claim_hmac_key do
     with {:ok, secret} <- configured_secret_key_base() do
       {:ok, :crypto.hash(:sha256, secret <> <<0>> <> @replay_claim_domain)}
+    end
+  end
+
+  defp thread_scope_hmac_key do
+    case configured_secret_key_base() do
+      {:ok, secret} -> {:ok, :crypto.hash(:sha256, secret <> <<0>> <> @thread_scope_domain)}
+      {:error, _reason} -> :error
     end
   end
 

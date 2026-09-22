@@ -197,11 +197,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
                    order_by: [asc: request.admitted_at]
                )
 
-      {:ok, logical_identity} =
-        WebsocketTurnIdentity.resolve(anchor, state.codex_session.id)
+      # The released frames carry a thread, so the claim is named under the
+      # thread scope the gateway itself uses rather than the session id
+      # (icoretech/codex-pooler-findings#250).
+      claim_scope = WebsocketTurnIdentity.claim_scope(state.codex_session, released_thread_id)
+      refute claim_scope == state.codex_session.id
+
+      {:ok, logical_identity} = WebsocketTurnIdentity.resolve(anchor, claim_scope)
 
       assert {:ok, ^logical_identity} =
-               WebsocketTurnIdentity.resolve(continuation, state.codex_session.id)
+               WebsocketTurnIdentity.resolve(continuation, claim_scope)
 
       assert anchor_request.correlation_id == logical_identity.turn_claim_key
 

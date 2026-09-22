@@ -1128,6 +1128,18 @@ defmodule CodexPooler.Accounting.RequestReplay do
     end
   end
 
+  # The turn a resend is asking to rejoin, found by the tenant and the semantic
+  # turn digest rather than by the Pooler session.
+  #
+  # The digest is already thread-scoped and tenant-bound
+  # (`WebsocketTurnIdentity.claim_scope/2`), and the session is NOT stable for
+  # the life of a turn's thread: a remote compaction rotates
+  # `x-codex-window-id`, the session key prefers the window, and the successor
+  # therefore arrives in a different session. Scoping this lookup on that
+  # session made a live predecessor invisible to its own client, so the resend
+  # fell through to the resend policy and was refused instead of rejoining the
+  # turn that was still running (findings#250). The `in_progress` status is what
+  # keeps the refusal for a resend that has nothing to rejoin.
   defp active_semantic_lifecycle(input) do
     Repo.one(
       from turn in CodexTurn,
@@ -1138,10 +1150,10 @@ defmodule CodexPooler.Accounting.RequestReplay do
         left_join: entitlement in RequestReplayEntitlement,
         on: entitlement.request_id == request.id,
         where:
-          turn.codex_session_id == ^input.codex_session_id and
+          request.pool_id == ^input.pool_id and request.api_key_id == ^input.api_key_id and
             turn.semantic_turn_digest == ^input.semantic_turn_digest and
             turn.status == "in_progress",
-        order_by: [desc: turn.turn_sequence],
+        order_by: [desc: request.admitted_at, desc: turn.turn_sequence],
         limit: 1,
         select: %{
           turn: turn,
@@ -1418,8 +1430,14 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
   defp coherent_armed_attempt?(%Attempt{}, %RequestReplayEntitlement{}), do: false
 
-  defp compare_active_authorization(turn, request, api_key, input) do
-    if turn.codex_session_id == input.codex_session_id and request.api_key_id == input.api_key_id and
+  # No session term, for the reason stated on `active_semantic_lifecycle/1`: the
+  # successor of a compacted thread is in a different session by construction,
+  # and requiring the predecessor's would refuse exactly the resend this path
+  # exists to serve. Every other binding the session used to imply -- api key,
+  # its revocation epoch, pool, model id and requested model -- is still
+  # compared here (findings#250).
+  defp compare_active_authorization(_turn, request, api_key, input) do
+    if request.api_key_id == input.api_key_id and
          api_key.runtime_revocation_epoch == input.api_key_runtime_epoch and
          request.pool_id == input.pool_id and request.model_id == input.model_id and
          secure_text_match?(request.requested_model, input.model_identifier) do

@@ -101,6 +101,19 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
 
   @max_request_kind_bytes 128
 
+  # The client's own thread identity, which a remote compaction does NOT move.
+  # The window does: `x-codex-window-id` is minted as `"{thread_id}:{window_number}"`
+  # and `advance_auto_compact_window` bumps the number after a remote compaction
+  # (`session/mod.rs:4449-4459`, `compact_remote_v2.rs:323`), so the window is the
+  # thread plus a counter and the thread is the part that survives. It is present
+  # in the canonical document under a WIDER gate than the window
+  # (`responses_metadata.rs:405-416`: `has_thread_identity` for `thread_id`,
+  # `has_request_identity` for `window_id`), so a request that carries a window
+  # always carries the thread it belongs to.
+  @thread_id_key "thread_id"
+  @max_thread_id_bytes 256
+  @thread_id_pattern ~r/\A[A-Za-z0-9_.:-]+\z/
+
   @doc "The native Codex compaction route."
   @spec compact_endpoint() :: String.t()
   def compact_endpoint, do: @compact_endpoint
@@ -285,6 +298,38 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   end
 
   def canonical_metadata_map(_metadata), do: %{}
+
+  @doc """
+  The client's stable thread identity for this request, or `nil`.
+
+  Resolved through `canonical_document/2`, so a header-only client answers the
+  same as a body client, and bounded to a printable identifier of at most
+  #{@max_thread_id_bytes} bytes. A value that does not meet the bound is
+  reported as ABSENT rather than replaced by a derived stand-in: the caller's
+  fallback is the Pooler session, and a generic substitute would silently merge
+  the claims of unrelated threads.
+  """
+  @spec thread_identity(map(), RequestOptions.t()) :: String.t() | nil
+  def thread_identity(payload, %RequestOptions{} = options),
+    do: payload |> canonical_document(options) |> thread_identity()
+
+  @doc "The thread identity carried by an already-resolved canonical document."
+  @spec thread_identity(term()) :: String.t() | nil
+  def thread_identity(document) do
+    document
+    |> canonical_metadata_map()
+    |> Map.get(@thread_id_key)
+    |> bounded_thread_identity()
+  end
+
+  defp bounded_thread_identity(value)
+       when is_binary(value) and byte_size(value) >= 1 and byte_size(value) <= @max_thread_id_bytes do
+    trimmed = String.trim(value)
+
+    if String.valid?(trimmed) and Regex.match?(@thread_id_pattern, trimmed), do: trimmed, else: nil
+  end
+
+  defp bounded_thread_identity(_value), do: nil
 
   # Body-only, like the two helpers above it, and private so it cannot acquire
   # an HTTP caller that would get a body-blind answer out of it.

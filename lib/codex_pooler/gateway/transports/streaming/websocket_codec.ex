@@ -913,7 +913,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
        do: {:ok, :missing}
 
   defp native_turn_identity(%{"type" => "response.create"} = payload, %RequestOptions{} = opts) do
-    case WebsocketTurnIdentity.resolve(payload, codex_session_id(opts)) do
+    case WebsocketTurnIdentity.resolve(payload, turn_claim_scope(payload, opts)) do
       {:ok, identity} -> {:ok, identity}
       :missing -> {:ok, :missing}
       {:error, reason} -> {:error, reason}
@@ -922,11 +922,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp native_turn_identity(_payload, %RequestOptions{}), do: {:ok, :missing}
 
-  defp codex_session_id(%RequestOptions{continuity: %{codex_session: %{id: id}}})
-       when is_binary(id),
-       do: id
+  # A websocket frame always carries the canonical document, so the thread scope
+  # is available here whenever the client sends one; a frame without it keeps
+  # the session scope, which is what this call passed before findings#250.
+  defp turn_claim_scope(payload, %RequestOptions{continuity: %{codex_session: session}} = opts)
+       when is_map(session) do
+    WebsocketTurnIdentity.claim_scope(session, NativeTurnContinuation.thread_identity(payload, opts))
+  end
 
-  defp codex_session_id(%RequestOptions{}), do: nil
+  defp turn_claim_scope(_payload, %RequestOptions{}), do: nil
 
   defp put_native_turn_identity(%RequestOptions{} = request_options, :missing),
     do: request_options

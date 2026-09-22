@@ -86,6 +86,17 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # turn from colliding, and the websocket path has the same miss for the same
   # reason. The prefix arm deliberately does NOT inherit it.
   #
+  # ## The scope a claim is named under
+  #
+  # Every claim above is derived from `WebsocketTurnIdentity.claim_scope/2`
+  # rather than from the Pooler session id. A remote compaction rotates
+  # `x-codex-window-id`, the session key prefers that window, and the session
+  # therefore moves in the middle of a thread -- so a session-scoped claim stops
+  # seeing its own predecessor exactly when a client resends the first
+  # post-compaction turn (findings#250). The scope is the client's thread when
+  # the request carries one and the session id otherwise, so a client that sends
+  # no thread identity keeps today's naming.
+  #
   # ## Failing open
   #
   # A non-native route, a translated `/v1` request, a missing session, an absent
@@ -160,10 +171,14 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
     with true <- native_route?(request_options),
          metadata when not is_nil(metadata) <-
            NativeTurnContinuation.canonical_document(payload, request_options),
-         %CodexSession{id: session_id} when is_binary(session_id) <-
-           Map.get(request_options.continuity, :codex_session),
+         %CodexSession{} = session <- Map.get(request_options.continuity, :codex_session),
+         claim_scope when is_binary(claim_scope) <-
+           WebsocketTurnIdentity.claim_scope(
+             session,
+             NativeTurnContinuation.thread_identity(metadata)
+           ),
          {:ok, identity} <-
-           WebsocketTurnIdentity.resolve(canonical_payload(metadata), session_id),
+           WebsocketTurnIdentity.resolve(canonical_payload(metadata), claim_scope),
          {:ok, claim} <- claim_for(identity, request_options, payload) do
       {:ok,
        claim

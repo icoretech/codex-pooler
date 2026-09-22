@@ -22,6 +22,51 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
              )
   end
 
+  describe "claim_scope/2" do
+    # The scope has to be the one thing a remote compaction does not move. The
+    # client rotates `x-codex-window-id` after compacting
+    # (`compact_remote_v2.rs:323`) and the Pooler session follows the window, so
+    # a claim named after the session stopped meeting its own predecessor
+    # (icoretech/codex-pooler-findings#250).
+    setup do
+      session = %{
+        id: @session_id,
+        pool_id: "018f60df-713f-7ca8-b9a0-0d12c508a456",
+        api_key_id: "018f60df-713f-7ca8-b9a0-0d12c508a789"
+      }
+
+      %{session: session}
+    end
+
+    test "a thread names one scope for every window of that thread", %{session: session} do
+      window_one = WebsocketTurnIdentity.claim_scope(session, "thread-a")
+
+      window_two =
+        WebsocketTurnIdentity.claim_scope(%{session | id: "018f60df-713f-7ca8-b9a0-0d12c508aaaa"}, "thread-a")
+
+      assert window_one == window_two
+      refute window_one == session.id
+      refute window_one == WebsocketTurnIdentity.claim_scope(session, "thread-b")
+    end
+
+    test "the scope separates tenants, because the claim index is global", %{session: session} do
+      scope = WebsocketTurnIdentity.claim_scope(session, "thread-a")
+
+      refute scope ==
+               WebsocketTurnIdentity.claim_scope(%{session | pool_id: "018f60df-713f-7ca8-b9a0-0d12c508abcd"}, "thread-a")
+
+      refute scope ==
+               WebsocketTurnIdentity.claim_scope(%{session | api_key_id: "018f60df-713f-7ca8-b9a0-0d12c508abcd"}, "thread-a")
+    end
+
+    test "a request with no thread keeps the session scope it had", %{session: session} do
+      assert WebsocketTurnIdentity.claim_scope(session, nil) == session.id
+      assert WebsocketTurnIdentity.claim_scope(session, "") == session.id
+      assert WebsocketTurnIdentity.claim_scope(%{id: @session_id}, "thread-a") == @session_id
+      assert WebsocketTurnIdentity.claim_scope(nil, "thread-a") == nil
+    end
+  end
+
   describe "resolve/2" do
     test "pins canonical turn id acceptance and rejection for metadata consumers" do
       for accepted <- ["a", "turn_1", "turn.1", "turn:1", String.duplicate("z", 256)] do

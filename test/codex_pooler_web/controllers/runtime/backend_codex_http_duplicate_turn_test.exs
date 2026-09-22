@@ -79,6 +79,59 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     end
   end
 
+  # After a remote compaction the released client advances its window
+  # (`compact_remote_v2.rs:323`), and `x-codex-window-id` is minted as
+  # `"{thread_id}:{window_number}"` (`session/mod.rs:4449-4459`). The resend of
+  # the very turn that compacted therefore carries a NEW window while the
+  # `session-id`, the thread, the `turn_id` and the authorized history are
+  # unchanged -- the certified wire capture of the post-compaction lane shows
+  # exactly that (`windowOrdinal` 1 -> 2, one `sessionOrdinal`, one `turnId`,
+  # `inputEqual: true`). The session key prefers the window since `6441e83d`, so
+  # the resend opened a SECOND codex session and a claim named after the session
+  # UUID could not meet its own predecessor: the fence stayed green while the
+  # provider was asked the same history twice
+  # (icoretech/codex-pooler-findings#250).
+  test "an identical resend of the first post-compaction turn is fenced across a window rotation",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_window_rotation"}))
+    setup = gateway_setup(upstream)
+    session = session_id()
+    thread = thread_id()
+
+    opening = post_window_turn(conn, setup, session, thread, 1, @turn_id)
+    assert %{"id" => "resp_window_rotation"} = json_response(opening, 200)
+    assert FakeUpstream.count(upstream) == 1
+
+    resend = post_window_turn(conn, setup, session, thread, 2, @turn_id)
+    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(resend, 409)
+
+    # The provider is not paid a second time and the refused resend records
+    # nothing, exactly as a resend inside one window already did.
+    assert FakeUpstream.count(upstream) == 1
+    assert [opening_request] = pool_requests(setup)
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^opening_request.id), :count) == 1
+
+    # A genuinely new turn of the rotated window is still ordinary work.
+    successor_turn_id = @turn_id <> "_successor"
+    successor = post_window_turn(conn, setup, session, thread, 2, successor_turn_id)
+    assert %{"id" => "resp_window_rotation"} = json_response(successor, 200)
+    assert FakeUpstream.count(upstream) == 2
+
+    # And it is still filed under its own window-keyed session: the claim now
+    # follows the thread, while routing and affinity keep following the window
+    # exactly where `6441e83d` put them.
+    assert [^opening_request, successor_request] = pool_requests(setup)
+
+    assert opening_request.request_metadata["codex_session_key"] ==
+             window_session_key(thread, 1)
+
+    assert successor_request.request_metadata["codex_session_key"] ==
+             window_session_key(thread, 2)
+
+    refute opening_request.request_metadata["codex_session_id"] ==
+             successor_request.request_metadata["codex_session_id"]
+  end
+
   # `409 duplicate_turn` is a public response on a runtime route, so the
   # machine-readable route/feature contract has to carry it for both transports
   # and has to be answerable from the route itself rather than from prose
@@ -1944,4 +1997,39 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   end
 
   defp session_id, do: "codex-session-" <> unique_suffix()
+
+  defp thread_id, do: "codex-thread-" <> unique_suffix()
+
+  # One turn of a Codex thread, sent the way the released client sends it after
+  # `window_number` compactions: the stable `session-id`, the window the client
+  # currently holds, and the canonical document naming the thread the window
+  # belongs to.
+  defp post_window_turn(conn, setup, session, thread, window_number, turn_id) do
+    document =
+      CodexPooler.JSON.encode!(%{
+        "turn_id" => turn_id,
+        "thread_id" => thread,
+        "window_id" => window_id(thread, window_number),
+        "window_number" => window_number,
+        "request_kind" => "turn"
+      })
+
+    conn
+    |> recycle()
+    |> auth(setup)
+    |> put_req_header(@session_header, session)
+    |> put_req_header("x-codex-window-id", window_id(thread, window_number))
+    |> put_req_header(@metadata_header, document)
+    |> post("/backend-api/codex/responses", turn_payload(setup))
+  end
+
+  defp window_id(thread, window_number), do: "#{thread}:#{window_number}"
+
+  defp window_session_key(thread, window_number) do
+    digest =
+      :crypto.hash(:sha256, window_id(thread, window_number))
+      |> Base.encode16(case: :lower)
+
+    "x-codex-window-id:" <> digest
+  end
 end

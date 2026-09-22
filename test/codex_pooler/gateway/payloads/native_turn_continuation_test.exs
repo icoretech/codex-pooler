@@ -61,6 +61,41 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
     end
   end
 
+  describe "thread_identity/2" do
+    # The thread is what a remote compaction leaves alone while the window
+    # rotates, so it is what the turn claim is scoped by
+    # (icoretech/codex-pooler-findings#250). A value that does not meet the
+    # bound is reported ABSENT, never replaced: the caller then keeps the
+    # session scope instead of merging unrelated threads under one stand-in.
+    test "reads the thread from either carrier and trims it" do
+      body = document(%{"request_kind" => "turn", "turn_id" => "t-1", "thread_id" => " thread-a "})
+      header = document(%{"request_kind" => "turn", "turn_id" => "t-1", "thread_id" => "thread-b"})
+
+      assert NativeTurnContinuation.thread_identity(
+               %{"client_metadata" => %{@metadata_key => body}},
+               options()
+             ) == "thread-a"
+
+      assert NativeTurnContinuation.thread_identity(
+               %{},
+               options(headers: [{@metadata_key, header}])
+             ) == "thread-b"
+    end
+
+    test "an absent, oversized or malformed thread is absent rather than derived" do
+      for absent <- [nil, "", "   ", 42, %{"id" => "thread"}, String.duplicate("z", 257), "thread a", "threadid"] do
+        document = document(%{"request_kind" => "turn", "turn_id" => "t-1", "thread_id" => absent})
+
+        assert NativeTurnContinuation.thread_identity(
+                 %{"client_metadata" => %{@metadata_key => document}},
+                 options()
+               ) == nil
+      end
+
+      assert NativeTurnContinuation.thread_identity(%{}, options()) == nil
+    end
+  end
+
   describe "request_kind/2" do
     # A client that sends only the bounded header copy must resolve its kind
     # exactly as one that sends the body document, or it is classified
