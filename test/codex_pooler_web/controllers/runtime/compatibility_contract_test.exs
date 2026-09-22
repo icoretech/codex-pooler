@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Websocket, as: GatewayWebsocket
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -4412,9 +4413,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     other_key = %{session | api_key_id: Ecto.UUID.generate()}
 
     key = fn codex_session, thread_id ->
-      scope = CodexPooler.Gateway.Payloads.WebsocketTurnIdentity.claim_scope(codex_session, thread_id)
+      scope = WebsocketTurnIdentity.claim_scope(codex_session, thread_id)
       payload = %{"client_metadata" => %{"turn_id" => "matrix-claim-scope-turn"}}
-      {:ok, %{semantic_turn_key: semantic_key}} = CodexPooler.Gateway.Payloads.WebsocketTurnIdentity.resolve(payload, scope)
+      {:ok, %{semantic_turn_key: semantic_key}} = WebsocketTurnIdentity.resolve(payload, scope)
       semantic_key
     end
 
