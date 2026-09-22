@@ -91,16 +91,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "usage_limit_exceeded",
     "usage_limit_reached"
   ]
+  # The `response.failed` codes the latest released Codex client treats as
+  # final instead of resending the compaction (rust-v0.156.0
+  # `codex-api/src/sse/responses.rs` `process_responses_event` and
+  # `protocol/src/error.rs` `retry_delay`). Since 0.156.0 `slow_down` is a
+  # retried rate limit and the three spend/credit codes are a final quota
+  # error; a 0.155.1 client still resends after those three and the Pooler
+  # refuses that resend as a terminal predecessor.
   @codex_response_failed_non_retryable_codes [
     "context_length_exceeded",
     "insufficient_quota",
+    "credit_balance_exhausted",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
     "usage_not_included",
     "cyber_policy",
     "misalignment_policy_violation",
     "invalid_prompt",
     "bio_policy",
-    "server_is_overloaded",
-    "slow_down"
+    "server_is_overloaded"
   ]
 
   @known_error_codes Enum.uniq(

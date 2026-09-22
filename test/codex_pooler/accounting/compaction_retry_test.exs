@@ -279,6 +279,7 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
   for {event_type, error} <- [
         {"response.failed", "server_error"},
         {"response.failed", "rate_limit_exceeded"},
+        {"response.failed", "slow_down"},
         {"response.incomplete", "max_output_tokens"}
       ] do
     test "claims one successor for Codex-retryable #{event_type} #{error}" do
@@ -301,13 +302,15 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
   for error <- [
         "context_length_exceeded",
         "insufficient_quota",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
         "usage_not_included",
         "cyber_policy",
         "misalignment_policy_violation",
         "invalid_prompt",
         "bio_policy",
-        "server_is_overloaded",
-        "slow_down"
+        "server_is_overloaded"
       ] do
     test "rejects Codex-terminal response.failed #{error} without side effects" do
       {setup, predecessor, opts} = predecessor!(unquote(error), 0)
