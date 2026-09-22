@@ -289,6 +289,26 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
     assert_lease_preserved!(fixture)
   end
 
+  test "detach from a gone owner whose recovery stands down for a newer turn is not logged as a failed detach", fixture do
+    websocket_turn = active_turn_fixture(fixture, "websocket")
+    finalize_turn(websocket_turn, "succeeded", nil)
+    http_turn = unowned_turn_fixture(fixture, "http_sse")
+
+    # The owner is gone before the socket detaches; its lease stays with the
+    # newer turn, so the detach fails and the leftover recovery stands down.
+    _owner_log = capture_info_log(fn -> assert :ok = GenServer.stop(fixture.owner_pid) end)
+
+    log = capture_info_log(fn -> assert :ok = DownstreamSession.cleanup(websocket_turn.state) end)
+
+    assert log =~ "[info] websocket owner lifecycle recovery superseded"
+    refute log =~ "[warning]"
+    refute log =~ "websocket owner detach failed"
+
+    assert Repo.get!(Request, http_turn.request.id).status == "in_progress"
+    assert Repo.get!(CodexTurn, http_turn.turn.id).status == "in_progress"
+    assert Repo.get!(BridgeOwnerLease, fixture.owner_lease.id).status == "active"
+  end
+
   test "successful detach preserves a failed terminal winner and its single settlement",
        fixture do
     turn = active_turn_fixture(fixture, "websocket")
