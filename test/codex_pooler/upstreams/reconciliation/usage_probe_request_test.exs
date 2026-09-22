@@ -151,7 +151,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
 
     assert_received {:deadline, deadline}
     assert long_log =~ "usage polling paused beyond the long-pause threshold by a provider Retry-After"
-    assert long_log =~ "upstream_identity_id=#{identity.id} credential_epoch=1"
+    assert long_log =~ "upstream_identity_id=#{identity.id} credential_epoch=1 scope=account"
     assert long_log =~ "status=503 paused_until=#{DateTime.to_iso8601(deadline)}"
     assert long_log =~ ~r/pause_seconds=259\d{3} threshold_seconds=3600/
     refute long_log =~ FakeUpstream.url(long)
@@ -165,7 +165,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
     merged_log =
       capture_log(fn ->
         assert {:ok, ^deadline} =
-                 UsagePollCooldown.record(identity.id, 1, origin, 429, DateTime.add(observed_at, 7_200, :second), observed_at)
+                 UsagePollCooldown.record(identity.id, UsagePollCooldown.current_scope(identity), origin, 429, DateTime.add(observed_at, 7_200, :second), observed_at)
       end)
 
     refute merged_log =~ "long-pause threshold"

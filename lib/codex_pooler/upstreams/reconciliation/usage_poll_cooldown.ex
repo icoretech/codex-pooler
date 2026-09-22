@@ -7,12 +7,20 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   when it is willing to answer again, and ignoring it turns a single throttled
   read into a fallback chain and then into the next minute's probe.
 
-  The pause is scoped to one upstream identity, at one credential epoch, for one
-  provider origin, and it lives in that identity's metadata so every replica,
+  The pause is scoped to one upstream identity, for the provider account its
+  credential belongs to, for one provider origin, and it lives in that
+  identity's metadata so every replica,
   every Pool assignment sharing the identity, and every entry point - scheduled
   reconciliation, manual refresh, gateway quota refresh, post-reset confirmation
   - reads the same committed deadline. Assignments may point at different usage
   hosts, so origins are kept side by side rather than overwriting one slot.
+
+  The provider throttles the account, not one access token, so the pause
+  survives everything that keeps the credential on the same provider account: a
+  token refresh, pause then reactivate, a re-import or relink of that account.
+  It ends at its deadline, or when the identity's stored account id names a
+  different account. An identity with no usable account id falls back to the
+  credential epoch, the only witness it has.
 
   What it is not: a circuit breaker, a quota fact, or a reason to refuse a
   generation request. A deferred read reports that it did not happen; the
@@ -43,6 +51,11 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
 
   @type instruction :: {:retry_after, DateTime.t()} | :retry_now | :absent
   @type admission :: :ok | {:deferred, DateTime.t()}
+  @typedoc """
+  What a pause is recorded for: the digest of the provider account id when the
+  identity has a usable one, and the credential epoch otherwise.
+  """
+  @type scope :: %{required(:account_key) => String.t() | nil, required(:credential_epoch) => pos_integer() | nil}
   @type active_pause :: %{
           required(:origin_key) => String.t(),
           required(:not_before) => DateTime.t(),
@@ -56,6 +69,21 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   """
   @spec metadata_key() :: String.t()
   def metadata_key, do: @metadata_key
+
+  @doc """
+  The scope a usage read made with this identity's credential at
+  `credential_epoch` is throttled under.
+  """
+  @spec scope(UpstreamIdentity.t(), pos_integer() | nil) :: scope()
+  def scope(%UpstreamIdentity{chatgpt_account_id: account_id}, credential_epoch) do
+    %{account_key: account_key(account_id), credential_epoch: positive_epoch(credential_epoch)}
+  end
+
+  @doc """
+  The scope of the credential this identity holds now.
+  """
+  @spec current_scope(UpstreamIdentity.t()) :: scope()
+  def current_scope(%UpstreamIdentity{} = identity), do: scope(identity, CredentialFencing.credential_epoch(identity))
 
   @doc """
   What the provider's `Retry-After` header on this response asks us to do.
@@ -118,16 +146,16 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   def origin_key(_url), do: nil
 
   @doc """
-  Whether a usage read for this identity, epoch and origin may go out now.
+  Whether a usage read for this identity, scope and origin may go out now.
 
   The caller passes the metadata it already holds. Reads see whatever was
   committed before them, which is the whole contract: a read admitted before a
   concurrent pause commits may finish, and one admitted after it may not start.
   This is not an in-flight lease.
   """
-  @spec admit(map() | nil, pos_integer(), String.t() | nil, DateTime.t()) :: admission()
-  def admit(metadata, credential_epoch, origin_key, %DateTime{} = as_of) do
-    with %{"not_before" => not_before} <- entry(metadata, credential_epoch, origin_key),
+  @spec admit(map() | nil, scope(), String.t() | nil, DateTime.t()) :: admission()
+  def admit(metadata, scope, origin_key, %DateTime{} = as_of) do
+    with %{"not_before" => not_before} <- entry(metadata, scope, origin_key),
          {:ok, deadline, 0} <- DateTime.from_iso8601(not_before),
          :lt <- DateTime.compare(as_of, deadline) do
       {:deferred, deadline}
@@ -142,65 +170,63 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   Every outbound usage read re-asks it, because the pause a sibling replica
   committed a moment ago is exactly the one this read must not ignore.
   """
-  @spec admit_current(Ecto.UUID.t(), pos_integer(), String.t() | nil, DateTime.t()) :: admission()
-  def admit_current(identity_id, credential_epoch, origin_key, %DateTime{} = as_of) do
+  @spec admit_current(Ecto.UUID.t(), scope(), String.t() | nil, DateTime.t()) :: admission()
+  def admit_current(identity_id, scope, origin_key, %DateTime{} = as_of) do
     Repo.one(from identity in UpstreamIdentity, where: identity.id == ^identity_id, select: identity.metadata)
-    |> admit(credential_epoch, origin_key, as_of)
+    |> admit(scope, origin_key, as_of)
   end
 
   @doc """
-  Persist a provider-requested deadline for one identity, epoch and origin.
+  Persist a provider-requested deadline for one identity, scope and origin.
 
   Taken under the identity row lock so a deadline and a credential replacement
   cannot interleave, and merged with `max/2` so neither a later success nor a
   shorter concurrent instruction can shorten a pause the provider asked for.
-  A response that arrived for a credential we have since replaced is dropped:
-  it says nothing about the credential we hold now.
+  A response that arrived for a credential of the same provider account still
+  applies, even if that credential has since been refreshed; one for an
+  account the identity no longer belongs to is dropped - it says nothing about
+  the account we hold now.
   """
-  @spec record(Ecto.UUID.t(), pos_integer(), String.t(), pos_integer(), DateTime.t(), DateTime.t()) ::
+  @spec record(Ecto.UUID.t(), scope(), String.t(), pos_integer(), DateTime.t(), DateTime.t()) ::
           {:ok, DateTime.t()} | {:error, term()}
-  def record(identity_id, credential_epoch, origin_key, status, %DateTime{} = not_before, %DateTime{} = as_of)
+  def record(identity_id, %{} = scope, origin_key, status, %DateTime{} = not_before, %DateTime{} = as_of)
       when is_binary(origin_key) and is_map_key(@statuses, status) do
     Repo.transaction(fn ->
       case lock_identity(identity_id) do
         %UpstreamIdentity{} = identity ->
-          write_deadline(identity, credential_epoch, origin_key, status, not_before, as_of)
+          write_deadline(identity, scope, origin_key, status, not_before, as_of)
 
         nil ->
           Repo.rollback(:upstream_identity_not_found)
       end
     end)
-    |> tap(&maybe_log_long_pause(&1, identity_id, credential_epoch, origin_key, status, not_before, as_of))
+    |> tap(&maybe_log_long_pause(&1, identity_id, scope, origin_key, status, not_before, as_of))
   end
 
-  def record(_identity_id, _credential_epoch, _origin_key, _status, %DateTime{}, %DateTime{}),
+  def record(_identity_id, _scope, _origin_key, _status, %DateTime{}, %DateTime{}),
     do: {:error, :invalid_usage_poll_cooldown}
 
   @doc """
-  The pauses still running for the credential the identity holds at
-  `credential_epoch`, longest first.
+  The pauses still running for `scope`, longest first.
 
   This is what `admit/4` would defer on, read the same way: an entry recorded
-  for another credential epoch, or one whose deadline has passed, is not a
-  pause. Status and source are the bounded vocabulary this module writes; an
+  for another provider account (or, without an account id, another credential
+  epoch), or one whose deadline has passed, is not a pause. Status and source are the bounded vocabulary this module writes; an
   entry carrying anything else still counts as a pause, with `nil` in place of
   the value it cannot name.
   """
-  @spec active_pauses(map() | nil, pos_integer() | nil, DateTime.t()) :: [active_pause()]
-  def active_pauses(metadata, credential_epoch, %DateTime{} = as_of)
-      when is_map(metadata) and is_integer(credential_epoch) do
-    case Map.get(metadata, @metadata_key) do
-      %{"version" => @version, "credential_epoch" => ^credential_epoch, "origins" => %{} = origins} ->
+  @spec active_pauses(map() | nil, scope(), DateTime.t()) :: [active_pause()]
+  def active_pauses(metadata, %{} = scope, %DateTime{} = as_of) do
+    case record_origins(metadata, scope) do
+      %{} = origins ->
         origins
         |> Enum.flat_map(fn {origin_key, entry} -> active_pause(origin_key, entry, as_of) end)
         |> Enum.sort_by(&{DateTime.to_unix(&1.not_before, :microsecond), &1.origin_key}, :desc)
 
-      _absent ->
+      nil ->
         []
     end
   end
-
-  def active_pauses(_metadata, _credential_epoch, %DateTime{}), do: []
 
   @doc """
   The bounded status name for a throttling response, or `nil` for a status that
@@ -213,58 +239,103 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
   # shorter or equal one merged into it changes nothing and says nothing. Only
   # bounded values are logged - the identity id, the origin digest, the status
   # and the deadline - never the URL or the header as received.
-  defp maybe_log_long_pause({:ok, deadline}, identity_id, credential_epoch, origin_key, status, not_before, as_of) do
+  defp maybe_log_long_pause({:ok, deadline}, identity_id, scope, origin_key, status, not_before, as_of) do
     pause_seconds = DateTime.diff(not_before, as_of, :second)
 
     if DateTime.compare(deadline, not_before) == :eq and pause_seconds > @long_pause_seconds do
       Logger.warning(
         "usage polling paused beyond the long-pause threshold by a provider Retry-After " <>
-          "upstream_identity_id=#{identity_id} credential_epoch=#{credential_epoch} " <>
+          "upstream_identity_id=#{identity_id} credential_epoch=#{scope.credential_epoch} " <>
+          "scope=#{scope_kind(scope)} " <>
           "origin=#{origin_key} status=#{status} paused_until=#{DateTime.to_iso8601(not_before)} " <>
           "pause_seconds=#{pause_seconds} threshold_seconds=#{@long_pause_seconds}"
       )
     end
   end
 
-  defp maybe_log_long_pause(_result, _identity_id, _credential_epoch, _origin_key, _status, _not_before, _as_of), do: :ok
+  defp maybe_log_long_pause(_result, _identity_id, _scope, _origin_key, _status, _not_before, _as_of), do: :ok
 
-  defp write_deadline(identity, credential_epoch, origin_key, status, not_before, as_of) do
+  defp scope_kind(%{account_key: key}) when is_binary(key), do: "account"
+  defp scope_kind(_scope), do: "credential_epoch"
+
+  defp write_deadline(identity, scope, origin_key, status, not_before, as_of) do
     metadata = identity.metadata || %{}
+    current = current_scope(identity)
 
-    if CredentialFencing.current_credential_epoch?(identity, credential_epoch) do
-      record = record_for_epoch(metadata, credential_epoch)
-      merged = merge_deadline(record["origins"], origin_key, status, not_before, as_of)
+    case same_scope(scope, current) do
+      :ok ->
+        # A record for another account (or, without one, another epoch) is
+        # replaced rather than merged. Within the scope, entries whose deadline
+        # has passed are pruned as we write - an expired pause is not protecting
+        # anything, and an active one is never evicted to make room.
+        origins = record_origins(metadata, current) || %{}
+        merged = merge_deadline(origins, origin_key, status, not_before, as_of)
 
-      metadata =
-        Map.put(metadata, @metadata_key, %{
-          "version" => @version,
-          "credential_epoch" => credential_epoch,
-          "origins" => merged
-        })
+        record =
+          %{"version" => @version, "credential_epoch" => current.credential_epoch, "origins" => merged}
+          |> put_account_key(current.account_key)
 
-      identity
-      |> UpstreamIdentity.changeset(%{metadata: metadata})
-      |> Repo.update!()
+        identity
+        |> UpstreamIdentity.changeset(%{metadata: Map.put(metadata, @metadata_key, record)})
+        |> Repo.update!()
 
-      deadline(merged, origin_key) || not_before
+        deadline(merged, origin_key) || not_before
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
+
+  # The response is about the account the probing credential belonged to. It
+  # still applies when that is the account the identity holds now, however
+  # often the credential was refreshed in between.
+  defp same_scope(%{account_key: key}, %{account_key: key}) when is_binary(key), do: :ok
+  defp same_scope(%{account_key: key}, _current) when is_binary(key), do: {:error, :provider_account_changed}
+
+  defp same_scope(%{account_key: nil, credential_epoch: epoch}, %{account_key: nil, credential_epoch: epoch})
+       when is_integer(epoch),
+       do: :ok
+
+  defp same_scope(_scope, %{account_key: key}) when is_binary(key), do: {:error, :provider_account_changed}
+  defp same_scope(_scope, _current), do: {:error, :stale_credential_epoch}
+
+  defp put_account_key(record, key) when is_binary(key), do: Map.put(record, "account_key", key)
+  defp put_account_key(record, nil), do: record
+
+  # The origins of the record this scope reads. A record carrying an account
+  # key belongs to that account only. One without it - written for an identity
+  # with no usable account id, or before account keys existed - keeps the
+  # credential epoch rule it was written under.
+  defp record_origins(metadata, scope) when is_map(metadata) do
+    with %{"version" => @version, "origins" => %{} = origins} = record <- Map.get(metadata, @metadata_key),
+         true <- record_matches?(record, scope) do
+      origins
     else
-      Repo.rollback(:stale_credential_epoch)
+      _other -> nil
     end
   end
 
-  # A record written under another credential epoch describes a credential we no
-  # longer hold, so it is replaced rather than merged. Within the current epoch,
-  # entries whose deadline has passed are pruned as we write - an expired pause
-  # is not protecting anything, and an active one is never evicted to make room.
-  defp record_for_epoch(metadata, credential_epoch) do
-    case Map.get(metadata, @metadata_key) do
-      %{"version" => @version, "credential_epoch" => ^credential_epoch, "origins" => origins} when is_map(origins) ->
-        %{"origins" => origins}
+  defp record_origins(_metadata, _scope), do: nil
 
-      _replaced ->
-        %{"origins" => %{}}
+  defp record_matches?(%{"account_key" => key}, %{account_key: key}) when is_binary(key), do: true
+  defp record_matches?(%{"account_key" => key}, _scope) when is_binary(key), do: false
+  defp record_matches?(%{"credential_epoch" => epoch}, %{credential_epoch: epoch}) when is_integer(epoch), do: true
+  defp record_matches?(_record, _scope), do: false
+
+  # A digest, like the origin key: the stored record never repeats the account
+  # id, and a synthetic placeholder is no account at all.
+  defp account_key(account_id) do
+    case UpstreamIdentity.account_scope(account_id) do
+      scoped when is_binary(scoped) ->
+        :sha256 |> :crypto.hash(scoped) |> Base.encode16(case: :lower) |> String.slice(0, 32)
+
+      nil ->
+        nil
     end
   end
+
+  defp positive_epoch(epoch) when is_integer(epoch) and epoch > 0, do: epoch
+  defp positive_epoch(_epoch), do: nil
 
   # Pruning is relative to the moment the response arrived, never to the
   # deadline being written: a long pause for one origin must not evict a
@@ -357,20 +428,20 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
 
   defp entry_deadline(_entry), do: nil
 
-  defp entry(metadata, credential_epoch, origin_key) when is_map(metadata) and is_binary(origin_key) do
-    case Map.get(metadata, @metadata_key) do
-      %{"version" => @version, "credential_epoch" => ^credential_epoch, "origins" => %{} = origins} ->
+  defp entry(metadata, %{} = scope, origin_key) when is_binary(origin_key) do
+    case record_origins(metadata, scope) do
+      %{} = origins ->
         case Map.get(origins, origin_key) do
           %{} = entry -> entry
           _missing -> nil
         end
 
-      _absent ->
+      nil ->
         nil
     end
   end
 
-  defp entry(_metadata, _credential_epoch, _origin_key), do: nil
+  defp entry(_metadata, _scope, _origin_key), do: nil
 
   defp lock_identity(identity_id) do
     Repo.one(from identity in UpstreamIdentity, where: identity.id == ^identity_id, lock: "FOR UPDATE")

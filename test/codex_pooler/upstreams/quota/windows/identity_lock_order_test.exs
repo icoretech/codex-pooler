@@ -275,7 +275,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
     test "recording a provider pause locks only the identity row", ctx do
       results =
         assert_row_only_leaf(ctx.identity, fn ->
-          UsagePollCooldown.record(ctx.identity.id, 1, ctx.origin, 429, ctx.deadline, ctx.as_of)
+          UsagePollCooldown.record(ctx.identity.id, UsagePollCooldown.scope(ctx.identity, 1), ctx.origin, 429, ctx.deadline, ctx.as_of)
         end)
 
       assert results == %{row: {:ok, ctx.deadline}, advisory: {:ok, ctx.deadline}}

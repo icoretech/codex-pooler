@@ -27,9 +27,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.UsagePollPause do
       </div>
       <p id={"#{@id_prefix}-usage-poll-pause-origin"} class="text-xs text-base-content/70">
         The provider answered a usage read with {@pause.origin_label}.
-        Quota and saved-reset reads for this account resume on their own at that time,
-        or sooner if the account's credentials are replaced; until then routing uses its
-        quota evidence only while that evidence stays fresh.
+        Quota and saved-reset reads for this account resume on their own at that time.
+        The provider throttles the account, so refreshing, re-importing or reactivating
+        its credentials does not end the pause; until then routing uses its quota
+        evidence only while that evidence stays fresh.
       </p>
       <p
         :if={@pause.origin_count > 1}

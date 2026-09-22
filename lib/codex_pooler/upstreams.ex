@@ -21,7 +21,7 @@ defmodule CodexPooler.Upstreams do
     TokenRefreshEnqueue
   }
 
-  alias CodexPooler.Upstreams.Lifecycle.{AccountLifecycle, CredentialFencing, IdentityLifecycle}
+  alias CodexPooler.Upstreams.Lifecycle.{AccountLifecycle, IdentityLifecycle}
   alias CodexPooler.Upstreams.Reconciliation.UsagePollCooldown
 
   alias CodexPooler.Upstreams.Schemas.{
@@ -202,13 +202,13 @@ defmodule CodexPooler.Upstreams do
   defdelegate soft_delete_account_for_scope(scope, identity_or_id, attrs), to: AccountLifecycle
 
   @doc """
-  The provider-requested usage polling pauses still running for the credential
-  this identity holds now, longest first. An operator projection: the origin is
+  The provider-requested usage polling pauses still running for the provider
+  account this identity's credential belongs to, longest first. An operator projection: the origin is
   the stored digest, never a URL.
   """
   @spec usage_poll_pauses(UpstreamIdentity.t(), DateTime.t()) :: [UsagePollCooldown.active_pause()]
   def usage_poll_pauses(%UpstreamIdentity{} = identity, %DateTime{} = as_of) do
-    UsagePollCooldown.active_pauses(identity.metadata, CredentialFencing.credential_epoch(identity), as_of)
+    UsagePollCooldown.active_pauses(identity.metadata, UsagePollCooldown.current_scope(identity), as_of)
   end
 
   @spec enqueue_token_refresh_for_scope(Scope.t(), identity_ref(), keyword()) ::

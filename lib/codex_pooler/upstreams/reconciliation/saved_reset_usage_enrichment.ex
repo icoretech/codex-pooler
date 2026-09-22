@@ -134,7 +134,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
          {:ok, _deadline} <-
            UsagePollCooldown.record(
              cooldown.identity_id,
-             cooldown.credential_epoch,
+             cooldown.scope,
              origin_key,
              status,
              not_before,
@@ -151,7 +151,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
   defp admit_detail_read(%{} = cooldown, observed_at) do
     UsagePollCooldown.admit_current(
       cooldown.identity_id,
-      cooldown.credential_epoch,
+      cooldown.scope,
       cooldown.origin_key,
       observed_at
     )

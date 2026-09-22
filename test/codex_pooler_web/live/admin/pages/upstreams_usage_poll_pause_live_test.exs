@@ -24,7 +24,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsUsagePollPauseLiveTest do
     assert length(FakeUpstream.requests(fake)) == 1
 
     %UpstreamIdentity{metadata: metadata} = Repo.get!(UpstreamIdentity, identity.id)
-    [%{not_before: not_before}] = UsagePollCooldown.active_pauses(metadata, 1, DateTime.utc_now())
+    [%{not_before: not_before}] = UsagePollCooldown.active_pauses(metadata, UsagePollCooldown.current_scope(Repo.get!(UpstreamIdentity, identity.id)), DateTime.utc_now())
     assert DateTime.diff(not_before, DateTime.utc_now(), :second) > @multi_day_seconds - 120
 
     {:ok, view, html} = live(conn, ~p"/admin/upstreams")
@@ -61,22 +61,35 @@ defmodule CodexPoolerWeb.Admin.UpstreamsUsagePollPauseLiveTest do
     refute has_element?(view, "#upstream-account-#{identity.id}-usage-poll-pause")
   end
 
-  test "a pause for a replaced credential or one already over is not shown", %{conn: conn} do
+  test "a refreshed credential of the same account still shows the pause; another account or an elapsed pause does not", %{conn: conn} do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     origin = UsagePollCooldown.origin_key("https://usage.example.test/backend-api/wham/usage")
+    deadline = DateTime.add(now, @multi_day_seconds, :second)
 
-    %{identity: stale_epoch} = active_upstream_assignment_fixture(pool_fixture(), %{account_label: "Replaced Credential Sample"})
+    %{identity: refreshed} = active_upstream_assignment_fixture(pool_fixture(), %{account_label: "Refreshed Credential Sample"})
+    %{identity: rebound} = active_upstream_assignment_fixture(pool_fixture(), %{account_label: "Rebound Account Sample"})
     %{identity: elapsed} = active_upstream_assignment_fixture(pool_fixture(), %{account_label: "Elapsed Pause Sample"})
 
-    assert {:ok, _deadline} = UsagePollCooldown.record(stale_epoch.id, 1, origin, 429, DateTime.add(now, @multi_day_seconds, :second), now)
-    put_metadata!(stale_epoch.id, "credential_epoch", 2)
+    for identity <- [refreshed, rebound] do
+      assert {:ok, ^deadline} = UsagePollCooldown.record(identity.id, UsagePollCooldown.scope(identity, 1), origin, 429, deadline, now)
+    end
+
+    # A token refresh moves the credential epoch but not the provider account.
+    put_metadata!(refreshed.id, "credential_epoch", 2)
+
+    # The identity now carries a different provider account id.
+    Repo.get!(UpstreamIdentity, rebound.id)
+    |> Ecto.Changeset.change(chatgpt_account_id: "acct_usage_poll_pause_rebound_#{System.unique_integer([:positive])}")
+    |> Repo.update!()
 
     earlier = DateTime.add(now, -120, :second)
-    assert {:ok, _deadline} = UsagePollCooldown.record(elapsed.id, 1, origin, 503, DateTime.add(earlier, 60, :second), earlier)
+    assert {:ok, _deadline} = UsagePollCooldown.record(elapsed.id, UsagePollCooldown.scope(elapsed, 1), origin, 503, DateTime.add(earlier, 60, :second), earlier)
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
-    for identity <- [stale_epoch, elapsed] do
+    assert has_element?(view, "#upstream-account-#{refreshed.id}-usage-poll-pause[data-paused-until='#{DateTime.to_iso8601(deadline)}']")
+
+    for identity <- [rebound, elapsed] do
       assert has_element?(view, "#upstream-account-#{identity.id}")
       refute has_element?(view, "#upstream-account-#{identity.id}-usage-poll-pause")
     end
@@ -90,7 +103,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsUsagePollPauseLiveTest do
 
     for {host, status, deadline} <- [{"usage-a.example.test", 429, shorter}, {"usage-b.example.test", 503, longer}] do
       origin = UsagePollCooldown.origin_key("https://#{host}/backend-api/wham/usage")
-      assert {:ok, _deadline} = UsagePollCooldown.record(identity.id, 1, origin, status, deadline, now)
+      assert {:ok, _deadline} = UsagePollCooldown.record(identity.id, UsagePollCooldown.scope(identity, 1), origin, status, deadline, now)
     end
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")

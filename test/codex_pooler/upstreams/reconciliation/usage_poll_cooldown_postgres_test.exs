@@ -23,13 +23,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldownPostgresTest do
     as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     long = DateTime.add(as_of, 7_200, :second)
     short = DateTime.add(as_of, 60, :second)
+    scope = scope!(fixture.identity_id, 1)
 
     results =
       [long, short]
       |> Enum.map(fn deadline ->
         Task.async(fn ->
           Sandbox.unboxed_run(Repo, fn ->
-            UsagePollCooldown.record(fixture.identity_id, 1, origin, 429, deadline, as_of)
+            UsagePollCooldown.record(fixture.identity_id, scope, origin, 429, deadline, as_of)
           end)
         end)
       end)
@@ -41,30 +42,34 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldownPostgresTest do
     # A third session - the replica that never saw either response - reads the
     # longer pause, whichever order the two writers landed in.
     assert Sandbox.unboxed_run(Repo, fn ->
-             UsagePollCooldown.admit_current(fixture.identity_id, 1, origin, as_of)
+             UsagePollCooldown.admit_current(fixture.identity_id, scope, origin, as_of)
            end) == {:deferred, long}
 
     # A later successful read writes nothing, so it cannot clear the pause.
     assert Sandbox.unboxed_run(Repo, fn ->
              UsagePollCooldown.admit_current(
                fixture.identity_id,
-               1,
+               scope,
                origin,
                DateTime.add(as_of, 120, :second)
              )
            end) == {:deferred, long}
   end
 
-  test "a credential replaced between the response and the write leaves the new credential unpaused" do
+  # findings#259: the provider throttled the account, so a credential refreshed
+  # on another session between the response and the write still gets the pause;
+  # an identity that now belongs to another provider account does not.
+  test "a credential refreshed between the response and the write is still paused, another account is not" do
     fixture = committed_identity!()
     on_exit(fn -> cleanup!(fixture) end)
 
     origin = UsagePollCooldown.origin_key("https://usage.example.test/backend-api/codex/usage")
     as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     not_before = DateTime.add(as_of, 3_600, :second)
+    probed = scope!(fixture.identity_id, 1)
 
-    # The throttled response was for epoch 1. Another session replaces the
-    # credential before the write lands.
+    # The throttled response was for epoch 1. Another session refreshes the
+    # credential of the same account before the write lands.
     Sandbox.unboxed_run(Repo, fn ->
       identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
 
@@ -73,14 +78,33 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldownPostgresTest do
       |> Repo.update!()
     end)
 
-    assert Sandbox.unboxed_run(Repo, fn ->
-             UsagePollCooldown.record(fixture.identity_id, 1, origin, 429, not_before, as_of)
-           end) == {:error, :stale_credential_epoch}
+    assert {:ok, ^not_before} =
+             Sandbox.unboxed_run(Repo, fn -> UsagePollCooldown.record(fixture.identity_id, probed, origin, 429, not_before, as_of) end)
 
-    # The credential we now hold was never throttled, so it reads freely.
     assert Sandbox.unboxed_run(Repo, fn ->
-             UsagePollCooldown.admit_current(fixture.identity_id, 2, origin, as_of)
+             UsagePollCooldown.admit_current(fixture.identity_id, scope!(fixture.identity_id, 2), origin, as_of)
+           end) == {:deferred, not_before}
+
+    # Another session rebinds the identity to a different provider account: a
+    # response for the old account cannot pause the new one.
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.get!(UpstreamIdentity, fixture.identity_id)
+      |> Ecto.Changeset.change(chatgpt_account_id: "acct_cooldown_pg_rebound_#{System.unique_integer([:positive])}")
+      |> Repo.update!()
+    end)
+
+    assert {:error, :provider_account_changed} =
+             Sandbox.unboxed_run(Repo, fn ->
+               UsagePollCooldown.record(fixture.identity_id, probed, origin, 429, DateTime.add(not_before, 60, :second), as_of)
+             end)
+
+    assert Sandbox.unboxed_run(Repo, fn ->
+             UsagePollCooldown.admit_current(fixture.identity_id, scope!(fixture.identity_id, 2), origin, as_of)
            end) == :ok
+  end
+
+  defp scope!(identity_id, epoch) do
+    Sandbox.unboxed_run(Repo, fn -> UsagePollCooldown.scope(Repo.get!(UpstreamIdentity, identity_id), epoch) end)
   end
 
   defp committed_identity! do

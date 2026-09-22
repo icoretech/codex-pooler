@@ -68,7 +68,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
 
   @typep usage_poll_cooldown :: %{
            identity_id: Ecto.UUID.t(),
-           credential_epoch: pos_integer(),
+           scope: UsagePollCooldown.scope(),
            origin_key: String.t() | nil
          }
 
@@ -219,7 +219,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
 
     cooldown = %{
       identity_id: identity.id,
-      credential_epoch: credential_epoch,
+      scope: UsagePollCooldown.scope(identity, credential_epoch),
       origin_key: UsagePollCooldown.origin_key(base)
     }
 
@@ -251,7 +251,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   defp admit_usage_read(cooldown, observed_at) do
     UsagePollCooldown.admit_current(
       cooldown.identity_id,
-      cooldown.credential_epoch,
+      cooldown.scope,
       cooldown.origin_key,
       observed_at
     )
@@ -558,7 +558,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   defp record_usage_poll_cooldown(cooldown, status, not_before, received_at) do
     case UsagePollCooldown.record(
            cooldown.identity_id,
-           cooldown.credential_epoch,
+           cooldown.scope,
            cooldown.origin_key,
            status,
            not_before,
