@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Websocket do
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
   alias CodexPooler.Gateway.Payloads.{ContinuityPayload, PayloadNormalizer, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Admission
@@ -293,6 +294,7 @@ defmodule CodexPooler.Gateway.Websocket do
 
     opts
     |> RequestOptions.put_continuity(codex_session: session)
+    |> refresh_session_owner_witness(session)
     |> RequestOptions.put_transport(
       websocket_owner_forwarding_enabled?: true,
       websocket_owner_session: session,
@@ -305,6 +307,24 @@ defmodule CodexPooler.Gateway.Websocket do
       upstream_websocket_bridge?: true
     )
   end
+
+  # The HTTP request's owner witness was taken from the session before the
+  # bridge attached. When the attach took an unavailable owner's lease over,
+  # the prepared session carries the replacement lease this request now holds;
+  # the request's continuity writes must be fenced by that lease, not the one
+  # it replaced, or its own registration fails `stale_owner` and its response
+  # id never becomes an alias (findings#225 row 225-102).
+  defp refresh_session_owner_witness(
+         %RequestOptions{runtime: %{session_owner_witness: %OwnerWitness{session_id: session_id}}} = opts,
+         %CodexSession{id: session_id} = session
+       ) do
+    case OwnerWitness.new(session) do
+      {:ok, witness} -> RequestOptions.put_session_owner_witness(opts, witness)
+      {:error, :invalid_owner_witness} -> opts
+    end
+  end
+
+  defp refresh_session_owner_witness(%RequestOptions{} = opts, _session), do: opts
 
   @spec recover_websocket_owner_response_options(RequestOptions.t()) ::
           {:ok, RequestOptions.t()} | {:error, term()}
