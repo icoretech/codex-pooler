@@ -395,6 +395,14 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "reasoning content is never surfaced as output text"
     end
 
+    test "states that a replayed public fallback item id is dropped before upstream dispatch" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+
+      assert feature.contract =~ "carries the fallback id <type>_<output_index>"
+      assert feature.contract =~ "whose id is exactly its own type's fallback id"
+      assert feature.contract =~ "provider ids and every other id are forwarded unchanged"
+    end
+
     test "states that public /v1 surfaces relay no provider event header objects" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
       fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)

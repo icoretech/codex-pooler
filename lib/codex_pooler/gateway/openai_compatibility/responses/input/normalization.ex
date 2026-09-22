@@ -155,9 +155,43 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp clean_string(_value), do: nil
 
+  # The public stream names an output item the upstream sent without an id
+  # `<type>_<output_index>` (or `<type>` without an index; see
+  # `PublicResponses.fallback_output_item_id/2`). Replayed into a `store:
+  # false` turn, the Codex backend rejects that id for a message or a
+  # compaction (400 `invalid_value` on `input[i].id`) and accepts the item
+  # without one; provider ids are a short prefix plus an opaque suffix
+  # (`msg_`, `rs_`, `cmp_`, `fc_`) and never the item type itself. The input
+  # adapter therefore drops exactly the item's own fallback id before
+  # normalization, so the upstream receives the item as it produced it
+  # (findings#254). A reasoning item keeps its id unless it carries encrypted
+  # content, the only form that stays valid without one.
+  defp drop_public_fallback_item_id(%{"type" => type, "id" => id} = item)
+       when type in ["message", "compaction"] and is_binary(id) do
+    if public_fallback_item_id?(type, id), do: Map.delete(item, "id"), else: item
+  end
+
+  defp drop_public_fallback_item_id(%{"type" => "reasoning", "id" => id, "encrypted_content" => content} = item)
+       when is_binary(id) and is_binary(content) do
+    if public_fallback_item_id?("reasoning", id) and String.trim(content) != "",
+      do: Map.delete(item, "id"),
+      else: item
+  end
+
+  defp drop_public_fallback_item_id(item), do: item
+
+  defp public_fallback_item_id?(type, type), do: true
+
+  defp public_fallback_item_id?(type, id) do
+    prefix = type <> "_"
+
+    String.starts_with?(id, prefix) and
+      Regex.match?(~r/\A[0-9]+\z/, binary_part(id, byte_size(prefix), byte_size(id) - byte_size(prefix)))
+  end
+
   defp normalize_input_items(input) do
     Enum.reduce_while(input, {:ok, []}, fn item, {:ok, acc} ->
-      case normalize_input_item(item) do
+      case item |> drop_public_fallback_item_id() |> normalize_input_item() do
         {:ok, items} when is_list(items) -> {:cont, {:ok, Enum.reverse(items) ++ acc}}
         {:ok, item} -> {:cont, {:ok, [item | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
