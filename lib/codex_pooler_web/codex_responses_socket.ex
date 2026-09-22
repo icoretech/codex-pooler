@@ -53,8 +53,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   @impl WebSock
   def init(state) do
     case WebsocketControlPath.run(:init, fn -> initialize_socket(state) end) do
-      {:ok, result} -> result
-      {:error, _reason} -> {:stop, :normal, {1011, "websocket initialization unavailable"}, state}
+      {:ok, result} -> mark_stopped(result)
+      {:error, _reason} -> mark_stopped({:stop, :normal, {1011, "websocket initialization unavailable"}, state})
     end
   end
 
@@ -87,11 +87,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  # Once a callback returns a stop, Bandit has already run `terminate/2` and
+  # sent the close, but it keeps handing the frames and messages that race
+  # that close to these callbacks with the stopped state until the client's
+  # own close arrives. The released Codex client writes its first frame right
+  # after the 101, so every refused init meets one. Nothing may start on a
+  # stopped socket: a frame would open a response task whose session, owner
+  # and lease the refusal or `terminate/2` never granted or already released
+  # (findings#255).
   @impl WebSock
+  def handle_in(_frame, %{socket_stopped?: true} = state), do: {:ok, state}
+
   def handle_in(frame, state) do
     case WebsocketControlPath.run(:serve, fn -> handle_socket_frame(frame, state) end) do
-      {:ok, result} -> result
-      {:error, _reason} -> {:stop, :normal, {1011, "websocket control unavailable"}, state}
+      {:ok, result} -> mark_stopped(result)
+      {:error, _reason} -> mark_stopped({:stop, :normal, {1011, "websocket control unavailable"}, state})
     end
   end
 
@@ -130,12 +140,24 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   @impl WebSock
+  def handle_info(_message, %{socket_stopped?: true} = state), do: {:ok, state}
+
   def handle_info(message, state) do
     case WebsocketControlPath.run(:serve, fn -> handle_socket_info(message, state) end) do
-      {:ok, result} -> result
-      {:error, _reason} -> {:stop, :normal, {1011, "websocket control unavailable"}, state}
+      {:ok, result} -> mark_stopped(result)
+      {:error, _reason} -> mark_stopped({:stop, :normal, {1011, "websocket control unavailable"}, state})
     end
   end
+
+  defp mark_stopped({:stop, reason, state}), do: {:stop, reason, Map.put(state, :socket_stopped?, true)}
+
+  defp mark_stopped({:stop, reason, close_detail, state}),
+    do: {:stop, reason, close_detail, Map.put(state, :socket_stopped?, true)}
+
+  defp mark_stopped({:stop, reason, close_detail, messages, state}),
+    do: {:stop, reason, close_detail, messages, Map.put(state, :socket_stopped?, true)}
+
+  defp mark_stopped(result), do: result
 
   defp handle_socket_info(
          {InstanceSettingsCache, {:applied, applied_version}},
