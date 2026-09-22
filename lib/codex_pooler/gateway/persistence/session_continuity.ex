@@ -507,7 +507,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       pool_id: auth.pool.id,
       api_key_id: auth.api_key.id,
       session_key: session_key,
-      conversation_key: conversation_key(opts),
       status: @session_active,
       owner_instance_id: owner.node_name,
       owner_instance_boot_id: owner.boot_id,
@@ -723,10 +722,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   defp safe_hash(value) when is_binary(value) do
     :crypto.hash(:sha256, value)
     |> Base.encode16(case: :lower)
-  end
-
-  defp conversation_key(%RequestOptions{} = request_options) do
-    request_options.continuity.conversation_key |> blank_to_nil()
   end
 
   defp pool_upstream_assignment_id(%RequestOptions{} = request_options) do

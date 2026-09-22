@@ -106,7 +106,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :compaction_projection_context,
     :compaction_result_mode,
     :compaction_result_transport,
-    :conversation_key,
     :connect_timeout,
     :connect_timeout_ms,
     :bridge_owner_lease_ttl_seconds,

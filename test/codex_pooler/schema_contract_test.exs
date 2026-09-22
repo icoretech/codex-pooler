@@ -207,6 +207,9 @@ defmodule CodexPooler.SchemaContractTest do
 
     refute Map.has_key?(indexes, "memberships_single_instance_owner_active_uq")
     refute Map.has_key?(indexes, "requests_api_key_idempotency_uq")
+    # Nothing sets `conversation_key`, and its Pool-wide uniqueness would have
+    # collided across API keys the moment anything did (findings#255).
+    refute Map.has_key?(indexes, "codex_sessions_pool_conversation_key_uq")
 
     assert indexes["ledger_entries_api_key_known_settlement_occurred_idx"] ==
              "CREATE INDEX ledger_entries_api_key_known_settlement_occurred_idx ON " <>

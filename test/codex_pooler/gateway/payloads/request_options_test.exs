@@ -1766,7 +1766,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
             websocket_writer: writer,
             upstream_websocket_session: self(),
             session_key: "session-key",
-            conversation_key: "conversation-key",
             owner_instance_id: "node-a",
             bridge_owner_lease_ttl_seconds: 120,
             reconnect_window_seconds: 30,
@@ -1789,7 +1788,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.transport.upstream_websocket_session == self()
       assert options.continuity.session_key == "session-key"
       assert options.continuity.session_header_source == nil
-      assert options.continuity.conversation_key == "conversation-key"
+      # No caller ever supplied a conversation key; the dead field is gone
+      # rather than persisted under a Pool-wide unique index (findings#255).
+      refute Map.has_key?(options.continuity, :conversation_key)
       assert options.continuity.owner_instance_id == "node-a"
       assert options.continuity.bridge_owner_lease_ttl_seconds == 120
       assert options.continuity.reconnect_window_seconds == 30
@@ -2197,7 +2198,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
             collect_openai_response_stream: true,
             connect_timeout: 10,
             connect_timeout_ms: 11,
-            conversation_key: "conversation-key",
             defer_file_create_request: true,
             effective_model: "example-model",
             file_affinity_assignment_id: Ecto.UUID.generate(),
