@@ -2498,12 +2498,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # A fresh intent without a predecessor lifecycle means the runtime preflight
   # matched no recorded turn: the owner refused a new turn because it is still
   # running or holding the previous one. That is not a duplicate, so the
-  # client gets the owner's own bounded refusal (503 owner_unavailable, 409
-  # owner_busy), which the released Codex client retries exactly as it retries
-  # a 409, and the duplicate-turn counter does not see it. Every other intent
-  # is a resend of a turn already recorded, and stays a counted
-  # `duplicate_turn` (findings#225).
-  defp owner_replay_refusal(reason, %{intent: :fresh, lifecycle: nil}) do
+  # client gets the owner's own bounded refusal (409 owner_busy from a live
+  # owner, 503 owner_unavailable from one it could not reach), which the
+  # released Codex client retries exactly as it retries a 409, and the
+  # duplicate-turn counter does not see it. Every other intent is a resend of
+  # a turn already recorded, and stays a counted `duplicate_turn`; so does a
+  # fresh frame the owner recognised as the very request it is running, which
+  # lost a race to its own winner (findings#225, rows 225-75 and 225-84).
+  defp owner_replay_refusal(reason, %{intent: :fresh, lifecycle: nil})
+       when reason != :duplicate_active_turn do
     case WebsocketOwnerContract.safe_error_payload(reason, nil) do
       {:ok, payload} -> payload
       {:error, _unknown} -> owner_error(:owner_unavailable)

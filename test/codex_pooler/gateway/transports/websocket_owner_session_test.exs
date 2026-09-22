@@ -3121,6 +3121,71 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
              {:error, :duplicate_downstream}
   end
 
+  # A fresh intent is a frame the runtime matched to no recorded turn. A live
+  # owner running a turn refuses it as backpressure, `owner_busy`, like the
+  # legacy preflight; only the very request it is running, which lost the race
+  # to its own winner, is named as such so the socket can answer the counted
+  # duplicate (findings#225, row 225-84).
+  @tag :replay_matrix
+  test "a fresh preflight meeting a running turn is owner_busy unless it is that very request", context do
+    context = %{context | codex_session_id: Ecto.UUID.generate(), owner_lease_token: Ecto.UUID.generate()}
+    on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)
+    block_ref = make_ref()
+
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self(), block_ref: block_ref, messages: ["running"])
+
+    persistence = %{
+      renew_owner_token: fn _, token, _ -> {:ok, %{owner_lease_token: token, owner_instance_id: Atom.to_string(node())}} end,
+      release_owner_lease: fn _, _, _, _ -> :ok end,
+      interrupt_codex_session: fn _, _ -> :ok end
+    }
+
+    {:ok, owner} = start_owner(context, upstream: upstream, persistence: persistence)
+    assert_receive {:websocket_owner_harness_upstream_started, _}
+    {:ok, first} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("fresh-busy-a"))
+    authorization = authorization_binding(context.codex_session_id)
+    semantic = semantic_turn_key(context.codex_session_id, "turn-a")
+    replay = <<42::256>>
+
+    descriptor = %{
+      semantic_turn_key: semantic,
+      replay_claim_digest: replay,
+      authorization_snapshot: authorization,
+      request_id: Ecto.UUID.generate(),
+      codex_turn_id: Ecto.UUID.generate(),
+      model_id: Ecto.UUID.generate(),
+      endpoint: "/backend-api/codex/responses",
+      attempt_id: Ecto.UUID.generate(),
+      replay_generation: 0
+    }
+
+    assert :ok = WebsocketOwnerSession.prepare_next_replay_descriptor(owner, first, descriptor)
+    submit = Task.async(fn -> WebsocketOwnerSession.submit_request(owner, first, native_websocket_request("turn-a")) end)
+    assert_receive {:websocket_owner_frame, "fresh-busy-a", 1, {:data, "running"}}
+    assert_receive {:websocket_owner_harness_barrier, barrier, ^block_ref}
+
+    racer = %{pid: self(), epoch: 2, correlation_id: "fresh-busy-b"}
+    other_semantic = semantic_turn_key(context.codex_session_id, "turn-b")
+
+    assert {:error, :duplicate_active_turn} =
+             WebsocketOwnerSession.reconnect_control_v2(owner, fresh_control(context, racer, semantic, replay, authorization))
+
+    # Same turn, different request (a continuation's replay claim): not the running request.
+    assert {:error, :owner_busy} =
+             WebsocketOwnerSession.reconnect_control_v2(owner, fresh_control(context, racer, semantic, <<43::256>>, authorization))
+
+    assert {:error, :owner_busy} =
+             WebsocketOwnerSession.reconnect_control_v2(owner, fresh_control(context, racer, other_semantic, <<44::256>>, authorization))
+
+    # Refusals leave the running turn and its downstream untouched.
+    assert %{active_turn: %{descriptor: %{downstream_status: :attached}}, downstream_epoch: 1} = :sys.get_state(owner)
+
+    send(barrier, {:websocket_owner_harness_release, block_ref})
+    assert :ok = Task.await(submit, 15_000)
+    assert_receive {:websocket_owner_frame, "fresh-busy-a", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
   @tag :replay_active_reattach
   @tag :replay_matrix
   test "exact lost active descriptor reattaches without another upstream send", context do
@@ -6388,6 +6453,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       )
 
     {preflight, reserve}
+  end
+
+  defp fresh_control(context, downstream, semantic, replay, authorization) do
+    {:ok, control} =
+      RemoteReconnectControlV2.new(%{
+        version: 2,
+        action: :preflight,
+        intent: :fresh,
+        codex_session_id: context.codex_session_id,
+        downstream: Map.take(downstream, [:pid, :epoch, :correlation_id]),
+        semantic_turn_digest: semantic,
+        replay_claim_digest: replay,
+        provisional_token: nil,
+        replay_generation: nil,
+        owner_lease_token: context.owner_lease_token,
+        control_ref: make_ref(),
+        authorization_binding: authorization,
+        consume_binding: nil
+      })
+
+    control
   end
 
   defp reconnect_control(context, downstream, semantic, replay, authorization, descriptor) do

@@ -17,11 +17,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   alias CodexPooler.Access
+  alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Websocket
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
@@ -70,13 +74,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
       {new_result, new_log} =
         with_info_log(fn -> CodexResponsesSocket.handle_in({new_turn, [opcode: :text]}, second_state) end)
 
+      # A live owner running another turn is backpressure: the code the legacy
+      # preflight and the busy-owner contract use (findings#225, row 225-84).
+      busy_code = CompatibilityMatrix.fixture!(:websocket_turn).active_reconnect.owner_replay_preflight.live_owner_refusal_code
+      assert busy_code == CompatibilityMatrix.fixture!(:websocket_turn).active_reconnect.bounded_busy.noncancelled_different_identity
       assert {:push, {:text, new_error}, ^second_state} = new_result
       new_error = CodexPooler.JSON.decode!(new_error)
-      assert new_error["status"] == 503
-      assert new_error["error"]["code"] == "owner_unavailable"
+      assert new_error["status"] == 409
+      assert new_error["error"]["code"] == busy_code
       assert new_log =~ "rejection_stage=replay_preflight"
-      assert new_log =~ "reason_code=owner_unavailable"
+      assert new_log =~ "reason_code=owner_busy"
       refute new_log =~ "reconnect_disposition=identity_rejected"
+      refute_received {:duplicate_turn_refused, _stage, _transport}
+
+      # The race: a frame the runtime matched to no recorded turn, yet the owner
+      # is running exactly that request (it lost the race to its own winner).
+      # Posed by giving the running turn this frame's digests; the frame itself
+      # takes the real runtime and owner path and must be the counted duplicate.
+      race_turn = turn_payload(setup, "ws-owner-refusal-code-race", "the request the owner is running")
+      pose_owner_running_request!(first_state.codex_session.id, second_state, race_turn)
+
+      {race_result, race_log} =
+        with_info_log(fn -> CodexResponsesSocket.handle_in({race_turn, [opcode: :text]}, second_state) end)
+
+      assert {:push, {:text, race_error}, ^second_state} = race_result
+      race_error = CodexPooler.JSON.decode!(race_error)
+      assert race_error["status"] == 409
+      assert race_error["error"]["code"] == "duplicate_turn"
+      assert race_log =~ "reason_code=duplicate_active_turn"
+      assert_received {:duplicate_turn_refused, "owner_replay_preflight", "websocket"}
       refute_received {:duplicate_turn_refused, _stage, _transport}
 
       {retry_result, retry_log} =
@@ -141,6 +167,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
       assert :ok = CodexResponsesSocket.terminate(:closed, state)
       await_owner_cleanup!(session_id)
     end
+  end
+
+  defp pose_owner_running_request!(codex_session_id, socket_state, raw_payload) do
+    options =
+      socket_state
+      |> Adapter.response_options(true, nil)
+      |> RequestOptions.capture_api_key_runtime_epoch(socket_state.auth)
+
+    {:ok, prepared} = Websocket.prepare_websocket_response(raw_payload, options, fn _data -> :ok end)
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(codex_session_id)
+
+    :sys.replace_state(owner_pid, fn owner_state ->
+      update_in(owner_state.active_turn.descriptor, fn descriptor ->
+        %{descriptor | semantic_turn_digest: prepared.semantic_turn_key, replay_claim_digest: prepared.replay_claim_digest}
+      end)
+    end)
+
+    :ok
   end
 
   defp attach_duplicate_turn_counter! do

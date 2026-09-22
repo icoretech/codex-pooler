@@ -3716,7 +3716,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
+  # A fresh intent means the runtime preflight matched the frame to no recorded
+  # turn, and an owner still running or holding a turn cannot take it. That is
+  # backpressure from a live owner, so it answers `owner_busy`, the code the
+  # legacy preflight and the busy-owner contract give a different identity;
+  # `owner_unavailable` stays for an owner that cannot be reached or has no
+  # lease. The one exception is a frame that lost a race to its own winner: the
+  # runtime read no predecessor, yet the running turn carries this frame's
+  # semantic turn and replay claim, so it is a resend of the running turn and
+  # the socket answers it as the counted duplicate it is (findings#225, row
+  # 225-84). A continuation of the same turn has a different replay claim and
+  # stays `owner_busy`.
+  defp apply_valid_reconnect_control_v2(
+         %{active_turn: active_turn, suspended_replay: suspended_replay},
+         %RemoteReconnectControlV2{action: :preflight, intent: :fresh} = control
+       )
+       when is_map(active_turn) or is_map(suspended_replay) do
+    if active_turn_same_request?(active_turn, control),
+      do: {:error, :duplicate_active_turn},
+      else: {:error, :owner_busy}
+  end
+
   defp apply_valid_reconnect_control_v2(_state, _control), do: {:error, :owner_unavailable}
+
+  defp active_turn_same_request?(%{descriptor: %{} = descriptor}, control) do
+    secure_digest_match?(Map.get(descriptor, :semantic_turn_digest), control.semantic_turn_digest) and
+      secure_digest_match?(Map.get(descriptor, :replay_claim_digest), control.replay_claim_digest)
+  end
+
+  defp active_turn_same_request?(_active_turn, _control), do: false
 
   defp cancel_uncommitted_provisional(state, reconciled) do
     if Map.get(reconciled, :reserve_receipt_used?, false) do
