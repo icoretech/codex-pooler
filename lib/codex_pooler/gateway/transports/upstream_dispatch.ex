@@ -1027,7 +1027,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     do: "invalid_field:#{DiagnosticTaxonomy.reason_code(field)}"
 
   defp owner_request_validation_reason({:unknown_fields, _fields}), do: "unknown_fields"
-  defp owner_request_validation_reason(_validation_error), do: "unknown"
 
   defp direct_websocket_request(upstream_request, request_options, _identity, request, attempt) do
     case request_options.transport.upstream_websocket_session do
