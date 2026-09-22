@@ -40,6 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
   @detection_timeout_ms 15_000
@@ -526,6 +527,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def gateway_setup(upstream, opts \\ []) do
+    # Socket callback tests terminate sockets from the test process; their
+    # deferred cleanup must finish before the sandbox owner stops.
+    :ok = WebsocketCleanupFence.install!()
     key = active_api_key_fixture()
     pool = key.pool
     compact? = Keyword.get(opts, :compact?, false)
@@ -1075,6 +1079,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def start_public_endpoint_with_server! do
+    # The fence's on_exit is registered before the listener's own, so the
+    # listener stops first and the fence then waits for its sockets' cleanup
+    # while the sandbox owner is still alive (findings#206, row 206-28).
+    :ok = WebsocketCleanupFence.install!()
+
     {:ok, server} =
       Bandit.start_link(
         plug: CodexPoolerWeb.Endpoint,
@@ -1091,6 +1100,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       end
     end)
 
+    :ok = WebsocketCleanupFence.install!(server: server)
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
     {server, port}
   end
