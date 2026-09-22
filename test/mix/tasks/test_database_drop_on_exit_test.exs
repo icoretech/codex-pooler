@@ -99,7 +99,11 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
     %{directory: directory}
   end
 
+  # A child run is a VM boot plus a database create, migrate and drop, which the ordinary
+  # 6 s hard limit cannot hold on a loaded host: measured at 4.1-5.9 s alone and 7.7-10.6 s
+  # beside other test runs. The declared limit is twice the slowest of those.
   @tag slow: "runs a real namespaced mix test child that creates, migrates and drops its own database"
+  @tag duration_limit_ms: 20_000
   test "a failing namespaced run drops its database and reports its outcome",
        %{directory: directory} do
     failing = run_namespaced!(directory, "failing", @failing_test)
@@ -114,6 +118,7 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
   end
 
   @tag slow: "runs a real namespaced mix test child whose database lifecycle and leaked-owner drain are the property"
+  @tag duration_limit_ms: 20_000
   test "a run that leaks a websocket owner drops its database without waiting out the drain",
        %{directory: directory} do
     run = run_namespaced!(directory, "leaked_owner", @leaked_owner_test)
