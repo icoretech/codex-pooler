@@ -641,13 +641,15 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     %{api_key: other_key} = CodexPooler.PoolerFixtures.active_api_key_fixture(auth.pool)
     swapped_auth = %{auth | api_key: other_key, api_key_id: other_key.id}
 
-    assert {:error, %{status: 409, code: "duplicate_turn"}} =
+    # A session bound to another principal is refused before the frame is
+    # matched to any turn, so it is not a duplicate (findings#225, row 225-83).
+    assert {:error, %{status: 503, code: "owner_unavailable"}} =
              Service.prepare_replay_intent(swapped_auth, stale_prepared)
 
     other_pool = CodexPooler.PoolerFixtures.pool_fixture()
     swapped_pool_auth = %{auth | pool: other_pool, pool_id: other_pool.id}
 
-    assert {:error, %{status: 409, code: "duplicate_turn"}} =
+    assert {:error, %{status: 503, code: "owner_unavailable"}} =
              Service.prepare_replay_intent(swapped_pool_auth, stale_prepared)
 
     assert runtime_counts() == counts
@@ -945,7 +947,9 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
     counts = runtime_counts()
 
-    assert {:error, %{status: 409, code: "duplicate_turn"}} =
+    # Refused before the frame is matched to any turn: not a duplicate
+    # (findings#225, row 225-83).
+    assert {:error, %{status: 503, code: "owner_unavailable"}} =
              Service.prepare_replay_intent(auth, prepared)
 
     assert runtime_counts() == counts
