@@ -512,7 +512,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     close_upstream_websocket_session(state)
 
-    acknowledge_response_task_cleanup(state)
+    state = acknowledge_response_task_cleanup(state)
 
     {remaining_tasks, state} =
       remaining_response_tasks_after_cleanup(state, reason, remaining_tasks)
@@ -641,7 +641,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:ok, token, ^pid} ->
           outcome = response_task_cleanup_outcome(state, pid, token, pid, registry)
           ResponseTask.acknowledge_delivery(pid, token, outcome)
-          record_downstream_delivery_receipt(state, pid, outcome)
+          :ok = record_drained_delivery_receipt(state, pid, outcome)
           state
 
         _watcher_or_unknown ->
@@ -3766,24 +3766,44 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  # Returns the state with every task that was itself the acknowledgement
+  # recipient remembered: a task consumes the first acknowledgement it
+  # receives, so the drain's re-acknowledgement of that task is a no-op and
+  # must not record a second delivery receipt for the one terminal the socket
+  # could have pushed (findings#225, row 225-100). A task whose terminate-time
+  # acknowledgement went to a cancellation watcher is not remembered: the
+  # drain's acknowledgement is the one it consumes, and it records that.
   defp acknowledge_response_task_cleanup(state) do
     registry = response_task_activity_registry(state)
 
-    state
-    |> Map.get(:tasks, MapSet.new())
-    |> Enum.each(fn pid ->
-      case authoritative_delivery_target(state, pid, registry) do
-        {:ok, token, ack_pid} ->
-          outcome = response_task_cleanup_outcome(state, pid, token, ack_pid, registry)
-          ResponseTask.acknowledge_delivery(ack_pid, token, outcome)
-          record_downstream_delivery_receipt(state, pid, outcome)
+    acknowledged =
+      state
+      |> Map.get(:tasks, MapSet.new())
+      |> Enum.reduce(
+        Map.get(state, :terminate_acknowledged_tasks, MapSet.new()),
+        &acknowledge_terminating_response_task(state, registry, &1, &2)
+      )
 
-        :unknown ->
-          :ok
-      end
-    end)
+    Map.put(state, :terminate_acknowledged_tasks, acknowledged)
+  end
 
-    :ok
+  defp acknowledge_terminating_response_task(state, registry, pid, acknowledged) do
+    case authoritative_delivery_target(state, pid, registry) do
+      {:ok, token, ack_pid} ->
+        outcome = response_task_cleanup_outcome(state, pid, token, ack_pid, registry)
+        ResponseTask.acknowledge_delivery(ack_pid, token, outcome)
+        record_downstream_delivery_receipt(state, pid, outcome)
+        if ack_pid == pid, do: MapSet.put(acknowledged, pid), else: acknowledged
+
+      :unknown ->
+        acknowledged
+    end
+  end
+
+  defp record_drained_delivery_receipt(state, pid, outcome) do
+    if MapSet.member?(Map.get(state, :terminate_acknowledged_tasks, MapSet.new()), pid),
+      do: :ok,
+      else: record_downstream_delivery_receipt(state, pid, outcome)
   end
 
   defp response_task_cleanup_outcome(state, pid, token, pid, registry) do
