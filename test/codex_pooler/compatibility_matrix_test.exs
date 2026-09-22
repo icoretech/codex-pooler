@@ -2,6 +2,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.CompatibilityMatrix
+  alias CodexPooler.Gateway.Metadata.CatalogRepresentation
   alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Pools.RoutingSettings
 
@@ -602,8 +603,21 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                digest: "sha256_deterministic_canonical_json",
                format: "weak_cp_models_v1",
                aliases_share_exact_body_and_token: true,
-               cache_coherence: "eventual_after_successful_responses_token"
+               cache_coherence: "eventual_after_successful_responses_token",
+               instructions_representation: %{
+                 selector: "client_version_query",
+                 template_only_since: "0.148.0",
+                 template_only: "base_instructions_dropped_when_instructions_template_is_a_string",
+                 verbatim: "older_0_147_0_absent_or_unparsable_client_version",
+                 etag_input: "served_representation",
+                 vary_header: false
+               }
              }
+
+      assert fixture.instructions_representation.template_only_since ==
+               CatalogRepresentation.template_only_since()
+
+      assert feature.contract =~ "the ETag is the digest of the representation actually served"
 
       assert feature.canonical_partition.new_turn_capacity == %{
                backend_codex_catalog_driven: "selected_partition_only",
@@ -694,6 +708,8 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              }
 
       assert fixture.upstream_etag_relay == false
+      assert fixture.representation_selector == "user_agent_package_version"
+      assert feature.contract =~ "package version after the originator in the request User-Agent"
 
       assert fixture.provider_metadata_event == %{
                order: :after_pooler_event,

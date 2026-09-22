@@ -95,7 +95,7 @@ When you set `model_catalog_url`:
 
 - Use the absolute URL of the Pool catalog, `/backend-api/codex/models` under the same host as `base_url`. Codex adds its `client_version` query parameter itself and authenticates with the same Pool API key.
 - Point it at the final URL. Codex refuses redirects on this request, so an `http://` URL that the ingress redirects to `https://` fails.
-- Codex refuses a catalog response larger than 1 MiB and then keeps its bundled catalog. Current Codex model entries are large, typically 40 to 90 KB each, so a Pool that exposes many models can reach that limit.
+- Codex refuses a catalog response larger than 1 MiB and then keeps its bundled catalog. The upstream catalog repeats each model's instructions in a legacy `base_instructions` field for older Codex releases; Codex Pooler leaves that copy out for Codex 0.148.0 and later, which read the same text from `model_messages`, and keeps it for older releases or when `client_version` is missing. For current releases that makes the catalog about a third smaller, and entries are typically 25 to 65 KB each (40 to 90 KB with the legacy copy), so a Pool that exposes many models can still reach the limit.
 
 `api_key_model_discovery` is marked as under development in Codex. Codex prints an under-development warning at startup while it is enabled; set `suppress_unstable_features_warning = true` at the top level of the config file to hide it. Because the feature is still under development, a later Codex release may rename or change it; recheck this page when you upgrade Codex.
 

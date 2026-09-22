@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Metadata do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Metadata.Accounting, as: MetadataAccounting
+  alias CodexPooler.Gateway.Metadata.CatalogRepresentation
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -29,21 +30,31 @@ defmodule CodexPooler.Gateway.Metadata do
           required(:source_identity) => CodexPooler.Upstreams.Schemas.UpstreamIdentity.t() | nil
         }
 
-  @spec serve_codex_models(auth(), opts()) :: {:ok, gateway_result()} | {:error, gateway_error()}
-  def serve_codex_models(auth, %RequestOptions{} = request_options) do
+  # `client_version` is the value of the request's `client_version` query
+  # parameter (Codex appends its whole package version); it selects the
+  # instructions representation of the served body and therefore its ETag.
+  @spec serve_codex_models(auth(), opts(), term()) ::
+          {:ok, gateway_result()} | {:error, gateway_error()}
+  def serve_codex_models(auth, %RequestOptions{} = request_options, client_version \\ nil) do
     endpoint = request_endpoint(request_options, "/backend-api/codex/models")
     request_options = request_options(request_options, endpoint, %{})
+    representation = CatalogRepresentation.for_client_version(client_version)
 
-    with {:ok, snapshot} <- codex_catalog_snapshot(auth, endpoint, request_options),
+    with {:ok, snapshot} <- codex_catalog_snapshot(auth, endpoint, request_options, representation),
          :ok <-
            record_metadata_request(auth, endpoint, request_options, snapshot) do
       {:ok, %{status: 200, headers: [{"etag", snapshot.etag} | json_headers()], body: snapshot.body}}
     end
   end
 
-  @spec codex_catalog_snapshot(auth(), String.t(), opts()) ::
+  @spec codex_catalog_snapshot(auth(), String.t(), opts(), CatalogRepresentation.t()) ::
           {:ok, codex_catalog_snapshot()} | {:error, gateway_error()}
-  def codex_catalog_snapshot(auth, endpoint, %RequestOptions{} = request_options)
+  def codex_catalog_snapshot(
+        auth,
+        endpoint,
+        %RequestOptions{} = request_options,
+        representation \\ :verbatim
+      )
       when is_binary(endpoint) do
     with {:ok, policy} <- normalize_policy_or_log(auth, endpoint, request_options) do
       hydration = CandidateEligibility.hydrate_model_visibility(auth.pool)
@@ -78,7 +89,8 @@ defmodule CodexPooler.Gateway.Metadata do
               visible_models,
               hydration.candidates_by_model_id
             )
-          end
+          end,
+          representation: representation
         )
 
       {:ok,
@@ -87,6 +99,21 @@ defmodule CodexPooler.Gateway.Metadata do
          source_identity: CandidateEligibility.model_source_identity(hydration, visible_models)
        })}
     end
+  end
+
+  # The catalog a Responses turn (or the websocket upgrade) names in
+  # `x-models-etag`: the representation the same client's own catalog fetch
+  # selected, derived from the version in its `User-Agent`.
+  @spec codex_turn_catalog_snapshot(auth(), String.t(), opts()) ::
+          {:ok, codex_catalog_snapshot()} | {:error, gateway_error()}
+  def codex_turn_catalog_snapshot(auth, endpoint, %RequestOptions{} = request_options)
+      when is_binary(endpoint) do
+    codex_catalog_snapshot(
+      auth,
+      endpoint,
+      request_options,
+      CatalogRepresentation.for_request(request_options)
+    )
   end
 
   @spec effective_model_serving_modes(

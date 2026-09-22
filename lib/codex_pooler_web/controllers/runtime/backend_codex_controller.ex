@@ -11,7 +11,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   alias CodexPoolerWeb.PublicGatewayDispatch
 
   def models(conn, _params) do
-    serve_models(conn, "/backend-api/codex/models")
+    serve_models(conn, "/backend-api/codex/models", "/backend-api/codex/models")
   end
 
   def v1_models(conn, _params) do
@@ -211,10 +211,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
     |> CompactionTrigger.adapt_gateway_result()
   end
 
-  defp serve_models(conn, endpoint) do
-    serve_models(conn, endpoint, endpoint)
-  end
-
   defp serve_models(conn, endpoint, accounting_endpoint) do
     case GatewayHelpers.authenticate(conn) do
       {:ok, auth} ->
@@ -226,7 +222,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
             fn ->
               Metadata.serve_codex_models(
                 auth,
-                metadata_request_options(conn, accounting_endpoint)
+                metadata_request_options(conn, accounting_endpoint),
+                catalog_client_version(conn)
               )
             end
           )
@@ -270,6 +267,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       opts
       |> Map.put(:collect_openai_response_stream, true)
       |> Map.put(:openai_chat_payload, params)
+
+  # Codex appends `?client_version=<major.minor.patch>` to every catalog fetch;
+  # it selects the instructions representation (and so the ETag) of the body.
+  defp catalog_client_version(conn) do
+    conn
+    |> Plug.Conn.fetch_query_params()
+    |> Map.get(:query_params, %{})
+    |> Map.get("client_version")
+  end
 
   defp metadata_request_options(conn, endpoint) do
     conn

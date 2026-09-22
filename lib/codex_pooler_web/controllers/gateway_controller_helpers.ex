@@ -228,7 +228,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
          "/backend-api/codex/responses",
          "/backend-api/codex/v1/responses"
        ] do
-      case Metadata.codex_catalog_snapshot(auth, source_endpoint, request_options) do
+      case Metadata.codex_turn_catalog_snapshot(auth, source_endpoint, request_options) do
         {:ok, snapshot} -> {:ok, put_resp_header(conn, "x-models-etag", snapshot.etag)}
         {:error, reason} -> {:error, reason}
       end

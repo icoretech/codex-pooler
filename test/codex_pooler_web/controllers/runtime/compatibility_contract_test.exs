@@ -1025,6 +1025,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  next_websocket_turn: :reresolve
                },
                upstream_etag_relay: false,
+               representation_selector: "user_agent_package_version",
                provider_metadata_event: %{
                  order: :after_pooler_event,
                  x_models_etag: :removed,

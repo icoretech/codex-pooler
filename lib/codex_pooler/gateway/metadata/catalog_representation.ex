@@ -1,0 +1,97 @@
+defmodule CodexPooler.Gateway.Metadata.CatalogRepresentation do
+  @moduledoc """
+  Chooses how a served native Codex catalog entry carries its instructions.
+
+  The upstream catalog carries every model's instructions twice: once as
+  `model_messages.instructions_template` and once mirrored into the deprecated
+  top-level `base_instructions` for older clients. Codex clients whose catalog
+  decoder prefers the template (every build reporting `0.148.0` or newer) ignore
+  `base_instructions` whenever the template is present, so those clients get
+  entries without the duplicate. Older clients, and requests whose version is
+  absent or unparsable, keep the entry verbatim: up to 0.146.x the field is a
+  required string, and 0.147.0 alphas 1-5 report the whole version `0.147.0`
+  while still requiring it, so 0.147.0 itself stays on the verbatim entry.
+
+  The representation is part of the body, so the catalog ETag is the digest of
+  the representation actually served. The `/models` request selects it from its
+  `client_version` query parameter (part of the request URI, so no `Vary`
+  header is needed); a Responses turn selects it from the version in its
+  `User-Agent`, which the same Codex build derives from the same package
+  version, so the `x-models-etag` a turn carries matches the catalog ETag that
+  client holds and never triggers a catalog refetch loop.
+  """
+
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+
+  @type t :: :verbatim | :instructions_template
+
+  # First whole version whose every build decodes `model_messages` with the
+  # template taking precedence (`deserialize_model_infos_with_legacy_base`
+  # landed in rust-v0.147.0-alpha.6; alphas 1-5 still report `0.147.0`).
+  @template_only_since {0, 148, 0}
+
+  @client_version_pattern ~r/\A(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:[-+][0-9A-Za-z.+-]{0,64})?\z/
+  @user_agent_pattern ~r/\A[^\/\x00-\x1f\x7f]{1,64}\/(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?=[\s(+-]|\z)/
+
+  @spec template_only_since() :: String.t()
+  def template_only_since do
+    {major, minor, patch} = @template_only_since
+    "#{major}.#{minor}.#{patch}"
+  end
+
+  @doc "Representation for a `/models` request's `client_version` query value."
+  @spec for_client_version(term()) :: t()
+  def for_client_version(version) when is_binary(version) do
+    case Regex.run(@client_version_pattern, version, capture: :all_but_first) do
+      [major, minor, patch] -> for_whole_version(major, minor, patch)
+      nil -> :verbatim
+    end
+  end
+
+  def for_client_version(_version), do: :verbatim
+
+  @doc "Representation for a request whose `User-Agent` is `<originator>/<version> ...`."
+  @spec for_user_agent(term()) :: t()
+  def for_user_agent(user_agent) when is_binary(user_agent) do
+    case Regex.run(@user_agent_pattern, user_agent, capture: :all_but_first) do
+      [major, minor, patch] -> for_whole_version(major, minor, patch)
+      nil -> :verbatim
+    end
+  end
+
+  def for_user_agent(_user_agent), do: :verbatim
+
+  @spec for_request(RequestOptions.t()) :: t()
+  def for_request(%RequestOptions{request_metadata: %{user_agent: user_agent}}),
+    do: for_user_agent(user_agent)
+
+  def for_request(%RequestOptions{}), do: :verbatim
+
+  @doc """
+  Applies the representation to one projected catalog entry.
+
+  Only an entry whose `model_messages.instructions_template` is a string loses
+  `base_instructions`; an entry without the template keeps it, because the
+  decoder promotes it into the template and rejects the whole catalog when both
+  are missing.
+  """
+  @spec apply_to_model(map(), t()) :: map()
+  def apply_to_model(model, :instructions_template) when is_map(model) do
+    case model do
+      %{"model_messages" => %{"instructions_template" => template}, "base_instructions" => _base}
+      when is_binary(template) ->
+        Map.delete(model, "base_instructions")
+
+      _other ->
+        model
+    end
+  end
+
+  def apply_to_model(model, :verbatim) when is_map(model), do: model
+
+  defp for_whole_version(major, minor, patch) do
+    version = {String.to_integer(major), String.to_integer(minor), String.to_integer(patch)}
+
+    if version >= @template_only_since, do: :instructions_template, else: :verbatim
+  end
+end

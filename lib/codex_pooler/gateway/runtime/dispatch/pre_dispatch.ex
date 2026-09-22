@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
   alias CodexPooler.Gateway.Denials
+  alias CodexPooler.Gateway.Metadata.CatalogRepresentation
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.InputShape
@@ -545,7 +546,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
               candidates_by_model_id,
               route_state.quota_snapshots
             )
-          end
+          end,
+          # Same representation the client's own catalog fetch selected, or
+          # the turn's x-models-etag would never match it (refetch per turn).
+          representation: CatalogRepresentation.for_request(request_options)
         )
 
       RouteState.put_codex_models_etag(route_state, etag)

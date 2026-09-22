@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
+  alias CodexPooler.Gateway.Metadata.CatalogRepresentation
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -38,7 +39,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
         }
   @type routable_assignment_ids_by_model_id_resolver :: (-> routable_assignment_ids_by_model_id())
   @type selection_opts :: [
-          routable_assignment_ids_by_model_id: routable_assignment_ids_by_model_id_resolver()
+          routable_assignment_ids_by_model_id: routable_assignment_ids_by_model_id_resolver(),
+          representation: CatalogRepresentation.t()
         ]
 
   @spec build([Model.t()], normalized_policy()) :: result()
@@ -104,14 +106,16 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           normalized_policy(),
           pricing_buckets(),
           context_window_overrides(),
-          effective_model_serving_modes()
+          effective_model_serving_modes(),
+          CatalogRepresentation.t()
         ) :: {:ok, result()} | {:error, :invalid_model_metadata}
   def build_selected_sources(
         selected_sources,
         normalized_policy,
         pricing_buckets,
         context_window_overrides,
-        effective_model_serving_modes
+        effective_model_serving_modes,
+        representation \\ :verbatim
       )
       when is_list(selected_sources) and is_map(normalized_policy) and is_map(pricing_buckets) and
              is_map(context_window_overrides) and is_map(effective_model_serving_modes) do
@@ -134,7 +138,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
       end
     end)
     |> case do
-      {:ok, models} -> {:ok, result_from_models(models)}
+      {:ok, models} -> {:ok, result_from_models(models, representation)}
       {:error, :invalid_model_metadata} = error -> error
     end
   end
@@ -180,14 +184,16 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           normalized_policy(),
           pricing_buckets(),
           context_window_overrides(),
-          effective_model_serving_modes()
+          effective_model_serving_modes(),
+          CatalogRepresentation.t()
         ) :: {:ok, result()} | {:error, :invalid_model_metadata}
   def build_selected_partitions(
         partitions,
         normalized_policy,
         pricing_buckets,
         context_window_overrides,
-        effective_model_serving_modes
+        effective_model_serving_modes,
+        representation \\ :verbatim
       )
       when is_list(partitions) do
     selected_sources =
@@ -201,7 +207,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
       normalized_policy,
       pricing_buckets,
       context_window_overrides,
-      effective_model_serving_modes
+      effective_model_serving_modes,
+      representation
     )
   end
 
@@ -223,17 +230,20 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
         effective_model_serving_modes,
         opts \\ []
       ) do
+    representation = Keyword.get(opts, :representation, :verbatim)
+
     models
     |> select_canonical_sources(candidates_by_model_id, opts)
     |> build_selected_partitions(
       normalized_policy,
       pricing_buckets,
       context_window_overrides,
-      effective_model_serving_modes
+      effective_model_serving_modes,
+      representation
     )
     |> case do
       {:ok, result} -> result
-      {:error, :invalid_model_metadata} -> result_from_models([])
+      {:error, :invalid_model_metadata} -> result_from_models([], representation)
     end
   end
 
@@ -260,8 +270,15 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     result_from_models(models)
   end
 
-  defp result_from_models(models) do
-    body = %{"models" => Enum.sort_by(models, &Map.fetch!(&1, "slug"))}
+  defp result_from_models(models, representation \\ :verbatim) do
+    models =
+      models
+      |> Enum.map(&CatalogRepresentation.apply_to_model(&1, representation))
+      |> Enum.sort_by(&Map.fetch!(&1, "slug"))
+
+    # The ETag is the digest of the representation actually served, so a
+    # client holding one representation never matches the other's token.
+    body = %{"models" => models}
     %{body: body, etag: etag(body)}
   end
 
