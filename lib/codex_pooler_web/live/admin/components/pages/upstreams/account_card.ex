@@ -20,7 +20,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.{
     ReconciliationStatus,
     ReinviteLink,
-    RoutePath
+    RoutePath,
+    UsagePollPause
   }
 
   alias CodexPoolerWeb.DateTimeDisplay
@@ -342,6 +343,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           identity_observability={@account.identity_observability}
           reauth_required?={@account.reauth_required?}
           lifecycle_warning={@lifecycle_warning}
+        />
+
+        <UsagePollPause.usage_poll_pause
+          id_prefix={"upstream-account-#{@account.identity.id}"}
+          pause={Map.get(@account, :usage_poll_pause)}
         />
       </div>
       <AdminComponents.card_fact_strip

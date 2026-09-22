@@ -36,6 +36,13 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
 
   @type instruction :: {:retry_after, DateTime.t()} | :retry_now | :absent
   @type admission :: :ok | {:deferred, DateTime.t()}
+  @type active_pause :: %{
+          required(:origin_key) => String.t(),
+          required(:not_before) => DateTime.t(),
+          required(:status) => String.t() | nil,
+          required(:status_code) => pos_integer() | nil,
+          required(:source) => String.t() | nil
+        }
 
   @doc """
   The metadata key this record occupies, for callers that must keep it internal.
@@ -162,6 +169,32 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
     do: {:error, :invalid_usage_poll_cooldown}
 
   @doc """
+  The pauses still running for the credential the identity holds at
+  `credential_epoch`, longest first.
+
+  This is what `admit/4` would defer on, read the same way: an entry recorded
+  for another credential epoch, or one whose deadline has passed, is not a
+  pause. Status and source are the bounded vocabulary this module writes; an
+  entry carrying anything else still counts as a pause, with `nil` in place of
+  the value it cannot name.
+  """
+  @spec active_pauses(map() | nil, pos_integer() | nil, DateTime.t()) :: [active_pause()]
+  def active_pauses(metadata, credential_epoch, %DateTime{} = as_of)
+      when is_map(metadata) and is_integer(credential_epoch) do
+    case Map.get(metadata, @metadata_key) do
+      %{"version" => @version, "credential_epoch" => ^credential_epoch, "origins" => %{} = origins} ->
+        origins
+        |> Enum.flat_map(fn {origin_key, entry} -> active_pause(origin_key, entry, as_of) end)
+        |> Enum.sort_by(&{DateTime.to_unix(&1.not_before, :microsecond), &1.origin_key}, :desc)
+
+      _absent ->
+        []
+    end
+  end
+
+  def active_pauses(_metadata, _credential_epoch, %DateTime{}), do: []
+
+  @doc """
   The bounded status name for a throttling response, or `nil` for a status that
   carries no pause.
   """
@@ -250,6 +283,40 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldown do
       "status" => Map.fetch!(@statuses, status),
       "source" => @source
     }
+  end
+
+  defp active_pause(origin_key, %{} = entry, as_of) when is_binary(origin_key) do
+    case entry_deadline(entry) do
+      %DateTime{} = deadline ->
+        if DateTime.compare(as_of, deadline) == :lt do
+          status = known_value(entry["status"], Map.values(@statuses))
+
+          [
+            %{
+              origin_key: origin_key,
+              not_before: deadline,
+              status: status,
+              status_code: status_code(status),
+              source: known_value(entry["source"], [@source])
+            }
+          ]
+        else
+          []
+        end
+
+      nil ->
+        []
+    end
+  end
+
+  defp active_pause(_origin_key, _entry, _as_of), do: []
+
+  defp status_code(status_name) do
+    Enum.find_value(@statuses, fn {code, name} -> if name == status_name, do: code end)
+  end
+
+  defp known_value(value, known) do
+    if value in known, do: value
   end
 
   defp deadline(origins, origin_key), do: origins |> Map.get(origin_key) |> entry_deadline()

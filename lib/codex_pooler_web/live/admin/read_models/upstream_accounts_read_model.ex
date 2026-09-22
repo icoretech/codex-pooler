@@ -86,6 +86,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:quota_evidence_age) => String.t() | nil,
           required(:credential_expiry) => credential_expiry_projection()
         }
+  @type usage_poll_pause :: %{
+          required(:paused_until) => DateTime.t(),
+          required(:paused_until_label) => String.t(),
+          required(:remaining_label) => String.t(),
+          required(:status_code) => pos_integer() | nil,
+          required(:origin_label) => String.t(),
+          required(:origin_count) => pos_integer()
+        }
   @type token_burn :: TokenBurnProjection.token_burn()
   @type saved_reset_snapshot :: SavedResetProjection.snapshot()
   @type action :: SavedResetProjection.action()
@@ -117,7 +125,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:quota_readiness) => quota_readiness(),
           required(:routing_readiness) => routing_readiness(),
           required(:quota_limits) => [quota_limit_row()],
-          required(:identity_observability) => identity_observability()
+          required(:identity_observability) => identity_observability(),
+          required(:usage_poll_pause) => usage_poll_pause() | nil
         }
 
   @terminal_reconciliation_statuses ~w(succeeded partial failed)
@@ -477,7 +486,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           quota_snapshot.credit_balance,
           raw_quota_windows
         ),
-      identity_observability: identity_observability
+      identity_observability: identity_observability,
+      usage_poll_pause: usage_poll_pause(identity, snapshot_at, datetime_preferences)
     }
 
     Map.put(
@@ -731,6 +741,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     identity
     |> current_token_refresh_status()
     |> Map.get("reason", %{})
+  end
+
+  # The longest running pause is the one that decides when this account's usage
+  # is read again, so it is the one shown; the others are only counted. The
+  # stored origin is a digest, so the operator sees what the provider said and
+  # how, never where.
+  defp usage_poll_pause(%UpstreamIdentity{} = identity, now, datetime_preferences) do
+    case Upstreams.usage_poll_pauses(identity, now) do
+      [] ->
+        nil
+
+      [longest | _others] = pauses ->
+        %{
+          paused_until: longest.not_before,
+          paused_until_label: DateTimeDisplay.format_datetime(longest.not_before, datetime_preferences),
+          remaining_label: Formatting.relative_time_label(longest.not_before, now),
+          status_code: longest.status_code,
+          origin_label: usage_poll_pause_origin_label(longest.status_code, longest.source),
+          origin_count: length(pauses)
+        }
+    end
+  end
+
+  defp usage_poll_pause_origin_label(status_code, source) do
+    status = if status_code, do: "HTTP #{status_code}", else: "a throttling response"
+    instruction = if source == "retry_after", do: "Retry-After", else: "a provider instruction"
+
+    "#{status} with #{instruction}"
   end
 
   defp refresh_job_state(nil), do: nil

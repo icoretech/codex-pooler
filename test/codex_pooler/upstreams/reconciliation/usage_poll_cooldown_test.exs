@@ -274,6 +274,46 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsagePollCooldownTest do
       assert Map.drop(after_metadata, [UsagePollCooldown.metadata_key()]) == before
       refute Map.has_key?(before, UsagePollCooldown.metadata_key())
     end
+
+    test "the operator projection lists exactly the pauses admit/4 would defer on, latest first", %{
+      identity: identity,
+      origin: origin
+    } do
+      other = UsagePollCooldown.origin_key("https://other.example.test/x")
+      shorter = DateTime.add(@received_at, 600, :second)
+      longer = DateTime.add(@received_at, 7_200, :second)
+
+      assert {:ok, _} = UsagePollCooldown.record(identity.id, 1, origin, 429, shorter, @received_at)
+      assert {:ok, _} = UsagePollCooldown.record(identity.id, 1, other, 503, longer, @received_at)
+      metadata = Repo.get!(UpstreamIdentity, identity.id).metadata
+
+      assert UsagePollCooldown.active_pauses(metadata, 1, @received_at) == [
+               %{origin_key: other, not_before: longer, status: "unavailable", status_code: 503, source: "retry_after"},
+               %{origin_key: origin, not_before: shorter, status: "throttled", status_code: 429, source: "retry_after"}
+             ]
+
+      # A deadline that has passed, another credential epoch, or no record at all
+      # is no pause - the same answer admit/4 gives.
+      assert [%{origin_key: ^other}] = UsagePollCooldown.active_pauses(metadata, 1, shorter)
+      assert UsagePollCooldown.active_pauses(metadata, 1, longer) == []
+      assert UsagePollCooldown.active_pauses(metadata, 2, @received_at) == []
+      assert UsagePollCooldown.active_pauses(%{}, 1, @received_at) == []
+      assert UsagePollCooldown.active_pauses(nil, 1, @received_at) == []
+
+      # An entry whose status or source this module never writes still defers
+      # reads, so it is still a pause; only the words it cannot name are absent.
+      tampered =
+        put_in(metadata, [UsagePollCooldown.metadata_key(), "origins", origin], %{
+          "not_before" => DateTime.to_iso8601(shorter),
+          "status" => "<script>",
+          "source" => "somewhere"
+        })
+
+      assert {:deferred, ^shorter} = UsagePollCooldown.admit(tampered, 1, origin, @received_at)
+
+      assert %{status: nil, status_code: nil, source: nil, not_before: ^shorter} =
+               tampered |> UsagePollCooldown.active_pauses(1, @received_at) |> Enum.find(&(&1.origin_key == origin))
+    end
   end
 
   defp response(values) do
