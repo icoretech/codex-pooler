@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.8.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.5...codex-pooler-v0.8.6) (2026-09-22)
+
+
+### Features
+
+* **accounting:** record the model the upstream declares it served ([ad89143](https://github.com/icoretech/codex-pooler/commit/ad8914332cf790203d1550fb6a2c617c5b5f397b))
+* **accounting:** record the price bucket a settlement was substituted onto ([c996dc3](https://github.com/icoretech/codex-pooler/commit/c996dc38d0aea6ca38b832300b1156c6e8a8f1e2))
+* **dev:** let the perf fake upstream carry its request id on the backend's header name ([fa40137](https://github.com/icoretech/codex-pooler/commit/fa401375bc39d17480b0249b1573840ff79b1255))
+* **gateway:** keep the reason a native retry observation lost its authority ([f29fc83](https://github.com/icoretech/codex-pooler/commit/f29fc83d888a2c627a5838137d4595b6b9fd8ce4))
+
+
+### Bug Fixes
+
+* **accounting:** hand a dead-execution recovery's interrupted marker to the outer commit ([13c87c0](https://github.com/icoretech/codex-pooler/commit/13c87c0fe385ff3f8f0ae9cb5f7bb98e41773a1c))
+* **accounting:** price a model by its own identifiers before the one the client asked for ([542327c](https://github.com/icoretech/codex-pooler/commit/542327c80217d4d8a85ad88fc0764cf36fd32c3e))
+* **accounting:** resolve the scale tier instead of calling it unsupported ([301ba15](https://github.com/icoretech/codex-pooler/commit/301ba1530a639167ae57bb55944a2e4ac5d4d6fe))
+* **catalog:** stop model discovery from scoping a sync to a synthetic account id ([e3be8f1](https://github.com/icoretech/codex-pooler/commit/e3be8f199b37e067957aecde2c0dd0ad32b699d1))
+* **dev:** declare the upstream request id header in the perf fake's parsed configuration type ([18f6c4f](https://github.com/icoretech/codex-pooler/commit/18f6c4f43169fa9535aeb9a90fbe63a3d208abfb))
+* **dev:** interrupt owned QA preparation and batch provenance checks ([318541e](https://github.com/icoretech/codex-pooler/commit/318541eff7a51ee370e7f0b59dfb00ea1ea38f34))
+* **gateway:** bound persisted provider header values and drop event headers on public surfaces ([48a0c3e](https://github.com/icoretech/codex-pooler/commit/48a0c3e6510febe375f99f9ec91e53342d28d305))
+* **gateway:** canonicalize a reported service tier before bounding it ([78ccf2a](https://github.com/icoretech/codex-pooler/commit/78ccf2ada1075d99edfce405ec38e5a55dabda2b))
+* **gateway:** classify a crashed owner as an interrupted turn on every finalizer ([1ac9d85](https://github.com/icoretech/codex-pooler/commit/1ac9d854581ac52d2e0faf3e5130783687b286bc))
+* **gateway:** forward the per-request client metadata headers the allowlist missed and align the files bridge ([fa350fb](https://github.com/icoretech/codex-pooler/commit/fa350fb525832519dfceb18c32f0c5dc311047b9))
+* **gateway:** keep metadata event headers on public owner forwarding and canonical terminal re-encoding ([1082b64](https://github.com/icoretech/codex-pooler/commit/1082b64f097ae866435b44435f3ab437d394d25e))
+* repair two dialyzer contracts the quality gate caught ([4ffa527](https://github.com/icoretech/codex-pooler/commit/4ffa527ada26da6d5dd2912cd7fe96688375cf57))
+* **status:** mark a truncated component list instead of cutting mid-name ([deb3e42](https://github.com/icoretech/codex-pooler/commit/deb3e42d967485da2e7bbff77ea1b68d3b799fe6))
+* **status:** stop one unreadable incident from stalling every retirement ([85c6b79](https://github.com/icoretech/codex-pooler/commit/85c6b791e670c7e888a2fb14e5e86944bccb1dc2))
+* **upstreams:** honor a provider Retry-After on usage polling ([aa42f75](https://github.com/icoretech/codex-pooler/commit/aa42f75d9a882dc9dfdac84cb29326a5f21796ba))
+* **upstreams:** require structured refresh-token rejection codes ([505600b](https://github.com/icoretech/codex-pooler/commit/505600b18ebca96538efe6dd1e27589d10e9891d))
+* **upstreams:** wait the interval a throttled token refresh was given ([509d474](https://github.com/icoretech/codex-pooler/commit/509d4746c6103ed087f401d6515368f2f607fe46))
+
+
+### Tests
+
+* **gateway:** pin the native retry witness on admitted tool-continuation and post-compaction resume claims ([22d59b9](https://github.com/icoretech/codex-pooler/commit/22d59b977e2d6a6a076d4e2b2a48da470a946d54))
+* recognize absolute kill paths in process absence diagnostics ([ea32759](https://github.com/icoretech/codex-pooler/commit/ea32759449e88da5dc068ac420fd8278a4e60759))
+* remove duplicate successful database cleanup probe ([b4d39ae](https://github.com/icoretech/codex-pooler/commit/b4d39aeddd820184a2686c3ecb94df99313181ad))
+* **routing:** pin that provider denial outranks positive monthly credits ([934893f](https://github.com/icoretech/codex-pooler/commit/934893f04ffcde437b2c43fe017dd567b43eaaf6))
+* skip duration guard registration in CI ([29ef60b](https://github.com/icoretech/codex-pooler/commit/29ef60ba4026e6e71aaa11f2e3970409ee4aad76))
+* **status:** pin the incident feed shapes the provider actually sends ([2f2ff86](https://github.com/icoretech/codex-pooler/commit/2f2ff86b52854fde0a2cfc66bb4caa3900ad7034))
+* trim fixture setup and await LiveView and websocket teardown ([ba4a15f](https://github.com/icoretech/codex-pooler/commit/ba4a15fb932225b6167c5397df46a92c96653121))
+* **upstreams:** pin the refresh rejection classification table ([cabe4f5](https://github.com/icoretech/codex-pooler/commit/cabe4f511f916be4d549c03eb633190d8909b532))
+
+
+### Miscellaneous Chores
+
+* **deps:** update helm release codex-pooler to v0.8.9 ([4c588e2](https://github.com/icoretech/codex-pooler/commit/4c588e2d274a8e44e9f6524f09017c932981c28e))
+
 ## [0.8.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.4...codex-pooler-v0.8.5) (2026-09-21)
 
 
