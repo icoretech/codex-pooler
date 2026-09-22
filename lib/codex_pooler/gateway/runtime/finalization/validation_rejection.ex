@@ -79,27 +79,36 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   def supported_values_codes, do: @supported_values_codes
 
   @spec fetch(Req.Response.t(), RequestOptions.t() | term()) :: rejection() | nil
-  def fetch(
-        %Req.Response{status: @rejection_status} = response,
-        %RequestOptions{} = request_options
-      ) do
-    with true <- Metadata.ordinary_responses_route?(request_options),
-         %{code: code, type: @provider_error_type} = rejection when code in @relayable_codes <-
-           Metadata.rejection_error(response) do
-      outcome = response_supported_values_outcome(code, response)
-
-      %{
-        code: code,
-        param: Map.get(rejection, :param),
-        supported_values: outcome_values(outcome),
-        supported_values_state: outcome_state(outcome)
-      }
-    else
-      _other -> nil
-    end
+  def fetch(%Req.Response{} = response, %RequestOptions{} = request_options) do
+    if Metadata.ordinary_responses_route?(request_options), do: fetch_ordinary_route(response)
   end
 
   def fetch(_response, _request_options), do: nil
+
+  @doc """
+  `fetch/2` for a response already known to answer an ordinary Responses
+  request, such as a provider refusal on the public `/v1/responses` websocket,
+  whose socket holds no per-turn request options (findings#254 row 254-15).
+  """
+  @spec fetch_ordinary_route(Req.Response.t() | term()) :: rejection() | nil
+  def fetch_ordinary_route(%Req.Response{status: @rejection_status} = response) do
+    case Metadata.rejection_error(response) do
+      %{code: code, type: @provider_error_type} = rejection when code in @relayable_codes ->
+        outcome = response_supported_values_outcome(code, response)
+
+        %{
+          code: code,
+          param: Map.get(rejection, :param),
+          supported_values: outcome_values(outcome),
+          supported_values_state: outcome_state(outcome)
+        }
+
+      _other ->
+        nil
+    end
+  end
+
+  def fetch_ordinary_route(_response), do: nil
 
   @doc """
   Projects the bounded supported-values fact of a fetched rejection as attempt

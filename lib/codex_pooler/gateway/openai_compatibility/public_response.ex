@@ -53,6 +53,35 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   end
 
   @doc """
+  The public websocket event for a provider refusal the upstream websocket
+  sent as its wrapped error frame (`{"type": "error", "status": 4xx,
+  "error": {...}}`): the OpenAI websocket mode's `error` event carrying the
+  status and error object a streaming `/v1/responses` request answers over
+  HTTP for the same provider response under the default (mode-scoped)
+  projection, i.e. the relayed parameter-validation rejection when it
+  qualifies and otherwise the redacted upstream error under the stream
+  startup code `upstream_status` (findings#254 row 254-15). Provider message
+  text never travels.
+  """
+  @spec provider_rejection_websocket_event(400..499, map()) :: map()
+  def provider_rejection_websocket_event(status, %{} = error) when status in 400..499 do
+    response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
+
+    public_error =
+      case ValidationRejection.fetch_ordinary_route(response) do
+        %{} = rejection -> validation_rejection_error(rejection)
+        nil -> normalize_error(error, status: status, source_code: "upstream_status")
+      end
+
+    %{"type" => "error", "status" => public_http_error_status(status), "error" => public_error}
+  end
+
+  # `/v1` answers an upstream 404 as 502 (`PublicGatewayResult`), the public
+  # websocket event carries the same status.
+  defp public_http_error_status(404), do: 502
+  defp public_http_error_status(status), do: status
+
+  @doc """
   Renders a relayed upstream parameter-validation rejection as the public
   OpenAI error object, mapping the upstream param path to the client field.
   """

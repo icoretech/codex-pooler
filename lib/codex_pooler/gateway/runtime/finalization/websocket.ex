@@ -16,7 +16,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     ResponseUsage,
     SettlementAttrs,
     SideEffects,
-    Streaming
+    Streaming,
+    ValidationRejection
   }
 
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
@@ -762,6 +763,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         Map.get(finalization, :transport_failure)
       )
       |> collected_compaction_diagnostics(finalization)
+      |> Map.merge(provider_rejection_metadata(body, context.request_options))
 
     settle_terminal_failure(
       context,
@@ -773,6 +775,41 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       metadata_headers
     )
   end
+
+  # A provider refusal the upstream websocket sent as its wrapped error frame
+  # (`{"type": "error", "status": 4xx, "error": {...}}`) records the rejection
+  # fields the HTTP path records for the same provider response, read from that
+  # frame as the equivalent HTTP response (findings#254 row 254-15). Nothing is
+  # recorded outside `Metadata.rejection_metadata_status?/1`.
+  defp provider_rejection_metadata(body, request_options) do
+    with {:ok, %{"type" => "error", "error" => %{} = error} = frame} <- last_terminal_frame(body),
+         status = Map.get(frame, "status", Map.get(frame, "status_code")),
+         true <- Metadata.rejection_metadata_status?(status) do
+      response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
+
+      Map.merge(
+        Metadata.rejection_metadata(response),
+        ValidationRejection.attempt_metadata(ValidationRejection.fetch(response, request_options))
+      )
+    else
+      _other -> %{}
+    end
+  end
+
+  defp last_terminal_frame(body) when is_binary(body) do
+    case StreamProtocol.complete_sse_blocks(body, bounded?: false) do
+      {[_block | _rest] = blocks, _remaining} ->
+        case StreamProtocol.stream_block_event(List.last(blocks)) do
+          {_event_type, %{} = decoded} -> {:ok, decoded}
+          _other -> :error
+        end
+
+      _other ->
+        :error
+    end
+  end
+
+  defp last_terminal_frame(_body), do: :error
 
   defp terminal_failure_metadata(
          context,

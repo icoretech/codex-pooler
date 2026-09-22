@@ -173,7 +173,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   def rejection_metadata_status?(_status), do: false
 
-  defp rejection_metadata(%Req.Response{status: status} = response) do
+  @doc """
+  The sanitized rejection facts (`rejection_error_code`/`type`/`param`, message
+  presence and size, or a `{"detail": ...}` class) of a refused response, empty
+  outside `rejection_metadata_status?/1`. The websocket finalizer feeds it the
+  provider's wrapped error frame as the equivalent HTTP response, so both
+  transports record the same fields (findings#254 row 254-15).
+  """
+  @spec rejection_metadata(Req.Response.t()) :: map()
+  def rejection_metadata(%Req.Response{status: status} = response) do
     if rejection_metadata_status?(status) do
       response
       |> rejection_body()

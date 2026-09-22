@@ -424,6 +424,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "drops codex.* controls, responsesapi.* events and typeless non-terminal frames before sequence numbering"
     end
 
+    test "states that a provider 4xx refusal reaches the public websocket as the HTTP path's error" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+
+      assert feature.contract =~ "reaches a public GET /v1/responses websocket client as the websocket error event with that status and the error object a streaming POST /v1/responses answers over HTTP"
+      assert feature.contract =~ "the websocket attempt records the same rejection fields; a 429, a 5xx and those two codes keep the masked response.failed"
+    end
+
     test "states that a replayed call item named by its own call_id is dropped before upstream dispatch" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
 
