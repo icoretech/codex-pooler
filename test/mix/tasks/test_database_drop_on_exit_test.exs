@@ -9,6 +9,7 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
   """
   use CodexPooler.UnixIntegrationCase, async: false, tools: ~w(mix)
 
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerDefaults
   alias CodexPooler.MixTasks.{TestDatabaseLock, TestDatabasePrune}
   alias CodexPooler.Repo
 
@@ -29,7 +30,7 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
   # unresponsive arms of `CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest` run with the
   # shipped owner-task budget instead of their own, `mix test
   # test/codex_pooler/gateway/transports/websocket_rollout_drain_test.exs`). Those arms pin the
-  # bounded path in process, so this acceptance does not spend five seconds per unresponsive owner.
+  # bounded path in process; the unresponsive-owner cases below pin it end to end, one owner call each.
   @drain_budget_ms 5_000
 
   @receipt_prefix "drop-on-exit-probe "
@@ -81,6 +82,53 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
     test "leaves a websocket owner with an active turn running" do
       %{rows: [[database]]} = Repo.query!("SELECT current_database()")
       {:ok, owner} = GenServer.start(CodexPooler.DropOnExitProbe.LeakedOwner, :ok)
+      assert Process.alive?(owner)
+      IO.puts("drop-on-exit-probe database=#{database}")
+    end
+  end
+  """
+
+  # An owner that stops answering one of the drain's calls, left running when its test finishes.
+  # It has no reply that could mark the end of the wait, so it watches the rollout drain server
+  # and reports the moment that server stops, which is when the shutdown got past the drain.
+  # ANSWER_STATUS picks the call it hangs: `true` answers the status poll with a turn that never
+  # ends and hangs the post-deadline `:drain`, `false` hangs the first status call.
+  @unresponsive_owner_test ~S"""
+  defmodule CodexPooler.DropOnExitProbe.UnresponsiveOwner do
+    use GenServer
+
+    @registry CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry
+
+    @impl GenServer
+    def init(answer_status?) do
+      {:ok, _owner} = Registry.register(@registry, {__MODULE__, self()}, nil)
+      _monitor = Process.monitor(CodexPooler.Gateway.Transports.Websocket.RolloutDrain)
+      {:ok, answer_status?}
+    end
+
+    @impl GenServer
+    def handle_cast(:begin_drain, answer_status?) do
+      IO.puts("drop-on-exit-probe drain_begin_ms=#{System.monotonic_time(:millisecond)}")
+      {:noreply, answer_status?}
+    end
+
+    @impl GenServer
+    def handle_call(:owner_status, _from, true), do: {:reply, {:ok, %{active_turn?: true}}, true}
+    def handle_call(_request, _from, answer_status?), do: {:noreply, answer_status?}
+
+    @impl GenServer
+    def handle_info({:DOWN, _monitor, :process, _drain, _reason}, answer_status?) do
+      IO.puts("drop-on-exit-probe drain_down_ms=#{System.monotonic_time(:millisecond)}")
+      {:noreply, answer_status?}
+    end
+  end
+
+  defmodule CodexPooler.DropOnExitProbe.UnresponsiveOwnerTest do
+    use CodexPooler.DataCase, async: false
+
+    test "leaves an unresponsive websocket owner running" do
+      %{rows: [[database]]} = Repo.query!("SELECT current_database()")
+      {:ok, owner} = GenServer.start(CodexPooler.DropOnExitProbe.UnresponsiveOwner, ANSWER_STATUS)
       assert Process.alive?(owner)
       IO.puts("drop-on-exit-probe database=#{database}")
     end
@@ -140,6 +188,41 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
 
     refute database_exists?(run.database),
            "run-scoped database #{run.database} survived its run\n#{run.output}"
+  end
+
+  # One owner call is the whole bound: the test configuration's shutdown budget ends the status
+  # poll at once, so the drain waits out exactly one unanswered call. Measured at 5.0 s in
+  # process (`websocket_rollout_drain_test.exs`); the 2 s above it is scheduling tolerance for a
+  # child VM on a loaded host. With the release budget (`CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS`
+  # 50 000) the status-answering owner is polled for about 39 s first and fails the upper bound.
+  # The owner that answers nothing cannot be driven past it without a runtime change: its first
+  # status call already ends at the owner call timeout whatever the drain budget is.
+  for {arm, answer_status?} <- [{"answers its status but never the drain", true}, {"answers nothing", false}] do
+    @tag slow: "runs a real namespaced mix test child whose application stop waits out one unanswered owner call"
+    @tag duration_limit_ms: 30_000
+    @tag answer_status: answer_status?
+    test "a run that leaks an owner which #{arm} drops its database within one owner call",
+         %{directory: directory, answer_status: answer_status?} do
+      source = String.replace(@unresponsive_owner_test, "ANSWER_STATUS", to_string(answer_status?))
+      run = run_namespaced!(directory, "unresponsive_owner", source)
+      call_timeout_ms = OwnerDefaults.owner_call_timeout_ms()
+
+      assert run.exit_code == 0, run.output
+      assert run.receipts["database"] == run.database, run.output
+
+      assert Map.has_key?(run.receipts, "drain_begin_ms") and Map.has_key?(run.receipts, "drain_down_ms"),
+             "the rollout drain never reached the unresponsive owner, or never stopped\n#{run.output}"
+
+      drain_ms = String.to_integer(run.receipts["drain_down_ms"]) - String.to_integer(run.receipts["drain_begin_ms"])
+      CodexPooler.TestDiagnostics.puts("drop-on-exit unresponsive owner answer_status=#{answer_status?} drain_ms=#{drain_ms}")
+
+      assert drain_ms >= call_timeout_ms and drain_ms < call_timeout_ms + 2_000,
+             "stopping the application held the unresponsive owner for #{drain_ms} ms " <>
+               "(one owner call is #{call_timeout_ms} ms, tolerance 2000 ms)\n#{run.output}"
+
+      refute database_exists?(run.database),
+             "run-scoped database #{run.database} survived its run\n#{run.output}"
+    end
   end
 
   defp run_namespaced!(directory, name, source) do
