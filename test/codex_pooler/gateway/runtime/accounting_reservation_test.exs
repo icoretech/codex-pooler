@@ -366,10 +366,30 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
                fn _frame -> :ok end
              )
 
+    test_pid = self()
+    handler_id = "duplicate-turn-refused-#{System.unique_integer([:positive])}"
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :duplicate_turn, :refused],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:duplicate_turn_refused, measurements, metadata})
+        end,
+        nil
+      )
+
     {replay_result, replay_log} =
       with_log([level: :info], fn -> Service.prepare_replay_intent(auth, changed) end)
 
+    :telemetry.detach(handler_id)
+
     assert {:error, ^lifecycle_public} = replay_result
+    # The preflight refusal writes no request row; the counter is its operator
+    # signal (findings#225).
+    assert_received {:duplicate_turn_refused, %{count: 1}, %{stage: "runtime_replay_preflight", transport: "websocket"}}
+    refute_received {:duplicate_turn_refused, _measurements, _metadata}
     assert replay_log =~ "websocket replay rejection"
     assert replay_log =~ "stage=runtime_replay_preflight"
     assert replay_log =~ "reason_code=payload_mismatch"

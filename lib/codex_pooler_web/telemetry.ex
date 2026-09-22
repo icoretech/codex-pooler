@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Telemetry do
   alias CodexPooler.Accounting.PreAttemptRelease
   alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
+  alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
@@ -44,6 +45,7 @@ defmodule CodexPoolerWeb.Telemetry do
           reason_class: String.t()
         }
   @type affinity_stale_write_tags :: %{operation: String.t(), affinity_kind: String.t()}
+  @type duplicate_turn_refused_tags :: %{stage: String.t(), transport: String.t()}
   @type bridge_fallback_tags :: %{reason: String.t()}
   @type pre_attempt_release_tags :: %{phase: String.t(), transport: String.t(), via: String.t()}
   @type saved_reset_convergence_tags :: %{source: String.t(), outcome: String.t()}
@@ -644,6 +646,15 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:operation, :affinity_kind],
         tag_values: &affinity_stale_write_tag_values/1,
         description: "Affinity writes the updated_at fence refused, by bounded operation and affinity kind."
+      ),
+      counter("codex_pooler.gateway.duplicate_turn.refused.count",
+        event_name: DuplicateTurnTelemetry.event(),
+        measurement: :count,
+        tags: [:stage, :transport],
+        tag_values: &duplicate_turn_refused_tag_values/1,
+        description:
+          "Client-visible 409 duplicate_turn refusals, by bounded refusing stage and transport class. " <>
+            "None writes a request row for the refused request, so request-log counts never include these."
       )
     ]
   end
@@ -925,6 +936,14 @@ defmodule CodexPoolerWeb.Telemetry do
   end
 
   @spec admin_stats_enum_value(term(), [String.t()]) :: String.t()
+  @spec duplicate_turn_refused_tag_values(map()) :: duplicate_turn_refused_tags()
+  defp duplicate_turn_refused_tag_values(metadata) do
+    %{
+      stage: admin_stats_enum_value(metadata[:stage], DuplicateTurnTelemetry.stages()),
+      transport: admin_stats_enum_value(metadata[:transport], DuplicateTurnTelemetry.transports())
+    }
+  end
+
   defp admin_stats_enum_value(value, allowed_values) when is_atom(value) do
     value
     |> Atom.to_string()

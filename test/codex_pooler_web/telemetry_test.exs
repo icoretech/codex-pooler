@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
 
   alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
+  alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
@@ -640,6 +641,34 @@ defmodule CodexPoolerWeb.TelemetryTest do
 
     assert %{operation: "unknown", affinity_kind: "unknown"} =
              metric.tag_values.(%{})
+  end
+
+  test "exports duplicate_turn refusals with bounded stage and transport tags" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.duplicate_turn.refused.count")
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :gateway, :duplicate_turn, :refused],
+             measurement: :count,
+             tags: [:stage, :transport]
+           } = metric
+
+    assert %{stage: "runtime_replay_preflight", transport: "websocket"} =
+             metric.tag_values.(%{stage: "runtime_replay_preflight", transport: "websocket"})
+
+    assert %{stage: "unknown", transport: "unknown"} =
+             metric.tag_values.(%{stage: "codex-session-4711", transport: "http_json"})
+
+    assert %{stage: "unknown", transport: "unknown"} = metric.tag_values.(%{})
+
+    stage_values =
+      DuplicateTurnTelemetry.stages()
+      |> Enum.map(&metric.tag_values.(%{stage: &1}).stage)
+      |> MapSet.new()
+
+    assert stage_values == MapSet.new(DuplicateTurnTelemetry.stages())
+    assert MapSet.size(stage_values) * length(DuplicateTurnTelemetry.transports()) == 12
   end
 
   test "keeps the fenced-affinity label set bounded at 12 series per app pod" do

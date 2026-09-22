@@ -79,6 +79,7 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 10. saved-reset post-consume convergence rate by bounded source and outcome, plus p95 timing from application to canonical evidence, canonical evidence to lifecycle finish, and application to lifecycle finish
 11. fenced affinity writes per pod by bounded operation and affinity kind
 12. reservations released with no attempt row, by bounded pre-attempt phase and transport
+13. client-visible `duplicate_turn` refusals, by bounded refusing stage and transport
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
@@ -97,6 +98,12 @@ Oversized stream-buffer histogram observations saturate at 128 MiB for Prometheu
 Two bounded labels: `operation` is `success_upsert` or `miss_update`, and `affinity_kind` is `codex_session`, `idempotency_key`, or `request_correlation`. Unrecognized values become `unknown`, giving at most 12 series per app pod. No Pool, API-key, assignment, identity, session, request, or affinity-key value is exported, and **no node or instance name is in the payload**: per-replica attribution comes from the scrape target's `pod` label, which is what the dashboard panel groups by.
 
 A low rate spread across pods is ordinary reordering between two nodes finishing overlapping turns on one affinity key, and it costs nothing but the ordering hint for that key. The signal to act on is a sustained rate concentrated on **one pod**. That replica's clock runs behind its peers, so it loses every affinity write it attempts: it keeps serving traffic normally and simply stops contributing prompt-cache steering, invisibly. Compare that pod's clock against the others. Nothing about routing admission, retries, settlement, accounting, or durable metadata changes either way — affinity is an ordering hint within an already eligible shortlist, never an admission filter.
+
+### Duplicate-turn refusals
+
+`codex_pooler_gateway_duplicate_turn_refused_count` counts the `409 duplicate_turn` refusals clients receive. None of the refusing stages writes a request row for the refused request, so request logs, admin statistics, and every other database-derived error count miss them; this counter is where they are visible. Two bounded labels: `stage` is `runtime_replay_preflight`, `websocket_turn_claim`, `native_http_turn_claim`, `native_replay_dispatch`, `client_retry_claim`, or `compaction_retry_claim`, and `transport` is `websocket` or `http`. Unrecognized values become `unknown`, giving at most 21 series per app pod including that fallback. No Pool, API-key, session, request, or turn identifier is exported.
+
+A low rate is ordinary: clients resend a turn after a cut, and the Pooler refuses the resend when the original already produced output or is still reserved, rather than billing the same history twice. The refusal reason is in the matching `replay rejection` log line; its vocabulary is open, so it is not a label. Read those lines when the rate on one stage rises after a rollout or concentrates on one pod.
 
 ### Pre-attempt reservation releases
 

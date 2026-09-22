@@ -32,6 +32,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
+  alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
@@ -2329,6 +2330,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       end)
 
     {label, transport} = replay_rejection_channel(request_options)
+    :ok = DuplicateTurnTelemetry.emit_refused(stage, request_options.transport.transport)
 
     Logger.info(fn ->
       label <>

@@ -1566,6 +1566,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     refute logs =~ "transport=websocket"
   end
 
+  # The refusal writes no request row, so request-log counts never see it; the
+  # duplicate-turn counter is the only operator signal it leaves (findings#225).
+  test "a native HTTP duplicate_turn refusal is counted by stage and transport", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_counted_refusal"}))
+    setup = gateway_setup(upstream)
+    session = session_id()
+    test_pid = self()
+    handler_id = "duplicate-turn-refused-#{System.unique_integer([:positive])}"
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :duplicate_turn, :refused],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:duplicate_turn_refused, measurements, metadata})
+        end,
+        nil
+      )
+
+    assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+    refute_received {:duplicate_turn_refused, _measurements, _metadata}
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(post_turn(conn, setup, session, @turn_id), 409)
+
+    assert_received {:duplicate_turn_refused, %{count: 1}, %{stage: "native_http_turn_claim", transport: "http"}}
+    refute_received {:duplicate_turn_refused, _measurements, _metadata}
+    assert length(pool_requests(setup)) == 1
+  end
+
   # `FailedPredecessorResend.scoped?/2` requires `transport == "websocket"` of
   # the PREDECESSOR ROW, not of the request being served. The bare `codex-turn:`
   # claim is payload-independent and is the one claim that coincides across the

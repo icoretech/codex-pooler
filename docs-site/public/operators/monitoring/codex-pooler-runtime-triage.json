@@ -2584,6 +2584,58 @@
       }
     },
     {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Duplicate Turn Refusals",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Client-visible 409 duplicate_turn refusals, by bounded refusing stage and transport class. runtime_replay_preflight is the replay preflight judging a resend against its predecessor's lifecycle; websocket_turn_claim and native_http_turn_claim refuse a second reservation of a turn already claimed; native_replay_dispatch, client_retry_claim and compaction_retry_claim refuse a replay or retry whose binding or claim no longer holds. None of them writes a request row for the refused request, so request logs, admin stats and every database-derived error count miss them: this panel is where they are counted. The reason is in the matching replay rejection log line; its vocabulary is open, so it is not a label.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage, transport) (rate(codex_pooler_gateway_duplicate_turn_refused_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{stage}} {{transport}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 136
+      }
+    },
+    {
       "type": "row",
       "collapsed": false,
       "id": 0,
