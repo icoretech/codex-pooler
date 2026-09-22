@@ -310,6 +310,58 @@ defmodule CodexPooler.CommittedWriteGuardProbe.AutoModeTest do
   end
 end
 
+defmodule CodexPooler.CommittedWriteGuardProbe.AutoModeSetupAllTest do
+  use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
+
+  alias CodexPooler.Catalog.PricingSnapshot
+  alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL.Sandbox
+
+  # The mode changes once, for the whole module, so no test of it makes a call the guard counts:
+  # without the module window every write below would be invisible to the test that made it.
+  setup_all do
+    on_exit(fn -> Sandbox.mode(Repo, :manual) end)
+    :ok = Sandbox.mode(Repo, :auto)
+    :ok
+  end
+
+  test "a leaves a pricing snapshot behind" do
+    insert_snapshot!()
+  end
+
+  test "b removes the snapshot it inserted" do
+    Repo.delete!(insert_snapshot!())
+  end
+
+  test "c updates the committed instance settings in place and never restores them" do
+    Repo.query!(
+      ~s[UPDATE instance_settings ] <>
+        ~s[SET metadata = metadata || '{"committed_write_guard_probe_auto": true}'::jsonb]
+    )
+  end
+
+  defp insert_snapshot! do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    unique = System.unique_integer([:positive])
+
+    Repo.insert!(%PricingSnapshot{
+      model_identifier: "committed-write-guard-probe-#{unique}",
+      price_version: "guard-probe-setup-all-#{unique}",
+      currency_code: "USD",
+      billing_unit: "token",
+      input_token_micros: Decimal.new(1),
+      cached_input_token_micros: Decimal.new(1),
+      output_token_micros: Decimal.new(1),
+      reasoning_token_micros: Decimal.new(1),
+      request_base_micros: Decimal.new(0),
+      effective_at: now,
+      captured_at: now,
+      config: CodexPooler.AccountingTestSupport.pricing_config(%{})
+    })
+  end
+end
+
 defmodule CodexPooler.CommittedWriteGuardProbe.UnguardedTest do
   use ExUnit.Case, async: false
 

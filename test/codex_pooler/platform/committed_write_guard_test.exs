@@ -3,8 +3,10 @@ defmodule CodexPooler.CommittedWriteGuardTest do
   Locks `CodexPooler.CommittedWriteGuard`: a test that leaves committed rows behind, or changes a
   committed singleton row, fails and names the tables; the tests around it do not; a module that
   leaves behind what its `setup_all` committed fails as a module, while one that removes it passes
-  and neither charges the module after it; and rows nothing guarded, or that came through a channel
-  no test verification sees, fail the run instead.
+  and neither charges the module after it; a module that switches the sandbox to `:auto` in its
+  `setup_all` has every write of its tests charged to the test that made it, an in-place update
+  included; and rows nothing guarded, or that came through a channel no test verification sees,
+  fail the run instead.
 
   The probe runs the guard in a `mix run` VM of its own, so its tests can leak on purpose without
   failing this one. Every row they commit carries a probe label and is removed here, and this
@@ -45,6 +47,9 @@ defmodule CodexPooler.CommittedWriteGuardTest do
              "test passes while the row its setup_all committed is still there" => {"passed", "none", []},
              "test is not charged for the module that leaked before it" => {"passed", "none", []},
              "test leaves a pricing snapshot behind in auto mode" => {"failed", "during", ["pricing_snapshots"]},
+             "test a leaves a pricing snapshot behind" => {"failed", "during", ["pricing_snapshots"]},
+             "test b removes the snapshot it inserted" => {"passed", "none", []},
+             "test c updates the committed instance settings in place and never restores them" => {"failed", "during", ["instance_settings"]},
              "test commits an identity without the guard" => {"passed", "none", []},
              "test starts after rows an unguarded test committed" => {"failed", "before", ["upstream_identities"]},
              "test starts after that failure has been reported" => {"passed", "none", []},
@@ -56,7 +61,7 @@ defmodule CodexPooler.CommittedWriteGuardTest do
 
     # A module the guard fails invalidates its tests, so ExUnit counts one failure for the test
     # `SetupAllLeakTest` passed as well.
-    assert probe.summary == %{"stage" => "probe", "total" => 19, "failures" => 9}, probe.output
+    assert probe.summary == %{"stage" => "probe", "total" => 22, "failures" => 11}, probe.output
 
     assert probe.modules == %{
              "CodexPooler.CommittedWriteGuardProbe.SandboxedCaseTest" => {"passed", "none", []},
@@ -65,6 +70,7 @@ defmodule CodexPooler.CommittedWriteGuardTest do
              "CodexPooler.CommittedWriteGuardProbe.SetupAllLeakTest" => {"failed", "module", ["upstream_identities"]},
              "CodexPooler.CommittedWriteGuardProbe.AfterSetupAllLeakTest" => {"passed", "none", []},
              "CodexPooler.CommittedWriteGuardProbe.AutoModeTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.AutoModeSetupAllTest" => {"passed", "none", []},
              "CodexPooler.CommittedWriteGuardProbe.UnguardedTest" => {"passed", "none", []},
              "CodexPooler.CommittedWriteGuardProbe.AfterUnguardedTest" => {"passed", "none", []},
              "CodexPooler.CommittedWriteGuardProbe.UntracedRowLeakTest" => {"passed", "none", []},
@@ -135,8 +141,9 @@ defmodule CodexPooler.CommittedWriteGuardTest do
       Repo.query!("DELETE FROM instance_presences WHERE instance_id LIKE 'committed-write-guard-probe-%'")
 
       Repo.query!(
-        "UPDATE instance_settings SET metadata = metadata - 'committed_write_guard_probe' " <>
-          "WHERE metadata ? 'committed_write_guard_probe'"
+        "UPDATE instance_settings SET metadata = metadata " <>
+          "- 'committed_write_guard_probe' - 'committed_write_guard_probe_auto' " <>
+          "WHERE metadata ?| ARRAY['committed_write_guard_probe', 'committed_write_guard_probe_auto']"
       )
 
       # Only a bootstrap this probe completed: a row a real bootstrap test left completed carries
