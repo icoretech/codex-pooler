@@ -1796,12 +1796,22 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     with {:ok, payload} <- WebsocketCodec.decode_payload(raw_payload),
          true <- canonical_native_turn_metadata?(payload),
          {:ok, metadata} <-
-           NativeCodexTurnMetadata.parse(payload, options.continuity.codex_session.id),
+           NativeCodexTurnMetadata.parse(payload, native_metadata_scope(payload, options)),
          true <- compaction_authority_metadata?(metadata) do
       RequestOptions.put_payload_context(options, native_codex_turn_metadata: metadata)
     else
       _missing_or_invalid -> options
     end
+  end
+
+  # The metadata's semantic turn key feeds the native compaction admission
+  # binding, which is checked against the frame's continuity key. Since the
+  # duplicate-turn claim is scoped on the client thread (findings#250) that key
+  # is derived under the thread scope, so the metadata must use the same scope:
+  # the session id alone made every incremental mid-turn compaction of a client
+  # that names its thread fail `binding_mismatch` (findings#225, row 225-90).
+  defp native_metadata_scope(payload, %RequestOptions{} = options) do
+    WebsocketCodec.native_turn_claim_scope(payload, options) || options.continuity.codex_session.id
   end
 
   defp reserve_native_compaction_admission(
@@ -1815,7 +1825,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          {:ok, metadata} <-
            NativeCodexTurnMetadata.parse(
              payload,
-             prepared.request_options.continuity.codex_session.id
+             native_metadata_scope(payload, prepared.request_options)
            ) do
       case metadata.request_kind do
         :prewarm ->

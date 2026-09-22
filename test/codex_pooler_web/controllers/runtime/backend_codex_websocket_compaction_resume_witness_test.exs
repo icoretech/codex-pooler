@@ -25,18 +25,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
   @detection_timeout_ms 15_000
   @uuid ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
 
-  for topology <- [:direct, :forwarded] do
-    test "#{topology} resume of a mid-turn compaction with the same turn_id stores its retry witness" do
-      assert_resume_witness(unquote(topology))
+  # The released client names its thread in the turn metadata; the duplicate
+  # turn claim is scoped on it (findings#250), and the compaction admission must
+  # derive the same turn key or the mid-turn compaction fails `binding_mismatch`
+  # (row 225-90). Both shapes are kept.
+  for topology <- [:direct, :forwarded], thread <- [:without_thread_id, :with_thread_id] do
+    @tag slow: "drives an anchor turn, a mid-turn compaction and its resume through the real public listener (0.3-0.6 s alone, over 1 s under partition load)"
+    test "#{topology} resume of a mid-turn compaction with the same turn_id stores its retry witness (#{thread})" do
+      assert_resume_witness(unquote(topology), unquote(thread) == :with_thread_id)
     end
   end
 
-  defp assert_resume_witness(topology) do
+  defp assert_resume_witness(topology, thread?) do
     put_owner_forwarding!(topology == :forwarded)
     :ok = NativeCompactionAuthorizationObserver.arm()
     on_exit(fn -> NativeCompactionAuthorizationObserver.disarm() end)
 
     turn = "resume-witness-#{topology}-#{System.unique_integer([:positive])}"
+    thread = if thread?, do: "thread-#{turn}"
     context = "00000000-0000-4000-8000-000000000a01"
     item = %{"type" => "compaction", "encrypted_content" => "synthetic-resume-witness"}
 
@@ -84,7 +90,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
     {conn, websocket, ref} = public_websocket_connect!(port, setup, "resume-witness-upgrade", "/backend-api/codex/responses")
 
     try do
-      anchor = frame(setup, %{"input" => [%{"type" => "message", "role" => "user", "content" => "anchor"}]}, turn_metadata(turn, context, 1, :turn))
+      anchor = frame(setup, %{"input" => [%{"type" => "message", "role" => "user", "content" => "anchor"}]}, turn_metadata(turn, thread, context, 1, :turn))
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, anchor)
       {conn, websocket, _created} = public_websocket_receive_text!(conn, websocket, ref)
       {conn, websocket, _completed} = public_websocket_receive_text!(conn, websocket, ref)
@@ -99,7 +105,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
               %{"type" => "compaction_trigger"}
             ]
           },
-          turn_metadata(turn, context, 1, :compaction)
+          turn_metadata(turn, thread, context, 1, :compaction)
         )
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact)
@@ -108,7 +114,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
 
       # The released client resumes the same turn after a remote compaction:
       # same turn_id, the window advanced, the compacted history as input.
-      resume = frame(setup, %{"input" => [item]}, turn_metadata(turn, "00000000-0000-4000-8000-000000000a02", 2, :turn))
+      resume = frame(setup, %{"input" => [item]}, turn_metadata(turn, thread, "00000000-0000-4000-8000-000000000a02", 2, :turn))
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, resume)
       {conn, websocket, created} = public_websocket_receive_text!(conn, websocket, ref)
       {_conn, _websocket, completed} = public_websocket_receive_text!(conn, websocket, ref)
@@ -121,7 +127,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
       assert counts["final_runtime_proof_redeemed"] == 1
 
       assert [anchor_row, compact_row, resume_row] =
-               Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at, asc: r.id]))
+               settled_pool_requests!(setup.pool.id, 3)
 
       assert String.starts_with?(anchor_row.correlation_id, "codex-")
       assert compact_row.endpoint == "/backend-api/codex/responses/compact"
@@ -145,13 +151,46 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
     end
   end
 
+  # The resume's response task settles it after the terminal frame reaches the
+  # client, in a transaction on the shared sandbox connection, so reading the
+  # rows right after the frame can queue behind it. No completion signal
+  # reaches the test, so wait, within a bounded detection budget, for the
+  # resume to be settled before reading.
+  @settlement_budget_ms 15_000
+
+  defp settled_pool_requests!(pool_id, count) do
+    deadline = System.monotonic_time(:millisecond) + @settlement_budget_ms
+    await_settled_pool_requests(pool_id, count, deadline)
+  end
+
+  defp await_settled_pool_requests(pool_id, count, deadline) do
+    rows =
+      try do
+        Repo.all(from(r in Request, where: r.pool_id == ^pool_id, order_by: [asc: r.admitted_at, asc: r.id]))
+      rescue
+        DBConnection.ConnectionError -> :busy
+      end
+
+    cond do
+      is_list(rows) and length(rows) == count and Enum.all?(rows, &(&1.status not in ["accepted", "in_progress"])) ->
+        rows
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("expected #{count} settled requests, got #{inspect(if is_list(rows), do: Enum.map(rows, & &1.status), else: rows)}")
+
+      true ->
+        Process.sleep(10)
+        await_settled_pool_requests(pool_id, count, deadline)
+    end
+  end
+
   defp frame(setup, fields, metadata) do
     %{"type" => "response.create", "model" => setup.model.exposed_model_id, "stream" => true, "client_metadata" => %{"x-codex-turn-metadata" => metadata}}
     |> Map.merge(fields)
     |> CodexPooler.JSON.encode!()
   end
 
-  defp turn_metadata(turn_id, context_window_id, window_number, kind) do
+  defp turn_metadata(turn_id, thread, context_window_id, window_number, kind) do
     base = %{
       "turn_id" => turn_id,
       # The released client names the window `<thread_id>:<window_number>`, so
@@ -163,6 +202,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
     }
 
     base
+    |> then(&if thread, do: Map.put(&1, "thread_id", thread), else: &1)
     |> then(fn metadata ->
       if kind == :compaction,
         do:

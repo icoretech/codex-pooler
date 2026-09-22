@@ -932,6 +932,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp turn_claim_scope(_payload, %RequestOptions{}), do: nil
 
+  @doc """
+  The claim scope this frame's native turn identity is derived under.
+
+  Every other derivation of the same frame's semantic turn key (the native
+  compaction admission binding among them) must use this scope, or it names a
+  different turn than the continuity key the frame is sealed and persisted
+  with (findings#225, row 225-90).
+  """
+  @spec native_turn_claim_scope(map(), RequestOptions.t()) :: String.t() | nil
+  def native_turn_claim_scope(payload, %RequestOptions{} = opts) when is_map(payload),
+    do: turn_claim_scope(payload, opts)
+
   defp put_native_turn_identity(%RequestOptions{} = request_options, :missing),
     do: request_options
 
