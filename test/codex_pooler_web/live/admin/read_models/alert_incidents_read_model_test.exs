@@ -158,6 +158,28 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
     refute inspect(page) =~ raw_url
   end
 
+  # The incident detail names the assignment states the evaluation recorded,
+  # bounded to the alert vocabulary, so an incident caused by a model the Pool
+  # does not serve says so in words.
+  test "a pool incident detail names its bounded assignment state counts", %{scope: scope} do
+    pool = pool_fixture(%{slug: "alert-incidents-states-#{unique_suffix()}", name: "State Count Pool"})
+
+    rule = alert_rule_fixture(pool, %{display_name: "State count rule"})
+
+    incident =
+      alert_incident_fixture(
+        pool: pool,
+        rule_kind: "pool_no_usable_assignments",
+        safe_evidence_snapshot: %{"state_counts" => %{"model_not_served" => 2, "raw prompt state" => 4}}
+      )
+
+    alert_incident_target_fixture(incident, rule, pool)
+
+    assert [row] = AlertIncidentsReadModel.load(scope, %{"pool_id" => pool.id}).incidents
+    assert row.reason_detail =~ "Assignment states: 2 model not served."
+    refute row.reason_detail =~ "raw prompt"
+  end
+
   test "query_params keeps incident tab and drops blank filters" do
     assert AlertIncidentsReadModel.query_params(%{
              "pool_id" => "pool-1",

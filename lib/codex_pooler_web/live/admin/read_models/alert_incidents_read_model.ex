@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   alias CodexPooler.Alerts.Schemas.AlertChannel
   alias CodexPooler.Alerts.Schemas.AlertIncident
   alias CodexPooler.Alerts.Schemas.AlertRule
+  alias CodexPooler.Alerts.StatusVocabulary.AssignmentState
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.AlertRuleForm
@@ -312,7 +313,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
       state: incident.state,
       state_label: state_label(incident.state),
       reason_title: reason_title(incident),
-      reason_detail: reason_detail(incident, upstream_account_label),
+      reason_detail: incident |> reason_detail(upstream_account_label) |> with_assignment_states(incident),
       upstream_account_label: upstream_account_label,
       occurrence_count: incident.occurrence_count,
       first_seen_at: incident.first_seen_at,
@@ -591,6 +592,18 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp reason_detail(_incident, _upstream_account_label) do
     "Persisted routing evidence shows no currently usable assignment for this condition."
   end
+
+  # Pool rules record how many assignments were in each state; name them in
+  # the bounded alert vocabulary so, for example, an unserved model is
+  # visible in words. Unknown states are dropped by the vocabulary.
+  defp with_assignment_states(detail, %{safe_evidence_snapshot: %{} = evidence}) do
+    case AssignmentState.describe(evidence["state_counts"]) do
+      nil -> detail
+      states -> "#{detail} Assignment states: #{states}."
+    end
+  end
+
+  defp with_assignment_states(detail, _incident), do: detail
 
   defp saved_reset_count_detail(%{} = evidence) do
     [

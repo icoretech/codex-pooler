@@ -3,6 +3,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayload do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Alerts.Schemas.{AlertChannel, AlertDeliveryAttempt, AlertIncident}
+  alias CodexPooler.Alerts.StatusVocabulary.AssignmentState
   alias CodexPooler.JSON.OrderedObject
   alias CodexPooler.RouteClass
 
@@ -37,6 +38,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayload do
     route_class_scope
     routing_usable
     source
+    state_counts
     status
     target_state
     threshold_used_percent
@@ -177,6 +179,12 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayload do
       RouteClass.all()
     )
   end
+
+  # Per-assignment state counts from the evaluation, bounded to the alert
+  # state vocabulary, so an incident caused by, for example, an unserved model
+  # says so instead of only `model_membership_resolved=false`.
+  defp safe_summary_value("state_counts", _value, evidence),
+    do: AssignmentState.bounded_counts(Map.get(evidence, "state_counts") || Map.get(evidence, :state_counts))
 
   defp safe_summary_value("circuit_blocked_reasons", _value, evidence) do
     bounded_safe_list(
