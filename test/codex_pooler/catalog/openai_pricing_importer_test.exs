@@ -1,6 +1,7 @@
 defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   use CodexPooler.DataCase, async: false
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Catalog.{OpenAIPricingImporter, PricingSnapshot}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
@@ -8,12 +9,13 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
+  import CodexPooler.AccountingTestSupport, only: [accounting_setup: 0]
   import CodexPooler.PoolerFixtures
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "941cb4fca0f134563356844fadcf84008bd593d162407b4874a138d386aad52e"
-  @target_generated_at "2026-09-12T20:55:16.394578Z"
+  @target_sha256 "9ad1c33a7d68bc689f6e9ca49ea3b9e338f11cfdb65c4d6a954c07bd16106c12"
+  @target_generated_at "2026-09-22T18:00:08.224828Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -46,6 +48,14 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
       "standard" => ["10.0", "1.0", "12.5", "50.0"],
       "fast" => ["20.0", "2.0", "25.0", "100.0"]
     },
+    "gpt-6-sol" => %{
+      "standard" => ["2.0", "0.2", "2.5", "10.0"],
+      "fast" => ["4.0", "0.4", "5.0", "20.0"]
+    },
+    "gpt-6-luna" => %{
+      "standard" => ["0.1", "0.01", "0.125", "0.5"],
+      "fast" => ["0.2", "0.02", "0.25", "1.0"]
+    },
     "gpt-5.6-luna" => %{
       "standard" => ["0.2", "0.02", "0.25", "1.2"],
       "fast" => ["0.4", "0.04", "0.5", "2.4"]
@@ -61,6 +71,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   }
   @reviewed_fast_long_context_rates %{
     "gpt-6-astra" => ["40.0", "4.0", "50.0", "150.0"],
+    "gpt-6-sol" => ["8.0", "0.8", "10.0", "30.0"],
+    "gpt-6-luna" => ["0.4", "0.04", "0.5", "1.5"],
     "gpt-5.6-luna" => ["0.8", "0.08", "1.0", "3.6"],
     "gpt-5.6-terra" => ["8.0", "0.8", "10.0", "36.0"],
     "gpt-5.6-sol" => ["16.0", "1.6", "20.0", "60.0"]
@@ -305,7 +317,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "imports the reviewed September 12 target as canonical revision 2 rows" do
+  test "imports the reviewed September 22 target as canonical revision 2 rows" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
@@ -329,13 +341,13 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
-    assert first.inserted == 179
+    assert first.inserted == 203
     assert first.skipped == 87
 
     rows =
       Repo.all(from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version)
 
-    assert length(rows) == 179
+    assert length(rows) == 203
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
     refute Enum.any?(rows, &(&1.model_identifier in @removed_identifiers))
@@ -359,6 +371,19 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     end)
 
     assert {:ok, %{inserted: 0, skipped: 87}} = OpenAIPricingImporter.import_file(@target)
+  end
+
+  # The rows above only prove the importer wrote the rates. These settle real
+  # requests after the release entrypoint imports the vendored target, with the
+  # model shaped as catalog sync discovers it (`pricing_ref` defaults to
+  # `openai/<upstream id>`, which no snapshot names), so the price has to come
+  # through the accounting identifier precedence exactly as in production.
+  test "the vendored target prices gpt-6-sol requests at its standard and priority rates" do
+    assert_imported_target_settles("gpt-6-sol", default: "3280", priority: "6560")
+  end
+
+  test "the vendored target prices gpt-6-luna requests at its standard and priority rates" do
+    assert_imported_target_settles("gpt-6-luna", default: "164", priority: "328")
   end
 
   test "target checksum, exact rates, removals, and schema descriptors detect drift" do
@@ -934,6 +959,68 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
              from row in PricingSnapshot,
                where: row.model_identifier in ["first-model", "bad-model"]
            )
+  end
+
+  # Each tier is the one the provider reports on the response. `default` is sent
+  # without a requested tier, as Codex does, and prices from the `standard` rows;
+  # `priority` is requested and served. 1_000 input tokens of which 400 cached
+  # and 200 output tokens cost 600 * input + 400 * cached_input + 200 * output
+  # at that tier's default-bucket rates, in micro-dollars.
+  defp assert_imported_target_settles(identifier, expected_costs) do
+    assert {:ok, %{price_version: price_version}} = CodexPooler.Catalog.import_openai_pricing_from_priv()
+    assert price_version == "#{@target_generated_at}:importer-format-2"
+
+    setup = accounting_setup()
+
+    model =
+      setup.pool
+      |> model_fixture(%{exposed_model_id: identifier, upstream_model_id: identifier})
+      |> Ecto.Changeset.change(pricing_ref: "openai/#{identifier}")
+      |> Repo.update!()
+
+    for {tier, expected_cost} <- expected_costs do
+      correlation_id = "corr-#{identifier}-#{tier}-#{System.unique_integer([:positive])}"
+      payload = %{"model" => identifier, "max_output_tokens" => 200}
+      payload = if tier == :priority, do: Map.put(payload, "service_tier", "priority"), else: payload
+      snapshot_tier = if tier == :priority, do: "priority", else: "standard"
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 model,
+                 payload,
+                 %{correlation_id: correlation_id}
+               )
+
+      assert reserved.pricing_status == "priced"
+      assert reserved.pricing_snapshot.model_identifier == identifier
+      assert reserved.pricing_snapshot.price_version == price_version
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 1_000,
+                   cached_input_tokens: 400,
+                   output_tokens: 200,
+                   total_tokens: 1_200,
+                   service_tier: to_string(tier)
+                 },
+                 %{response_status_code: 200}
+               )
+
+      settled = Repo.get!(PricingSnapshot, result.settlement.pricing_snapshot_id)
+      assert settled.model_identifier == identifier
+      assert settled.price_version == price_version
+      assert settled.config["service_tier"] == snapshot_tier
+      assert settled.config["price_bucket"] == "default"
+      assert result.settlement.details["pricing_status"] == "priced"
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(expected_cost))
+    end
   end
 
   defp valid_payload(

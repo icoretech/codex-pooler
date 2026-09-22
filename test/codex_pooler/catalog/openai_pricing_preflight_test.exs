@@ -6,7 +6,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "941cb4fca0f134563356844fadcf84008bd593d162407b4874a138d386aad52e"
+  @target_sha256 "9ad1c33a7d68bc689f6e9ca49ea3b9e338f11cfdb65c4d6a954c07bd16106c12"
 
   @skipped_pricing_type_paths [
     "models.gpt-4o-mini-transcribe.pricing_type",
@@ -122,16 +122,16 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
            ]
   end
 
-  test "classifies the reviewed September 12 target with exact artifact and warning coverage" do
+  test "classifies the reviewed September 22 target with exact artifact and warning coverage" do
     raw = File.read!(@target)
     payload = CodexPooler.JSON.decode!(raw)
     result = OpenAIPricingPreflight.validate_file(@target)
 
-    assert byte_size(raw) == 68_640
+    assert byte_size(raw) == 73_335
     assert Base.encode16(:crypto.hash(:sha256, raw), case: :lower) == @target_sha256
-    assert payload["generated_at"] == "2026-09-12T20:55:16.394578Z"
-    assert payload["models_count"] == 83
-    assert map_size(payload["models"]) == 83
+    assert payload["generated_at"] == "2026-09-22T18:00:08.224828Z"
+    assert payload["models_count"] == 85
+    assert map_size(payload["models"]) == 85
     assert payload["tools_count"] == 4
     assert map_size(payload["tools"]) == 4
 
@@ -140,17 +140,17 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     assert length(result.warnings) == 87
 
     assert result.summary == %{
-             importable_rows: 179,
-             priced_rows: 173,
+             importable_rows: 203,
+             priced_rows: 197,
              unavailable_rows: 6,
              skipped_models: 13,
              skipped_price_buckets: 74
            }
 
     assert result.coverage.imported_price_buckets == %{
-             "default" => 115,
-             "long_context" => 32,
-             "short_context" => 32
+             "default" => 123,
+             "long_context" => 40,
+             "short_context" => 40
            }
 
     assert Enum.frequencies_by(result.warnings, & &1.code) == %{
