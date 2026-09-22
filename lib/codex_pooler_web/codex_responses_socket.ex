@@ -499,6 +499,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     log_closed_before_request_reservation(reason, state)
 
+    state = arm_previsible_owner_replay(reason, state)
+
     {remaining_tasks, state} = await_response_task_cleanup_results(state)
 
     # An owner recovery may already have replaced the lease this socket still
@@ -536,6 +538,28 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     )
 
     :ok
+  end
+
+  # A client that loses the socket before any output resends the same request
+  # on a new socket; Codex 0.156.0 does so after about 200 ms. The owner must
+  # have armed the replay entitlement by then, or the resend meets the
+  # predecessor still attached to this closing socket, is refused
+  # `409 duplicate_turn` at the owner handoff, and the client falls back to a
+  # new HTTP turn while the entitlement expires unredeemed (findings#232, row
+  # 232-100). So the owner suspends a replay-active turn before the drain
+  # below, which waits up to 250 ms for response tasks the suspension itself
+  # releases; every other shape keeps the ordinary detach after the drain.
+  defp arm_previsible_owner_replay(reason, state) do
+    if owner_forwarded_socket?(state) and active_response_task?(state),
+      do: state |> absorb_recovered_owner_runtime() |> detach_previsible_owner_downstream(reason),
+      else: state
+  end
+
+  defp detach_previsible_owner_downstream(state, reason) do
+    case WebsocketControlPath.run(:terminate, fn -> Adapter.detach_previsible_owner_downstream(state, reason) end) do
+      {:ok, :suspended} -> Map.put(state, :websocket_owner_replay_armed_before_drain?, true)
+      _not_suspended -> state
+    end
   end
 
   defp cancel_abandoned_response_tasks(state, remaining_tasks) do
@@ -4705,7 +4729,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       cancel_pending_owner_admission(state, task_pid, interrupt_reason)
     end)
 
-    Adapter.cleanup_owner_session(state, reason)
+    # The owner already detached this downstream when it armed the replay.
+    unless Map.get(state, :websocket_owner_replay_armed_before_drain?, false),
+      do: Adapter.cleanup_owner_session(state, reason)
+
+    :ok
   end
 
   defp cleanup_websocket_session(_reason, state) do

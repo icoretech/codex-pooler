@@ -451,6 +451,27 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     end
   end
 
+  @doc """
+  Asks the owner to arm the replay of a pre-visible turn attached to this
+  closing downstream before the socket drains its response tasks
+  (findings#232, 232-100). A rollout drain or shutdown keeps its own cleanup,
+  and `:not_previsible` leaves everything to `cleanup/2`.
+  """
+  @spec detach_previsible(socket_state(), term()) :: :suspended | :not_previsible
+  def detach_previsible(state, reason) do
+    if owner?(state) and not shutdown_reason?(reason) and not rollout_drain_cleanup?(state, reason) do
+      state
+      |> Map.get(:codex_session)
+      |> Websocket.detach_previsible_websocket_owner_downstream(
+        Map.get(state, :websocket_owner_lease_token),
+        Map.get(state, :websocket_owner_downstream),
+        Map.get(state, :opts, %{})
+      )
+    else
+      :not_previsible
+    end
+  end
+
   @spec cancel_owner_turn(socket_state(), pid(), :owner_drained) :: :ok
   def cancel_owner_turn(state, owner_turn_id, :owner_drained)
       when is_pid(owner_turn_id) do

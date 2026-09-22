@@ -308,6 +308,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     GenServer.call(owner, {:detach_downstream, pid, epoch, correlation_id}, owner_call_timeout())
   end
 
+  @doc """
+  Suspends the active turn into its replay entitlement when `downstream` is
+  its attached downstream and the turn is replay-active (a native turn with a
+  replay binding and no visible output), and changes nothing otherwise.
+
+  A closing socket calls this before it drains its response tasks, so a
+  client resend that follows a pre-visible disconnect finds the entitlement
+  armed instead of the predecessor still attached (findings#232, 232-100).
+  Every other shape answers `:not_previsible` and stays with the ordinary
+  detach after the drain.
+  """
+  @spec detach_previsible_downstream(GenServer.server(), map()) ::
+          :suspended | :not_previsible | {:error, WebsocketOwnerContract.owner_error()}
+  def detach_previsible_downstream(owner, %{pid: pid, epoch: epoch, correlation_id: correlation_id})
+      when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
+    GenServer.call(
+      owner,
+      {:detach_previsible_downstream, pid, epoch, correlation_id},
+      owner_call_timeout()
+    )
+  end
+
   @spec cancel_downstream(GenServer.server(), per_call_downstream(), :owner_drained) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
   def cancel_downstream(
@@ -1587,6 +1609,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:detach_previsible_downstream, pid, epoch, correlation_id}, _from, state) do
+    requested_downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
+
+    with :active <- DownstreamState.downstream_status(state.downstream, requested_downstream),
+         true <- replay_active?(state, requested_downstream),
+         {:suspended, suspended} <- suspend_replay_downstream(state) do
+      {:reply, :suspended, DownstreamState.demonitor_downstream(suspended)}
+    else
+      # A terminal that already won, or a suspension that failed and restored
+      # the descriptor, keeps the attached downstream: the socket's ordinary
+      # detach settles it after the drain, exactly as before.
+      {outcome, unchanged} when outcome in [:terminal_won, :failed] ->
+        {:reply, :not_previsible, unchanged}
+
+      _not_replay_active ->
+        {:reply, :not_previsible, state}
     end
   end
 

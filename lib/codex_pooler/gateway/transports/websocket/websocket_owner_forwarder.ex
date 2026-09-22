@@ -984,6 +984,44 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     end
   end
 
+  @doc false
+  @spec remote_detach_previsible_downstream_v1(binary(), WebsocketOwnerSession.downstream()) ::
+          :suspended | :not_previsible | {:error, WebsocketOwnerContract.owner_error()}
+  def remote_detach_previsible_downstream_v1(codex_session_id, downstream)
+      when is_binary(codex_session_id) and is_map(downstream) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.detach_previsible_downstream(owner_pid, downstream)
+    end
+  end
+
+  # Only `:suspended` means the remote owner armed the replay. Everything else,
+  # including an owner node that predates this call (`undef`), leaves the
+  # downstream attached for the socket's ordinary detach after its drain.
+  @spec detach_previsible_remote_downstream(
+          node(),
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          submit_opts()
+        ) :: :suspended | :not_previsible
+  def detach_previsible_remote_downstream(node, codex_session_id, downstream, opts)
+      when is_atom(node) and is_binary(codex_session_id) and is_map(downstream) and is_list(opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(
+      node,
+      __MODULE__,
+      :remote_detach_previsible_downstream_v1,
+      [codex_session_id, downstream],
+      timeout
+    )
+    |> case do
+      :suspended -> :suspended
+      _not_suspended -> :not_previsible
+    end
+  end
+
   @spec cancel_remote_downstream(
           node(),
           binary(),

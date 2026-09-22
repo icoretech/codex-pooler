@@ -814,6 +814,38 @@ defmodule CodexPooler.Gateway.Websocket do
 
   def detach_websocket_owner_downstream(_session, _owner_lease_token, _downstream, _opts), do: :ok
 
+  @doc """
+  Arms the replay of a pre-visible owner turn for a closing downstream before
+  the socket drains its response tasks (findings#232, 232-100); answers
+  `:not_previsible` for every other shape, which the ordinary detach handles.
+  """
+  @spec detach_previsible_websocket_owner_downstream(
+          CodexSession.t() | nil,
+          String.t() | nil,
+          WebsocketOwnerSession.downstream() | nil,
+          opts()
+        ) :: :suspended | :not_previsible
+  def detach_previsible_websocket_owner_downstream(
+        %CodexSession{} = session,
+        owner_lease_token,
+        downstream,
+        opts
+      )
+      when is_binary(owner_lease_token) and is_map(downstream) do
+    opts = websocket_request_options(opts)
+
+    with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
+         {:ok, owner} <- WebsocketOwnerForwarder.resolve_owner(session, owner_forwarder_opts(opts)),
+         :suspended <- detach_previsible_owner(owner, session.id, downstream, opts) do
+      :suspended
+    else
+      _not_suspended -> :not_previsible
+    end
+  end
+
+  def detach_previsible_websocket_owner_downstream(_session, _owner_lease_token, _downstream, _opts),
+    do: :not_previsible
+
   @spec cancel_websocket_owner_turn(
           CodexSession.t() | nil,
           String.t() | nil,
@@ -1104,6 +1136,25 @@ defmodule CodexPooler.Gateway.Websocket do
       opts
       |> owner_forwarder_opts()
       |> Keyword.put_new(:timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+    )
+  end
+
+  defp detach_previsible_owner({:local, owner_instance_id}, codex_session_id, downstream, opts) do
+    with {:ok, pid} <-
+           WebsocketOwnerSession.lookup(
+             codex_session_id,
+             owner_lookup_metadata(owner_instance_id, opts)
+           ) do
+      WebsocketOwnerSession.detach_previsible_downstream(pid, downstream)
+    end
+  end
+
+  defp detach_previsible_owner({:remote, node, _owner_instance_id}, codex_session_id, downstream, opts) do
+    WebsocketOwnerForwarder.detach_previsible_remote_downstream(
+      node,
+      codex_session_id,
+      downstream,
+      owner_forwarder_opts(opts)
     )
   end
 
