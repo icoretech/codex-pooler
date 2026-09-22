@@ -50,7 +50,10 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
 
         assert contents =~ "schedulers=3"
         assert contents =~ "erl_flags=+sbwt none +S 3:3"
+        assert contents =~ ~r/candidates=\S+\/duration-[1-4]\.tsv/
       end)
+
+      refute Enum.any?(File.ls!(fixture.directory), &String.starts_with?(&1, "confirm-"))
     end
   end
 
@@ -90,6 +93,84 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
       started = await_receipts!(fixture.directory, "run-", 2)
       dropped = await_receipts!(fixture.directory, "drop-", 2)
       assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
+    end
+  end
+
+  test "duration candidates are re-measured alone and pass when they fit" do
+    unless partitioned_child?() do
+      fixture = start_fixture!()
+
+      assert {output, 0} =
+               run_make(fixture, 2,
+                 TEST_FAST_RELEASE: "1",
+                 TEST_FAST_LOGICAL_CPUS: "4",
+                 ERL_FLAGS: "",
+                 TEST_FAST_CANDIDATES: "test/b_test.exs:9 test/a_test.exs:3",
+                 TEST_FAST_CANDIDATE_PARTITION: "2"
+               )
+
+      assert output =~ "test-fast: 2 tests exceeded the duration limits beside the other partitions; re-measuring them alone"
+      assert output =~ "test-fast: all 2 re-measured within the duration limits (1/3 runs)"
+      assert output =~ "test-fast: PASS (2/2 partitions)"
+
+      started = await_receipts!(fixture.directory, "run-", 2)
+      [namespace] = started |> Enum.map(&(&1 |> String.split("-") |> Enum.at(1))) |> Enum.uniq()
+
+      assert confirm_rounds(fixture, namespace) == [
+               "namespace=#{namespace} partition=1 erl_flags=+S 2:2 candidates=set args=test/a_test.exs:3 test/b_test.exs:9"
+             ]
+
+      dropped = await_receipts!(fixture.directory, "drop-", 2)
+      assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
+    end
+  end
+
+  test "a candidate that exceeds its limits in every run on its own fails the invocation" do
+    unless partitioned_child?() do
+      fixture = start_fixture!()
+
+      assert {output, exit_code} =
+               run_make(fixture, 2,
+                 TEST_FAST_RELEASE: "1",
+                 TEST_FAST_CANDIDATES: "test/a_test.exs:3 test/b_test.exs:9",
+                 TEST_FAST_CANDIDATE_PARTITION: "1",
+                 TEST_FAST_CONFIRM_KEEP: "test/b_test.exs:9"
+               )
+
+      assert exit_code != 0
+      assert output =~ "test-fast: FAIL (duration: 1 of 2 tests exceeded the limits in 3 runs on their own)"
+      assert output =~ "test/b_test.exs:9 synthetic still over its limit"
+      refute output =~ "test-fast: PASS"
+
+      started = await_receipts!(fixture.directory, "run-", 2)
+      [namespace] = started |> Enum.map(&(&1 |> String.split("-") |> Enum.at(1))) |> Enum.uniq()
+
+      assert fixture |> confirm_rounds(namespace) |> Enum.map(&(&1 |> String.split("args=") |> List.last())) == [
+               "test/a_test.exs:3 test/b_test.exs:9",
+               "test/b_test.exs:9",
+               "test/b_test.exs:9"
+             ]
+
+      dropped = await_receipts!(fixture.directory, "drop-", 2)
+      assert MapSet.new(dropped) == rename_receipts(started, "run-", "drop-")
+    end
+  end
+
+  test "a re-measurement that fails on its own fails the invocation" do
+    unless partitioned_child?() do
+      fixture = start_fixture!()
+
+      assert {output, exit_code} =
+               run_make(fixture, 2,
+                 TEST_FAST_RELEASE: "1",
+                 TEST_FAST_CANDIDATES: "test/a_test.exs:3",
+                 TEST_FAST_CANDIDATE_PARTITION: "1",
+                 TEST_FAST_CONFIRM_EXIT: "2"
+               )
+
+      assert exit_code != 0
+      assert output =~ "test-fast: FAIL (duration re-measurement 1/3 exited 2)"
+      refute output =~ "test-fast: PASS"
     end
   end
 
@@ -144,14 +225,35 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
       exit 0
     fi
 
+    # Without --partitions this is the re-measurement of duration candidates:
+    # its arguments are the candidate locations.
+    if [ "${2:-}" != "--partitions" ]; then
+      shift
+      printf 'namespace=%s partition=%s erl_flags=%s candidates=%s args=%s\n' \
+        "$namespace" "$partition" "${ERL_FLAGS:-}" "${CODEX_POOLER_TEST_DURATION_CANDIDATES:+set}" "$*" \
+        >> "${TEST_FAST_ACCEPTANCE_DIR}/confirm-${namespace}"
+
+      if [ -n "${TEST_FAST_CONFIRM_KEEP:-}" ]; then
+        printf '%s\tsynthetic still over its limit\n' "$TEST_FAST_CONFIRM_KEEP" > "$CODEX_POOLER_TEST_DURATION_CANDIDATES"
+      else
+        : > "$CODEX_POOLER_TEST_DURATION_CANDIDATES"
+      fi
+
+      exit "${TEST_FAST_CONFIRM_EXIT:-0}"
+    fi
+
     schedulers=""
 
     if [ "${TEST_FAST_CAPTURE_SCHEDULERS:-}" = "1" ]; then
       schedulers="$(elixir -e 'IO.write(System.schedulers_online())')"
     fi
 
-    printf 'namespace=%s partition=%s schedulers=%s erl_flags=%s\n' \
-      "$namespace" "$partition" "$schedulers" "${ERL_FLAGS:-}" > "$receipt"
+    printf 'namespace=%s partition=%s schedulers=%s erl_flags=%s candidates=%s\n' \
+      "$namespace" "$partition" "$schedulers" "${ERL_FLAGS:-}" "${CODEX_POOLER_TEST_DURATION_CANDIDATES:-}" > "$receipt"
+
+    if [ -n "${TEST_FAST_CANDIDATES:-}" ] && [ "${TEST_FAST_CANDIDATE_PARTITION:-}" = "$partition" ]; then
+      printf '%s\tsynthetic candidate\n' $TEST_FAST_CANDIDATES > "$CODEX_POOLER_TEST_DURATION_CANDIDATES"
+    fi
 
     if [ "${TEST_FAST_REQUIRE_EPMD:-}" = "1" ] && ! epmd -names >/dev/null 2>&1; then
       exit 19
@@ -313,6 +415,10 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
            |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
            |> Map.values()
            |> Enum.all?(&(Enum.sort(&1) == Enum.to_list(partitions)))
+  end
+
+  defp confirm_rounds(fixture, namespace) do
+    fixture.directory |> Path.join("confirm-#{namespace}") |> File.read!() |> String.split("\n", trim: true)
   end
 
   defp rename_receipts(receipts, from, to) do

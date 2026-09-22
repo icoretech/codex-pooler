@@ -25,6 +25,32 @@ defmodule CodexPooler.TestDurationGuardTest do
     assert violation(1_000_001, %{slow: "real process boundary"}) == nil
   end
 
+  test "only a unix_integration test with a slow reason may declare its own hard limit" do
+    child_vm = %{unix_integration: true, slow: "boots a child Mix project", duration_limit_ms: 30_000}
+
+    assert violation(29_000_000, child_vm) == nil
+    assert violation(30_000_001, child_vm) =~ "exceeds its declared 30000.0ms limit"
+
+    for invalid <- [
+          Map.delete(child_vm, :unix_integration),
+          Map.put(child_vm, :slow, ""),
+          Map.put(child_vm, :duration_limit_ms, 6_000),
+          Map.put(child_vm, :duration_limit_ms, 60_001),
+          Map.put(child_vm, :duration_limit_ms, "30000")
+        ] do
+      assert violation(1, invalid) =~ "requires @tag duration_limit_ms"
+    end
+
+    assert violation(6_000_001, Map.delete(child_vm, :duration_limit_ms)) =~ "6000.0ms hard limit"
+  end
+
+  test "exceeded limits are timing findings while malformed tags are not" do
+    assert {:timing, "unknown:0", _text} = finding(1_000_001, %{})
+    assert {:timing, "unknown:0", _text} = finding(6_000_001, %{slow: "real process boundary"})
+    assert {:tag, "unknown:0", _text} = finding(1, %{slow: true})
+    assert {:tag, "unknown:0", _text} = finding(1, %{duration_limit_ms: 30_000})
+  end
+
   test "skipped and excluded tests do not need slow exemptions" do
     for state <- [{:skipped, "fixture"}, {:excluded, "fixture"}, {:invalid, nil}] do
       assert TestDurationGuard.violation(%ExUnit.Test{state: state, tags: %{slow: true}}, @limits) ==
@@ -75,6 +101,45 @@ defmodule CodexPooler.TestDurationGuardTest do
       assert output =~ "guard receipts after start=0", output
       assert output =~ "probe teardown completed", output
       assert output =~ "guard receipts remaining=0", output
+    end
+  end
+
+  for mode <- ["normal", "trace"],
+      {scenario, expected_exit, candidate} <- [
+        {"fast", 0, nil},
+        {"ordinary", 0, "exceeds 1.0ms"},
+        {"hard", 0, "2.0ms hard limit"},
+        {"invalid", 1, nil},
+        {"missing", 1, nil}
+      ] do
+    @tag :tmp_dir
+    @tag slow: "boots an isolated BEAM VM to verify deferred candidates and the exit status they leave"
+    test "#{mode} subprocess with a candidates file defers #{scenario} timing only", %{tmp_dir: dir} do
+      candidates = Path.join(dir, "candidates.txt")
+
+      {output, exit_code} =
+        System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, unquote(scenario), unquote(mode)],
+          env: [{"CODEX_POOLER_TEST_DURATION_CANDIDATES", candidates} | @local_env],
+          stderr_to_stdout: true
+        )
+
+      assert exit_code == unquote(expected_exit), output
+      assert output =~ "probe teardown completed", output
+      assert output =~ "guard receipts remaining=0", output
+
+      case unquote(candidate) do
+        nil ->
+          assert File.read!(candidates) == ""
+          refute output =~ "test duration guard deferred", output
+
+        diagnostic ->
+          assert [line] = candidates |> File.read!() |> String.split("\n", trim: true)
+          assert [location, text] = String.split(line, "\t")
+          assert location =~ ~r/^scripts\/verification\/test_duration_guard_probe_test\.exs:\d+$/
+          assert text =~ diagnostic
+          assert output =~ "test duration guard deferred 1 candidates", output
+          refute output =~ "test duration guard failed:", output
+      end
     end
   end
 
@@ -141,6 +206,10 @@ defmodule CodexPooler.TestDurationGuardTest do
       %ExUnit.Test{module: __MODULE__, name: :example, time: time, tags: tags},
       @limits
     )
+  end
+
+  defp finding(time, tags) do
+    TestDurationGuard.finding(%ExUnit.Test{module: __MODULE__, name: :example, time: time, tags: tags}, @limits)
   end
 
   defp assert_diagnostic(output, nil), do: refute(output =~ "test duration guard failed:", output)

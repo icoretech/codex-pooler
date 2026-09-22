@@ -196,12 +196,42 @@ test-fast:
 		echo "test-fast: interrupted; stopping partitions"; \
 		exit "$$rc"; \
 	}; \
+	duration_locations() { \
+		cat "$$@" 2>/dev/null | cut -f1 | sort -u; \
+	}; \
+	confirm_durations() { \
+		local round rc total locations; \
+		locations=($$(duration_locations "$$log_dir"/duration-*.tsv)); \
+		total=$${#locations[@]}; \
+		[ "$$total" -eq 0 ] && return 0; \
+		echo "test-fast: $$total tests exceeded the duration limits beside the other partitions; re-measuring them alone"; \
+		for round in 1 2 3; do \
+			(ERL_FLAGS="$$partition_erl_flags" CODEX_POOLER_TEST_RUN_NAMESPACE="$$run_namespace" MIX_TEST_PARTITION=1 CODEX_POOLER_TEST_DURATION_CANDIDATES="$$log_dir/confirm-$$round.tsv" $(TEST_FAST_COMMAND) "$${locations[@]}") > "$$log_dir/confirm-$$round.log" 2>&1 & \
+			pids[1]=$$!; \
+			while child_running "$${pids[1]}"; do sleep 0.1; done; \
+			if wait "$${pids[1]}"; then rc=0; else rc=$$?; fi; \
+			pids[1]=""; \
+			if [ "$$rc" -ne 0 ]; then \
+				echo "test-fast: FAIL (duration re-measurement $$round/3 exited $$rc)"; \
+				cat "$$log_dir/confirm-$$round.log"; \
+				return 1; \
+			fi; \
+			locations=($$(duration_locations "$$log_dir/confirm-$$round.tsv")); \
+			if [ "$${#locations[@]}" -eq 0 ]; then \
+				echo "test-fast: all $$total re-measured within the duration limits ($$round/3 runs)"; \
+				return 0; \
+			fi; \
+		done; \
+		echo "test-fast: FAIL (duration: $${#locations[@]} of $$total tests exceeded the limits in 3 runs on their own)"; \
+		tr '\t' ' ' < "$$log_dir/confirm-3.tsv"; \
+		return 1; \
+	}; \
 	trap finalize EXIT; \
 	trap 'interrupt 130' INT; \
 	trap 'interrupt 143' TERM; \
 	for partition in $$(seq 1 "$$partitions"); do \
 		logs[$$partition]="$$log_dir/partition-$$partition.log"; \
-		(ERL_FLAGS="$$partition_erl_flags" CODEX_POOLER_TEST_RUN_NAMESPACE="$$run_namespace" MIX_TEST_PARTITION="$$partition" $(TEST_FAST_COMMAND) --partitions $$partitions) > "$${logs[$$partition]}" 2>&1 & \
+		(ERL_FLAGS="$$partition_erl_flags" CODEX_POOLER_TEST_RUN_NAMESPACE="$$run_namespace" MIX_TEST_PARTITION="$$partition" CODEX_POOLER_TEST_DURATION_CANDIDATES="$$log_dir/duration-$$partition.tsv" $(TEST_FAST_COMMAND) --partitions $$partitions) > "$${logs[$$partition]}" 2>&1 & \
 		pids[$$partition]=$$!; \
 	done; \
 	failures=0; \
@@ -220,6 +250,7 @@ test-fast:
 		pids[$$partition]=""; \
 	done; \
 	if [ "$$failures" -eq 0 ]; then \
+		confirm_durations || exit 1; \
 		echo "test-fast: PASS ($$partitions/$$partitions partitions)"; \
 		exit 0; \
 	fi; \
