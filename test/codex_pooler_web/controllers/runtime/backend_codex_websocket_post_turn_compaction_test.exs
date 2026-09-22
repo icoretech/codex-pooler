@@ -30,6 +30,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
   @window_id "#{@thread_id}:0"
   @anchor_response_id "resp_post_turn_anchor_000001"
   @compact_response_id "resp_post_turn_compact_000001"
+  @resumed_turn_id "019a0000-0000-7000-8000-00000000a006"
+  @resumed_window_id "#{@thread_id}:1"
+  @resumed_response_id "resp_post_turn_resumed_00001"
 
   for topology <- [:direct, :owner_forwarded] do
     @tag topology: topology
@@ -131,6 +134,82 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
     end
   end
 
+  # `codex exec resume --last` after a post-turn compaction: the first socket is
+  # gone (the client exited after the compaction), a new socket on the same
+  # thread with the rotated window prewarms, then sends the next turn carrying
+  # the compaction item. The owner left `pending_final` behind on detach; the
+  # resumed turn must be admitted on a new upstream connection with the
+  # compaction item and without the old anchor (findings#258 row 258-26; the
+  # released-client run on one node with owner forwarding was the only
+  # evidence). The resumed frames keep the key sets the released 0.156.0
+  # binary sent; through the Pooler its upstream frame carried no
+  # previous_response_id, as here.
+  for topology <- [:direct, :owner_forwarded] do
+    @tag topology: topology
+    test "#{topology} post-turn compaction, client exit and resume on a new socket admits the compacted turn", %{topology: topology} do
+      put_owner_forwarding!(topology == :owner_forwarded)
+      compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-post-turn-resume-#{topology}"}
+
+      upstream =
+        start_upstream(
+          # provenance: observed rust-v0.156.0 released-binary exec + resume frame shapes; reply frames synthetic
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create"}], respond: completed_frames(@anchor_response_id)),
+            FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create", "input.0.type" => "compaction_trigger"}], respond: compaction_frames(compact_item)),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 2,
+              json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]],
+              respond: completed_frames(@resumed_response_id)
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+      port = start_public_endpoint!()
+      {first_conn, _websocket, _ref} = post_turn_compacted_socket!(port, setup, "post-turn-resume-#{topology}")
+      Mint.HTTP.close(first_conn)
+
+      {conn, websocket, ref, _headers} =
+        public_websocket_connect_with_request_headers!(
+          port,
+          setup,
+          "post-turn-resume-second-#{topology}",
+          "/backend-api/codex/responses",
+          [{"session-id", @session_id}, {"thread-id", @thread_id}, {"x-client-request-id", @thread_id}, {"x-codex-window-id", @resumed_window_id}]
+        )
+
+      try do
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, resume_prewarm_frame(setup))
+        {conn, websocket, prewarm_created} = public_websocket_receive_text!(conn, websocket, ref)
+        {conn, websocket, prewarm_completed} = public_websocket_receive_text!(conn, websocket, ref)
+        assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(prewarm_created)
+        assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(prewarm_completed)
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, resumed_turn_frame(setup, compact_item))
+        {conn, websocket, created} = public_websocket_receive_text!(conn, websocket, ref)
+        {_conn, _websocket, completed} = public_websocket_receive_text!(conn, websocket, ref)
+        assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created)
+        assert %{"type" => "response.completed", "response" => %{"id" => @resumed_response_id}} = CodexPooler.JSON.decode!(completed)
+
+        assert [first_turn, compact, resumed] = FakeUpstream.requests(upstream)
+        assert compact.websocket_connection_id == first_turn.websocket_connection_id
+        assert resumed.websocket_connection_id != first_turn.websocket_connection_id
+        assert compact_item in resumed.json["input"]
+
+        assert await_settled_rows!(setup) == [
+                 {"/backend-api/codex/responses", "websocket", "succeeded"},
+                 {"/backend-api/codex/responses/compact", "websocket", "succeeded"},
+                 {"/backend-api/codex/responses", "websocket", "succeeded"}
+               ]
+
+        assert :ok = FakeUpstream.verify!(upstream)
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
   # After a post-turn compaction the owner keeps the native compaction
   # admission in `pending_final` for the next turn. The released client then
   # exits, and the detach clears that admission; its lifecycle observation must
@@ -181,7 +260,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
         setup,
         turn_state,
         "/backend-api/codex/responses",
-        [{"session-id", @session_id}, {"thread-id", @thread_id}, {"x-client-request-id", @thread_id}]
+        [{"session-id", @session_id}, {"thread-id", @thread_id}, {"x-client-request-id", @thread_id}, {"x-codex-window-id", @window_id}]
       )
 
     {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, turn_frame(setup))
@@ -230,6 +309,63 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
     setup
     |> frame([%{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic post-turn prompt"}]}])
     |> put_in(["client_metadata", "x-codex-turn-metadata"], turn_metadata(:turn))
+    |> CodexPooler.JSON.encode!()
+  end
+
+  # The shared websocket receive helper drops every non-socket message, so the
+  # request events cannot be awaited; the rows are the authority (bounded poll,
+  # no completion signal survives the receive loop).
+  defp await_settled_rows!(setup) do
+    await_settled_rows!(setup, System.monotonic_time(:millisecond) + 15_000)
+  end
+
+  defp await_settled_rows!(setup, deadline) do
+    rows =
+      Repo.all(
+        from(request in Request,
+          where: request.pool_id == ^setup.pool.id,
+          order_by: request.admitted_at,
+          select: {request.endpoint, request.transport, request.status}
+        )
+      )
+
+    if Enum.any?(rows, &match?({_endpoint, _transport, "in_progress"}, &1)) and
+         System.monotonic_time(:millisecond) <= deadline do
+      Process.sleep(10)
+      await_settled_rows!(setup, deadline)
+    else
+      rows
+    end
+  end
+
+  # The resumed process's prewarm on the rotated window: no input, no
+  # generation, prewarm turn metadata.
+  defp resume_prewarm_frame(setup) do
+    setup
+    |> frame([])
+    |> Map.put("generate", false)
+    |> put_in(["client_metadata", "turn_id"], @resumed_turn_id)
+    |> put_in(["client_metadata", "root_turn_id"], @resumed_turn_id)
+    |> put_in(["client_metadata", "x-codex-window-id"], @resumed_window_id)
+    |> put_in(["client_metadata", "x-codex-turn-metadata"], turn_metadata(:resume_prewarm))
+    |> CodexPooler.JSON.encode!()
+  end
+
+  # The resumed turn replays the history with the compaction item in place of
+  # what it compacted, under a new turn id on the rotated window.
+  defp resumed_turn_frame(setup, compact_item) do
+    history = [
+      %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic post-turn prompt"}]},
+      compact_item,
+      %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic resumed prompt"}]}
+    ]
+
+    setup
+    |> frame(history)
+    |> put_in(["client_metadata", "turn_id"], @resumed_turn_id)
+    |> put_in(["client_metadata", "root_turn_id"], @resumed_turn_id)
+    |> put_in(["client_metadata", "x-codex-window-id"], @resumed_window_id)
+    |> put_in(["client_metadata", "x-codex-turn-metadata"], turn_metadata(:resumed_turn))
     |> CodexPooler.JSON.encode!()
   end
 
@@ -290,6 +426,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
     })
     |> CodexPooler.JSON.encode!()
   end
+
+  defp turn_metadata(:resume_prewarm) do
+    common_turn_metadata()
+    |> Map.drop(["root_turn_id", "turn_started_at_unix_ms", "turn_trigger"])
+    |> Map.merge(resumed_window_metadata())
+    |> Map.merge(%{"request_kind" => "prewarm", "model" => "gpt-test-model", "reasoning_effort" => "low"})
+    |> CodexPooler.JSON.encode!()
+  end
+
+  defp turn_metadata(:resumed_turn) do
+    common_turn_metadata()
+    |> Map.merge(resumed_window_metadata())
+    |> Map.merge(%{"request_kind" => "turn", "root_turn_id" => @resumed_turn_id, "model" => "gpt-test-model", "reasoning_effort" => "low"})
+    |> CodexPooler.JSON.encode!()
+  end
+
+  defp resumed_window_metadata, do: %{"turn_id" => @resumed_turn_id, "window_id" => @resumed_window_id, "window_number" => 1}
 
   defp common_turn_metadata do
     %{
