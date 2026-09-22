@@ -35,6 +35,12 @@ defmodule CodexPooler.DataCase do
     end
   end
 
+  # Runs before the using module's own `setup_all`, so rows that one commits belong to the module
+  # and are compared again once every module-level callback has run.
+  setup_all tags do
+    CommittedWriteGuard.guard_module!(tags)
+  end
+
   setup tags do
     CodexPooler.DataCase.setup_sandbox(tags)
   end

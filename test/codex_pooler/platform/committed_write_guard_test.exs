@@ -1,8 +1,10 @@
 defmodule CodexPooler.CommittedWriteGuardTest do
   @moduledoc """
   Locks `CodexPooler.CommittedWriteGuard`: a test that leaves committed rows behind, or changes a
-  committed singleton row, fails and names the tables; the tests around it do not; and rows nothing
-  guarded, or that came through a channel no test verification sees, fail the run instead.
+  committed singleton row, fails and names the tables; the tests around it do not; a module that
+  leaves behind what its `setup_all` committed fails as a module, while one that removes it passes
+  and neither charges the module after it; and rows nothing guarded, or that came through a channel
+  no test verification sees, fail the run instead.
 
   The probe runs the guard in a `mix run` VM of its own, so its tests can leak on purpose without
   failing this one. Every row they commit carries a probe label and is removed here, and this
@@ -38,6 +40,10 @@ defmodule CodexPooler.CommittedWriteGuardTest do
              "test updates the committed instance settings singleton and never restores it" => {"failed", "during", ["instance_settings"]},
              "test completes the committed bootstrap singleton and never restores it" => {"failed", "during", ["platform_bootstrap_state"]},
              "test bumps only the committed instance settings updated_at" => {"passed", "none", []},
+             "test runs with the identity its setup_all committed" => {"passed", "none", []},
+             "test writes nothing of its own" => {"passed", "none", []},
+             "test passes while the row its setup_all committed is still there" => {"passed", "none", []},
+             "test is not charged for the module that leaked before it" => {"passed", "none", []},
              "test leaves a pricing snapshot behind in auto mode" => {"failed", "during", ["pricing_snapshots"]},
              "test commits an identity without the guard" => {"passed", "none", []},
              "test starts after rows an unguarded test committed" => {"failed", "before", ["upstream_identities"]},
@@ -48,7 +54,23 @@ defmodule CodexPooler.CommittedWriteGuardTest do
            },
            probe.output
 
-    assert probe.summary == %{"stage" => "probe", "total" => 15, "failures" => 8}, probe.output
+    # A module the guard fails invalidates its tests, so ExUnit counts one failure for the test
+    # `SetupAllLeakTest` passed as well.
+    assert probe.summary == %{"stage" => "probe", "total" => 19, "failures" => 9}, probe.output
+
+    assert probe.modules == %{
+             "CodexPooler.CommittedWriteGuardProbe.SandboxedCaseTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.TimestampChangeTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.SetupAllFixtureTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.SetupAllLeakTest" => {"failed", "module", ["upstream_identities"]},
+             "CodexPooler.CommittedWriteGuardProbe.AfterSetupAllLeakTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.AutoModeTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.UnguardedTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.AfterUnguardedTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.UntracedRowLeakTest" => {"passed", "none", []},
+             "CodexPooler.CommittedWriteGuardProbe.LastUntracedTest" => {"passed", "none", []}
+           },
+           probe.output
 
     assert probe.output =~
              ~r/committed rows changed during .*test fails in its body after leaking a committed identity.*\n  upstream_identities: \d+ -> \d+ \(\+1\)/,
@@ -86,11 +108,15 @@ defmodule CodexPooler.CommittedWriteGuardTest do
       output: output,
       exit_code: exit_code,
       summary: summary,
-      outcomes:
-        receipts
-        |> Enum.filter(&(&1["stage"] == "test"))
-        |> Map.new(&{&1["name"], {&1["outcome"], &1["guard"], &1["tables"]}})
+      outcomes: receipts_by_name(receipts, "test"),
+      modules: receipts_by_name(receipts, "module")
     }
+  end
+
+  defp receipts_by_name(receipts, stage) do
+    receipts
+    |> Enum.filter(&(&1["stage"] == stage))
+    |> Map.new(&{&1["name"], {&1["outcome"], &1["guard"], &1["tables"]}})
   end
 
   # Registered before the probe runs, so a probe that dies half way still has its rows removed.

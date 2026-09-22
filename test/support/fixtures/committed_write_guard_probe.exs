@@ -89,12 +89,7 @@ defmodule CodexPooler.CommittedWriteGuardProbe.Receipts do
 
   @impl GenServer
   def handle_cast({:test_finished, %ExUnit.Test{name: name, state: state}}, nil) do
-    {outcome, messages} =
-      case state do
-        nil -> {"passed", []}
-        {:failed, failures} -> {"failed", Enum.map(failures, &failure_message/1)}
-        other -> {other |> elem(0) |> Atom.to_string(), []}
-      end
+    {outcome, messages} = outcome(state)
 
     Probe.receipt(%{
       stage: "test",
@@ -107,7 +102,25 @@ defmodule CodexPooler.CommittedWriteGuardProbe.Receipts do
     {:noreply, nil}
   end
 
+  def handle_cast({:module_finished, %ExUnit.TestModule{name: name, state: state}}, nil) do
+    {outcome, messages} = outcome(state)
+
+    Probe.receipt(%{
+      stage: "module",
+      name: inspect(name),
+      outcome: outcome,
+      guard: Enum.find_value(messages, "none", &guard_kind/1),
+      tables: messages |> Enum.flat_map(&changed_tables/1) |> Enum.uniq() |> Enum.sort()
+    })
+
+    {:noreply, nil}
+  end
+
   def handle_cast(_event, nil), do: {:noreply, nil}
+
+  defp outcome(nil), do: {"passed", []}
+  defp outcome({:failed, failures}), do: {"failed", Enum.map(failures, &failure_message/1)}
+  defp outcome(other), do: {other |> elem(0) |> Atom.to_string(), []}
 
   defp failure_message({_kind, %{message: message}, _stack}) when is_binary(message), do: message
   defp failure_message({kind, reason, stack}), do: Exception.format_banner(kind, reason, stack)
@@ -116,6 +129,7 @@ defmodule CodexPooler.CommittedWriteGuardProbe.Receipts do
     cond do
       message =~ "committed rows changed during" -> "during"
       message =~ "committed rows changed before" -> "before"
+      message =~ "committed rows changed while" -> "module"
       true -> nil
     end
   end
@@ -202,6 +216,66 @@ defmodule CodexPooler.CommittedWriteGuardProbe.TimestampChangeTest do
   # and nothing in the suite reads it.
   test "bumps only the committed instance settings updated_at" do
     run_unboxed(fn -> Repo.query!("UPDATE instance_settings SET updated_at = now()") end)
+  end
+end
+
+defmodule CodexPooler.CommittedWriteGuardProbe.SetupAllFixtureTest do
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.PoolerFixtures
+
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @label "Committed write guard probe setup_all fixture"
+
+  setup_all do
+    # Registered after the guard's own module callback and therefore run before it: the module
+    # removes what it committed, and the guard then finds the committed state as it was.
+    on_exit(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label == @label)
+      end)
+    end)
+
+    Sandbox.unboxed_run(Repo, fn -> upstream_identity_fixture(%{account_label: @label}) end)
+
+    :ok
+  end
+
+  test "runs with the identity its setup_all committed" do
+    assert %UpstreamIdentity{} = upstream_identity_fixture()
+  end
+
+  test "writes nothing of its own" do
+    assert true
+  end
+end
+
+defmodule CodexPooler.CommittedWriteGuardProbe.SetupAllLeakTest do
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.PoolerFixtures
+
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @label "Committed write guard probe setup_all leak"
+
+  setup_all do
+    Sandbox.unboxed_run(Repo, fn -> upstream_identity_fixture(%{account_label: @label}) end)
+    :ok
+  end
+
+  test "passes while the row its setup_all committed is still there" do
+    assert true
+  end
+end
+
+defmodule CodexPooler.CommittedWriteGuardProbe.AfterSetupAllLeakTest do
+  use CodexPooler.DataCase, async: false
+
+  test "is not charged for the module that leaked before it" do
+    assert true
   end
 end
 

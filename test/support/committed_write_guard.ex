@@ -59,10 +59,18 @@ defmodule CodexPooler.CommittedWriteGuard do
   `use CodexPooler.CommittedWriteGuard` directly below `use ExUnit.Case`: the guard registers its
   `on_exit` before any other callback so that it runs after all of them, cleanups included.
 
-  Counters that move outside every guarded test (an unguarded module, a `setup_all`, a process that
-  outlived its test) are verified when the next guarded test starts. That test fails in setup with
-  the tables and a message saying the rows are not its own. After the last test the rows are
-  counted once more whatever the counters say, and a change there fails the run.
+  A sync module also gets a window, from a `setup_all` the case template or `__using__/1` injects
+  before the module's own. Rows the module commits in `setup_all` belong to it: its first test
+  accepts them instead of failing, every test of that module is compared by content, because what
+  a `setup_all` opened can commit without a call the guard counts, and the committed state is
+  compared with the state from before the module once every module-level callback has run. A
+  difference there fails the module, naming the tables no test of it was already blamed for, and
+  ExUnit invalidates the module's tests. The next module's first test is never charged for it.
+
+  Counters that move outside every guarded test and outside a module window (an unguarded module,
+  a process that outlived its test) are verified when the next guarded test starts. That test fails
+  in setup with the tables and a message saying the rows are not its own. After the last test the
+  rows are compared once more whatever the counters say, and a change there fails the run.
   """
 
   use GenServer
@@ -72,6 +80,7 @@ defmodule CodexPooler.CommittedWriteGuard do
   @server __MODULE__
   @table __MODULE__
   @verify_callback {__MODULE__, :verify}
+  @module_callback {__MODULE__, :module}
 
   # Names Postgrex caches the two verification statements under, on the guard's own connection.
   @counts_statement "committed_write_guard_counts"
@@ -138,6 +147,10 @@ defmodule CodexPooler.CommittedWriteGuard do
 
   defmacro __using__(_opts) do
     quote do
+      setup_all context do
+        CodexPooler.CommittedWriteGuard.guard_module!(context)
+      end
+
       setup context do
         CodexPooler.CommittedWriteGuard.guard_test!(context)
       end
@@ -175,6 +188,54 @@ defmodule CodexPooler.CommittedWriteGuard do
   end
 
   @doc """
+  Opens the calling module's window, from a `setup_all` that runs before the module's own.
+
+  Rows the module commits in its `setup_all` belong to the module: the first test accepts them
+  instead of failing, every test of that module is compared by content because what `setup_all`
+  opened can commit without a call the guard counts, and the committed state is compared with the
+  state from before the module once every module-level callback has run. A difference there fails
+  the module, never the next module's first test.
+
+  `CodexPooler.DataCase` and `CodexPoolerWeb.ConnCase` call this for every sync module they cover;
+  a plain `ExUnit.Case` module gets it from `use CodexPooler.CommittedWriteGuard`. It does nothing
+  for an `async: true` module, which is not guarded.
+  """
+  @spec guard_module!(map()) :: :ok
+  def guard_module!(tags) do
+    if running?() and tags[:async] != true do
+      module = Map.fetch!(tags, :module)
+      start = @table |> :ets.lookup_element(:session, 2) |> read_counts()
+      :ok = GenServer.call(@server, {:begin_module, module, start}, @verify_timeout_ms)
+
+      # Registered before any callback the module's own `setup_all` registers, and callbacks run in
+      # reverse registration order, so this one runs after the module has removed its fixture.
+      ExUnit.Callbacks.on_exit(@module_callback, fn -> end_module!(module) end)
+    end
+
+    :ok
+  end
+
+  @doc false
+  def end_module!(module) do
+    if running?() do
+      now = @table |> :ets.lookup_element(:session, 2) |> read_counts()
+
+      case GenServer.call(@server, {:end_module, module, now}, @verify_timeout_ms) do
+        :ok ->
+          :ok
+
+        {:leak, message} ->
+          # ExUnit keeps only the first error a module's `on_exit` callbacks raise, and this one
+          # runs last, so the diagnostic is printed as well as raised.
+          IO.puts(:stderr, message)
+          raise ExUnit.AssertionError, message: message
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
   Opens the calling test's window. Call it before the harness's own sandbox calls, then
   `register_verify!/1` once they are done and before any other `on_exit` is registered.
 
@@ -191,11 +252,25 @@ defmodule CodexPooler.CommittedWriteGuard do
       # Only a message needs the label, so it is formatted on the paths that report something.
       where = Map.take(tags, [:module, :test, :file, :line])
 
-      if :ets.lookup_element(@table, :verified, 2) != start do
-        verify_or_raise!({:verify, :outside, where, start})
+      verified = :ets.lookup_element(@table, :verified, 2)
+
+      if verified != start do
+        verify_or_raise!({:verify, moved_where(tags[:module], verified), where, start})
       end
 
       %{where: where, start: start, session: session}
+    end
+  end
+
+  # Counters that moved between this module's window opening and its first test moved inside a
+  # `setup_all`: what it committed belongs to the module, which owns it until it ends. The window
+  # has to have opened on verified counters for that to hold; a module that opens its window after
+  # an unguarded module already moved them inherits nothing, and its first test reports the rows
+  # as committed outside every guarded test, as before.
+  defp moved_where(module, verified) do
+    case :ets.lookup(@table, :module) do
+      [{:module, %{name: ^module, verified: ^verified, start: ^verified}}] -> :setup_all
+      _other -> :outside
     end
   end
 
@@ -259,8 +334,9 @@ defmodule CodexPooler.CommittedWriteGuard do
     # Connected before counting starts, so the guard's own connection never counts.
     conn = connect!(repo_config)
     tables = watched_tables!(conn)
-    content_query = content_query(tables)
-    snapshot = query_rows!(conn, content_query, @content_statement, &content_row/1)
+    sql = %{counts: counts_sql(tables), content: content_sql(tables)}
+    prepared = prepare!(conn, sql)
+    snapshot = query_content!(conn, prepared.content)
     session = start_session!()
     true = :ets.insert(@table, [{:session, session}, {:verified, read_counts(session)}])
 
@@ -268,10 +344,11 @@ defmodule CodexPooler.CommittedWriteGuard do
      %{
        repo_config: repo_config,
        conn: conn,
-       counts_query: counts_query(tables),
-       content_query: content_query,
+       sql: sql,
+       prepared: prepared,
        snapshot: snapshot,
        session: session,
+       module: nil,
        checks: 0,
        content_checks: 0,
        check_native: 0
@@ -279,24 +356,54 @@ defmodule CodexPooler.CommittedWriteGuard do
   end
 
   @impl GenServer
+  def handle_call({:begin_module, module, start}, _from, state) do
+    verified = :ets.lookup_element(@table, :verified, 2)
+    true = :ets.insert(@table, {:module, %{name: module, verified: verified, start: start}})
+    {:reply, :ok, %{state | module: open_window(state, module)}}
+  end
+
+  def handle_call({:end_module, module, now}, _from, state) do
+    {reply, state} = end_module(state, module, now)
+    {:reply, reply, state}
+  end
+
   def handle_call({:verify, :outside, where, now}, _from, state) do
     verified = :ets.lookup_element(@table, :verified, 2)
 
-    {reply, state} =
+    {reply, changes, state} =
       verify_rows(state, now, true, &outside_message(label(where), &1, calls(verified, now)))
 
-    {:reply, reply, state}
+    # Charged to this test, so the module it belongs to is not asked for it again when it ends.
+    {:reply, reply, remember_reported(state, where[:module], changes)}
+  end
+
+  # The module's own `setup_all` committed these rows. They are read and accepted here, and
+  # compared again when the module ends; a `setup_all` that opened a channel the guard cannot see,
+  # such as `Sandbox.mode(Repo, :auto)`, also makes every test of the module content-compared.
+  def handle_call({:verify, :setup_all, _where, now}, _from, state) do
+    {state, read} = state |> ensure_connected() |> read_row_content()
+    true = :ets.insert(@table, {:verified, now})
+
+    case read do
+      {:ok, current} ->
+        state = %{state | snapshot: current, content_checks: state.content_checks + 1}
+        {:reply, :ok, %{state | module: %{state.module | fixture?: true}}}
+
+      {:error, error} ->
+        {:reply, {:leak, query_failed_message(error)}, state}
+    end
   end
 
   def handle_call({:verify, :test, where, now, calls, nodes}, _from, state) do
     # A call the guard counts, or a connected node, means the test could have committed through a
-    # channel whose writes need not move a row count, so the content is compared for it.
-    content? = calls != [] or nodes != []
+    # channel whose writes need not move a row count, so the content is compared for it. So does a
+    # `setup_all` of this module that committed: what it opened outlives its own window.
+    content? = calls != [] or nodes != [] or escalated?(state, where[:module])
 
-    {reply, state} =
+    {reply, changes, state} =
       verify_rows(state, now, content?, &test_message(label(where), &1, calls, nodes))
 
-    {:reply, reply, state}
+    {:reply, reply, remember_reported(state, where[:module], changes)}
   end
 
   # Always compares the content: a commit no entry point reveals in the last tests has no later
@@ -304,7 +411,7 @@ defmodule CodexPooler.CommittedWriteGuard do
   def handle_call({:finish, now}, _from, state) do
     verified = :ets.lookup_element(@table, :verified, 2)
 
-    {reply, state} =
+    {reply, _changes, state} =
       verify_rows(state, now, true, &after_suite_message(&1, calls(verified, now)))
 
     TestDiagnostics.puts(fn ->
@@ -332,46 +439,134 @@ defmodule CodexPooler.CommittedWriteGuard do
   end
 
   defp verify_counts(state, message) do
-    case measure(state, state.counts_query, @counts_statement, &count_row/1) do
+    case read_row_counts(state) do
       {state, {:ok, counts}} ->
         if counts == row_counts(state.snapshot),
-          do: {:ok, state},
+          do: {:ok, [], state},
           else: verify_content(state, message)
 
       {state, {:error, error}} ->
-        {{:leak, message.({:count_failed, error})}, state}
+        {{:leak, message.({:count_failed, error})}, [], state}
     end
   end
 
   defp verify_content(state, message) do
-    case measure(state, state.content_query, @content_statement, &content_row/1) do
+    case read_row_content(state) do
       {state, {:ok, current}} ->
-        state = %{state | content_checks: state.content_checks + 1}
+        before = state.snapshot
+        state = %{state | content_checks: state.content_checks + 1, snapshot: current}
 
-        case changes(state.snapshot, current) do
-          [] -> {:ok, %{state | snapshot: current}}
-          changes -> {{:leak, message.(changes)}, %{state | snapshot: current}}
+        case changes(before, current) do
+          [] -> {:ok, [], state}
+          changes -> {{:leak, message.(changes)}, changes, state}
         end
 
       {state, {:error, error}} ->
-        {{:leak, message.({:count_failed, error})}, state}
+        {{:leak, message.({:count_failed, error})}, [], state}
     end
   end
 
-  defp measure(state, query, statement, row) do
+  defp read_row_counts(state) do
     started = System.monotonic_time()
-    result = query_rows(state.conn, query, statement, row)
-    elapsed = System.monotonic_time() - started
+    result = query_counts(state.conn, state.prepared.counts)
+    {charge(state, started), result}
+  end
 
-    {%{state | checks: state.checks + 1, check_native: state.check_native + elapsed}, result}
+  defp read_row_content(state) do
+    started = System.monotonic_time()
+    result = query_content(state.conn, state.prepared.content)
+    {charge(state, started), result}
+  end
+
+  defp charge(state, started) do
+    elapsed = System.monotonic_time() - started
+    %{state | checks: state.checks + 1, check_native: state.check_native + elapsed}
   end
 
   defp row_counts(snapshot), do: Map.new(snapshot, fn {table, {n, _content}} -> {table, n} end)
 
+  # Sync modules run one at a time, so one window is enough. Opening it twice, for a module that
+  # both uses a case template and `use CodexPooler.CommittedWriteGuard`, keeps the first.
+  defp open_window(%{module: %{name: module}} = state, module), do: state.module
+
+  defp open_window(state, module) do
+    %{name: module, baseline: state.snapshot, fixture?: false, reported: MapSet.new()}
+  end
+
+  defp escalated?(%{module: %{name: module, fixture?: true}}, module), do: true
+  defp escalated?(_state, _module), do: false
+
+  defp remember_reported(%{module: %{name: module} = window} = state, module, [_ | _] = changes) do
+    tables = MapSet.new(changes, fn {table, _was, _now} -> table end)
+    %{state | module: %{window | reported: MapSet.union(window.reported, tables)}}
+  end
+
+  defp remember_reported(state, _module, _changes), do: state
+
+  # Runs from the module's last `on_exit`, so the module has already removed what its `setup_all`
+  # committed. The comparison is against the committed state from before the module, minus the
+  # tables one of its tests was already blamed for.
+  defp end_module(%{module: %{name: module} = window} = state, module, now) do
+    true = :ets.insert(@table, {:verified, now})
+    true = :ets.delete(@table, :module)
+    state = %{ensure_connected(state) | module: nil}
+
+    if window.fixture?,
+      do: compare_module(state, window),
+      else: compare_module_counts(state, window)
+  end
+
+  defp end_module(state, _module, now) do
+    true = :ets.insert(@table, {:verified, now})
+    {:ok, state}
+  end
+
+  # Nothing the module committed in `setup_all`, so the content is only read when a count moved
+  # since the state from before the module or since the last verification, which is what a
+  # module-level callback that commits leaves behind.
+  defp compare_module_counts(state, window) do
+    case read_row_counts(state) do
+      {state, {:ok, counts}} ->
+        if module_counts_unchanged?(counts, window, state),
+          do: {:ok, state},
+          else: compare_module(state, window)
+
+      {state, {:error, error}} ->
+        {{:leak, query_failed_message(error)}, state}
+    end
+  end
+
+  defp module_counts_unchanged?(counts, window, state) do
+    counts == row_counts(window.baseline) and counts == row_counts(state.snapshot)
+  end
+
+  defp compare_module(state, window) do
+    case read_row_content(state) do
+      {state, {:ok, current}} ->
+        state = %{state | content_checks: state.content_checks + 1, snapshot: current}
+
+        case module_changes(window, current) do
+          [] -> {:ok, state}
+          changes -> {{:leak, module_message(window.name, changes)}, state}
+        end
+
+      {state, {:error, error}} ->
+        {{:leak, query_failed_message(error)}, state}
+    end
+  end
+
+  defp module_changes(window, current) do
+    window.baseline
+    |> changes(current)
+    |> Enum.reject(fn {table, _was, _now} -> MapSet.member?(window.reported, table) end)
+  end
+
   # The run's last verification disconnects so that `mix codex_pooler.test` can drop a run-scoped
   # database; `mix test --repeat-until-failure` runs the suite again in the same VM.
-  defp ensure_connected(%{conn: nil, repo_config: repo_config} = state),
-    do: %{state | conn: connect!(repo_config)}
+  defp ensure_connected(%{conn: nil, repo_config: repo_config} = state) do
+    conn = connect!(repo_config)
+    %{state | conn: conn, prepared: prepare!(conn, state.sql)}
+  end
 
   defp ensure_connected(state), do: state
 
@@ -445,7 +640,7 @@ defmodule CodexPooler.CommittedWriteGuard do
   end
 
   # `~s|...|` because the SQL carries both `[]` and `()`.
-  defp content_query(tables) do
+  defp content_sql(tables) do
     Enum.map_join(tables, " UNION ALL ", fn {table, ignored} ->
       content =
         ~s|(to_jsonb(r) - ARRAY[#{Enum.map_join(ignored, ", ", &"'#{&1}'")}]::text[])::text|
@@ -456,30 +651,47 @@ defmodule CodexPooler.CommittedWriteGuard do
     end)
   end
 
-  defp counts_query(tables) do
+  defp counts_sql(tables) do
     Enum.map_join(tables, " UNION ALL ", fn {table, _ignored} ->
       ~s|SELECT '#{table}', count(*) FROM "#{table}"|
     end)
   end
 
-  defp query_rows!(conn, query, statement, row) do
-    case query_rows(conn, query, statement, row) do
+  # Both statements are prepared once per connection, so every check after the first skips the
+  # parse and the plan; the run's last verification disconnects, and the next one prepares again.
+  defp prepare!(conn, sql) do
+    {:ok, counts} = Postgrex.prepare(conn, @counts_statement, sql.counts)
+    {:ok, content} = Postgrex.prepare(conn, @content_statement, sql.content)
+    %{counts: counts, content: content}
+  end
+
+  defp query_content!(conn, query) do
+    case query_content(conn, query) do
       {:ok, rows} -> rows
       {:error, error} -> raise error
     end
   end
 
-  # Both statements are cached on the guard's connection, so every check after the first skips the
-  # parse and plan; Postgrex prepares them again by itself after the finish/reconnect cycle.
-  defp query_rows(conn, query, statement, row) do
-    case Postgrex.query(conn, query, [], timeout: @verify_timeout_ms, cache_statement: statement) do
-      {:ok, %Postgrex.Result{rows: rows}} -> {:ok, Map.new(rows, row)}
+  defp query_counts(conn, query) do
+    case run_query(conn, query) do
+      {:ok, rows} -> {:ok, Map.new(rows, fn [table, n] -> {table, n} end)}
       {:error, error} -> {:error, error}
     end
   end
 
-  defp count_row([table, n]), do: {table, n}
-  defp content_row([table, n, content]), do: {table, {n, content}}
+  defp query_content(conn, query) do
+    case run_query(conn, query) do
+      {:ok, rows} -> {:ok, Map.new(rows, fn [table, n, content] -> {table, {n, content}} end)}
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp run_query(conn, query) do
+    case Postgrex.execute(conn, query, [], timeout: @verify_timeout_ms) do
+      {:ok, _query, %Postgrex.Result{rows: rows}} -> {:ok, rows}
+      {:error, error} -> {:error, error}
+    end
+  end
 
   defp start_session! do
     session = :trace.session_create(:codex_pooler_committed_write_guard, self(), [])
@@ -565,6 +777,20 @@ defmodule CodexPooler.CommittedWriteGuard do
     Calls that can commit outside the sandbox made since the last verification: \
     #{format_calls(calls)}
     """
+  end
+
+  defp module_message(module, changes) do
+    """
+    committed rows changed while #{inspect(module)} ran, and nothing removed them:
+    #{format_changes(changes)}
+    Rows a module commits in its setup_all belong to that module, not to its first test and not to \
+    the next module: remove them from a callback the setup_all registers, so the removal runs \
+    before this check. Tables a test of this module was already blamed for are not repeated here.
+    """
+  end
+
+  defp query_failed_message(error) do
+    "committed write guard: could not read the committed rows: #{Exception.message(error)}"
   end
 
   defp after_suite_message(changes, calls) do
