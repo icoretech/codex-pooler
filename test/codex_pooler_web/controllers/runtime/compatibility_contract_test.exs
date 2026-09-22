@@ -2689,9 +2689,16 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  present_invalid: "source_specific_invalid_request_without_fallback",
                  missing: "no_native_turn_identity"
                },
-               semantic_key: "opaque_session_scoped_sha256_32_bytes",
-               claim_key: "opaque_session_scoped_full_base64url_sha256_claim"
+               semantic_key: "opaque_claim_scoped_sha256_32_bytes",
+               claim_key: "opaque_claim_scoped_full_base64url_sha256_claim",
+               claim_scope: %{
+                 thread_named: "hmac_of_pool_api_key_and_thread",
+                 thread_absent: "codex_session_id"
+               }
              }
+
+      assert feature.contract =~ "an HMAC of Pool, API key and client thread when the turn metadata names a thread and the Codex session otherwise"
+      assert_native_turn_claim_scope!(fixture.native_turn_identity.claim_scope)
 
       assert fixture.active_reconnect == %{
                same_active_non_cancelled: %{
@@ -4394,4 +4401,28 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
   defp generated_secret(label),
     do: "fixture-secret-#{label}-#{System.unique_integer([:positive])}"
+
+  # The fixture's claim scope, derived through the same functions the codec
+  # uses for a frame's semantic key (`WebsocketTurnIdentity.claim_scope/2` over
+  # the frame's session and thread, then `resolve/2`), so the matrix cannot
+  # claim a scope the key derivation does not have (findings#225, row 225-92).
+  defp assert_native_turn_claim_scope!(%{thread_named: "hmac_of_pool_api_key_and_thread", thread_absent: "codex_session_id"}) do
+    session = %{id: Ecto.UUID.generate(), pool_id: Ecto.UUID.generate(), api_key_id: Ecto.UUID.generate()}
+    next_session = %{session | id: Ecto.UUID.generate()}
+    other_key = %{session | api_key_id: Ecto.UUID.generate()}
+
+    key = fn codex_session, thread_id ->
+      scope = CodexPooler.Gateway.Payloads.WebsocketTurnIdentity.claim_scope(codex_session, thread_id)
+      payload = %{"client_metadata" => %{"turn_id" => "matrix-claim-scope-turn"}}
+      {:ok, %{semantic_turn_key: semantic_key}} = CodexPooler.Gateway.Payloads.WebsocketTurnIdentity.resolve(payload, scope)
+      semantic_key
+    end
+
+    assert byte_size(key.(session, "matrix-thread")) == 32
+    assert key.(session, "matrix-thread") == key.(next_session, "matrix-thread")
+    refute key.(session, "matrix-thread") == key.(other_key, "matrix-thread")
+    refute key.(session, "matrix-thread") == key.(session, "matrix-other-thread")
+    refute key.(session, nil) == key.(next_session, nil)
+    assert key.(session, nil) == key.(%{other_key | id: session.id}, nil)
+  end
 end
