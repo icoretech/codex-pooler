@@ -36,6 +36,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     :terminal_then_delayed_close
   ]
 
+  @raw_websocket_peer_retryable_first_then_control_modes [
+    :retryable_first_then_coalesced_close,
+    :retryable_first_then_coalesced_ping,
+    :retryable_first_then_delayed_close
+  ]
+
   # Detection budget for observing a call the session itself already bounds by
   # @timeouts. It has to stay above those scenario timeouts, or a loaded run
   # gives up on a request that was still allowed to be in flight.
@@ -3512,6 +3518,71 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end
   end
 
+  # The adjacent halt of the #251 shape: a retryable pre-visible first frame
+  # (here a quota denial) fails the request with `upstream_terminal_event`, and
+  # that failure keeps the connection for reuse, so a Close decoded behind it in
+  # the same read must still close the connection (icoretech/codex-pooler-findings#203).
+  for {close_arrival, response_mode} <- [
+        {"coalesced with a retryable first frame in one read", :retryable_first_then_coalesced_close},
+        {"in a read of its own after a retryable first frame", :retryable_first_then_delayed_close}
+      ] do
+    @response_mode response_mode
+
+    test "answers an upstream close that arrives #{close_arrival} and reconnects for the next request" do
+      peer = start_raw_websocket_peer(response_mode: @response_mode)
+      {:ok, session} = UpstreamWebsocketSession.start_link([])
+
+      on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+      request = raw_websocket_request(peer.url, self())
+      initial_lifecycle = lifecycle_state(session)
+
+      assert {:error, %{reason: {:quota_exhausted_first_event, %{code: "usage_limit_reached"}}}} =
+               UpstreamWebsocketSession.request(session, request)
+
+      refute_received {:upstream_websocket_frame, _frame}
+
+      # Below the peer loop's own 1 s receive timeout: past that the peer tears
+      # the connection down itself and the witness stops discriminating.
+      assert :closed = wait_for_raw_websocket_connection_closed(1, 500)
+      assert_disconnected_lifecycle(session, %{initial_lifecycle | generation: 1})
+
+      set_raw_websocket_peer_response_mode(peer, :terminal)
+
+      assert {:ok, %{terminal: "response.completed", status: 200}} =
+               UpstreamWebsocketSession.request(session, request)
+
+      assert lifecycle_state(session) == %{initial_lifecycle | generation: 2}
+      connection_count = raw_websocket_peer_connection_count(peer)
+      cleanup = stop_raw_websocket_peer(peer)
+
+      assert cleanup.alive_tasks == []
+      assert cleanup.client_socket_count == 0
+      assert connection_count == 2
+    end
+  end
+
+  test "pongs an upstream ping coalesced behind a retryable first frame and keeps the connection" do
+    peer = start_raw_websocket_peer(response_mode: :retryable_first_then_coalesced_ping)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = raw_websocket_request(peer.url, self())
+
+    assert {:error, %{reason: {:quota_exhausted_first_event, %{code: "usage_limit_reached"}}}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:raw_upstream_websocket_control, :pong, 1, _ping_count, 14}, 1_000
+
+    set_raw_websocket_peer_response_mode(peer, :terminal)
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert raw_websocket_peer_connection_count(peer) == 1
+  end
+
   test "pongs an upstream ping coalesced behind the terminal in one read" do
     peer = start_raw_websocket_peer(response_mode: :terminal_then_coalesced_ping)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -5883,6 +5954,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
           CodexPooler.JSON.encode!(response)
         )
 
+      mode when mode in @raw_websocket_peer_retryable_first_then_control_modes ->
+        send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
+
+        response = %{
+          "type" => "response.failed",
+          "response" => %{
+            "id" => "resp_raw_ws_#{connection_id}_#{request_count}",
+            "status" => "failed",
+            "error" => %{"code" => "usage_limit_reached", "message" => "synthetic quota denial"}
+          }
+        }
+
+        send_raw_websocket_peer_retryable_first_then_control(mode, socket, CodexPooler.JSON.encode!(response))
+
       :unexpected_binary ->
         send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
         :ok = :gen_tcp.send(socket, <<0x82, 1, 0>>)
@@ -5946,6 +6031,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     # The control arm: the same two frames, two reads. The session has always
     # answered this one, through its idle path.
     :ok = :gen_tcp.send(socket, raw_websocket_server_text_frame(terminal))
+    Process.sleep(50)
+    :ok = :gen_tcp.send(socket, raw_websocket_server_close_frame(1000))
+  end
+
+  # The same three arms behind a retryable pre-visible first frame instead of a
+  # terminal (icoretech/codex-pooler-findings#203).
+  defp send_raw_websocket_peer_retryable_first_then_control(:retryable_first_then_coalesced_close, socket, frame) do
+    :ok = :gen_tcp.send(socket, [raw_websocket_server_text_frame(frame), raw_websocket_server_close_frame(1000)])
+  end
+
+  defp send_raw_websocket_peer_retryable_first_then_control(:retryable_first_then_coalesced_ping, socket, frame) do
+    :ok = :gen_tcp.send(socket, [raw_websocket_server_text_frame(frame), raw_websocket_server_ping_frame("p2-ping-behind")])
+  end
+
+  defp send_raw_websocket_peer_retryable_first_then_control(:retryable_first_then_delayed_close, socket, frame) do
+    :ok = :gen_tcp.send(socket, raw_websocket_server_text_frame(frame))
     Process.sleep(50)
     :ok = :gen_tcp.send(socket, raw_websocket_server_close_frame(1000))
   end

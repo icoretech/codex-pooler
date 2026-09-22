@@ -1602,23 +1602,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         finish_terminal_result(state, receive_state, terminal, trailing_frames)
 
       {:failure, state, receive_state, reason} ->
-        next_state =
-          if receive_state.termination_source == :upstream_terminal_event and
-               not exhausted_connection?(receive_state),
-             do: state,
-             else: retire_exhausted_connection(state, receive_state)
+        finish_failure_result(state, receive_state, reason, [])
 
-        {{:error,
-          %{
-            body: receive_body(receive_state),
-            reason: reason,
-            headers: Map.get(state, :headers, []),
-            upstream_error_param: receive_state.terminal_upstream_error_param,
-            websocket_frame_headers: receive_state.websocket_frame_headers,
-            transport_failure: transport_failure_metadata(reason, state, receive_state, phase: failure_phase(reason)),
-            native_client_retry_observation: final_client_retry_observation(receive_state)
-          }}, next_state}
+      {:failure, state, receive_state, reason, trailing_frames} ->
+        finish_failure_result(state, receive_state, reason, trailing_frames)
     end
+  end
+
+  # A retryable pre-visible first frame fails the request with
+  # `upstream_terminal_event` and keeps the connection for reuse, so a Close or
+  # Ping decoded behind it in the same read gets the same drain the terminal
+  # gives its trailing frames (icoretech/codex-pooler-findings#203). Every other
+  # failure retires or invalidates the connection and carries no trailing frames.
+  # The error result is built from the pre-drain state, like the terminal's.
+  defp finish_failure_result(state, receive_state, reason, trailing_frames) do
+    next_state =
+      if receive_state.termination_source == :upstream_terminal_event and
+           not exhausted_connection?(receive_state),
+         do: drain_trailing_frames(state, trailing_frames, :retryable_first_frame),
+         else: retire_exhausted_connection(state, receive_state)
+
+    {{:error,
+      %{
+        body: receive_body(receive_state),
+        reason: reason,
+        headers: Map.get(state, :headers, []),
+        upstream_error_param: receive_state.terminal_upstream_error_param,
+        websocket_frame_headers: receive_state.websocket_frame_headers,
+        transport_failure: transport_failure_metadata(reason, state, receive_state, phase: failure_phase(reason)),
+        native_client_retry_observation: final_client_retry_observation(receive_state)
+      }}, next_state}
   end
 
   # A peer may coalesce its Close with the terminal frame in a single TCP write,
@@ -1649,10 +1662,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       }
       |> maybe_put_success_response_id(terminal, receive_state.response_id)
 
-    state = handle_async_frames(state, trailing_frames)
+    state = drain_trailing_frames(state, trailing_frames, :terminal)
 
     {{:ok, result}, maybe_retire_exhausted_connection(state, receive_state)}
   end
+
+  # Drains the frames decoded behind a halting frame through the idle path.
+  defp drain_trailing_frames(state, [], _halt), do: state
+
+  defp drain_trailing_frames(state, trailing_frames, halt) when halt in [:terminal, :retryable_first_frame],
+    do: handle_async_frames(state, trailing_frames)
 
   defp maybe_retire_exhausted_connection(state, receive_state) do
     if exhausted_connection?(receive_state),
@@ -1692,6 +1711,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: {:halt, result}
 
   defp reduce_receive_result({:failure, _state, _receive_state, _reason} = result),
+    do: {:halt, result}
+
+  defp reduce_receive_result({:failure, _state, _receive_state, _reason, _trailing} = result),
     do: {:halt, result}
 
   defp handle_data(state, data, %ReceiveState{} = receive_state) do
@@ -1760,8 +1782,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   # Folded by hand rather than with `Enum.reduce_while/3` so the terminal can
   # hand the frames decoded behind it in the same read to the caller instead of
   # dropping them (icoretech/codex-pooler-findings#251); `finish_terminal_result/4`
-  # drains them. Every other halt ends the receive for a reason that retires or
-  # invalidates the connection anyway, so it carries nothing.
+  # drains them. A retryable pre-visible first frame (`upstream_terminal_event`)
+  # also keeps the connection, so its failure carries them the same way
+  # (icoretech/codex-pooler-findings#203). Every other halt ends the receive for
+  # a reason that retires or invalidates the connection anyway, so it carries
+  # nothing.
   defp reduce_frames([], result), do: result
 
   defp reduce_frames([frame | trailing_frames], {:continue, _state, _receive_state} = result) do
@@ -1771,6 +1796,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
       {:halt, {:terminal, state, receive_state, terminal}} ->
         {:terminal, state, receive_state, terminal, trailing_frames}
+
+      {:halt, {:failure, state, %ReceiveState{termination_source: :upstream_terminal_event} = receive_state, reason}} ->
+        {:failure, state, receive_state, reason, trailing_frames}
 
       {:halt, halted_result} ->
         halted_result
