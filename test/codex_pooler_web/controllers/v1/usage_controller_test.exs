@@ -499,7 +499,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
   } do
     pool = pool_fixture()
     setup = active_api_key_fixture(pool)
-    now = ~U[2026-06-07 12:00:00Z]
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     %{identity: identity} =
       active_upstream_assignment_fixture(pool, %{account_label: "Monthly-only usage upstream"})
