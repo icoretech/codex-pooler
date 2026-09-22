@@ -12,6 +12,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
+  alias CodexPooler.Upstreams.Quota.Windows.Retention
   alias CodexPooler.Upstreams.Quota.Windows.RuntimeCoherence
   alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
 
@@ -47,6 +48,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   def logical_windows(windows, %DateTime{} = as_of) when is_list(windows) do
     windows
     |> Enum.reject(&future_observation?(&1, as_of))
+    |> Retention.reject_past_retention(as_of)
     |> Enum.map(&normalize_legacy_weekly_primary/1)
     |> Enum.group_by(&logical_key/1)
     |> Enum.flat_map(fn {_logical_key, candidates} ->

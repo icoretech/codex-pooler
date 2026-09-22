@@ -3275,7 +3275,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "stores monthly-only account primary quota without synthetic secondary window" do
       identity = active_identity_fixture()
-      observed_at = ~U[2026-04-27 13:00:00Z]
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       reset_at = DateTime.add(observed_at, 30, :day)
 
       assert {:ok, [window]} =
@@ -3305,7 +3305,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "persists monthly-only usage payload as raw account primary evidence" do
       identity = active_identity_fixture()
-      observed_at = ~U[2026-04-27 13:00:00Z]
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       reset_at = DateTime.add(observed_at, 30, :day)
 
       payload =
@@ -3518,7 +3518,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "preserves unknown long primary usage windows without remapping them" do
       identity = active_identity_fixture()
-      observed_at = ~U[2026-04-27 13:00:00Z]
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       unknown_window_seconds = 1_209_600
       unknown_window_minutes = 20_160
       reset_after_seconds = 1_800
@@ -9654,7 +9654,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "stores Spark rate-limit events without deriving rolling weekly resets" do
       identity = active_identity_fixture()
-      observed_at = ~U[2026-04-27 12:00:00Z]
+      observed_at = DateTime.utc_now() |> DateTime.add(-10, :day) |> DateTime.truncate(:second)
       primary_reset_at = DateTime.add(observed_at, 900, :second)
 
       assert {:ok, [primary, secondary]} =
@@ -11978,7 +11978,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "expired and stale quota evidence remains visible but routing unusable" do
       identity = active_identity_fixture()
-      now = ~U[2026-04-27 12:00:00Z]
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       expired_reset_at = DateTime.add(now, -60, :second)
       stale_observed_at = DateTime.add(now, -Quotas.Evidence.freshness_ttl_seconds() - 1, :second)

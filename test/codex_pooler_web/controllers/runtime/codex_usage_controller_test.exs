@@ -1197,7 +1197,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
          conn: conn
        } do
     pool = pool_fixture()
-    now = ~U[2026-06-07 12:00:00Z]
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
     account_id = "monthly-account-#{System.unique_integer([:positive])}"
 
     %{identity: identity} =

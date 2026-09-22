@@ -31,8 +31,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.ExpiredQuotaWindowTest 
     running_reset = DateTime.add(now, 3, :day)
 
     age_row!(identity, "codex_rate_limit_event",
-      reset_at: DateTime.add(now, -60, :day),
-      observed_at: DateTime.add(now, -67, :day)
+      reset_at: DateTime.add(now, -20, :day),
+      observed_at: DateTime.add(now, -27, :day)
     )
 
     age_row!(identity, "codex_usage_api",

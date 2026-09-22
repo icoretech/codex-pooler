@@ -181,8 +181,8 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
         source: "codex_rate_limit_event",
         merge_precedence: 90,
         used_percent: Decimal.new("100"),
-        reset_at: DateTime.add(@as_of, -60, :day),
-        observed_at: DateTime.add(@as_of, -67, :day)
+        reset_at: DateTime.add(@as_of, -20, :day),
+        observed_at: DateTime.add(@as_of, -27, :day)
       )
 
     stale_running =
@@ -198,8 +198,10 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
       assert WindowSelector.logical_windows(windows, @as_of) == [stale_running]
     end
 
-    # With no running-cycle row left, the expired row is the only evidence and stays.
+    # With no running-cycle row left, the expired row is the only evidence and
+    # stays until it is past retention, when it is ignored as if pruned.
     assert WindowSelector.logical_windows([expired_exhausted], @as_of) == [expired_exhausted]
+    assert WindowSelector.logical_windows([expired_exhausted], DateTime.add(@as_of, 11, :day)) == []
   end
 
   test "same-cycle rows with countdown jitter are not rejected" do

@@ -22,7 +22,7 @@ defmodule CodexPooler.Alerts.Evaluation.ExpiredQuotaWindowAlertTest do
     %{identity: identity} = upstream_assignment_fixture(pool)
 
     write_weekly_rows!(identity, now,
-      event: [used: "100", reset_at: DateTime.add(now, -60, :day), observed_at: DateTime.add(now, -67, :day)],
+      event: [used: "100", reset_at: DateTime.add(now, -20, :day), observed_at: DateTime.add(now, -27, :day)],
       usage: [used: "30", reset_at: DateTime.add(now, 3, :day), observed_at: DateTime.add(now, -2, :hour)]
     )
 

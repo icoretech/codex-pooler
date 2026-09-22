@@ -13,6 +13,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
     WindowSelector
   }
 
+  alias CodexPooler.Upstreams.Quota.Windows.Retention
   alias CodexPooler.Upstreams.Quota.Windows.Routing
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -78,11 +79,16 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
     end
   end
 
+  # Rows past retention are invisible here exactly as they are after the
+  # runtime-cleanup prune deletes them, so routing never depends on whether
+  # that pass has run yet.
   @spec time_visible_raw_windows(t()) :: [AccountQuotaWindow.t()]
   def time_visible_raw_windows(%__MODULE__{raw_windows: raw_windows, as_of: as_of}) do
-    Enum.filter(raw_windows, fn %AccountQuotaWindow{observed_at: observed_at} ->
+    raw_windows
+    |> Enum.filter(fn %AccountQuotaWindow{observed_at: observed_at} ->
       DateTime.compare(observed_at, as_of) in [:lt, :eq]
     end)
+    |> Retention.reject_past_retention(as_of)
   end
 
   @spec effective_windows(t()) :: [AccountQuotaWindow.t()]
