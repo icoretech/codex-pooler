@@ -444,11 +444,13 @@ A forbidden frame uses the existing websocket error frame with the same status,
 code, message, and route-native parameter. The connection is not rejected at
 upgrade time.
 
-Authenticated backend Codex model metadata reflects the policy. Unrestricted
-keeps the current levels and default. Allow up to filters to permitted known
-levels and a permitted default. Always use advertises its singleton only when it
-is model-effective, otherwise it returns no levels and no default. Models stay
-visible, and public `/v1/models` remains unchanged.
+Authenticated backend Codex model metadata does not change with the policy:
+the Pool catalog serves each model's selected upstream entry with all of its
+advertised reasoning levels and its default, whatever the key's policy, and the
+policy applies when a request arrives. A Codex client can therefore offer an
+effort the key does not allow; that request is refused with
+`400 reasoning_effort_not_allowed`. Models stay visible, and public
+`/v1/models` remains unchanged.
 
 `minimal` and `ultra` remain distinct for policy evaluation. Backend Codex
 compatibility rewrites `minimal` to `low` and `ultra` to `max` before upstream
