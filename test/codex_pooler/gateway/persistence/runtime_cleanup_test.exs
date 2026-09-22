@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Gateway.OperationalSettings
+
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
     BridgeSessionAlias,
@@ -257,6 +259,69 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     assert Repo.reload!(in_progress_key).status == IdempotencyKey.expired_status()
     assert Repo.reload!(succeeded_key).status == IdempotencyKey.expired_status()
     assert Repo.reload!(failed_key).status == IdempotencyKey.failed_status()
+  end
+
+  # A session whose window is never used again stayed `active` forever once its
+  # idle owner released the lease: only a later start of the same key and
+  # session key closes an expired session, and that start is what carries the
+  # findings#141 assignment preference. Past the expired-alias retention, with
+  # every alias expired, no lease and no turn in progress, nothing can resume
+  # the session and the provider context the preference points at is long gone,
+  # so cleanup closes it; anything younger keeps the preference path intact
+  # (findings#225, row 225-89).
+  test "closes reconnectable sessions retired past the expired-alias retention and nothing else" do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    retention = OperationalSettings.current().expired_alias_ttl_seconds
+    retired_at = DateTime.add(now, -(retention + 60), :second)
+    recent = DateTime.add(now, -(retention - 60), :second)
+
+    retired = retired_session_fixture(pool, api_key, assignment, retired_at)
+    retired_interrupted = retired_session_fixture(pool, api_key, assignment, retired_at, status: "interrupted")
+    recent_expiry = retired_session_fixture(pool, api_key, assignment, recent)
+
+    with_alias = retired_session_fixture(pool, api_key, assignment, retired_at)
+    alias_fixture(pool, api_key, with_alias, status: BridgeSessionAlias.active_status(), expires_at: DateTime.add(now, 60, :second), token: "retained-alias")
+
+    with_lease = retired_session_fixture(pool, api_key, assignment, retired_at)
+    lease_fixture(pool, api_key, assignment, with_lease, status: BridgeOwnerLease.active_status(), expires_at: DateTime.add(now, 60, :second), now: now)
+
+    with_turn = retired_session_fixture(pool, api_key, assignment, retired_at)
+    request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    turn_fixture(with_turn, request, retired_at, status: CodexTurn.in_progress_status())
+
+    assert {:ok, summary} = RuntimeCleanup.cleanup_expired(now)
+
+    for session <- [retired, retired_interrupted] do
+      assert %CodexSession{status: "closed", closed_at: ^now} = Repo.reload!(session)
+    end
+
+    assert summary.closed_retired_sessions == 2
+
+    for session <- [recent_expiry, with_alias, with_lease] do
+      assert Repo.reload!(session).status == "active"
+    end
+
+    assert Repo.reload!(with_turn).status == "active"
+  end
+
+  defp retired_session_fixture(pool, api_key, assignment, lease_expired_at, attrs \\ []) do
+    %CodexSession{
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      session_key: "retired-#{System.unique_integer([:positive])}",
+      pool_upstream_assignment_id: assignment.id,
+      status: Keyword.get(attrs, :status, "active"),
+      owner_instance_id: "runtime-cleanup-test",
+      owner_lease_token: Ecto.UUID.generate(),
+      owner_lease_expires_at: lease_expired_at,
+      last_heartbeat_at: lease_expired_at,
+      created_at: lease_expired_at,
+      updated_at: lease_expired_at
+    }
+    |> Repo.insert!()
   end
 
   defp owned_attempt(request, assignment, %Identity{} = owner, opts \\ []) do

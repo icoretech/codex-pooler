@@ -17,7 +17,9 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     IdempotencyKey
   }
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
@@ -236,12 +238,55 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
         )
         |> Repo.update_all(set: [status: expired_idempotency_status, updated_at: now])
 
+      {closed_retired_sessions, _} = close_retired_sessions!(now, active_alias_status, active_lease_status)
+
       %{
         expired_aliases: expired_aliases,
         expired_owner_leases: expired_leases,
-        expired_idempotency_keys: expired_idempotency_keys
+        expired_idempotency_keys: expired_idempotency_keys,
+        closed_retired_sessions: closed_retired_sessions
       }
     end)
+  end
+
+  # A session is closed only by a later start of the same key and session key
+  # (`ExpiredSessions.close_for_key!/4`, which is also what hands the findings#141
+  # assignment preference to the recreated session) or by an interruption of an
+  # active turn. When its idle owner releases the lease and the window is never
+  # used again, the row stayed reconnectable forever: counted as an active
+  # session and kept in the per-key unique index (findings#225, row 225-89).
+  #
+  # Retire it once nothing can resume it and the preference no longer points at
+  # anything warm: its lease expired longer ago than the expired-alias retention
+  # (the same Instance Setting that bounds how long its aliases resolve), no
+  # alias of it is still active, no lease row is active and no turn of it is in
+  # progress. A start that races this rereads the row under its own lock and
+  # either renews it first (the WHERE no longer matches) or finds it closed and
+  # recreates without a preference, exactly as after any other close.
+  defp close_retired_sessions!(now, active_alias_status, active_lease_status) do
+    cutoff = DateTime.add(now, -OperationalSettings.current().expired_alias_ttl_seconds, :second)
+    reconnectable = SessionStatus.reconnectable_statuses()
+    in_progress = CodexTurn.in_progress_status()
+
+    from(session in CodexSession, as: :session)
+    |> where(
+      [session],
+      session.status in ^reconnectable and
+        coalesce(session.owner_lease_expires_at, session.updated_at) <= ^cutoff and
+        not exists(
+          from alias_record in BridgeSessionAlias,
+            where: alias_record.codex_session_id == parent_as(:session).id and alias_record.status == ^active_alias_status
+        ) and
+        not exists(
+          from lease in BridgeOwnerLease,
+            where: lease.codex_session_id == parent_as(:session).id and lease.status == ^active_lease_status
+        ) and
+        not exists(
+          from turn in CodexTurn,
+            where: turn.codex_session_id == parent_as(:session).id and turn.status == ^in_progress
+        )
+    )
+    |> Repo.update_all(set: [status: SessionStatus.closed_status(), closed_at: now, updated_at: now])
   end
 
   defp recover_expired_owner_runtime_state(%DateTime{} = now) do
