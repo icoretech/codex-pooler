@@ -97,7 +97,7 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
   defp effective_binding?(_binding, _requested_model), do: false
 
   defp enforce_window_reservation_limits(api_key, policy, estimate, timestamp) do
-    timestamp = timestamp || enforcement_timestamp(policy)
+    timestamp = timestamp || enforcement_timestamp(api_key, policy)
 
     limits =
       [
@@ -132,18 +132,32 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
   # Called only after reservation authorization holds the per-key mutex and
   # reader lock. Admission time stays on the ledger; every enforcement window
   # instead shares this database clock, including committed mutex predecessors.
-  defp enforcement_timestamp(%{
+  # A predecessor stamped by a node whose clock runs ahead of the database is
+  # dated after that clock, and the windows exclude rows dated after their
+  # end, so the window end moves up to the key's latest future-dated recorded
+  # entry: a committed predecessor always counts, whatever the node clock skew
+  # (findings#206).
+  defp enforcement_timestamp(_api_key, %{
          max_requests_per_minute: nil,
          max_tokens_per_day: nil,
          max_tokens_per_week: nil
        }),
        do: DateTime.utc_now()
 
-  defp enforcement_timestamp(_policy) do
-    Repo.one!(
-      from fragment("SELECT clock_timestamp() AS as_of"),
-        select: type(fragment("as_of"), :utc_datetime_usec)
-    )
+  defp enforcement_timestamp(api_key, _policy) do
+    %{rows: [[as_of]]} =
+      Repo.query!(
+        """
+        SELECT greatest(clock.as_of, (
+          SELECT max(occurred_at) FROM public.ledger_entries
+          WHERE api_key_id = $1::uuid AND amount_status = 'recorded' AND occurred_at > clock.as_of
+        ))
+        FROM (SELECT clock_timestamp() AS as_of) AS clock
+        """,
+        [Ecto.UUID.dump!(api_key.id)]
+      )
+
+    as_of
   end
 
   defp enforce_request_token_limits(policy, estimate) do

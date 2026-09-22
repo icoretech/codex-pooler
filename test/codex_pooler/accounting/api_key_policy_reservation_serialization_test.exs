@@ -102,13 +102,42 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationSerializationTest do
     assert unboxed(fn -> recorded_reservations(fixture) end) == 1
   end
 
+  # Admission time is the dispatching node's clock while every enforcement
+  # window reads the database clock under the mutex. A predecessor admitted by
+  # a node whose clock runs ahead of the database is dated after the waiter's
+  # window end, and must still count against it (206-25): with the holder 500 ms
+  # ahead both reservations used to succeed on every limit.
+  for {label, policy, message} <- [
+        {"request", %{max_requests_per_minute: 1, max_tokens_per_day: 1_000, max_tokens_per_week: 10_000}, "max_requests_per_minute"},
+        {"daily token", %{max_requests_per_minute: 60, max_tokens_per_day: 512, max_tokens_per_week: 10_000}, "max_tokens_per_day"},
+        {"weekly token", %{max_requests_per_minute: 60, max_tokens_per_day: 10_000, max_tokens_per_week: 512}, "max_tokens_per_week"}
+      ] do
+    @policy policy
+    @message message
+
+    test "a predecessor dated ahead of the database clock still counts against the #{label} limit", context do
+      fixture = fixture(context, @policy)
+      holder_now = DateTime.add(DateTime.utc_now(), 500, :millisecond)
+
+      {winner, loser} = race(context, fixture, {fixture.model, fixture.model.exposed_model_id, %{now: holder_now}}, {fixture.model, fixture.model.exposed_model_id, %{}})
+
+      assert {:ok, _reserved} = winner
+      assert {:error, %{code: :api_key_policy_limit_exceeded} = error} = loser
+      assert error.message =~ @message
+      assert unboxed(fn -> recorded_reservations(fixture) end) == 1
+    end
+  end
+
   # The holder parks inside its reservation transaction after the advisory mutex
   # and the key's reader lock; the waiter must then be observed waiting on that
   # advisory lock, on its own backend, before the holder is released.
   defp race(context, fixture, requested_model) when is_binary(requested_model),
     do: race(context, fixture, {fixture.model, requested_model}, {fixture.model, requested_model})
 
-  defp race(context, fixture, {holder_model, holder_requested}, {waiter_model, waiter_requested}) do
+  defp race(context, fixture, {holder_model, holder_requested}, {waiter_model, waiter_requested}),
+    do: race(context, fixture, {holder_model, holder_requested, %{}}, {waiter_model, waiter_requested, %{}})
+
+  defp race(context, fixture, {holder_model, holder_requested, holder_opts}, {waiter_model, waiter_requested, waiter_opts}) do
     parent = self()
     release = make_ref()
 
@@ -116,7 +145,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationSerializationTest do
       actor(context, fn ->
         send(parent, {:holder_backend, backend_pid()})
         Process.put({Reservation, :runtime_authorization_barrier}, {parent, release, {:reserve, :after}})
-        reserve(fixture, holder_model, holder_requested)
+        reserve(fixture, holder_model, holder_requested, holder_opts)
       end)
 
     assert_receive {:runtime_authorization_barrier, ^release, :reserve, :after, holder}, @detection_budget
@@ -125,7 +154,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationSerializationTest do
     waiter_task =
       actor(context, fn ->
         send(parent, {:waiter_backend, backend_pid()})
-        reserve(fixture, waiter_model, waiter_requested)
+        reserve(fixture, waiter_model, waiter_requested, waiter_opts)
       end)
 
     assert_receive {:waiter_backend, waiter_backend}, @detection_budget
@@ -166,8 +195,8 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationSerializationTest do
     end)
   end
 
-  defp reserve(fixture, model, requested_model),
-    do: Accounting.reserve(fixture.auth, model, %{"model" => requested_model, "max_output_tokens" => 1}, %{correlation_id: Ecto.UUID.generate()})
+  defp reserve(fixture, model, requested_model, opts),
+    do: Accounting.reserve(fixture.auth, model, %{"model" => requested_model, "max_output_tokens" => 1}, Map.put(opts, :correlation_id, Ecto.UUID.generate()))
 
   defp recorded_reservations(fixture) do
     Repo.aggregate(
