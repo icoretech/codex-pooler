@@ -111,7 +111,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
       assert request.request_metadata["routing"]["model_serving_mode"] == "lite"
       assert Repo.get_by!(CodexTurn, request_id: request.id).first_visible_output_at
 
-      assert {:error, :stale_owner_cleanup} =
+      # The prior witness names an earlier request while this turn runs, so the
+      # owner-scoped interrupt stands down as superseded and leaves it alone.
+      assert {:error, :superseded_owner_cleanup} =
                Persistence.interrupt_codex_session(
                  put_in(snapshot.active_turn.cleanup_witness, prior_witness),
                  :owner_drained

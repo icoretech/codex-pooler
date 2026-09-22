@@ -139,7 +139,9 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanupPostgresTest do
 
     refute old_witness.request_id == before_cleanup.active.cleanup_witness.request_id
     send(delayed, :release_cleanup)
-    assert_receive {:cleanup_finished, ^delayed, {:error, :stale_owner_cleanup}}, @budget
+    # The next request of the session is running, so the old witness's cleanup
+    # stands down as superseded rather than as a stale cleanup.
+    assert_receive {:cleanup_finished, ^delayed, {:error, :superseded_owner_cleanup}}, @budget
     after_cleanup = call(source, :facts, [current])
     assert_live_binding(after_cleanup, current, source)
     assert before_cleanup.request == after_cleanup.request

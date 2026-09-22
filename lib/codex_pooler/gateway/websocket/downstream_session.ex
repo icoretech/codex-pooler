@@ -772,11 +772,23 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   defp log_interrupt_failure({:ok, _result}, _state), do: :ok
 
+  # A later turn of the session was already running, so the owner-scoped
+  # interrupt stood down on purpose (findings#225): routine, not a failure.
+  defp log_interrupt_failure({:error, :superseded_owner_cleanup}, state) do
+    Logger.info(
+      "websocket interrupt cleanup superseded " <>
+        "codex_session_id=#{codex_session_id(state)} " <>
+        "cleanup_path=owner_detach reason_code=replacement_turn_active"
+    )
+
+    :ok
+  end
+
   defp log_interrupt_failure({:error, reason}, state) do
     Logger.warning(
       "websocket interrupt cleanup failed " <>
         "codex_session_id=#{codex_session_id(state)} " <>
-        "failure_reason=#{failure_reason(reason)}"
+        "failure_reason=#{failure_reason(reason)} cleanup_path=owner_detach"
     )
 
     :ok

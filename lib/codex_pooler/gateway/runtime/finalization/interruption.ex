@@ -713,7 +713,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
            true <- opts.transport.websocket_owner.lease_token == witness.owner_lease_token,
            %DateTime{} = expiry <- session.owner_lease_expires_at,
            true <- DateTime.compare(expiry, now()) == :gt,
-           false <- replacement_turn_active?(session_id, witness.request_id),
+           {:replacement_turn_active, false} <- {:replacement_turn_active, replacement_turn_active?(session_id, witness.request_id)},
            %Request{} = snapshot <- Repo.get(Request, witness.request_id),
            %APIKey{} <- Access.lock_api_key_for_read(snapshot.api_key_id),
            %CodexTurn{} = turn <- exact_owner_turn(session_id, witness),
@@ -738,6 +738,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           turn_authority: @authority_selected
         })
       else
+        # A later turn of the session is already running, so the owner-scoped
+        # interrupt must not touch the session: the witnessed request, if it is
+        # still open, is left to its request-scoped settlement (findings#252),
+        # and a finished one needs nothing. Either way standing down is the
+        # intended outcome, not a stale cleanup, so it gets its own reason and
+        # the callers log it as routine rather than as a failure (findings#225).
+        {:replacement_turn_active, true} -> Repo.rollback(:superseded_owner_cleanup)
         _missing_or_stale -> Repo.rollback(:stale_owner_cleanup)
       end
     end)

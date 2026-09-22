@@ -203,13 +203,15 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
     finalize_turn(websocket_turn, "succeeded", nil)
     http_turn = active_turn_fixture(fixture, "http_sse")
 
-    log =
-      ExUnit.CaptureLog.capture_log(fn ->
-        assert :ok = DownstreamSession.cleanup(websocket_turn.state)
-      end)
+    # Standing down for a newer turn of the session is the intended outcome,
+    # so it is logged as routine, with its path and cause, and never as a
+    # cleanup failure (findings#225).
+    log = capture_info_log(fn -> assert :ok = DownstreamSession.cleanup(websocket_turn.state) end)
 
-    assert log =~ "websocket interrupt cleanup failed"
-    assert log =~ "failure_reason=stale_owner_cleanup"
+    refute log =~ "websocket interrupt cleanup failed"
+    refute log =~ "[warning]"
+    assert log =~ "[info] websocket interrupt cleanup superseded"
+    assert log =~ "codex_session_id=#{fixture.session.id} cleanup_path=owner_detach reason_code=replacement_turn_active"
 
     assert Repo.get!(CodexSession, fixture.session.id).status == "active"
     assert Repo.get!(CodexTurn, websocket_turn.turn.id).status == "succeeded"
@@ -383,5 +385,17 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
              fixture.owner_lease.lease_token
 
     assert Process.alive?(fixture.owner_pid)
+  end
+
+  defp capture_info_log(fun) do
+    previous_level = Logger.level()
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+    Logger.configure(level: :info)
+
+    try do
+      ExUnit.CaptureLog.capture_log([level: :info], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
   end
 end
