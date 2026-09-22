@@ -8,6 +8,7 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
   @lifecycle Path.expand("../../../dev_support/bin/dev-server-lifecycle", __DIR__)
   @manifest Path.expand("../../../dev_support/bin/qa-manifest", __DIR__)
   @phase Path.expand("../../../dev_support/bin/qa-phase", __DIR__)
+  @cancellation_budget_ms 15_000
 
   test "help describes the explicit lifecycle protocol without mutation" do
     {output, code} = System.cmd(@wrapper, ["--help"], stderr_to_stdout: true)
@@ -68,15 +69,27 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
     refute File.exists?(fixture.compose_down_marker)
   end
 
+  @tag slow: "the wrapper's cap is whole seconds, so the cancellation under test cannot fire before one second"
   test "the 20 minute cap starts before preparation rather than after QA_READY" do
     fixture = wrapper_fixture!(0, 0)
+    release = Path.join(fixture.root, "prepare-release")
+    wrapper = Task.async(fn -> run_wrapper(fixture, "QA_COMPLETE", [{"RELIABILITY_QA_TIMEOUT_SECONDS", "1"}, {"FIXTURE_PREPARE_BLOCK", "1"}]) end)
 
+    # The blocked preparation never completes on its own, so only the cap can
+    # end it; a slow runner delays the cancellation but cannot let preparation
+    # finish first. A cap that is deferred until preparation completes, or that
+    # starts after QA_READY, leaves the wrapper waiting until this budget ends.
     {output, code} =
-      run_wrapper(fixture, "QA_COMPLETE", [{"RELIABILITY_QA_TIMEOUT_SECONDS", "1"}, {"FIXTURE_PREPARE_BLOCK", "1"}])
+      case Task.yield(wrapper, @cancellation_budget_ms) do
+        {:ok, result} ->
+          result
+
+        nil ->
+          File.touch!(release)
+          flunk("the cap did not cancel the blocked preparation within #{@cancellation_budget_ms} ms; after the test released it the wrapper returned #{inspect(Task.await(wrapper, @cancellation_budget_ms))}")
+      end
 
     assert code == 124, output
-    # A deferred TERM trap would wait for preparation's fallback completion.
-    # Observe cancellation itself rather than imposing a runner-speed limit.
     refute File.exists?(Path.join(fixture.root, "prepare-completed"))
     refute output =~ "QA_READY"
     assert File.exists?(fixture.compose_down_marker)
@@ -274,11 +287,11 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
       if [[ " $* " == *" make "* ]]; then
         if [[ "${FIXTURE_PREPARE_BLOCK:-0}" == 1 ]]; then
           trap 'kill "$descendant" 2>/dev/null || true; wait "$descendant" 2>/dev/null || true; exit 143' TERM
-          sleep 4 &
+          # Completes only when the test releases it, never on its own.
+          (while [ ! -e prepare-release ]; do sleep 0.05; done) &
           descendant=$!
           printf '%s %s\n' "$$" "$descendant" > phase-pids
-          wait "$descendant"
-          : > prepare-completed
+          if wait "$descendant"; then : > prepare-completed; fi
           exit 99
         fi
         sleep #{prepare_sleep}
