@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Jobs
   alias CodexPooler.Jobs.UpstreamEnqueue
   alias CodexPooler.Upstreams.SavedResets.ProbeLease
@@ -49,18 +50,39 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
     callback.()
     |> consume_continuity_result(context)
   rescue
-    _exception in [DBConnection.ConnectionError, Ecto.QueryError, Postgrex.Error] ->
-      log_continuity_failure(context)
+    exception in [DBConnection.ConnectionError, Ecto.QueryError, Postgrex.Error] ->
+      log_continuity_failure(context, continuity_exception_code(exception))
   end
 
   defp consume_continuity_result(:ok, _context), do: :ok
   defp consume_continuity_result({:ok, _value}, _context), do: :ok
 
-  defp consume_continuity_result(_result, context), do: log_continuity_failure(context)
+  defp consume_continuity_result(result, context),
+    do: log_continuity_failure(context, continuity_failure_code(result))
 
-  defp log_continuity_failure(%SelectedCandidateContext{} = context) do
+  # The line names the failure with a bounded code, never the raw result: a
+  # fixed rollback reason (`stale_owner`, `owner_unavailable`,
+  # `continuity_deadlock`, ...) renders as itself through the websocket
+  # diagnostic sanitizer, anything else as a fixed class (findings#225, row
+  # 225-96: the production line gave no way to tell why it failed).
+  defp continuity_failure_code({:error, reason}) do
+    case DiagnosticTaxonomy.reason_code(reason) do
+      code when is_binary(code) -> code
+      nil -> "unclassified_error"
+    end
+  end
+
+  defp continuity_failure_code(_result), do: "unexpected_result"
+
+  defp continuity_exception_code(%DBConnection.ConnectionError{}), do: "database_connection_error"
+  defp continuity_exception_code(%Ecto.QueryError{}), do: "query_error"
+  defp continuity_exception_code(%Postgrex.Error{}), do: "database_error"
+
+  defp log_continuity_failure(%SelectedCandidateContext{} = context, reason_code) do
     Logger.warning(
-      "gateway continuity registration failed",
+      "gateway continuity registration failed " <>
+        "pool_upstream_assignment_id=#{context.assignment.id} " <>
+        "reason_code=#{reason_code}",
       continuity_registration_metadata(context)
     )
 
