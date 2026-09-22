@@ -12,6 +12,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   import Ecto.Query
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.CodexCompactionSmokeFixture.{Journal, Provisioner}
@@ -366,6 +367,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   end
 
   defp cleanup(paths, journal) do
+    close_run_replays(journal)
     Provisioner.cleanup!(journal)
     cancel_pending_reconciliation(journal)
     require_postconditions(journal)
@@ -375,6 +377,19 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   rescue
     _exception -> {:error, "fixture cleanup incomplete; metadata journal retained"}
   end
+
+  # A pre-visible replay the released client never redeemed leaves its armed
+  # entitlement and `in_progress` turn behind, and the isolated runtime runs no
+  # Oban to expire it (findings#232, row 232-101). Close the run key's open
+  # entitlements through the lifecycle an API key deletion uses, which settles
+  # the request, turn and reservation, before the postconditions check them.
+  defp close_run_replays(%{"api_key_id" => api_key_id}) when is_binary(api_key_id) do
+    api_key_id
+    |> Accounting.request_replay_ids_for_api_key()
+    |> Enum.each(fn request_id -> {:ok, _closed_or_noop} = Accounting.close_request_replay(request_id, :deleted) end)
+  end
+
+  defp close_run_replays(_journal), do: :ok
 
   defp cancel_pending_reconciliation(%{
          "pool_id" => pool_id,

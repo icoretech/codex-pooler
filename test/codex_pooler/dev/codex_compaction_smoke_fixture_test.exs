@@ -2,13 +2,19 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountsFixtures
+  import CodexPooler.PoolerFixtures, only: [attempt_fixture: 3, ledger_entry_fixture: 2, request_fixture: 2]
 
+  alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.{LedgerEntry, Request, RequestReplay, RequestReplayEntitlement}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.CodexCompactionSmokeFixture
   alias CodexPooler.Dev.CodexCompactionSmokeFixture.Journal
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.{CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
+  alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Pools.{ModelServingOverride, Pool}
   alias CodexPooler.Repo
@@ -166,6 +172,35 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     refute File.exists?(Journal.paths(context.root, context.run_id).root)
     assert Repo.get!(Pool, foreign.pool_id).status == "active"
     assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(foreign_options)
+  end
+
+  # findings#232, row 232-101: a run whose released client never redeems a
+  # pre-visible replay leaves the armed entitlement and its `in_progress`
+  # turn; the isolated runtime runs no Oban, so nothing ever expires it.
+  @tag :unix_integration
+  test "release settles an unredeemed armed replay of the run key before its postconditions",
+       context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    paths = Journal.paths(context.root, context.run_id)
+    assert {:ok, secret} = Journal.read_secret(paths, context.run_id)
+    armed = arm_run_replay!(secret, acquired)
+
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+
+    assert %RequestReplayEntitlement{status: "revoked", closed_at: %DateTime{}} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: armed.request.id)
+
+    assert %Request{status: "failed", last_error_code: "websocket_replay_revoked"} =
+             Repo.get!(Request, armed.request.id)
+
+    assert %CodexTurn{status: status} = Repo.get!(CodexTurn, armed.turn.id)
+    refute status == "in_progress"
+
+    assert Repo.all(from(entry in LedgerEntry, where: entry.request_id == ^armed.request.id, select: entry.entry_kind))
+           |> Enum.frequencies() == %{"reservation" => 1, "settlement" => 1, "release" => 1}
+
+    refute File.exists?(paths.root)
   end
 
   @tag :unix_integration
@@ -482,6 +517,82 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     instructions? = is_binary(model["base_instructions"]) or is_binary(get_in(model, ["model_messages", "instructions_template"]))
 
     if instructions?, do: field_violations, else: field_violations ++ ["base_instructions"]
+  end
+
+  # The run key's websocket turn as the owner leaves it after a pre-visible
+  # disconnect: reserved, its generation-zero attempt failed retryable
+  # `client_disconnected`, and the replay armed through the product path.
+  defp arm_run_replay!(secret, acquired) do
+    assert {:ok, auth} = Access.authenticate_api_key(secret["api_key"])
+    model = Repo.get_by!(Model, pool_id: secret["pool_id"])
+    assignment = Repo.get!(PoolUpstreamAssignment, acquired.assignment_id)
+
+    assert {:ok, session} =
+             Websocket.start_codex_session(auth, %{accepted_turn_state: Ecto.UUID.generate()})
+
+    request =
+      request_fixture(auth, %{
+        model_id: model.id,
+        requested_model: model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil
+      })
+
+    semantic_digest = :crypto.strong_rand_bytes(32)
+
+    request_options =
+      RequestOptions.for_websocket(%{})
+      |> RequestOptions.put_continuity(semantic_turn_key: semantic_digest)
+
+    assert {:ok, turn} = SessionContinuity.start_codex_turn(session, request, request_options)
+
+    attempt =
+      request
+      |> attempt_fixture(assignment, %{status: "in_progress", completed_at: nil, upstream_status_code: nil, usage_status: "usage_pending"})
+      |> Ecto.Changeset.change(%{model_id: model.id})
+      |> Repo.update!()
+
+    request
+    |> ledger_entry_fixture(%{
+      entry_kind: "reservation",
+      amount_status: "recorded",
+      usage_status: "usage_pending",
+      attempt_id: nil,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      model_id: model.id
+    })
+    |> Ecto.Changeset.change(%{source_event_id: "request:#{request.id}:reservation"})
+    |> Repo.update!()
+
+    session = Repo.reload!(session)
+
+    assert {:ok, _armed} =
+             RequestReplay.arm(%{
+               api_key_id: auth.api_key.id,
+               pool_id: auth.pool.id,
+               codex_session_id: session.id,
+               request_id: request.id,
+               codex_turn_id: turn.id,
+               eligible_attempt_id: attempt.id,
+               api_key_runtime_epoch: auth.api_key.runtime_revocation_epoch,
+               model_id: model.id,
+               model_identifier: model.exposed_model_id,
+               endpoint: request.endpoint,
+               semantic_turn_digest: semantic_digest,
+               replay_claim_digest: :crypto.strong_rand_bytes(32),
+               owner_instance_id: session.owner_instance_id,
+               owner_lease_token: session.owner_lease_token,
+               predecessor_epoch: 1,
+               failure_reason: :client_disconnected,
+               pre_visible_output: true
+             })
+
+    assert %CodexTurn{status: "in_progress"} = Repo.get!(CodexTurn, turn.id)
+    %{request: request, turn: turn}
   end
 
   defp fixture_options(context) do
