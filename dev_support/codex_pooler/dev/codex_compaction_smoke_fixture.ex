@@ -1,6 +1,12 @@
 defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   @moduledoc """
   Run-scoped local fixture for released Codex same-turn automatic compaction.
+
+  `serving-override --mode full|lite|auto` writes or clears the run model's
+  Pool serving override through the product write path
+  (`Pools.update_model_serving_modes/4`, owner scope, snapshot revision), the
+  same path the operator Pools page uses, and journals the written row id so
+  `release` drops exactly that row. `auto` removes the override.
   """
 
   import Ecto.Query
@@ -27,7 +33,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
              upstream_base_url: :string,
              serving_mode: :string,
              upstream_frame_count: :integer,
-             duplicate_error_count: :integer
+             duplicate_error_count: :integer,
+             mode: :string
            ]
          ) do
       {options, ["acquire"], []} ->
@@ -45,9 +52,11 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       {options, ["cache-receipt"], []} ->
         validate_args(:cache_receipt, options)
 
+      {options, ["serving-override"], []} ->
+        validate_args(:serving_override, options)
+
       _invalid ->
-        {:error,
-         "use acquire --run-id RUN_ID --upstream-base-url ORIGIN [--serving-mode full|lite], status/release --run-id RUN_ID, receipt --run-id RUN_ID --upstream-frame-count N --duplicate-error-count N, or cache-receipt --run-id RUN_ID"}
+        {:error, "use acquire --run-id RUN_ID --upstream-base-url ORIGIN [--serving-mode full|lite], status/release --run-id RUN_ID, receipt --run-id RUN_ID --upstream-frame-count N --duplicate-error-count N, cache-receipt --run-id RUN_ID, or serving-override --run-id RUN_ID --mode full|lite|auto"}
     end
   end
 
@@ -91,6 +100,34 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
         {:error, _reason} -> {:error, "fixture journal is unsafe or invalid"}
       end
     end
+  end
+
+  @doc """
+  Writes (`full`, `lite`) or clears (`auto`) the Pool serving override of the
+  run model through `Pools.update_model_serving_modes/4` and journals the
+  written row id, so `release/1` drops exactly that row.
+  """
+  @spec serving_override(options()) :: {:ok, map()} | {:error, String.t()}
+  def serving_override(options) do
+    with :ok <- validate_environment(options),
+         {:ok, run_id} <- fetch_run_id(options),
+         {:ok, mode} <- fetch_override_mode(options),
+         {:ok, journal} <- read_ready_journal(options, run_id) do
+      paths = paths(options, run_id)
+      override_id = Provisioner.set_serving_override!(journal, mode)
+      :ok = Journal.write_journal(paths, Journal.put_serving_override(journal, override_id))
+
+      {:ok,
+       %{
+         status: "ready",
+         run_id: run_id,
+         model: Provisioner.model(),
+         serving_mode: mode,
+         serving_override_id: override_id
+       }}
+    end
+  rescue
+    _exception -> {:error, "fixture serving override failed"}
   end
 
   @spec receipt(options()) :: {:ok, map()} | {:error, String.t()}
@@ -138,8 +175,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
          turn_sequences: Enum.map(turns, &elem(&1, 2)),
          upstream_frame_count: Keyword.fetch!(options, :upstream_frame_count),
          duplicate_error_count: Keyword.fetch!(options, :duplicate_error_count),
-         logical_turn_fingerprints:
-           turns |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> Enum.map(&fingerprint/1),
+         logical_turn_fingerprints: turns |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> Enum.map(&fingerprint/1),
          request_fingerprints: Enum.map(correlations, &fingerprint/1)
        }}
     end
@@ -242,8 +278,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       # 0 means it was present and zero. Never coalesce one into the other.
       ledger_input_tokens: settlement && settlement.input_tokens,
       ledger_cached_input_tokens: settlement && settlement.cached_input_tokens,
-      ledger_cached_input_tokens_present:
-        not is_nil(settlement) and not is_nil(settlement.cached_input_tokens),
+      ledger_cached_input_tokens_present: not is_nil(settlement) and not is_nil(settlement.cached_input_tokens),
       ledger_output_tokens: settlement && settlement.output_tokens,
       ledger_total_tokens: settlement && settlement.total_tokens,
       settlement_present: not is_nil(settlement)
@@ -434,10 +469,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   defp identity_secret_active?(nil), do: false
 
   defp identity_secret_active?(identity_id),
-    do:
-      Repo.exists?(
-        from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity_id
-      )
+    do: Repo.exists?(from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity_id)
 
   defp serving_override_active?(nil), do: false
 
@@ -514,6 +546,13 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       else: {:error, "cache-receipt accepts only --run-id"}
   end
 
+  defp exact_option_keys(:serving_override, options) do
+    if Enum.sort(Keyword.keys(options)) == [:mode, :run_id] and
+         match?({:ok, _mode}, fetch_override_mode(options)),
+       do: :ok,
+       else: {:error, "serving-override requires --run-id and --mode full|lite|auto"}
+  end
+
   defp exact_option_keys(:receipt, options) do
     expected = [:duplicate_error_count, :run_id, :upstream_frame_count]
 
@@ -543,6 +582,13 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       {:ok, %{"state" => "ready"} = journal} -> {:ok, journal}
       {:ok, _journal} -> {:error, "fixture is not ready"}
       {:error, _reason} -> {:error, "fixture journal is unsafe or invalid"}
+    end
+  end
+
+  defp fetch_override_mode(options) do
+    case Keyword.get(options, :mode) do
+      mode when mode in ["full", "lite", "auto"] -> {:ok, mode}
+      _other -> {:error, "serving override mode must be full, lite, or auto"}
     end
   end
 

@@ -9,7 +9,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.CodexCompactionSmokeFixture.Journal
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, BridgeSessionAlias, CodexSession}
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Pools.{ModelServingOverride, Pool}
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows
@@ -73,11 +73,30 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
     provisioned
   end
 
+  @doc """
+  Writes (`full`, `lite`) or clears (`auto`) the run model's serving override
+  through the product write path and returns the written row id, or `nil` once
+  cleared.
+  """
+  @spec set_serving_override!(map(), String.t()) :: String.t() | nil
+  def set_serving_override!(%{"pool_id" => pool_id}, mode)
+      when is_binary(pool_id) and mode in ["full", "lite", "auto"] do
+    scope = owner_scope!()
+    {:ok, %{overrides: overrides}} = update_serving_mode(scope, pool_id, @model, mode)
+
+    case {mode, Enum.find(overrides, &(&1.exposed_model_id == @model))} do
+      {"auto", nil} -> nil
+      {mode, %ModelServingOverride{id: id, mode: mode}} when mode != "auto" -> id
+      _unexpected -> raise "serving override was not written as requested"
+    end
+  end
+
   @spec cleanup!(map()) :: :ok
   def cleanup!(journal) do
     scope = owner_scope!()
     pool_id = journal["pool_id"]
 
+    drop_serving_override(scope, pool_id, Map.get(journal, "serving_override_id"))
     revoke_key(scope, Map.get(journal, "api_key_id"))
     retire_model(journal["model_id"])
     delete_assignment(pool_id, journal["assignment_id"])
@@ -244,6 +263,31 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
     {:ok, _windows} = Windows.upsert_quota_windows(identity, windows)
   end
 
+  defp update_serving_mode(scope, pool_id, model, mode) do
+    {:ok, %{revision: revision}} = Pools.model_serving_modes_snapshot(scope, pool_id)
+    Pools.update_model_serving_modes(scope, pool_id, [%{exposed_model_id: model, mode: mode}], revision)
+  end
+
+  # Drops exactly the journalled row, through the product, and only while it
+  # still belongs to the run Pool. Any other override row is left in place, so
+  # the release postcondition reports it instead of hiding it.
+  defp drop_serving_override(_scope, _pool_id, nil), do: :ok
+
+  defp drop_serving_override(scope, pool_id, override_id) do
+    case Repo.get(ModelServingOverride, override_id) do
+      nil ->
+        :ok
+
+      %ModelServingOverride{pool_id: ^pool_id, exposed_model_id: model} ->
+        {:ok, %{overrides: overrides}} = update_serving_mode(scope, pool_id, model, "auto")
+        if Enum.any?(overrides, &(&1.id == override_id)), do: raise("serving override was not dropped")
+        :ok
+
+      %ModelServingOverride{} ->
+        raise "journalled serving override is not run-owned"
+    end
+  end
+
   defp revoke_key(_scope, nil), do: :ok
 
   defp revoke_key(scope, key_id) do
@@ -292,9 +336,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
   defp disable_identity(nil), do: :ok
 
   defp disable_identity(identity_id) do
-    Repo.delete_all(
-      from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity_id
-    )
+    Repo.delete_all(from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity_id)
 
     case Repo.get(UpstreamIdentity, identity_id) do
       nil ->
@@ -312,9 +354,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
 
   defp expire_continuity(pool_id) do
     session_ids =
-      Repo.all(
-        from session in CodexSession, where: session.pool_id == ^pool_id, select: session.id
-      )
+      Repo.all(from session in CodexSession, where: session.pool_id == ^pool_id, select: session.id)
 
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 

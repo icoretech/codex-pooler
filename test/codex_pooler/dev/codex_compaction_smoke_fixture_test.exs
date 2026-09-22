@@ -4,12 +4,13 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
   import CodexPooler.AccountsFixtures
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.CodexCompactionSmokeFixture
   alias CodexPooler.Dev.CodexCompactionSmokeFixture.Journal
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
   alias CodexPooler.Jobs.AccountReconciliationWorker
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Pools.{ModelServingOverride, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -260,6 +261,66 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert Application.get_env(:codex_pooler, Repo) == repo
   end
 
+  @tag :unix_integration
+  test "serving override writes through the product and release drops the journalled row", context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    paths = Journal.paths(context.root, context.run_id)
+
+    assert {:ok, full} = CodexCompactionSmokeFixture.serving_override(Keyword.put(options, :mode, "full"))
+    assert %{status: "ready", run_id: run_id, model: "gpt-5.5", serving_mode: "full", serving_override_id: override_id} = full
+    assert run_id == context.run_id
+
+    assert %ModelServingOverride{pool_id: pool_id, exposed_model_id: "gpt-5.5", mode: "full"} =
+             Repo.get(ModelServingOverride, override_id)
+
+    assert pool_id == acquired.pool_id
+    assert {:ok, %{"serving_override_id" => ^override_id, "state" => "ready"}} = Journal.read_journal(paths, context.run_id)
+
+    # The product write path records the operator audit event a raw insert never would.
+    assert Repo.exists?(from event in AuditEvent, where: event.pool_id == ^pool_id and event.action == "pool.model_serving_modes_update")
+
+    assert {:ok, %{serving_mode: "lite", serving_override_id: ^override_id}} =
+             CodexCompactionSmokeFixture.serving_override(Keyword.put(options, :mode, "lite"))
+
+    assert %ModelServingOverride{mode: "lite"} = Repo.get(ModelServingOverride, override_id)
+
+    assert {:ok, %{serving_mode: "auto", serving_override_id: nil}} =
+             CodexCompactionSmokeFixture.serving_override(Keyword.put(options, :mode, "auto"))
+
+    refute Repo.get(ModelServingOverride, override_id)
+    assert {:ok, %{"serving_override_id" => nil}} = Journal.read_journal(paths, context.run_id)
+
+    assert {:ok, %{serving_override_id: reacquired_id}} =
+             CodexCompactionSmokeFixture.serving_override(Keyword.put(options, :mode, "full"))
+
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+    refute Repo.get(ModelServingOverride, reacquired_id)
+    assert %Pool{status: "archived"} = Repo.get(Pool, pool_id)
+    refute File.exists?(paths.root)
+  end
+
+  @tag :unix_integration
+  test "release refuses an override row the journal does not own", context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    now = DateTime.utc_now()
+
+    Repo.insert_all(ModelServingOverride, [
+      %{pool_id: acquired.pool_id, exposed_model_id: "gpt-5.5", mode: "full", created_at: now, updated_at: now}
+    ])
+
+    assert {:error, "fixture cleanup incomplete; metadata journal retained"} = CodexCompactionSmokeFixture.release(options)
+    assert Repo.exists?(from override in ModelServingOverride, where: override.pool_id == ^acquired.pool_id)
+    Repo.delete_all(from override in ModelServingOverride, where: override.pool_id == ^acquired.pool_id)
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+  end
+
+  test "serving override requires a ready journal", context do
+    assert {:error, "fixture journal is unsafe or invalid"} =
+             CodexCompactionSmokeFixture.serving_override(Keyword.put(fixture_options(context), :mode, "full"))
+  end
+
   test "argument parser accepts only exact acquire/status/release forms", context do
     assert {:ok, :acquire, options} =
              CodexCompactionSmokeFixture.parse_args([
@@ -293,6 +354,22 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert receipt_options[:duplicate_error_count] == 0
 
     assert {:error, _} = CodexCompactionSmokeFixture.parse_args(["status"])
+
+    for mode <- ["full", "lite", "auto"] do
+      assert {:ok, :serving_override, override_options} =
+               CodexCompactionSmokeFixture.parse_args(["serving-override", "--run-id", context.run_id, "--mode", mode])
+
+      assert override_options[:mode] == mode
+    end
+
+    for invalid <- [
+          ["serving-override", "--run-id", context.run_id],
+          ["serving-override", "--run-id", context.run_id, "--mode", "default"],
+          ["serving-override", "--run-id", context.run_id, "--mode", "full", "--upstream-base-url", "http://127.0.0.1:4567"],
+          ["status", "--run-id", context.run_id, "--mode", "full"]
+        ] do
+      assert {:error, _} = CodexCompactionSmokeFixture.parse_args(invalid)
+    end
 
     assert {:error, _} =
              CodexCompactionSmokeFixture.parse_args([

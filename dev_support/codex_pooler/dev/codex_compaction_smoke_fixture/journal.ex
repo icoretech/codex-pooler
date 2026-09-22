@@ -3,6 +3,9 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Journal do
 
   @max_file_bytes 65_536
   @journal_keys ~w(version run_id state pool_id identity_id assignment_id model_id api_key_id)
+  # A journal written before the serving-override action existed has no such
+  # key; both shapes stay readable so an older retained journal still releases.
+  @serving_override_key "serving_override_id"
   @secret_keys ~w(version run_id api_key api_key_id pool_id model)
 
   @type paths :: %{root: String.t(), journal: String.t(), secret: String.t()}
@@ -37,6 +40,10 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Journal do
       when kind in [:pool, :identity, :assignment, :model, :api_key] and is_binary(id) do
     Map.put(journal, "#{kind}_id", id)
   end
+
+  @spec put_serving_override(map(), String.t() | nil) :: map()
+  def put_serving_override(journal, override_id) when is_nil(override_id) or is_binary(override_id),
+    do: Map.put(journal, @serving_override_key, override_id)
 
   @spec ready(map()) :: map()
   def ready(journal), do: Map.put(journal, "state", "ready")
@@ -194,13 +201,14 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Journal do
 
   defp validate_schema(:journal, value) do
     valid_ids? =
-      Enum.all?(~w(pool_id identity_id assignment_id model_id api_key_id), fn key ->
+      Enum.all?(~w(pool_id identity_id assignment_id model_id api_key_id serving_override_id), fn key ->
         is_nil(value[key]) or is_binary(value[key])
       end)
 
     valid_states = ~w(preparing prepared ready)
+    keys = value |> Map.keys() |> List.delete(@serving_override_key) |> Enum.sort()
 
-    if Enum.sort(Map.keys(value)) == Enum.sort(@journal_keys) and value["version"] == 1 and
+    if keys == Enum.sort(@journal_keys) and value["version"] == 1 and
          value["state"] in valid_states and valid_ids?,
        do: :ok,
        else: {:error, :schema}
