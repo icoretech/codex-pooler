@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   @moduledoc false
 
+  require Logger
+
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
@@ -467,29 +469,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
          %{normalized_compaction_item: item}
        )
        when is_map(item) do
-    digest = NativeCodexTurnMetadata.compaction_item_digest(item)
+    case compact_confirmation_provenance(request_options) do
+      {:ok, topology, lifecycle} ->
+        acknowledge_native_compact_confirmation(request_options, metadata, item, topology, lifecycle)
 
-    binding = %NativeCompactionAdmission.Binding{
-      semantic_turn_key: metadata.semantic_turn_key,
-      window_digest: metadata.window_id_digest,
-      context_digest: metadata.context_window_id_digest,
-      window_number: metadata.window_number,
-      compaction_item_digest: digest,
-      previous_response_digest: previous_response_digest(request_options),
-      serving_mode: serving_mode(request_options),
-      topology: compact_confirmation_topology(request_options),
-      lifecycle_id: compact_confirmation_lifecycle(request_options).lifecycle_id,
-      generation: compact_confirmation_lifecycle(request_options).generation
-    }
-
-    case RequestOptions.acknowledge_native_compact_finalization(
-           request_options,
-           digest,
-           binding,
-           System.system_time(:millisecond) + @compact_reservation_ttl_ms
-         ) do
-      :ok -> :ok
-      {:error, _reason} -> {:error, compact_ack_error()}
+      {:error, reason} ->
+        log_compact_confirmation_refusal(request_options, reason)
+        {:error, compact_ack_error()}
     end
   end
 
@@ -521,19 +507,94 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     end
   end
 
-  defp compact_confirmation_lifecycle(%RequestOptions{} = request_options) do
-    case RequestOptions.native_compaction_admission(request_options) do
-      {:ok, _capability, _owner, lifecycle} -> lifecycle
-      :none -> request_options.first_compact_collection.binding
+  defp acknowledge_native_compact_confirmation(request_options, metadata, item, topology, lifecycle) do
+    digest = NativeCodexTurnMetadata.compaction_item_digest(item)
+
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: metadata.semantic_turn_key,
+      window_digest: metadata.window_id_digest,
+      context_digest: metadata.context_window_id_digest,
+      window_number: metadata.window_number,
+      compaction_item_digest: digest,
+      previous_response_digest: previous_response_digest(request_options),
+      serving_mode: serving_mode(request_options),
+      topology: topology,
+      lifecycle_id: lifecycle.lifecycle_id,
+      generation: lifecycle.generation
+    }
+
+    case RequestOptions.acknowledge_native_compact_finalization(
+           request_options,
+           digest,
+           binding,
+           System.system_time(:millisecond) + @compact_reservation_ttl_ms
+         ) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, compact_ack_error()}
     end
   end
 
-  defp compact_confirmation_topology(%RequestOptions{} = request_options) do
+  # The confirmation binding is only authorized against provenance the request
+  # itself carries: the admission capability the socket reserved, or the
+  # first-compact collection this finalizer just collected. An incremental
+  # compaction whose owner reservation answered `:owner_unavailable` reaches
+  # this point with neither, and `RequestOptions.acknowledge_native_compact_finalization/4`
+  # would answer `:owner_unavailable` for exactly that shape, so the
+  # confirmation fails closed with its own reason instead of dereferencing an
+  # absent provenance (findings#257).
+  defp compact_confirmation_provenance(%RequestOptions{} = request_options) do
     case RequestOptions.native_compaction_admission(request_options) do
-      {:ok, capability, _owner, _lifecycle} -> capability.binding.topology
-      :none -> request_options.first_compact_collection.binding.topology
+      {:ok, capability, _owner, lifecycle} -> {:ok, capability.binding.topology, lifecycle}
+      _no_usable_admission -> first_compact_confirmation_provenance(request_options)
     end
   end
+
+  defp first_compact_confirmation_provenance(%RequestOptions{
+         first_compact_collection: %NativeCompactionAdmission.FirstCompactCollection{
+           binding: %NativeCompactionAdmission.Binding{} = binding
+         }
+       }),
+       do: {:ok, binding.topology, binding}
+
+  # Which provenance is missing is the whole diagnosis, so the reason keeps them
+  # apart: nothing was ever reserved, or an admission is carried and no longer
+  # unwraps into a usable capability.
+  defp first_compact_confirmation_provenance(%RequestOptions{native_compaction_admission: nil}),
+    do: {:error, :missing_confirmation_provenance}
+
+  defp first_compact_confirmation_provenance(%RequestOptions{}),
+    do: {:error, :unusable_admission_provenance}
+
+  # A refused confirmation settles the upstream turn as it really ended and
+  # refuses only the compaction acknowledgement, so the reason survives nowhere
+  # else: keep it in one bounded line instead of losing which provenance was
+  # missing.
+  defp log_compact_confirmation_refusal(%RequestOptions{} = request_options, reason) do
+    Logger.warning(fn ->
+      "native compact confirmation refused " <>
+        "reason=#{DiagnosticTaxonomy.identifier(reason) || "unknown"} " <>
+        "code=#{compact_ack_error().code} " <>
+        "status=#{compact_ack_error().status} " <>
+        "compaction_input_mode=#{compact_confirmation_input_mode(request_options)} " <>
+        "serving_mode=#{serving_mode(request_options)} " <>
+        "correlation_id=#{DiagnosticTaxonomy.safe_correlator(RequestOptions.websocket_request_correlation_id(request_options))} " <>
+        "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(compact_confirmation_session_id(request_options))}"
+    end)
+
+    :ok
+  end
+
+  defp compact_confirmation_input_mode(%RequestOptions{payload_context: %{compaction_input_mode: mode}})
+       when mode in [:incremental, :full_history],
+       do: mode
+
+  defp compact_confirmation_input_mode(%RequestOptions{}), do: "unknown"
+
+  defp compact_confirmation_session_id(%RequestOptions{continuity: %{codex_session: %{id: id}}})
+       when is_binary(id),
+       do: id
+
+  defp compact_confirmation_session_id(%RequestOptions{}), do: "none"
 
   defp previous_response_digest(%RequestOptions{continuity: %{previous_response_id: value}})
        when is_binary(value),

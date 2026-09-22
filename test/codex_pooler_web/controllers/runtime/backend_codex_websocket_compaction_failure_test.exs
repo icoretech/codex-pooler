@@ -961,6 +961,134 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     refute persisted =~ "malformed-optional-turn-id"
   end
 
+  test "anchored compact confirmation without owner provenance refuses instead of crashing" do
+    anchor = "resp_confirmation_provenance_anchor"
+
+    upstream =
+      start_upstream(
+        # Strict finite scenario: the lineage turn carries no native turn
+        # metadata, so nothing arms the owner, and the anchored compact that
+        # follows is the only other send.
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["previous_response_id"]
+            ],
+            respond: completed_websocket_frames(anchor)
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "previous_response_id" => anchor}
+            ],
+            respond: successful_compaction_frames("confirmation_provenance")
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %{codex_session: session, upstream_websocket_session: owner}} =
+             Websocket.prepare_websocket_session(auth)
+
+    options =
+      Websocket.websocket_response_options(
+        %{request_id: "compact-confirmation-provenance"},
+        session,
+        owner,
+        true
+      )
+
+    assert :ok =
+             Service.execute_websocket_response(
+               auth,
+               ordinary_payload(setup, anchor),
+               options,
+               fn _frame -> :ok end
+             )
+
+    # Nothing armed the owner, so a real socket reservation answers
+    # :owner_unavailable and the incremental compact runs with neither an
+    # admission capability nor a first-compact collection: the production shape
+    # that crashed the websocket response task in findings#257.
+    assert {:error, :owner_unavailable} =
+             UpstreamWebsocketSession.compaction_reservation_snapshot(owner)
+
+    payload = compact_payload(setup, anchor)
+
+    assert {:ok, %NativeCodexTurnMetadata{request_kind: :compaction} = metadata} =
+             NativeCodexTurnMetadata.parse(CodexPooler.JSON.decode!(payload), session.id)
+
+    compact_options =
+      RequestOptions.put_payload_context(options, native_codex_turn_metadata: metadata)
+
+    assert RequestOptions.native_compaction_admission(compact_options) == :none
+    assert is_nil(compact_options.first_compact_collection)
+
+    {result, log} =
+      with_log([level: :warning], fn ->
+        Service.execute_websocket_response(auth, payload, compact_options, fn frame ->
+          send(self(), {:unexpected_native_frame, frame})
+        end)
+      end)
+
+    assert {:error,
+            %{
+              status: 502,
+              code: "invalid_compaction_response",
+              message: "upstream compact stream was invalid"
+            }} = result
+
+    refute_received {:unexpected_native_frame, _frame}
+    assert log =~ "native compact confirmation refused"
+    assert log =~ "reason=missing_confirmation_provenance"
+    assert log =~ "compaction_input_mode=incremental"
+    refute log =~ "BadMapError"
+
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert FakeUpstream.count(upstream) == 2
+    assert FakeUpstream.http_request_count(upstream) == 0
+
+    compact_request =
+      Repo.one!(
+        from(request in Request,
+          where:
+            request.pool_id == ^setup.pool.id and
+              request.endpoint == "/backend-api/codex/responses/compact"
+        )
+      )
+
+    # The upstream compact turn really did run and settle, so the refusal is
+    # client-visible only: it must never rewrite the settled accounting rows.
+    assert compact_request.status == "succeeded"
+    assert compact_request.retry_count == 0
+
+    assert [compact_attempt] =
+             Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_request.id))
+
+    assert compact_attempt.status == "succeeded"
+
+    assert [compact_turn] =
+             Repo.all(from(turn in CodexTurn, where: turn.request_id == ^compact_request.id))
+
+    assert compact_turn.status == "succeeded"
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+  end
+
   defp assert_diagnostics(metadata, {upstream_code, event_type, error_param}) do
     assert Map.get(metadata, "upstream_error_code") == upstream_code
     assert Map.get(metadata, "stream_terminal_type") == event_type
