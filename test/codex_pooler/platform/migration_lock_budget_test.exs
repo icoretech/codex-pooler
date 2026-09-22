@@ -188,6 +188,117 @@ defmodule CodexPooler.Release.MigrationLockBudgetTest do
     await_holder_released!(holder)
   end
 
+  # findings#255 row 255-61: the watcher's cancel must land only on the wait it sampled. A waiter
+  # session stands in for the migration backend: it waits for a table lock, then (once the holder
+  # releases) runs its next statement, which a late unconditional cancel would interrupt.
+  test "a cancel for a wait that already ended leaves the backend's next statement alone", context do
+    %{holder: holder} = hold!(context.holder_name, ["LOCK TABLE #{context.table} IN SHARE MODE"])
+    %{waiter: waiter, pid: waiter_pid} = wait_then_sleep!(context.table)
+    sampled = sampled_wait!(waiter_pid)
+
+    send(holder, :release)
+    await_holder_released!(holder)
+    assert_receive {:lock_acquired, ^waiter}, @holder_budget_ms
+
+    with_watch_conn(fn conn ->
+      assert MigrationLockBudget.cancel_if_still_waiting(conn, waiter_pid, sampled) == :not_waiting
+    end)
+
+    assert_receive {:next_statement, ^waiter, :completed}, @holder_budget_ms
+  end
+
+  test "a cancel for the wait still in progress interrupts it", context do
+    %{holder: holder} = hold!(context.holder_name, ["LOCK TABLE #{context.table} IN SHARE MODE"])
+    %{waiter: waiter, pid: waiter_pid} = wait_then_sleep!(context.table)
+    sampled = sampled_wait!(waiter_pid)
+
+    with_watch_conn(fn conn ->
+      assert MigrationLockBudget.cancel_if_still_waiting(conn, waiter_pid, %{sampled | waitstart: "2000-01-01 00:00:00+00"}) == :not_waiting
+      assert MigrationLockBudget.cancel_if_still_waiting(conn, waiter_pid, sampled) == :canceled
+    end)
+
+    assert_receive {:lock_result, ^waiter, :query_canceled}, @holder_budget_ms
+    send(holder, :release)
+    await_holder_released!(holder)
+  end
+
+  # A session that waits for an EXCLUSIVE lock on `table`, reports whether the wait ended in a
+  # cancel, and after acquiring it runs one more statement (a short sleep) and reports how that
+  # statement ended.
+  defp wait_then_sleep!(table) do
+    test = self()
+    {:ok, conn} = Postgrex.start_link(connect_options("migration_lock_budget_waiter"))
+    Process.unlink(conn)
+    on_exit(fn -> if Process.alive?(conn), do: GenServer.stop(conn) end)
+
+    waiter =
+      spawn(fn ->
+        [[pid]] = Postgrex.query!(conn, "SELECT pg_backend_pid()", []).rows
+        send(test, {:waiter_pid, self(), pid})
+
+        Postgrex.transaction(
+          conn,
+          fn tx ->
+            case Postgrex.query(tx, "LOCK TABLE #{table} IN EXCLUSIVE MODE", []) do
+              {:ok, _result} ->
+                send(test, {:lock_acquired, self()})
+
+                outcome =
+                  case Postgrex.query(tx, "SELECT pg_sleep(0.6)", []) do
+                    {:ok, _result} -> :completed
+                    {:error, %Postgrex.Error{postgres: %{code: code}}} -> code
+                  end
+
+                send(test, {:next_statement, self(), outcome})
+
+              {:error, %Postgrex.Error{postgres: %{code: code}}} ->
+                send(test, {:lock_result, self(), code})
+                Postgrex.rollback(tx, code)
+            end
+          end,
+          timeout: :infinity
+        )
+      end)
+
+    receive do
+      {:waiter_pid, ^waiter, pid} -> %{waiter: waiter, pid: pid}
+    after
+      @holder_budget_ms -> flunk("waiter session did not start")
+    end
+  end
+
+  # The waiter's lock wait as the watcher samples it, once PostgreSQL has recorded its start.
+  defp sampled_wait!(backend_pid, attempts \\ 100) do
+    rows =
+      MigrationRepo.query!(
+        "SELECT l.locktype, coalesce(l.virtualxid, ''), coalesce(l.waitstart::text, '') FROM pg_locks l WHERE l.pid = $1 AND NOT l.granted",
+        [backend_pid],
+        log: false
+      ).rows
+
+    case rows do
+      [[locktype, target, waitstart]] when waitstart != "" ->
+        %{locktype: locktype, target: target, waitstart: waitstart}
+
+      _not_yet when attempts > 0 ->
+        Process.sleep(20)
+        sampled_wait!(backend_pid, attempts - 1)
+
+      _never ->
+        flunk("waiter session never waited for the lock")
+    end
+  end
+
+  defp with_watch_conn(fun) do
+    {:ok, conn} = Postgrex.start_link(connect_options("codex_pooler_migrate_watch"))
+
+    try do
+      fun.(conn)
+    after
+      GenServer.stop(conn)
+    end
+  end
+
   defp show_lock_timeout do
     [[value]] = MigrationRepo.query!("SHOW lock_timeout", [], log: false).rows
     value

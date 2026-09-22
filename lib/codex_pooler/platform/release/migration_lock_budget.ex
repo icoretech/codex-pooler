@@ -361,6 +361,7 @@ defmodule CodexPooler.Release.MigrationLockBudget do
 
   defp observe_wait(state, ["virtualxid", target, waitstart, waited_ms, blocker_pids]) do
     key = {target, waitstart}
+    wait = %{locktype: "virtualxid", target: target, waitstart: waitstart}
 
     state =
       if key == state.current_key do
@@ -375,26 +376,44 @@ defmodule CodexPooler.Release.MigrationLockBudget do
 
     cond do
       state.canceled != nil -> state
-      total_ms >= state.budget.transaction_wait_ms -> cancel(state, :transaction_wait, total_ms, blockers)
+      total_ms >= state.budget.transaction_wait_ms -> cancel(state, wait, :transaction_wait, total_ms, blockers)
       true -> maybe_notice(state, total_ms, blockers)
     end
   end
 
-  defp observe_wait(state, [_locktype, _target, _waitstart, waited_ms, blocker_pids]) do
+  defp observe_wait(state, [locktype, target, waitstart, waited_ms, blocker_pids]) do
+    wait = %{locktype: locktype, target: target, waitstart: waitstart}
     state = finish_current_wait(state)
     blockers = describe_pids(state.conn, blocker_pids)
     state = %{state | last_wait: %{reason: :lock_wait, waited_ms: waited_ms, blockers: blockers}}
 
     if state.canceled == nil and waited_ms >= state.budget.lock_wait_ms do
-      cancel(state, :lock_wait, waited_ms, blockers)
+      cancel(state, wait, :lock_wait, waited_ms, blockers)
     else
       state
     end
   end
 
-  defp cancel(state, reason, waited_ms, blockers) do
-    _result = Postgrex.query(state.conn, "SELECT pg_cancel_backend($1)", [state.backend_pid])
-    %{state | canceled: %{reason: reason, waited_ms: waited_ms, blockers: blockers}}
+  defp cancel(state, wait, reason, waited_ms, blockers) do
+    case cancel_if_still_waiting(state.conn, state.backend_pid, wait) do
+      :canceled -> %{state | canceled: %{reason: reason, waited_ms: waited_ms, blockers: blockers}}
+      :not_waiting -> state
+    end
+  end
+
+  @doc false
+  # Cancels the migration backend only while it is still in the sampled wait: the lock type, the
+  # waited virtual transaction id and the wait's start time must match in the same statement that
+  # sends the cancel. A plain `pg_cancel_backend` a sample (and a blocker lookup) after the wait was
+  # observed would otherwise hit the migration's next statement when the wait ended in between
+  # (findings#255 row 255-61); a wait that ended is sampled again on the next poll.
+  @spec cancel_if_still_waiting(GenServer.server(), pos_integer(), %{locktype: String.t(), target: String.t(), waitstart: String.t()}) ::
+          :canceled | :not_waiting
+  def cancel_if_still_waiting(conn, backend_pid, %{locktype: locktype, target: target, waitstart: waitstart}) do
+    case Postgrex.query(conn, cancel_sql(), [backend_pid, locktype, target, waitstart]) do
+      {:ok, %Postgrex.Result{rows: [[true]]}} -> :canceled
+      _not_waiting_or_failed -> :not_waiting
+    end
   end
 
   defp maybe_notice(state, total_ms, blockers) do
@@ -456,6 +475,18 @@ defmodule CodexPooler.Release.MigrationLockBudget do
            pg_blocking_pids(l.pid)
     FROM pg_locks l
     WHERE l.pid = $1 AND NOT l.granted
+    LIMIT 1
+    """
+  end
+
+  defp cancel_sql do
+    """
+    SELECT pg_cancel_backend(l.pid)
+    FROM pg_locks l
+    WHERE l.pid = $1 AND NOT l.granted
+      AND l.locktype = $2
+      AND coalesce(l.virtualxid, '') = $3
+      AND coalesce(l.waitstart::text, '') = $4
     LIMIT 1
     """
   end
