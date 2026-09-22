@@ -457,23 +457,15 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
     end
   end
 
-  @tag slow: "creates 128 finalized reservations plus unrelated history to prove scoped index access"
   test "active count excludes retained terminals regardless of amount status", context do
     fixture = fixture(context, 2)
     unrelated = fixture(context, nil)
 
     unboxed(fn ->
       seed_retained_history(unrelated, 2_048)
-
-      for _ <- 1..128 do
-        {:ok, historical} = reserve(fixture)
-
-        {:ok, _} =
-          Accounting.finalize_reservation_failure(
-            historical.request,
-            %{last_error_code: "dispatch_unavailable"}
-          )
-      end
+      # One real reservation and release, then 128 copies of their persisted rows:
+      # the count reads rows, so copies retain the shape without 128 round trips.
+      seed_retained_history(fixture, 128)
 
       # A voided terminal still ends execution; correction replaces debit, not capacity.
       Repo.update_all(
@@ -492,18 +484,20 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
 
       assert count == 1
       assert [query] = queries
-      Repo.query!("ANALYZE ledger_entries")
-      plan = Repo.query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> query.query, query.params)
 
-      CodexPooler.TestDiagnostics.puts(
+      # The plan is a receipt, not an assertion, so it is only collected when printed.
+      CodexPooler.TestDiagnostics.puts(fn ->
+        Repo.query!("ANALYZE ledger_entries")
+        plan = Repo.query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> query.query, query.params)
+
         Jason.encode!(%{
           scenario: :active_count_explain,
-          retained_terminals: 128,
+          retained_terminals: 129,
           unrelated_terminals: 2_049,
           active: count,
           plan: plan.rows
         })
-      )
+      end)
     end)
   end
 

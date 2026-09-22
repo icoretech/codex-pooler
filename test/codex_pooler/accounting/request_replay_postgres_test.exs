@@ -16,9 +16,11 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
-  test "consume and key pause or delete use separate backends without duplicate settlement" do
-    for mutation <- [:pause_api_key, :delete_api_key],
-        order <- [:concurrent, :consume_first, :mutation_first] do
+  # Each mutation and ordering is its own committed fixture and race, so each is
+  # its own test rather than six passes accumulated in one.
+  for mutation <- [:pause_api_key, :delete_api_key], order <- [:concurrent, :consume_first, :mutation_first] do
+    @tag replay_mutation: mutation, replay_order: order
+    test "consume and #{mutation} use separate backends without duplicate settlement (#{order})", %{replay_mutation: mutation, replay_order: order} do
       fixture = committed_replay_fixture!()
 
       {:ok, armed} = Sandbox.unboxed_run(Repo, fn -> RequestReplay.arm(arm_input(fixture)) end)
