@@ -191,6 +191,89 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
     Logger.configure(level: previous_level)
   end
 
+  # A tracked (proxy) task still running when the client leaves: until it hands
+  # its completion off, its registry recipient is its cancellation watcher,
+  # which ignores a delivery acknowledgement outside the owner-drained flow, so
+  # termination must not record a receipt for that no-op acknowledgement. The
+  # task is acknowledged once, by the drain, with its real outcome, and gets
+  # one receipt (findings#225, row 225-100: production logged `aborted` then
+  # `delivered` for one request).
+  test "a tracked task still running at termination gets one delivery receipt from the drain", %{auth: auth} do
+    previous_level = Logger.level()
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+    Logger.configure(level: :info)
+    registry = start_supervised!({ActivityRegistry, name: nil})
+    parent = self()
+
+    socket =
+      spawn(fn ->
+        receive do
+          {:terminate, state} ->
+            {:ok, logs} =
+              ExUnit.CaptureLog.with_log([level: :info], fn ->
+                CodexResponsesSocket.terminate({:error, :closed}, state)
+              end)
+
+            send(parent, {:socket_terminated, logs})
+        end
+      end)
+
+    on_exit(fn -> Process.exit(socket, :kill) end)
+
+    {:ok, task} =
+      ResponseTask.start(
+        socket,
+        :proxy,
+        fn _coordinator ->
+          send(parent, {:execution, ExecutionIdentity.local()})
+          :ok
+        end,
+        fn _task_pid, _reason -> :ok end,
+        activity_registry: registry,
+        before_completion_handoff: fn _token, _watcher ->
+          send(parent, {:completion_held, self()})
+
+          receive do
+            :release_completion -> :ok
+          end
+        end
+      )
+
+    on_exit(fn -> Process.exit(task, :kill) end)
+    monitor = Process.monitor(task)
+    assert_receive {:execution, execution}, @detection_timeout_ms
+    assert_receive {:completion_held, ^task}, @detection_timeout_ms
+
+    {request, attempt} = receipt_fixture(auth)
+
+    state =
+      local_owner_state(auth, task, registry)
+      |> put_delivery_receipt_context(task, request, attempt)
+      |> Map.put(:response_task_terminals_accepted, MapSet.new([task]))
+      |> Map.put(:response_task_completed_terminals, MapSet.new([task]))
+
+    owner =
+      start_supervised!({WebsocketOwnerSession, codex_session_id: state.codex_session.id, owner_lease_token: state.websocket_owner_lease_token, owner_instance_id: state.codex_session.owner_instance_id})
+
+    assert {:ok, downstream} = WebsocketOwnerSession.attach_downstream(owner, %{pid: socket, correlation_id: "tracked-running-at-close"})
+
+    send(socket, {:terminate, %{state | websocket_owner_downstream: downstream}})
+    await_post_cleanup_wait(socket, System.monotonic_time(:millisecond) + @detection_timeout_ms)
+    send(task, :release_completion)
+
+    assert_receive {:DOWN, ^monitor, :process, ^task, :normal}, @detection_timeout_ms
+    assert_receive {:socket_terminated, logs}, @detection_timeout_ms
+
+    receipts = Regex.scan(~r/websocket downstream terminal pushed [^\n]*/, logs)
+    assert length(receipts) == 1, "expected one delivery receipt, got #{length(receipts)}"
+    assert [[receipt]] = receipts
+    assert receipt =~ "outcome=delivered terminal_class=response.completed"
+
+    assert [proof] = Enum.filter(ExecutionRegistry.pending(10_000), &(&1.owner_execution_id == execution.owner_execution_id))
+    assert proof.end_kind == "completed"
+    Logger.configure(level: previous_level)
+  end
+
   defp assert_late_completion(auth, ordering) do
     previous_level = Logger.level()
     on_exit(fn -> Logger.configure(level: previous_level) end)

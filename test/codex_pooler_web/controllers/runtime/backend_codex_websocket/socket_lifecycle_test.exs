@@ -67,19 +67,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     init-prompt-sentinel
   )
 
-  defmodule DeliveryReceiptLogRelay do
-    @moduledoc false
-
-    # Runs in the process that emits the log line; used to react to a
-    # socket-side receipt while the test process is still inside terminate.
-    def log(%{msg: {:string, chardata}}, %{config: %{needle: needle, on_match: on_match}}) do
-      if IO.chardata_to_string(chardata) =~ needle, do: on_match.()
-      :ok
-    end
-
-    def log(_event, _config), do: :ok
-  end
-
   test "socket init failure before request reservation logs one bounded warning and creates no request row" do
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
@@ -428,16 +415,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     {state, attempt_id} = await_direct_attempt_receipt(state)
     assert is_binary(attempt_id)
 
-    # Terminate interrupts the request, acknowledges the task through the
-    # activity registry, records the receipt, and only then gives the
-    # in-flight upstream caller its grace period. That caller is still
-    # blocked on the upstream and its registry acknowledgement recipient is
-    # the cancellation watcher, so once the receipt line has been logged the
-    # test closes the fake upstream connection and hands the task the same
-    # acknowledgement directly; the grace period is not the property under
-    # test.
+    # Terminate interrupts the request and then gives the in-flight upstream
+    # caller its grace period. That caller is still blocked on the upstream
+    # and its registry acknowledgement recipient is its cancellation watcher,
+    # which ignores a delivery acknowledgement, so the receipt is recorded when
+    # the task itself is acknowledged, by the drain once it hands its result
+    # off (findings#225, row 225-100). Once the socket's cleanup has finished
+    # the test closes the fake upstream connection and hands the task the
+    # aborted acknowledgement directly; the grace period is not the property
+    # under test.
     [task_pid] = MapSet.to_list(state.tasks)
-    release_task_after_receipt_log!(upstream, task_pid)
+    release_task_after_socket_cleanup!(upstream, task_pid)
 
     {:ok, logs} =
       with_info_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, state) end)
@@ -1263,10 +1251,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     end
   end
 
-  defp release_task_after_receipt_log!(upstream, task_pid) do
-    handler_id = :"receipt-abort-release-#{System.unique_integer([:positive])}"
+  defp release_task_after_socket_cleanup!(upstream, task_pid) do
+    handler_id = "receipt-abort-release-#{System.unique_integer([:positive])}"
+    caller = self()
 
-    on_match = fn ->
+    on_cleanup = fn _event, _measurements, %{caller: ^caller}, _config ->
       case ActivityRegistry.delivery_target(task_pid) do
         {:ok, token, _ack_pid, _status} ->
           :ok = FakeUpstream.close_websocket_connections(upstream)
@@ -1277,13 +1266,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
       end
     end
 
-    :ok =
-      :logger.add_handler(handler_id, DeliveryReceiptLogRelay, %{
-        level: :info,
-        config: %{needle: "websocket downstream terminal pushed", on_match: on_match}
-      })
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
-    on_exit(fn -> :logger.remove_handler(handler_id) end)
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+        fn event, measurements, metadata, config ->
+          if metadata[:caller] == caller, do: on_cleanup.(event, measurements, metadata, config)
+        end,
+        nil
+      )
+
     :ok
   end
 

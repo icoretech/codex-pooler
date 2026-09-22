@@ -527,6 +527,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {remaining_tasks, state} =
       await_response_tasks(state, reason, remaining_tasks, response_task_drain_ms(state))
 
+    record_unreported_termination_receipts(state)
+
     await_response_task_registry_cleanup(
       state,
       Map.get(state, :tasks, MapSet.new()),
@@ -642,7 +644,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           outcome = response_task_cleanup_outcome(state, pid, token, pid, registry)
           ResponseTask.acknowledge_delivery(pid, token, outcome)
           :ok = record_drained_delivery_receipt(state, pid, outcome)
-          state
+          Map.update(state, :terminate_pending_receipts, MapSet.new(), &MapSet.delete(&1, pid))
 
         _watcher_or_unknown ->
           state
@@ -3766,37 +3768,81 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  # Returns the state with every task that was itself the acknowledgement
-  # recipient remembered: a task consumes the first acknowledgement it
-  # receives, so the drain's re-acknowledgement of that task is a no-op and
-  # must not record a second delivery receipt for the one terminal the socket
-  # could have pushed (findings#225, row 225-100). A task whose terminate-time
-  # acknowledgement went to a cancellation watcher is not remembered: the
-  # drain's acknowledgement is the one it consumes, and it records that.
+  # Acknowledges, at termination, every task whose acknowledgement is the one
+  # its recipient will act on and records that task's delivery receipt; every
+  # task gets exactly one receipt (findings#225, row 225-100):
+  #
+  # * a task that is its own recipient (a tracked task has handed its result
+  #   off; a local owner task sent its activity token together with its
+  #   result) is parked on this acknowledgement and consumes it; it is
+  #   remembered so the drain's re-acknowledgement records nothing;
+  # * a cancellation watcher in the owner-drained flow consumes it;
+  # * a running tracked task's cancellation watcher ignores a delivery
+  #   acknowledgement outside that flow, so it records nothing here: the drain
+  #   acknowledges and records the task with its real result once it hands its
+  #   result off, and a task that never does gets its `aborted` receipt when the
+  #   drains are over (`record_unreported_termination_receipts/1`).
   defp acknowledge_response_task_cleanup(state) do
     registry = response_task_activity_registry(state)
 
-    acknowledged =
-      state
-      |> Map.get(:tasks, MapSet.new())
-      |> Enum.reduce(
-        Map.get(state, :terminate_acknowledged_tasks, MapSet.new()),
-        &acknowledge_terminating_response_task(state, registry, &1, &2)
-      )
-
-    Map.put(state, :terminate_acknowledged_tasks, acknowledged)
+    state
+    |> Map.get(:tasks, MapSet.new())
+    |> Enum.reduce(state, &acknowledge_terminating_response_task(&2, registry, &1))
   end
 
-  defp acknowledge_terminating_response_task(state, registry, pid, acknowledged) do
-    case authoritative_delivery_target(state, pid, registry) do
-      {:ok, token, ack_pid} ->
-        outcome = response_task_cleanup_outcome(state, pid, token, ack_pid, registry)
-        ResponseTask.acknowledge_delivery(ack_pid, token, outcome)
-        record_downstream_delivery_receipt(state, pid, outcome)
-        if ack_pid == pid, do: MapSet.put(acknowledged, pid), else: acknowledged
+  defp acknowledge_terminating_response_task(state, registry, pid) do
+    case terminate_delivery_target(state, pid, registry) do
+      {:ok, token, ^pid, _status} ->
+        acknowledge_and_remember(state, registry, pid, token)
+
+      {:ok, token, ack_pid, status} when status in [:cancelling, :socket_state] ->
+        acknowledge_and_record_termination(state, registry, pid, token, ack_pid)
+        state
+
+      {:ok, token, ack_pid, _running} ->
+        ResponseTask.acknowledge_delivery(ack_pid, token, :aborted)
+        put_termination_receipt_pending(state, pid)
 
       :unknown ->
-        acknowledged
+        state
+    end
+  end
+
+  defp acknowledge_and_remember(state, registry, pid, token) do
+    acknowledge_and_record_termination(state, registry, pid, token, pid)
+    Map.update(state, :terminate_acknowledged_tasks, MapSet.new([pid]), &MapSet.put(&1, pid))
+  end
+
+  defp put_termination_receipt_pending(state, pid),
+    do: Map.update(state, :terminate_pending_receipts, MapSet.new([pid]), &MapSet.put(&1, pid))
+
+  defp record_unreported_termination_receipts(state) do
+    state
+    |> Map.get(:terminate_pending_receipts, MapSet.new())
+    |> Enum.each(&record_downstream_delivery_receipt(state, &1, :aborted))
+  end
+
+  defp acknowledge_and_record_termination(state, registry, pid, token, ack_pid) do
+    outcome = response_task_cleanup_outcome(state, pid, token, ack_pid, registry)
+    ResponseTask.acknowledge_delivery(ack_pid, token, outcome)
+    record_downstream_delivery_receipt(state, pid, outcome)
+  end
+
+  # The authoritative target with its registry status; a task the registry
+  # does not track answers from the socket's own state.
+  defp terminate_delivery_target(state, pid, registry) do
+    case ActivityRegistry.delivery_target(pid, name: registry) do
+      {:ok, _token, _ack_pid, _status} = target -> target
+      :unknown -> socket_state_delivery_target(state, pid)
+    end
+  catch
+    :exit, _reason -> socket_state_delivery_target(state, pid)
+  end
+
+  defp socket_state_delivery_target(state, pid) do
+    case state_delivery_target(state, pid) do
+      {:ok, token, ack_pid} -> {:ok, token, ack_pid, :socket_state}
+      :unknown -> :unknown
     end
   end
 
