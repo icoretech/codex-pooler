@@ -76,18 +76,9 @@ defmodule CodexPooler.Repo.Migrations.AddAccountingQueryIndexes do
     )
   end
 
+  # Table and row lock waits keep ten seconds; the concurrent build's wait for older transactions
+  # gets the helper's longer budget and names the blocking sessions when it runs out.
   defp with_lock_budget(fun) do
-    execute(fn ->
-      repo().checkout(fn ->
-        [[previous_timeout]] = repo().query!("SHOW lock_timeout", [], log: false).rows
-        repo().query!("SET lock_timeout = '10s'", [], log: false)
-
-        try do
-          fun.()
-        after
-          repo().query!("SELECT set_config('lock_timeout', $1, false)", [previous_timeout], log: false)
-        end
-      end)
-    end)
+    execute(fn -> CodexPooler.Release.MigrationLockBudget.run(repo(), fun) end)
   end
 end

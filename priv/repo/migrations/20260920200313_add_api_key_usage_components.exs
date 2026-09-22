@@ -82,19 +82,10 @@ defmodule CodexPooler.Repo.Migrations.AddApiKeyUsageComponents do
     end)
   end
 
+  # Table and row lock waits keep five seconds; the concurrent index builds' wait for older
+  # transactions gets the helper's longer budget and names the blocking sessions when it runs out.
   defp online(fun) do
-    execute(fn ->
-      repo().checkout(fn ->
-        [[previous]] = query("SHOW lock_timeout").rows
-        query("SET lock_timeout='5s'")
-
-        try do
-          fun.()
-        after
-          query("SELECT set_config('lock_timeout',$1,false)", [previous])
-        end
-      end)
-    end)
+    execute(fn -> CodexPooler.Release.MigrationLockBudget.run(repo(), fun, lock_wait_ms: 5_000) end)
   end
 
   defp query(sql, params \\ []), do: repo().query!(sql, params, log: false, timeout: :infinity)

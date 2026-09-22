@@ -63,19 +63,7 @@ defmodule CodexPooler.Repo.Migrations.DropCodexSessionConversationKeyIndex do
     repo().query!("DROP INDEX CONCURRENTLY IF EXISTS public.#{@name}", [], log: false, timeout: :infinity)
   end
 
-  defp with_lock_budget(fun) do
-    repo().checkout(
-      fn ->
-        [[previous_timeout]] = repo().query!("SHOW lock_timeout", [], log: false).rows
-        repo().query!("SET lock_timeout='10s'", [], log: false)
-
-        try do
-          fun.()
-        after
-          repo().query!("SELECT set_config('lock_timeout',$1,false)", [previous_timeout], log: false)
-        end
-      end,
-      timeout: :infinity
-    )
-  end
+  # Table and row lock waits keep ten seconds; the concurrent build's wait for older transactions
+  # gets the helper's longer budget and names the blocking sessions when it runs out.
+  defp with_lock_budget(fun), do: CodexPooler.Release.MigrationLockBudget.run(repo(), fun)
 end

@@ -154,6 +154,14 @@ traffic:
 docker compose logs migrate
 ```
 
+Index migrations run concurrently, so they wait for other open transactions on
+the same database, such as a backup or a `psql` session left idle inside a
+transaction. The migration waits up to five minutes in total for them and logs
+the blocking sessions while it waits; a table lock held by another session stops
+it after ten seconds. If it fails with a message that names blocking sessions,
+end those sessions or let them finish, then run `docker compose run --rm migrate`
+again. An interrupted index build is rebuilt on the next run.
+
 ## Stop or reset
 
 Stop the stack while keeping the database volume:
