@@ -36,6 +36,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- Validation.require_model(payload),
          :ok <- reject_locally_unsupported_fields(payload),
          :ok <- validate_prompt_cache_options(payload),
+         {:ok, payload} <- Input.drop_public_call_id_item_ids(payload),
          {:ok, payload} <- Input.normalize_recoverable_opencode_replay_call_ids(payload),
          {:ok, payload} <- Input.normalize_list_input(payload),
          payload = normalize_optional_function_tool_booleans(payload),

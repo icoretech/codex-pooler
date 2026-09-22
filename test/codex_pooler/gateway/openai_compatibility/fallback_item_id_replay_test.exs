@@ -40,6 +40,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.FallbackItemIdReplayTest do
     end
   end
 
+  test "a call item whose id is its own call_id is replayed without the id, a required program id is kept" do
+    call_id = "call_" <> String.duplicate("Ef3", 8)
+
+    shell_call = %{"type" => "shell_call", "id" => call_id, "call_id" => call_id, "action" => %{"commands" => []}}
+    shell_output = %{"type" => "shell_call_output", "id" => call_id, "call_id" => call_id, "output" => []}
+
+    assert {:ok, %{payload: %{"input" => [replayed_call, replayed_output]}}} = coerce([shell_call, shell_output])
+    assert replayed_call == Map.delete(shell_call, "id")
+    assert replayed_output == Map.delete(shell_output, "id")
+
+    # A program item requires its id; the rule never makes it invalid.
+    program = %{"type" => "program", "id" => call_id, "call_id" => call_id, "code" => "synthetic code", "fingerprint" => "synthetic-fingerprint"}
+
+    assert {:ok, %{payload: %{"input" => [^program]}}} = coerce([program])
+  end
+
   defp coerce(input, extra \\ %{}) do
     %{"model" => "synthetic-model", "input" => input}
     |> Map.merge(extra)

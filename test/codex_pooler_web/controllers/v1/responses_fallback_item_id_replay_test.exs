@@ -18,6 +18,8 @@ defmodule CodexPoolerWeb.V1.ResponsesFallbackItemIdReplayTest do
   @marker "synthetic fallback id marker"
   @compaction_content "synthetic-opaque-compaction-content"
   @reasoning_content "synthetic-opaque-reasoning-content"
+  @function_call_id "call_" <> String.duplicate("Ab1", 8)
+  @custom_call_id "call_" <> String.duplicate("Cd2", 8)
 
   test "id-less upstream output items round-trip through a public stream and replay without the fallback ids" do
     compaction = %{"type" => "compaction", "encrypted_content" => @compaction_content}
@@ -76,6 +78,75 @@ defmodule CodexPoolerWeb.V1.ResponsesFallbackItemIdReplayTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert [replayed_reasoning, _tool_output] = captured.json["input"]
     assert replayed_reasoning == Map.delete(reasoning, "id")
+  end
+
+  test "id-less upstream tool calls keep their call_id as the public id and replay without it" do
+    # The public surface names an id-less call item by its call_id. The Codex
+    # backend refuses a replayed function_call whose id equals its call_id
+    # (400 invalid_value on input[i].id, observed in production) and accepts
+    # it without an id, so the replay must reach the upstream without one.
+    function_call = %{"type" => "function_call", "call_id" => @function_call_id, "name" => "lookup", "arguments" => "{}", "status" => "completed"}
+    custom_call = %{"type" => "custom_tool_call", "call_id" => @custom_call_id, "name" => "apply", "input" => "synthetic custom input"}
+
+    upstream = start_upstream(FakeUpstream.sse_stream([completed([function_call, custom_call])]))
+    setup = gateway_setup(upstream)
+
+    public_output = setup |> stream_body!(%{"model" => setup.model.exposed_model_id, "input" => "synthetic tool turn", "stream" => true}) |> completed_output!()
+
+    assert Enum.map(public_output, & &1["id"]) == [@function_call_id, @custom_call_id]
+
+    replay_upstream = start_upstream(FakeUpstream.sse_stream([completed([message("msg_after_tool_replay", @marker)])]))
+    replay_setup = gateway_setup(replay_upstream)
+
+    tool_outputs = [
+      %{"type" => "function_call_output", "call_id" => @function_call_id, "output" => "synthetic tool output"},
+      %{"type" => "custom_tool_call_output", "call_id" => @custom_call_id, "output" => "synthetic custom output"}
+    ]
+
+    replay_status =
+      replay_setup
+      |> post_responses(%{
+        "model" => replay_setup.model.exposed_model_id,
+        "stream" => true,
+        "store" => false,
+        "input" => [user_message("synthetic tool turn")] ++ public_output ++ tool_outputs
+      })
+      |> Map.fetch!(:status)
+
+    assert replay_status == 200
+    assert [captured] = FakeUpstream.requests(replay_upstream)
+    assert [_user, replayed_function_call, replayed_custom_call, _function_output, _custom_output] = captured.json["input"]
+
+    refute Map.has_key?(replayed_function_call, "id")
+    assert Map.take(replayed_function_call, ["type", "call_id", "name", "arguments"]) == Map.take(function_call, ["type", "call_id", "name", "arguments"])
+    refute Map.has_key?(replayed_custom_call, "id")
+    assert Map.take(replayed_custom_call, ["type", "call_id", "name", "input"]) == Map.take(custom_call, ["type", "call_id", "name", "input"])
+  end
+
+  test "a tool call's provider id or an id that is not its own call_id reaches the upstream unchanged" do
+    upstream = start_upstream(FakeUpstream.sse_stream([completed([message("msg_after_tool_controls", @marker)])]))
+    setup = gateway_setup(upstream)
+
+    provider_call = %{"type" => "function_call", "id" => "fc_" <> String.duplicate("3d", 25), "call_id" => @function_call_id, "name" => "lookup", "arguments" => "{}"}
+    # The id is another call's call_id, not this item's own.
+    crossed_call = %{"type" => "custom_tool_call", "id" => @function_call_id, "call_id" => @custom_call_id, "name" => "apply", "input" => "synthetic custom input"}
+
+    input = [
+      user_message("synthetic tool control turn"),
+      provider_call,
+      crossed_call,
+      %{"type" => "function_call_output", "call_id" => @function_call_id, "output" => "synthetic tool output"},
+      %{"type" => "custom_tool_call_output", "call_id" => @custom_call_id, "output" => "synthetic custom output"}
+    ]
+
+    status =
+      setup
+      |> post_responses(%{"model" => setup.model.exposed_model_id, "stream" => true, "store" => false, "input" => input})
+      |> Map.fetch!(:status)
+
+    assert status == 200
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["input"] |> Enum.slice(1, 2) |> Enum.map(& &1["id"]) == [provider_call["id"], @function_call_id]
   end
 
   test "provider ids and ids that are not the item's own fallback shape reach the upstream unchanged" do

@@ -16,6 +16,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
   @spec normalize_list_input(map()) :: {:ok, map()} | {:error, term()}
   defdelegate normalize_list_input(payload), to: Normalization
 
+  @spec drop_public_call_id_item_ids(map()) :: {:ok, map()}
+  defdelegate drop_public_call_id_item_ids(payload), to: Normalization
+
   @spec normalize_recoverable_opencode_replay_call_ids(map()) :: {:ok, map()}
   defdelegate normalize_recoverable_opencode_replay_call_ids(payload), to: Normalization
 

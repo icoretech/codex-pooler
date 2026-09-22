@@ -404,6 +404,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "provider ids and every other id are forwarded unchanged"
     end
 
+    test "states that a replayed call item named by its own call_id is dropped before upstream dispatch" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+
+      assert feature.contract =~ "carries its own call_id when it has one"
+      assert feature.contract =~ "function_call, custom_tool_call, shell_call or shell_call_output item whose id equals its own call_id reaches the upstream without an id"
+    end
+
     test "states that public /v1 surfaces relay no provider event header objects" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
       fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)

@@ -26,6 +26,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     shell_call_output
   )
 
+  @call_id_named_item_types ~w(function_call custom_tool_call shell_call shell_call_output)
+
   @typep audio_normalization_result :: {:ok, map()} | {:error, Error.reason()}
 
   def normalize_input(%{"input" => input} = payload) when is_binary(input) do
@@ -68,6 +70,27 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   end
 
   def normalize_list_input(payload), do: {:ok, payload}
+
+  # An id-less call item is named by its own `call_id` on the public surface
+  # (`PublicResponses.ensure_output_item_id/2`). The Codex backend refuses a
+  # replayed `function_call` whose id equals its `call_id` (400
+  # `invalid_value` on `input[i].id`) and accepts it without an id, so that
+  # exact id is dropped from every call item whose id is optional (findings#254).
+  # A provider id (`fc_`, `ctc_`) never equals the provider's `call_id`
+  # (`call_`), and a `program` item keeps its required id. This runs on the
+  # input as the client sent it, before the OpenCode repair below copies a
+  # provider id into a blank `call_id`.
+  def drop_public_call_id_item_ids(%{"input" => input} = payload) when is_list(input) do
+    {:ok, Map.put(payload, "input", Enum.map(input, &drop_public_call_id_item_id/1))}
+  end
+
+  def drop_public_call_id_item_ids(payload), do: {:ok, payload}
+
+  defp drop_public_call_id_item_id(%{"type" => type, "id" => id, "call_id" => id} = item)
+       when type in @call_id_named_item_types and is_binary(id),
+       do: Map.delete(item, "id")
+
+  defp drop_public_call_id_item_id(item), do: item
 
   def normalize_recoverable_opencode_replay_call_ids(%{"input" => input} = payload)
       when is_list(input) do
