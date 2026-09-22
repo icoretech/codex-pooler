@@ -55,33 +55,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
            |> Enum.sort() == ["image", "text"]
   end
 
-  test "advertised typed fields and inferred default survive payload serialization" do
-    for mode <- ["direct", "code_mode", "code_mode_only"] do
-      model = %Model{
-        supports_reasoning: true,
-        metadata: %{
-          "tool_mode" => mode,
-          "supported_reasoning_levels" => ["high"],
-          "model_messages" => %{"notice" => "sample"},
-          "truncation_policy" => %{"mode" => "tokens", "limit" => 25},
-          "service_tiers" => ["default"]
-        }
-      }
-
-      payload =
-        ModelMetadata.codex_model_payload(model, %{}, nil, %{})
-        |> CodexPooler.JSON.encode!()
-        |> CodexPooler.JSON.decode!()
-
-      assert payload["tool_mode"] == mode
-      assert payload["default_reasoning_level"] == "high"
-      assert payload["model_messages"] == %{"notice" => "sample"}
-      assert payload["truncation_policy"] == %{"mode" => "tokens", "limit" => 25}
-      assert payload["service_tiers"] == ["default"]
-    end
-  end
-
-  test "malformed input modalities do not crash the advertised model payload" do
+  test "malformed input modalities do not crash the advertised modality list" do
     model = %Model{
       exposed_model_id: "sample-model",
       metadata: %{
@@ -89,13 +63,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
       }
     }
 
-    payload = ModelMetadata.codex_model_payload(model, %{}, nil, %{})
-    assert payload["input_modalities"] == ["text", "image"]
-
-    assert CodexPooler.JSON.decode!(CodexPooler.JSON.encode!(payload))["input_modalities"] == [
-             "text",
-             "image"
-           ]
+    assert ModelMetadata.input_modalities(model.metadata) == ["text", "image"]
   end
 
   test "context policy respects explicit overrides and safe compaction bounds" do
@@ -181,30 +149,5 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
     assert ModelMetadata.input_modalities(%{}) == ["text"]
     assert ModelMetadata.has_capability_evidence?(%{"capabilities" => %{"tools" => true}})
     refute ModelMetadata.assignment_source?(model, nil)
-  end
-
-  test "payload defaults discard invalid typed metadata" do
-    payload =
-      ModelMetadata.codex_model_payload(
-        %Model{
-          metadata: %{
-            "minimal_client_version" => :invalid,
-            "tool_mode" => "unknown",
-            "default_service_tier" => 1,
-            "priority" => "1",
-            "model_messages" => [],
-            "supports_image_detail_original" => false
-          }
-        },
-        %{},
-        nil,
-        %{}
-      )
-
-    assert payload["minimal_client_version"] == nil
-    assert payload["tool_mode"] == nil
-    assert payload["priority"] == 0
-    assert payload["model_messages"] == nil
-    refute payload["supports_image_detail_original"]
   end
 end

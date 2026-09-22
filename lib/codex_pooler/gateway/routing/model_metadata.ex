@@ -3,7 +3,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   Codex-compatible model metadata and capability helpers for gateway routing.
   """
 
-  alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.MetadataProjection
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
@@ -41,142 +40,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   @type context_window_overrides :: %{optional(String.t()) => pos_integer()}
   @type effective_model_serving_mode :: String.t() | nil
 
-  @spec codex_model_payload(Model.t(), pricing_buckets()) :: map()
-  def codex_model_payload(%Model{} = model, pricing_buckets),
-    do: codex_model_payload(model, pricing_buckets, nil)
-
-  @spec codex_model_payload(Model.t(), pricing_buckets(), MetadataProjection.t() | nil) :: map()
-  def codex_model_payload(%Model{} = model, pricing_buckets, reasoning_projection) do
-    settings = OperationalSettings.current()
-
-    codex_model_payload(
-      model,
-      pricing_buckets,
-      reasoning_projection,
-      settings.model_context_window_overrides
-    )
-  end
-
-  @spec codex_model_payload(
-          Model.t(),
-          pricing_buckets(),
-          MetadataProjection.t() | nil,
-          context_window_overrides()
-        ) :: map()
-  def codex_model_payload(
-        %Model{} = model,
-        pricing_buckets,
-        reasoning_projection,
-        context_window_overrides
-      )
-      when is_map(context_window_overrides) do
-    metadata =
-      model
-      |> metadata()
-      |> apply_context_window_policy(model, pricing_buckets, context_window_overrides)
-
-    model
-    |> base_codex_model_payload(metadata, reasoning_projection)
-    |> maybe_put_reasoning_summary_capabilities(metadata)
-    |> maybe_put_comp_hash(metadata)
-  end
-
-  @spec codex_model_payload(
-          Model.t(),
-          pricing_buckets(),
-          MetadataProjection.t() | nil,
-          context_window_overrides(),
-          effective_model_serving_mode()
-        ) :: map()
-  def codex_model_payload(
-        %Model{} = model,
-        pricing_buckets,
-        reasoning_projection,
-        context_window_overrides,
-        effective_model_serving_mode
-      )
-      when is_map(context_window_overrides) do
-    model
-    |> codex_model_payload(pricing_buckets, reasoning_projection, context_window_overrides)
-    |> Map.put("use_responses_lite", effective_model_serving_mode == "lite")
-  end
-
-  defp base_codex_model_payload(model, metadata, reasoning_projection) do
-    %{
-      "slug" => model.exposed_model_id,
-      "display_name" => model.display_name,
-      "description" => metadata["description"] || model.display_name,
-      "default_reasoning_level" => projected_default_reasoning_level(reasoning_projection, model, metadata),
-      "supported_reasoning_levels" => projected_reasoning_levels(reasoning_projection, model, metadata),
-      "shell_type" => "shell_command",
-      "visibility" => "list",
-      "priority" => int_metadata(metadata, "priority", 0),
-      "additional_speed_tiers" => list_metadata(metadata, "additional_speed_tiers"),
-      "service_tiers" => list_metadata(metadata, "service_tiers"),
-      "available_in_plans" => list_metadata(metadata, "available_in_plans"),
-      "default_service_tier" => string_metadata(metadata, "default_service_tier"),
-      "minimal_client_version" => json_metadata(metadata, "minimal_client_version"),
-      "availability_nux" => nil,
-      "upgrade" => nil,
-      "base_instructions" => metadata["base_instructions"] || "",
-      "default_reasoning_summary" => metadata["default_reasoning_summary"] || "auto",
-      "support_verbosity" => bool_metadata(metadata, "support_verbosity"),
-      "default_verbosity" => metadata["default_verbosity"],
-      "apply_patch_tool_type" => metadata["apply_patch_tool_type"],
-      "web_search_tool_type" => metadata["web_search_tool_type"] || "text",
-      "truncation_policy" =>
-        metadata["truncation_policy"] ||
-          %{
-            "mode" => "bytes",
-            "limit" => int_metadata(metadata, "truncation_limit", 10_000)
-          },
-      "supports_parallel_tool_calls" => model.supports_tools,
-      "supports_image_detail_original" => supports_image_detail_original?(metadata),
-      "model_messages" => map_metadata(metadata, "model_messages"),
-      "include_skills_usage_instructions" => bool_metadata(metadata, "include_skills_usage_instructions"),
-      "prefer_websockets" => bool_metadata(metadata, "prefer_websockets"),
-      "reasoning_summary_format" => string_metadata(metadata, "reasoning_summary_format"),
-      "context_window" => metadata["context_window"],
-      "max_context_window" => metadata["max_context_window"],
-      "auto_compact_token_limit" => metadata["auto_compact_token_limit"],
-      "effective_context_window_percent" => int_metadata(metadata, "effective_context_window_percent", 95),
-      "experimental_supported_tools" => list_metadata(metadata, "experimental_supported_tools"),
-      "input_modalities" => input_modalities(metadata),
-      "supports_search_tool" => bool_metadata(metadata, "supports_search_tool"),
-      "tool_mode" => tool_mode_metadata(metadata),
-      "upstream_model_id" => model.upstream_model_id,
-      "exposed_model_id" => model.exposed_model_id,
-      "status" => model.status,
-      "supported_in_api" => model.supports_responses,
-      "supports_responses" => model.supports_responses,
-      "supports_streaming" => model.supports_streaming,
-      "supports_tools" => model.supports_tools,
-      "supports_reasoning" => model.supports_reasoning,
-      "use_responses_lite" => bool_metadata(metadata, "use_responses_lite")
-    }
-  end
-
-  defp maybe_put_reasoning_summary_capabilities(payload, metadata) do
-    payload =
-      if supports_reasoning_summary_parameter?(metadata) do
-        payload
-      else
-        Map.put(payload, "supports_reasoning_summary_parameter", false)
-      end
-
-    case literal_boolean_metadata(metadata, "supports_reasoning_summaries") do
-      value when is_boolean(value) -> Map.put(payload, "supports_reasoning_summaries", value)
-      nil -> payload
-    end
-  end
-
-  defp maybe_put_comp_hash(payload, metadata) do
-    case optional_string_metadata(metadata, "comp_hash") do
-      nil -> payload
-      comp_hash -> Map.put(payload, "comp_hash", comp_hash)
-    end
-  end
-
   @spec supports_reasoning_summary_parameter?(metadata_input()) :: boolean()
   def supports_reasoning_summary_parameter?(%Model{} = model) do
     model
@@ -213,22 +76,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   end
 
   def assignment_source?(%Model{}, _assignment_id), do: false
-
-  defp projected_default_reasoning_level(
-         %MetadataProjection{default_effort: default_effort},
-         _model,
-         _metadata
-       ),
-       do: default_effort
-
-  defp projected_default_reasoning_level(nil, model, metadata),
-    do: default_reasoning_level(model, metadata)
-
-  defp projected_reasoning_levels(%MetadataProjection{levels: levels}, _model, _metadata),
-    do: levels
-
-  defp projected_reasoning_levels(nil, model, metadata),
-    do: supported_reasoning_levels(model, metadata)
 
   @spec default_reasoning_level(Model.t(), metadata()) :: String.t() | nil
   def default_reasoning_level(%Model{supports_reasoning: true}, metadata) do
@@ -410,49 +257,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     case Map.get(metadata, key) do
       value when is_binary(value) -> value
       _value -> nil
-    end
-  end
-
-  @spec optional_string_metadata(metadata(), String.t()) :: String.t() | nil
-  defp optional_string_metadata(metadata, key) do
-    case Map.get(metadata, key) do
-      value when is_binary(value) ->
-        case String.trim(value) do
-          "" -> nil
-          trimmed -> trimmed
-        end
-
-      _value ->
-        nil
-    end
-  end
-
-  @spec tool_mode_metadata(metadata()) :: String.t() | nil
-  defp tool_mode_metadata(metadata) do
-    case string_metadata(metadata, "tool_mode") do
-      value when value in ["direct", "code_mode", "code_mode_only"] -> value
-      _value -> nil
-    end
-  end
-
-  @spec map_metadata(metadata(), String.t()) :: metadata() | nil
-  defp map_metadata(metadata, key) do
-    case Map.get(metadata, key) do
-      %{} = map -> map
-      _value -> nil
-    end
-  end
-
-  @spec json_metadata(metadata(), String.t()) :: term() | nil
-  defp json_metadata(metadata, key) do
-    case Map.get(metadata, key) do
-      value
-      when is_binary(value) or is_boolean(value) or is_number(value) or is_list(value) or
-             is_map(value) or is_nil(value) ->
-        value
-
-      _value ->
-        nil
     end
   end
 
@@ -802,13 +606,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
       value = metadata_value(metadata, key)
       value in [true, "true", "supported", "enabled"]
     end)
-  end
-
-  defp literal_boolean_metadata(metadata, key) do
-    case metadata_value(metadata, key) do
-      value when is_boolean(value) -> value
-      _value -> nil
-    end
   end
 
   defp metadata_value(%{} = metadata, key) do

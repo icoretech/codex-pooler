@@ -1,7 +1,6 @@
 defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   @moduledoc false
 
-  alias CodexPooler.Access
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
@@ -42,64 +41,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           routable_assignment_ids_by_model_id: routable_assignment_ids_by_model_id_resolver(),
           representation: CatalogRepresentation.t()
         ]
-
-  @spec build([Model.t()], normalized_policy()) :: result()
-  def build(routable_models, normalized_policy)
-      when is_list(routable_models) and is_map(normalized_policy) do
-    visible_models = policy_visible_models(routable_models, normalized_policy)
-
-    build_visible(
-      visible_models,
-      normalized_policy,
-      Catalog.pricing_buckets_by_identifier(visible_models)
-    )
-  end
-
-  @spec build([Model.t()], normalized_policy(), pricing_buckets()) :: result()
-  def build(routable_models, normalized_policy, pricing_buckets)
-      when is_list(routable_models) and is_map(normalized_policy) and is_map(pricing_buckets) do
-    build(routable_models, normalized_policy, pricing_buckets, %{})
-  end
-
-  @spec build(
-          [Model.t()],
-          normalized_policy(),
-          pricing_buckets(),
-          context_window_overrides()
-        ) :: result()
-  def build(routable_models, normalized_policy, pricing_buckets, context_window_overrides)
-      when is_list(routable_models) and is_map(normalized_policy) and is_map(pricing_buckets) and
-             is_map(context_window_overrides) do
-    routable_models
-    |> policy_visible_models(normalized_policy)
-    |> build_visible(normalized_policy, pricing_buckets, context_window_overrides)
-  end
-
-  @spec build(
-          [Model.t()],
-          normalized_policy(),
-          pricing_buckets(),
-          context_window_overrides(),
-          effective_model_serving_modes()
-        ) :: result()
-  def build(
-        routable_models,
-        normalized_policy,
-        pricing_buckets,
-        context_window_overrides,
-        effective_model_serving_modes
-      )
-      when is_list(routable_models) and is_map(normalized_policy) and is_map(pricing_buckets) and
-             is_map(context_window_overrides) and is_map(effective_model_serving_modes) do
-    routable_models
-    |> policy_visible_models(normalized_policy)
-    |> build_visible(
-      normalized_policy,
-      pricing_buckets,
-      context_window_overrides,
-      effective_model_serving_modes
-    )
-  end
 
   @spec build_selected_sources(
           [selected_source()],
@@ -247,30 +188,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     end
   end
 
-  defp build_visible(
-         visible_models,
-         normalized_policy,
-         pricing_buckets,
-         context_window_overrides \\ %{},
-         effective_model_serving_modes \\ nil
-       ) do
-    models =
-      visible_models
-      |> Enum.map(
-        &model_payload(
-          &1,
-          normalized_policy,
-          pricing_buckets,
-          context_window_overrides,
-          effective_model_serving_modes
-        )
-      )
-      |> Enum.sort_by(&Map.fetch!(&1, "slug"))
-
-    result_from_models(models)
-  end
-
-  defp result_from_models(models, representation \\ :verbatim) do
+  defp result_from_models(models, representation) do
     models =
       models
       |> Enum.map(&CatalogRepresentation.apply_to_model(&1, representation))
@@ -522,39 +440,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
       |> Base.encode16(case: :lower)
 
     @etag_prefix <> digest <> ~s(")
-  end
-
-  defp model_payload(
-         %Model{} = model,
-         policy,
-         pricing_buckets,
-         context_window_overrides,
-         effective_model_serving_modes
-       ) do
-    {reasoning_levels, reasoning_default} =
-      ModelMetadata.reasoning_level_maps_and_default(model)
-
-    reasoning_projection =
-      Access.project_reasoning_effort_metadata(policy, reasoning_levels, reasoning_default)
-
-    case effective_model_serving_modes do
-      nil ->
-        ModelMetadata.codex_model_payload(
-          model,
-          pricing_buckets,
-          reasoning_projection,
-          context_window_overrides
-        )
-
-      effective_modes ->
-        ModelMetadata.codex_model_payload(
-          model,
-          pricing_buckets,
-          reasoning_projection,
-          context_window_overrides,
-          Map.get(effective_modes, model.exposed_model_id)
-        )
-    end
   end
 
   defp canonical_json(value) when is_map(value) do
