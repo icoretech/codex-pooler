@@ -131,6 +131,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
         Process.demonitor(monitor_ref, [:flush])
         {:ok, put_bridged_options(prepared_context, options), bridge_response(stream)}
 
+      {^ref, {:preflight, {:rejected, status, body}}} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {:ok, put_bridged_options(prepared_context, options), rejection_response(stream, status, body)}
+
       {^ref, {:preflight, {:fallback, reason}}} ->
         Process.demonitor(monitor_ref, [:flush])
         WebsocketBridgeStream.cancel(stream)
@@ -172,6 +176,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
       headers: %{"content-type" => ["text/event-stream"]},
       body: stream
     }
+  end
+
+  # A provider refusal sent as a wrapped websocket error frame before any
+  # content becomes the HTTP response the provider returns for the same
+  # request over HTTP, so the standard finalization answers the public client
+  # with the same status and error body and records the same rejection fields
+  # (findings#225). Taking the relay's metadata reaps it and its submit task.
+  defp rejection_response(%WebsocketBridgeStream{} = stream, status, body) do
+    %{upstream_websocket_connection: connection} =
+      WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream)
+
+    Req.Response.put_private(
+      %Req.Response{status: status, headers: %{"content-type" => ["application/json"]}, body: body},
+      :upstream_websocket_connection,
+      connection
+    )
   end
 
   defp put_bridged_options(%PreparedContext{context: context} = prepared_context, options) do

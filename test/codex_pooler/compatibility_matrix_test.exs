@@ -404,6 +404,12 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "provider ids and every other id are forwarded unchanged"
     end
 
+    test "states that a bridged provider 4xx refusal answers like the HTTP path" do
+      feature = CompatibilityMatrix.by_slug!(:upstream_websocket_bridge)
+
+      assert feature.contract =~ "answers the public client with the same HTTP status and OpenAI error body as the HTTP path and records the same rejection fields on the websocket attempt, without HTTP resubmission"
+    end
+
     test "states that the public SSE relays only the public Responses stream vocabulary" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
 

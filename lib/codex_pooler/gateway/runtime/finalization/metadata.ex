@@ -93,6 +93,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     metadata = Map.merge(metadata, response_body_limit_metadata(response))
     metadata = Map.merge(metadata, rejection_metadata(response))
 
+    metadata =
+      Map.merge(metadata, upstream_websocket_connection_attempt_metadata(Req.Response.get_private(response, :upstream_websocket_connection)))
+
     opts
     |> route_attempt_metadata()
     |> Map.merge(gateway_debug_attempt_metadata(opts))

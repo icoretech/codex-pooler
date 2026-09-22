@@ -54,12 +54,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec normalize_public_openai_responses_json_message(binary()) :: binary()
   defdelegate normalize_public_openai_responses_json_message(data),
     to: PublicResponses,
-    as: :normalize_json_message
+    as: :normalize_owner_json_message
 
   @spec normalize_public_openai_responses_json_message(binary(), map()) :: {binary(), map()}
   defdelegate normalize_public_openai_responses_json_message(data, decoded),
     to: PublicResponses,
-    as: :normalize_json_message
+    as: :normalize_owner_json_message
 
   @spec max_incomplete_sse_block_bytes() :: pos_integer()
   defdelegate max_incomplete_sse_block_bytes, to: SSEParser

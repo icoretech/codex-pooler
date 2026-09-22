@@ -46,6 +46,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:passthrough_terminal_seen?) => boolean()
         }
 
+  @websocket_retry_error_codes ~w(websocket_connection_limit_reached previous_response_not_found)
+
   @spec new_state(map()) :: state()
   def new_state(custom_tool_namespaces \\ %{}) when is_map(custom_tool_namespaces) do
     %{
@@ -101,6 +103,53 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         data
     end
   end
+
+  @doc """
+  Owner-side mapper for public turns carried over the upstream websocket.
+
+  It normalizes like `normalize_json_message/2` except for a provider
+  refusal sent as the websocket transport's wrapped error frame
+  (`provider_rejection_frame?/1`), which it passes through unchanged: the
+  websocket bridge turns that frame into the HTTP response the provider
+  returns for the same request over HTTP (findings#225), and the public
+  websocket surface normalizes every owner frame again with
+  `normalize_json_message/2` before it reaches its client.
+  """
+  @spec normalize_owner_json_message(binary()) :: binary()
+  def normalize_owner_json_message(data) when is_binary(data) do
+    case CodexPooler.JSON.decode(data) do
+      {:ok, %{} = decoded} ->
+        {normalized, _decoded} = normalize_owner_json_message(data, decoded)
+        normalized
+
+      _invalid ->
+        data
+    end
+  end
+
+  @spec normalize_owner_json_message(binary(), map()) :: {binary(), map()}
+  def normalize_owner_json_message(data, %{} = decoded) when is_binary(data) do
+    if provider_rejection_frame?(decoded),
+      do: {data, decoded},
+      else: normalize_json_message(data, decoded)
+  end
+
+  @doc """
+  True for the websocket transport's wrapped error frame
+  (`{"type": "error", "status": 4xx, "error": {...}}`, `status_code` is the
+  Codex client's alias) in the 4xx window whose rejection fields the HTTP
+  path records (429 excluded), unless it carries one of the two codes the
+  Codex client itself retries on its websocket.
+  """
+  @spec provider_rejection_frame?(term()) :: boolean()
+  def provider_rejection_frame?(%{"type" => "error", "error" => %{} = error} = decoded) do
+    status = Map.get(decoded, "status", Map.get(decoded, "status_code"))
+
+    is_integer(status) and status in 400..499 and status != 429 and
+      Map.get(error, "code") not in @websocket_retry_error_codes
+  end
+
+  def provider_rejection_frame?(_decoded), do: false
 
   @spec normalize_json_message(binary(), map()) :: {binary(), map()}
   def normalize_json_message(_data, %{"type" => "response.failed"} = decoded) do

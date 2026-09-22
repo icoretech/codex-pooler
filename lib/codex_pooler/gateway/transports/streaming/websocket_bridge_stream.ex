@@ -25,6 +25,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   and local receive/pong timeouts commit a fatal stream error because the
   provider may already be generating.
 
+  A provider refusal sent as the websocket transport's wrapped error frame
+  (`{"type": "error", "status": 4xx, "error": {...}}`, 429 excluded) before
+  any content is the websocket form of the HTTP 4xx the provider returns for
+  the same request, so the relay reports it as `{:rejected, status, body}`
+  with the provider's `{"error": ...}` body instead of committing a stream,
+  and the dispatcher finalizes it like that HTTP response (findings#225).
+
   An owner error or completion frame that lands before commitment is terminal
   for the turn, and the owner replies to the submit call before sending it, so
   the relay yields on the submit task for one short hop
@@ -35,6 +42,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   """
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
@@ -55,7 +63,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           correlation_id: String.t(),
           settle_timeout_ms: non_neg_integer()
         }
-  @type decision :: :stream | {:fallback, term()}
+  @type decision :: :stream | {:fallback, term()} | {:rejected, 400..499, binary()}
   @type part :: {:data, binary()} | :done | {:bridge_error, term()}
   @type attempt_metadata :: %{
           upstream_websocket_connection: map() | nil,
@@ -359,7 +367,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
             relay_after_result(%{state | pending: [], upstream_committed: true}, :ok)
 
           :terminal ->
-            report_terminal(parent, ref, state.pending, frame)
+            report_terminal_or_rejection(parent, ref, state.pending, frame)
             metadata_loop(%{state | pending: [], upstream_committed: true})
 
           :buffer ->
@@ -407,7 +415,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   end
 
   defp commit_terminal(state, frame) do
-    report_terminal(state.parent, state.ref, state.pending, frame)
+    report_terminal_or_rejection(state.parent, state.ref, state.pending, frame)
 
     state
     |> Map.put(:pending, [])
@@ -482,6 +490,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
     send(parent, {ref, {:data, sse_block_context(frame)}})
   end
+
+  defp report_terminal_or_rejection(parent, ref, _pending, %{rejection: {status, body}}) do
+    send(parent, {ref, {:preflight, {:rejected, status, body}}})
+  end
+
+  defp report_terminal_or_rejection(parent, ref, pending, frame),
+    do: report_terminal(parent, ref, pending, frame)
 
   defp report_terminal(parent, ref, pending, frame) do
     report_stream(parent, ref, pending, frame)
@@ -839,13 +854,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           text: text,
           event_type: event_type(decoded),
           terminal?: terminal?,
-          preflight_class: if(terminal?, do: :terminal, else: nonterminal_preflight_class(decoded))
+          preflight_class: if(terminal?, do: :terminal, else: nonterminal_preflight_class(decoded)),
+          rejection: if(terminal?, do: provider_rejection(decoded))
         }
 
       _other ->
-        %{text: text, event_type: nil, terminal?: false, preflight_class: :commit}
+        %{text: text, event_type: nil, terminal?: false, preflight_class: :commit, rejection: nil}
     end
   end
+
+  # The owner's public mapper passes this frame through unmasked
+  # (`PublicResponses.normalize_owner_json_message/2`), so its status and the
+  # provider's error object are still intact here.
+  defp provider_rejection(%{"error" => error} = decoded) do
+    if PublicResponses.provider_rejection_frame?(decoded) do
+      {Map.get(decoded, "status", Map.get(decoded, "status_code")), CodexPooler.JSON.encode!(%{"error" => error})}
+    end
+  end
+
+  defp provider_rejection(_decoded), do: nil
 
   defp terminal_outcome?({:ok, %{kind: kind}})
        when kind in [:completed, :incomplete, :failed],
