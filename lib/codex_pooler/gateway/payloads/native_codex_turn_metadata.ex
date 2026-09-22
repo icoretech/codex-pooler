@@ -46,7 +46,14 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
 
   @canonical_key "x-codex-turn-metadata"
   @canonical_param "client_metadata.x-codex-turn-metadata"
-  @max_metadata_bytes 4_096
+  # Caps only the decode work: the frame carrying the value is already bounded by the websocket
+  # frame limit. The released Codex 0.156.0 sends 742 bytes by default, but the value also carries
+  # `tool_namespaces_info` when `[features.tool_registry] turn_metadata_includes_tool_info` is on
+  # for a Responses Lite model (2,379 bytes with the harness tools alone, 22,504 bytes with 120 MCP
+  # tools, about 170 bytes per tool) and up to 16 `responses_api_metadata` entries (3,910 bytes at
+  # the maximum). The earlier 4,096-byte cap refused every websocket turn of such a client as
+  # `malformed_canonical` (findings#258 row 258-91).
+  @max_metadata_bytes 262_144
   @max_identifier_bytes 256
   @max_window_number 18_446_744_073_709_551_615
   @digest_salt "native_compaction_admission:v1"

@@ -244,6 +244,37 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
              )
   end
 
+  # findings#258 row 258-91, measured on the released Codex 0.156.0 against a capture server:
+  # 742 bytes by default, 22,504 bytes with `turn_metadata_includes_tool_info` on a Responses
+  # Lite model and 120 MCP tools, 3,910 bytes with 16 maximal `responses_api_metadata` entries.
+  test "accepts the released client's tool inventory and maximal extra metadata" do
+    tool_heavy = released_turn_metadata(%{"tool_namespaces_info" => tool_namespaces_info(3, 40)})
+    extras = released_turn_metadata(maximal_extra_metadata())
+
+    assert byte_size(tool_heavy) > 16_384
+    assert byte_size(extras) > 3_500
+
+    for encoded <- [tool_heavy, extras] do
+      assert {:ok, %NativeCodexTurnMetadata{request_kind: :turn} = metadata} =
+               NativeCodexTurnMetadata.parse(payload(encoded), @session_id)
+
+      assert byte_size(metadata.semantic_turn_key) == 32
+
+      assert {:ok, %NativeCodexTurnMetadata{request_kind: :turn}} =
+               NativeCodexTurnMetadata.parse(payload(CodexPooler.JSON.decode!(encoded)), @session_id)
+    end
+  end
+
+  test "refuses a canonical value above the decode bound" do
+    oversized = released_turn_metadata(%{"tool_namespaces_info" => tool_namespaces_info(12, 150)})
+    assert byte_size(oversized) > 262_144
+
+    for value <- [oversized, CodexPooler.JSON.decode!(oversized)] do
+      assert {:error, %{status: 400, code: "invalid_request"}} =
+               NativeCodexTurnMetadata.parse(payload(value), @session_id)
+    end
+  end
+
   test "produces domain-separated deterministic keyed digests without raw leakage" do
     sentinel = "raw-sentinel-#{System.unique_integer([:positive])}"
 
@@ -274,6 +305,56 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
       assert byte_size(digest) == 32
       refute inspect(digest) =~ sentinel
     end
+  end
+
+  defp released_turn_metadata(extra) do
+    %{
+      "installation_id" => "00000000-0000-4000-8000-00000000b001",
+      "session_id" => @session_id,
+      "thread_id" => @session_id,
+      "agent_name" => "/root",
+      "turn_id" => "019a0000-0000-7000-8000-00000000b002",
+      "window_id" => "#{@session_id}:0",
+      "window_number" => 0,
+      "context_window_id" => "00000000-0000-4000-8000-00000000b003",
+      "request_kind" => "turn",
+      "root_turn_id" => "019a0000-0000-7000-8000-00000000b002",
+      "thread_source" => "user",
+      "turn_trigger" => "exec",
+      "sandbox" => "seccomp",
+      "sandbox_mode" => "read-only",
+      "auto_review_enabled" => false,
+      "node_repl_auto_review_required" => false,
+      "node_repl_disabled" => false,
+      "turn_started_at_unix_ms" => 1_790_000_000_000,
+      "analytics_enabled" => true,
+      "model" => "gpt-test-model",
+      "reasoning_effort" => "medium"
+    }
+    |> Map.merge(extra)
+    |> CodexPooler.JSON.encode!()
+  end
+
+  # The `TurnToolNamespacesInfo` shape of rust-v0.156.0 (`responses_metadata.rs`): one entry per
+  # namespace, one per function, with the MCP server as the function's source.
+  defp tool_namespaces_info(servers, tools) do
+    Map.new(1..servers, fn server ->
+      namespace = "mcp__p23s#{server}__"
+
+      functions =
+        Map.new(1..tools, fn tool ->
+          name = "p23s#{server}_lookup_record_#{tool}"
+          {name, %{"name" => name, "direct" => false, "code_mode_name" => nil, "deferred" => true, "source" => %{"kind" => "mcp", "server_name" => "p23s#{server}"}}}
+        end)
+
+      {namespace, %{"name" => namespace, "functions" => functions}}
+    end)
+  end
+
+  defp maximal_extra_metadata do
+    Map.new(1..16, fn index ->
+      {"k#{index}_" <> String.duplicate("x", 60), String.duplicate("v", 128)}
+    end)
   end
 
   defp payload(metadata) do
