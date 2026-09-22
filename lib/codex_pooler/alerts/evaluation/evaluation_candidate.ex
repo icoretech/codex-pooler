@@ -49,6 +49,11 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
   end
 
   @spec threshold(AlertRule.t(), map(), DateTime.t()) :: candidate()
+  # A rule naming a model its Pool does not serve has no quota to watch: the
+  # evaluation reports `model_not_served`, and the threshold stays clear.
+  def threshold(%AlertRule{} = rule, %{quota: %{state: "model_not_served"}} = assignment, %DateTime{} = timestamp),
+    do: clear(rule, dedupe_key_for_rule(rule, assignment.upstream_identity_id), timestamp)
+
   def threshold(%AlertRule{} = rule, assignment, %DateTime{} = timestamp) do
     dedupe_key = dedupe_key_for_rule(rule, assignment.upstream_identity_id)
     threshold = rule.threshold_used_percent || Decimal.new(100)

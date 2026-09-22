@@ -116,15 +116,17 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
 
     assignments =
       Enum.map(assignments, fn row ->
-        snapshot = Map.fetch!(snapshots_by_identity_id, row.upstream_identity_id)
-
-        quota_projection =
-          snapshot
+        snapshot =
+          snapshots_by_identity_id
+          |> Map.fetch!(row.upstream_identity_id)
           |> scope_snapshot(scope, Map.get(served_models, row.upstream_identity_id, MapSet.new()))
-          |> quota_projection(scope)
+
+        quota_projection = quota_projection(snapshot, scope)
 
         Map.merge(row, %{
           model: model,
+          # Threshold rules read these windows; for a rule without a model
+          # they carry the same served-model scoping as the quota state.
           quota_windows: RoutingQuotaSnapshot.effective_windows(snapshot),
           quota: quota_projection,
           state: assignment_state(row, quota_projection),

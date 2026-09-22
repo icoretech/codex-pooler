@@ -74,6 +74,77 @@ defmodule CodexPooler.Alerts.Evaluation.ServedModelQuotaAlertTest do
     end
   end
 
+  # Threshold rules need fresh evidence, so the case that matters is a model
+  # the account still reports fresh usage for while no Pool of the account
+  # serves it.
+  describe "an upstream quota threshold rule" do
+    test "without a model is never triggered by a model no Pool of the account serves" do
+      now = now()
+      %{pool: pool, identity: identity} = account_with_usable_account_windows!(now)
+      insert_fresh_exhausted_model_row!(identity, @retired, now)
+
+      assert [%{action: :clear}] = evaluate_threshold(pool, nil, now)
+    end
+
+    test "without a model is still triggered by a served model's window" do
+      now = now()
+      %{pool: pool, identity: identity} = account_with_usable_account_windows!(now)
+      model_fixture(pool, %{exposed_model_id: @retired, upstream_model_id: @retired})
+      insert_fresh_exhausted_model_row!(identity, @retired, now)
+
+      assert [%{action: :match, match_attrs: match}] = evaluate_threshold(pool, nil, now)
+      assert match.safe_evidence_snapshot.quota_scope == "model"
+      assert match.safe_evidence_snapshot.quota_key == "example_meter"
+    end
+
+    test "naming a model its Pool does not serve clears instead of reporting quota" do
+      now = now()
+      %{pool: pool, identity: identity} = account_with_usable_account_windows!(now)
+      insert_fresh_exhausted_model_row!(identity, @retired, now)
+
+      assert [%{action: :clear}] = evaluate_threshold(pool, @retired, now)
+    end
+
+    test "naming a served model keeps today's behaviour" do
+      now = now()
+      %{pool: pool, identity: identity} = account_with_usable_account_windows!(now)
+      model_fixture(pool, %{exposed_model_id: @retired, upstream_model_id: @retired})
+      insert_fresh_exhausted_model_row!(identity, @retired, now)
+
+      assert [%{action: :match}] = evaluate_threshold(pool, @retired, now)
+    end
+  end
+
+  defp evaluate_threshold(pool, model, now) do
+    pool
+    |> alert_rule_fixture(Enum.reject([rule_kind: "upstream_quota_threshold", scope_type: "upstream_identity", threshold_used_percent: Decimal.new("90"), model: model], &is_nil(elem(&1, 1))))
+    |> Alerts.evaluate_rule(at: now)
+  end
+
+  defp insert_fresh_exhausted_model_row!(identity, model, now) do
+    %AccountQuotaWindow{}
+    |> AccountQuotaWindow.changeset(%{
+      upstream_identity_id: identity.id,
+      quota_key: "example_meter",
+      quota_scope: "model",
+      quota_family: "codex_model",
+      model: model,
+      window_kind: "primary",
+      window_minutes: 300,
+      used_percent: Decimal.new("95"),
+      reset_at: DateTime.add(now, 3_600, :second),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      last_sync_at: now,
+      observed_at: now,
+      metadata: %{},
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+  end
+
   defp evaluate(pool, rule_kind, target_state, model, now) do
     pool
     |> alert_rule_fixture(Enum.reject([rule_kind: rule_kind, target_state: target_state, model: model], &is_nil(elem(&1, 1))))
