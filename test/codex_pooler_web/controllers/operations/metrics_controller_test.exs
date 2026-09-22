@@ -420,7 +420,10 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       |> Map.new(&{&1, %{running: 0, queued: 0}})
       |> Map.put("invalid_route_class", %{running: 99, queued: 99})
 
-    sampler_name = {:global, {:metrics_admission_sampler, System.unique_integer([:positive])}}
+    # A local name: a :global registration takes the cluster-wide lock, which waits for every
+    # connected node, so a peer another test left unresponsive held this start for the whole
+    # 60 s test timeout in a long serial run.
+    sampler_name = :"metrics-admission-sampler-#{System.unique_integer([:positive])}"
 
     {:ok, sampler} =
       start_supervised({AdmissionSampler, name: sampler_name, enabled?: true, interval_ms: 60_000, snapshot_reader: fn -> {:ok, snapshot} end})

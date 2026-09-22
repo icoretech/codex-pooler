@@ -918,8 +918,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     parent = self()
     drain_name = :"rollout-drain-wait-error-#{System.unique_integer([:positive])}"
 
+    # A frozen clock keeps the poll window open however long the first
+    # `owner_status` takes: on the real clock this 500 ms drain gets the 10 ms
+    # floor, and an owner answering later than that aborts the turn before the
+    # wait under test is ever scheduled.
     deadline = %{
-      now_ms: fn -> System.monotonic_time(:millisecond) end,
+      now_ms: fn -> 0 end,
       schedule_wait: fn _recipient, wait_token, _wait_ms ->
         send(parent, {:rollout_drain_wait_callback_started, wait_token})
         raise "synthetic wait callback failure"
