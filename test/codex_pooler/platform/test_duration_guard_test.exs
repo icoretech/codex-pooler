@@ -6,7 +6,8 @@ defmodule CodexPooler.TestDurationGuardTest do
   @limits %{normal_us: 1_000_000, hard_us: 6_000_000}
   @guard Path.expand("test/support/test_duration_guard.ex")
   @probe Path.expand("scripts/verification/test_duration_guard_probe_test.exs")
-  @local_env [{"CI", nil}, {"DRONE", nil}, {"GITHUB_ACTIONS", nil}]
+  # make test-fast exports the candidates file to its partitions; a probe VM that inherited it would defer instead of failing
+  @local_env [{"CI", nil}, {"DRONE", nil}, {"GITHUB_ACTIONS", nil}, {"CODEX_POOLER_TEST_DURATION_CANDIDATES", nil}]
 
   test "exact boundaries pass and both limits reject the first excess microsecond" do
     assert violation(1_000_000, %{}) == nil
@@ -119,7 +120,7 @@ defmodule CodexPooler.TestDurationGuardTest do
 
       {output, exit_code} =
         System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, unquote(scenario), unquote(mode)],
-          env: [{"CODEX_POOLER_TEST_DURATION_CANDIDATES", candidates} | @local_env],
+          env: List.keystore(@local_env, "CODEX_POOLER_TEST_DURATION_CANDIDATES", 0, {"CODEX_POOLER_TEST_DURATION_CANDIDATES", candidates}),
           stderr_to_stdout: true
         )
 
@@ -145,7 +146,7 @@ defmodule CodexPooler.TestDurationGuardTest do
 
   @tag slow: "boots an isolated BEAM VM to verify false CI flags preserve local timing enforcement"
   test "false CI flags keep local duration checks active" do
-    {output, exit_code} = System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, "ordinary", "normal"], env: [{"CI", "false"}, {"DRONE", "0"}, {"GITHUB_ACTIONS", ""}], stderr_to_stdout: true)
+    {output, exit_code} = System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, "ordinary", "normal"], env: [{"CI", "false"}, {"DRONE", "0"}, {"GITHUB_ACTIONS", ""}, {"CODEX_POOLER_TEST_DURATION_CANDIDATES", nil}], stderr_to_stdout: true)
     assert exit_code == 1, output
     assert output =~ "test duration guard failed:", output
     assert output =~ "guard formatter registered=true", output
