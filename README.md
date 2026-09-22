@@ -495,18 +495,12 @@ For deployed instances, change `base_url` to
 `https://codex-pooler.example.com/backend-api/codex` and `model_catalog_url` to
 `https://codex-pooler.example.com/backend-api/codex/models`.
 
-Codex 0.156.0 and later read the Pool's model catalog only through
 `model_catalog_url` together with `api_key_model_discovery = true` under
-`[features]` (keep a single `[features]` table in the file). Without them Codex
-keeps the catalog bundled with the release, so models only your Pool serves and
-the Pool's context windows are missing, even when a ChatGPT account is signed
-in. Earlier Codex releases ignore both settings and read the catalog from
-`base_url` while a ChatGPT account is signed in. Codex Desktop and the IDE
-extension follow the same rule once their bundled Codex core reaches 0.156.0.
-Codex still marks `api_key_model_discovery` as under development and prints a
-startup warning while it is on. Point `model_catalog_url` at the final URL (the
-`https` one for a deployed instance), because Codex refuses redirects there;
-Codex also refuses a catalog response larger than 1 MiB on that path.
+`[features]` is what makes current Codex releases read the Pool's model catalog
+(keep a single `[features]` table in the file). Point `model_catalog_url` at the
+final `https` URL, because Codex refuses redirects there. See
+[Codex CLI and Desktop](https://docs.codex-pooler.com/clients/codex-cli-desktop/)
+for which Codex releases need it and how to check that the catalog is read.
 
 Leave `requires_openai_auth = true` unless you are deliberately running Codex
 Pooler as a gateway-only provider. With `true`, Codex still shows the local
@@ -851,7 +845,7 @@ on a fixed, cheap effort.
 
 Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends
 `service_tier: priority` only when the provider is `openai` on `api.openai.com`
-or `openai-codex` on `chatgpt.com`. Since the Hermes 0.21 releases, an
+or `openai-codex` on `chatgpt.com`. In current Hermes releases an
 `openai-api` provider pointed at Codex Pooler never sends it, even though
 `/fast` and its tip still report fast mode as on. Codex Pooler accepts
 `service_tier: priority` (and `fast` as an alias) whenever a client sends it,
@@ -2057,8 +2051,8 @@ Completions, and `maxOutputTokens` at the Vercel AI SDK layer.
 
 Vercel AI SDK can request explicit compaction on the normal `/v1/responses`
 route with `providerOptions.openai.store: false` and
-`providerOptions.openai.compactionTrigger: true` when using `@ai-sdk/openai`
-4.0.42 or later. Codex Pooler accepts exactly one final
+`providerOptions.openai.compactionTrigger: true` on a current `@ai-sdk/openai`
+release. Codex Pooler accepts exactly one final
 `compaction_trigger` after visible input and returns the compact item through
 Responses JSON, SSE, or the narrow Responses websocket surface. Replay the
 returned opaque `type: "compaction"` item at the start of a new request without

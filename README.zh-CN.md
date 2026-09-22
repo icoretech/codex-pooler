@@ -466,15 +466,11 @@ requires_openai_auth = true
 `https://codex-pooler.example.com/backend-api/codex`，并把 `model_catalog_url` 改为
 `https://codex-pooler.example.com/backend-api/codex/models`。
 
-Codex 0.156.0 及更高版本只有在同时配置 `model_catalog_url` 和 `[features]` 下的
-`api_key_model_discovery = true` 时才会读取 Pool 的模型目录（配置文件中只保留一个
-`[features]` 表）。缺少这两项时，Codex 会继续使用随版本内置的目录，因此只由你的
-Pool 提供的模型以及 Pool 的上下文窗口都不会出现，即使已登录 ChatGPT 账号也是如此。
-更早的 Codex 版本会忽略这两项设置，并在已登录 ChatGPT 账号时从 `base_url` 读取目录。
-Codex Desktop 和 IDE 扩展在其内置的 Codex core 升级到 0.156.0 后遵循同样的规则。
-Codex 仍把 `api_key_model_discovery` 标记为开发中功能，启用时会在启动时打印警告。
-`model_catalog_url` 请指向最终 URL（已部署实例使用 `https` URL），因为 Codex 在该请求上
-拒绝重定向；Codex 在该路径上也会拒绝超过 1 MiB 的目录响应。
+当前的 Codex 版本需要同时配置 `model_catalog_url` 和 `[features]` 下的
+`api_key_model_discovery = true` 才会读取 Pool 的模型目录（配置文件中只保留一个
+`[features]` 表）。`model_catalog_url` 请指向最终的 `https` URL，因为 Codex 在该请求上
+拒绝重定向。哪些 Codex 版本需要这项配置、以及如何确认目录已被读取，请参阅
+[Codex CLI 与 Desktop](https://docs.codex-pooler.com/clients/codex-cli-desktop/)。
 
 当 Codex 按上述配置读取 Pool 的模型目录时，Codex CLI 和 Codex Desktop 会从这些元数据
 派生有效上下文窗口和自动压缩边界。保持上下文大小自动配置，让客户端跟随每个模型的
@@ -777,7 +773,7 @@ provider account 可能暂时报告不同目录上限，请把这个 per-model e
 
 Hermes 会用单独的辅助调用生成会话标题，该调用不发送 reasoning effort，因此使用模型的默认 effort。设置 `auxiliary.title_generation.reasoning_effort: low`，让这些短调用固定使用较低成本的 effort。
 
-Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provider 为 `api.openai.com` 上的 `openai` 或 `chatgpt.com` 上的 `openai-codex` 时才发送 `service_tier: priority`。从 Hermes 0.21 版本开始，指向 Codex Pooler 的 `openai-api` provider 永远不会发送它，即使 `/fast` 及其提示仍显示 fast 模式已开启。只要客户端发送 `service_tier: priority`（或别名 `fast`），Codex Pooler 就会接受，因此这是 Hermes 的路由规则，而不是 Pooler 的限制。
+Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provider 为 `api.openai.com` 上的 `openai` 或 `chatgpt.com` 上的 `openai-codex` 时才发送 `service_tier: priority`。在当前的 Hermes 版本中，指向 Codex Pooler 的 `openai-api` provider 永远不会发送它，即使 `/fast` 及其提示仍显示 fast 模式已开启。只要客户端发送 `service_tier: priority`（或别名 `fast`），Codex Pooler 就会接受，因此这是 Hermes 的路由规则，而不是 Pooler 的限制。
 
 远程 HTTP MCP servers 需要 Hermes 的 `mcp` extra。如果
 `hermes mcp test codex_pooler` 报告 `mcp.client.streamable_http is not available`，
@@ -1923,7 +1919,7 @@ console.log(text);
 字段：OpenAI Responses 中的 `max_output_tokens`，Chat Completions 中的
 `max_completion_tokens`，以及 Vercel AI SDK 层的 `maxOutputTokens`。
 
-使用 `@ai-sdk/openai` 4.0.42 或更高版本时，Vercel AI SDK 可以通过
+使用当前版本的 `@ai-sdk/openai` 时，Vercel AI SDK 可以通过
 `providerOptions.openai.store: false` 和
 `providerOptions.openai.compactionTrigger: true` 在普通 `/v1/responses` 路由请求
 显式 compaction。Codex Pooler 接受位于可见输入之后、且恰好只有一个的最终
