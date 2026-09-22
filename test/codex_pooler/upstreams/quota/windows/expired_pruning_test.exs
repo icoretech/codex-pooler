@@ -42,23 +42,44 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruningTest do
       assert {:ok, %{expired_quota_windows_pruned: 0}} = Windows.prune_expired_windows(now)
     end
 
-    test "keeps an expired row that carries the saved-reset confirmation marker" do
+    test "deletes a marker row only once every reset the marker carries passed before the cutoff" do
       now = now()
       identity = upstream_identity_fixture()
-      old = DateTime.add(now, -(retention_days() + 10) * @day, :second)
+      cutoff = DateTime.add(now, -ExpiredPruning.retention_seconds(), :second)
+      old = DateTime.add(cutoff, -10 * @day, :second)
 
-      marked =
-        insert_window!(identity,
-          source: "codex_usage_api",
-          reset_at: old,
-          metadata: %{AutomaticConfirmation.metadata_key() => %{"version" => 1, "state" => "approach"}}
-        )
+      # The production shape: an approach witness left on a retired descriptor.
+      lapsed = insert_window!(identity, source: "codex_usage_api", reset_at: old, metadata: approach_marker(old))
+      # A marker still naming a reset after the cutoff stays even on an old row.
+      live = insert_window!(identity, source: "codex_usage_api", quota_key: "codex_spark", quota_scope: "model", model: "gpt-5.3-codex-spark", reset_at: old, metadata: approach_marker(DateTime.add(cutoff, @day, :second)))
+      # A malformed marker is read as absent by every reader.
+      malformed = insert_window!(identity, source: "codex_usage_api", window_kind: "primary", window_minutes: 300, reset_at: old, metadata: %{AutomaticConfirmation.metadata_key() => %{"version" => 1, "state" => "approach"}})
 
-      unmarked = insert_window!(identity, source: "codex_response_headers", reset_at: old)
+      assert {:ok, %{expired_quota_windows_pruned: 2}} = Windows.prune_expired_windows(now)
+      refute Repo.get(AccountQuotaWindow, lapsed.id)
+      refute Repo.get(AccountQuotaWindow, malformed.id)
+      assert Repo.get(AccountQuotaWindow, live.id)
+    end
 
-      assert {:ok, %{expired_quota_windows_pruned: 1}} = Windows.prune_expired_windows(now)
-      assert Repo.get(AccountQuotaWindow, marked.id)
-      refute Repo.get(AccountQuotaWindow, unmarked.id)
+    test "a marker has lapsed only when its first, latest and approach resets are all before the cutoff" do
+      cutoff = ~U[2026-08-01 00:00:00Z]
+      before = DateTime.add(cutoff, -@day, :second)
+      later = DateTime.add(cutoff, @day, :second)
+
+      assert AutomaticConfirmation.lapsed_before?(%{}, cutoff)
+      assert AutomaticConfirmation.lapsed_before?(nil, cutoff)
+      assert AutomaticConfirmation.lapsed_before?(approach_marker(before), cutoff)
+      refute AutomaticConfirmation.lapsed_before?(approach_marker(later), cutoff)
+      refute AutomaticConfirmation.lapsed_before?(approach_marker(cutoff), cutoff)
+
+      candidate = AutomaticConfirmation.observe(%{}, blocked_observation(before))
+      assert AutomaticConfirmation.state(candidate) == "candidate"
+      assert AutomaticConfirmation.lapsed_before?(candidate, cutoff)
+      refute AutomaticConfirmation.lapsed_before?(AutomaticConfirmation.observe(%{}, blocked_observation(later)), cutoff)
+
+      confirmed = AutomaticConfirmation.observe(candidate, blocked_observation(before, DateTime.add(before, -3_000, :second)))
+      assert AutomaticConfirmation.state(confirmed) == "confirmed"
+      assert AutomaticConfirmation.lapsed_before?(confirmed, cutoff)
     end
 
     test "a pass deletes at most the batch size, oldest reset first" do
@@ -232,6 +253,36 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruningTest do
       )
     )
     |> Repo.insert!()
+  end
+
+  defp approach_marker(reset_at) do
+    AutomaticConfirmation.observe_allowed(%{}, %{used_percent: 40.0, provider_observed_at: DateTime.add(reset_at, -3_600, :second), reset_at: reset_at})
+  end
+
+  defp blocked_observation(reset_at, observed_at \\ nil) do
+    observed_at = observed_at || DateTime.add(reset_at, -3_600, :second)
+
+    %{
+      binding: %{
+        identity_id: "00000000-0000-4000-8000-000000000260",
+        credential_epoch: 1,
+        reset_identity: DateTime.to_iso8601(reset_at),
+        provider_scope: String.duplicate("a", 64),
+        descriptor: String.duplicate("b", 64),
+        trigger: :blocked,
+        threshold_percent: nil,
+        bank_count: 1,
+        keep_credits: 0,
+        permission: %{allowed: false, reached: true, account_state: "blocked"}
+      },
+      provider_observed_at: observed_at,
+      observed_at: observed_at,
+      used_percent: 100.0,
+      rate_limit_allowed: false,
+      rate_limit_reached: true,
+      reset_at: reset_at,
+      available_count: 1
+    }
   end
 
   defp retention_days, do: div(ExpiredPruning.retention_seconds(), @day)

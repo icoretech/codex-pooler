@@ -12,11 +12,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruning do
   describe any cycle, so the table only holds evidence that can still matter.
 
   A row is deleted when its `reset_at` passed more than
-  `retention_seconds/0` ago. It is never deleted while it carries the
-  saved-reset automatic-confirmation marker, and never while another
-  transaction holds it locked: a saved-reset claim and its reservation lock
-  their proof rows `FOR UPDATE`, and those rows are skipped rather than waited
-  for. Deletion runs per identity under the same identity-first locks as the
+  `retention_seconds/0` ago. A row carrying the saved-reset
+  automatic-confirmation marker is deleted only when that marker has lapsed
+  by the same cutoff (`AutomaticConfirmation.lapsed_before?/2`: every reset
+  instant it carries passed before the cutoff, or it is malformed), so no
+  confirmation, approach witness or claim can still read it. A row another
+  transaction holds locked is never deleted: a saved-reset claim and its
+  reservation lock their proof rows `FOR UPDATE`, and those rows are skipped
+  rather than waited for. Deletion runs per identity under the same identity-first locks as the
   evidence writers (`EvidenceStore.lock_evidence_identity!/1`), and the
   candidate conditions are re-evaluated under those locks, so a row a
   concurrent observation refreshed is kept. A pass handles at most
@@ -60,10 +63,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruning do
     pruned =
       cutoff
       |> candidate_query()
-      |> order_by([window], asc: window.reset_at, asc: window.id)
+      |> order_by([window], asc: fragment("jsonb_exists(?, ?)", window.metadata, ^AutomaticConfirmation.metadata_key()), asc: window.reset_at, asc: window.id)
       |> limit(^batch_size)
-      |> select([window], {window.upstream_identity_id, window.id})
+      |> select([window], {window.upstream_identity_id, window.id, window.metadata})
       |> Repo.all()
+      |> Enum.filter(&lapsed_marker?(&1, cutoff))
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.reduce(0, fn {identity_id, window_ids}, total ->
@@ -87,8 +91,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruning do
           |> candidate_query()
           |> where([window], window.upstream_identity_id == ^identity_id and window.id in ^window_ids)
           |> lock("FOR UPDATE SKIP LOCKED")
-          |> select([window], window.id)
+          |> select([window], {window.upstream_identity_id, window.id, window.metadata})
           |> Repo.all()
+          |> Enum.filter(&lapsed_marker?(&1, cutoff))
+          |> Enum.map(&elem(&1, 1))
 
         {count, _rows} =
           Repo.delete_all(from(window in AccountQuotaWindow, where: window.id in ^deletable_ids))
@@ -101,12 +107,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruning do
     deleted
   end
 
+  # Unmarked rows sort first, so a marker that has not lapsed can never fill a
+  # batch ahead of rows that are deletable.
   defp candidate_query(cutoff) do
-    marker = AutomaticConfirmation.metadata_key()
-
-    from(window in AccountQuotaWindow,
-      where: window.reset_at < ^cutoff,
-      where: not fragment("jsonb_exists(?, ?)", window.metadata, ^marker)
-    )
+    from(window in AccountQuotaWindow, where: window.reset_at < ^cutoff)
   end
+
+  defp lapsed_marker?({_identity_id, _id, metadata}, cutoff),
+    do: AutomaticConfirmation.lapsed_before?(metadata, cutoff)
 end

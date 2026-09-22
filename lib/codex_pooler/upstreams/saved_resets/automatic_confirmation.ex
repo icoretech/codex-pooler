@@ -258,6 +258,35 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
   def clear(metadata) when is_map(metadata), do: Map.delete(metadata, @metadata_key)
   def clear(_metadata), do: %{}
 
+  @doc """
+  True when no reader can act on the marker in `metadata` at or after
+  `cutoff`: there is no marker, the marker is malformed (every reader treats
+  it as absent), or every reset instant it carries (first, latest and the
+  approach witness) is before `cutoff`. `confirmed?/3` never holds once `now`
+  reaches the latest reset, and a later observation of the same window belongs
+  to a later cycle, which restarts the proof and replaces the approach witness
+  instead of reading them, so such a marker can be dropped with its row.
+  """
+  @spec lapsed_before?(map() | nil, DateTime.t()) :: boolean()
+  def lapsed_before?(metadata, %DateTime{} = cutoff) do
+    case marker(metadata) do
+      nil ->
+        true
+
+      marker ->
+        case parse_marker(marker) do
+          {:ok, parsed} -> parsed |> marker_reset_instants() |> Enum.all?(&(DateTime.compare(&1, cutoff) == :lt))
+          :error -> true
+        end
+    end
+  end
+
+  defp marker_reset_instants(parsed) do
+    [Map.get(parsed, :first), Map.get(parsed, :latest), Map.get(parsed, :approach)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(& &1.reset_at)
+  end
+
   @doc "Returns the persisted marker state (approach, candidate or confirmed), or nil when absent or malformed."
   @spec state(map() | nil) :: String.t() | nil
   def state(metadata) do
