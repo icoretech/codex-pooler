@@ -258,7 +258,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
     end
   end
 
-  describe "usage polling pause leaf transactions" do
+  describe "usage polling pause leaf transaction" do
     setup do
       identity = unboxed(fn -> upstream_identity_fixture() end)
       register_unboxed_cleanup!(fn -> Repo.delete!(identity) end)
@@ -279,23 +279,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
         end)
 
       assert results == %{row: {:ok, ctx.deadline}, advisory: {:ok, ctx.deadline}}
-    end
-
-    test "the operator's clear locks only the identity row", ctx do
-      record = fn ->
-        {:ok, _deadline} = unboxed(fn -> UsagePollCooldown.record(ctx.identity.id, 1, ctx.origin, 429, ctx.deadline, ctx.as_of) end)
-        :ok
-      end
-
-      results =
-        assert_row_only_leaf(ctx.identity, fn -> UsagePollCooldown.clear(ctx.identity.id, ctx.as_of) end, before_each: record)
-
-      deadline = ctx.deadline
-
-      assert %{
-               row: {:ok, {%UpstreamIdentity{}, [%{not_before: ^deadline}]}},
-               advisory: {:ok, {%UpstreamIdentity{}, [%{not_before: ^deadline}]}}
-             } = results
     end
   end
 

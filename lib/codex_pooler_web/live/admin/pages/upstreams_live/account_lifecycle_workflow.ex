@@ -36,19 +36,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
         reload_fun
       )
 
-  @spec clear_usage_poll_pause(Phoenix.LiveView.Socket.t(), Ecto.UUID.t(), (Phoenix.LiveView.Socket.t() ->
-                                                                              Phoenix.LiveView.Socket.t())) ::
-          Phoenix.LiveView.Socket.t()
-  def clear_usage_poll_pause(socket, identity_id, reload_fun),
-    do:
-      lifecycle_action(
-        socket,
-        identity_id,
-        &Upstreams.clear_usage_poll_pause_for_scope/3,
-        "Usage polling resumed for this account",
-        reload_fun
-      )
-
   @spec refresh(Phoenix.LiveView.Socket.t(), Ecto.UUID.t(), (Phoenix.LiveView.Socket.t() ->
                                                                Phoenix.LiveView.Socket.t())) ::
           Phoenix.LiveView.Socket.t()

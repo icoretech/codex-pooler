@@ -51,7 +51,6 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Prose do
     "upstream_account.delete" => {:named, "deleted the upstream account"},
     "upstream_account.saved_reset_policy_update" => {:named, "updated the saved-reset policy of the upstream account"},
     "upstream_account.saved_reset_redeem_enqueue" => {:named, "queued a saved-reset redemption for the upstream account"},
-    "upstream_account.usage_poll_pause_clear" => {:named, "cleared the usage polling pause of the upstream account"},
     "api_key.create" => {:named, "created the API key"},
     "api_key.update" => {:named, "updated the API key"},
     "api_key.pause" => {:named, "paused the API key"},

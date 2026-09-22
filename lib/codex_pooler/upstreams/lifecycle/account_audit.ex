@@ -88,7 +88,6 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountAudit do
       |> Map.put(:pool_assignment_ids, assignment_ids(result, pool_id))
       |> maybe_put_detail(:trigger_kind, Keyword.get(opts, :trigger_kind))
       |> maybe_put_detail(:job_conflict, Keyword.get(opts, :job_conflict?))
-      |> Map.merge(Keyword.get(opts, :details, %{}))
 
     %{
       pool_id: pool_id,
