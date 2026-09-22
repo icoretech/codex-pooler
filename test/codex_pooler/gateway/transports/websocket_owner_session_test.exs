@@ -217,6 +217,87 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     end
   end
 
+  # Every owner-side clear of a native compaction admission names its cause
+  # from the fixed lifecycle vocabulary; before findings#258 row 258-50 these
+  # paths fell back to `:request_rejected`, which no request caused.
+  describe "native compaction admission clear reasons" do
+    test "a drain clears an armed admission as owner_drained", context do
+      armed = armed_admission!(context)
+      attach_admission_clear_observer(armed.binding.lifecycle_id)
+      owner_ref = Process.monitor(armed.owner)
+
+      assert :ok = WebsocketOwnerSession.drain_owner(armed.owner)
+      assert_receive {:admission_clear, %{reason: :owner_drained, phase_from: :pending_compact, phase_to: :cleared}}
+      assert_receive {:DOWN, ^owner_ref, :process, _owner, _reason}
+      refute_received {:admission_clear, %{reason: :request_rejected}}
+    end
+
+    test "a rollout drain start clears an armed admission as owner_drained", context do
+      armed = armed_admission!(context)
+      attach_admission_clear_observer(armed.binding.lifecycle_id)
+
+      :ok = WebsocketOwnerSession.begin_drain(armed.owner)
+      assert :sys.get_state(armed.owner).draining?
+      assert_receive {:admission_clear, %{reason: :owner_drained, phase_from: :pending_compact}}
+      refute_received {:admission_clear, %{reason: :request_rejected}}
+    end
+
+    test "the exit of the owner's upstream clears an armed admission as upstream_exited", context do
+      armed = armed_admission!(context)
+      attach_admission_clear_observer(armed.binding.lifecycle_id)
+      owner_ref = Process.monitor(armed.owner)
+
+      Process.exit(:sys.get_state(armed.owner).upstream_pid, :shutdown)
+
+      assert_receive {:DOWN, ^owner_ref, :process, _owner, _reason}
+      assert_receive {:admission_clear, %{reason: :upstream_exited, phase_from: :pending_compact}}
+      refute_received {:admission_clear, %{reason: :request_rejected}}
+    end
+
+    test "a stale owner lease clears an armed admission as stale_owner", context do
+      persistence = %{
+        renew_owner_token: fn _session_id, _owner_lease_token, %RequestOptions{} -> {:error, :stale_owner} end,
+        release_owner_lease: fn _session_id, _owner_lease_token, _reason -> :ok end,
+        interrupt_codex_session: fn _session_id, _opts -> :ok end
+      }
+
+      armed = armed_admission!(context, persistence: persistence)
+      attach_admission_clear_observer(armed.binding.lifecycle_id)
+      owner_ref = Process.monitor(armed.owner)
+
+      capture_log(fn ->
+        send(armed.owner, :renew_owner_lease)
+        assert_receive {:DOWN, ^owner_ref, :process, _owner, {:shutdown, :stale_owner}}
+      end)
+
+      assert_receive {:admission_clear, %{reason: :stale_owner, phase_from: :pending_compact}}
+      refute_received {:admission_clear, %{reason: :request_rejected}}
+    end
+
+    test "a submission without the admission's capability clears it as capability_rejected", context do
+      armed = armed_admission!(context)
+      attach_admission_clear_observer(armed.binding.lifecycle_id)
+
+      request = %UpstreamWebsocketSession.Request{
+        websocket_request()
+        | native_compaction_capability: nil,
+          expected_connection_lifecycle: %{lifecycle_id: armed.binding.lifecycle_id, generation: armed.binding.generation}
+      }
+
+      assert {:error, :native_compaction_capability_rejected} = WebsocketOwnerSession.submit_request(armed.owner, armed.downstream, request)
+      assert_receive {:admission_clear, %{reason: :capability_rejected, phase_from: :pending_compact}}
+      refute_received {:admission_clear, %{reason: :request_rejected}}
+    end
+
+    test "a rejected request still clears as request_rejected", context do
+      armed = armed_admission!(context)
+      attach_admission_clear_observer(armed.binding.lifecycle_id)
+
+      assert {:ok, nil} = WebsocketOwnerSession.admission_control(armed.owner, admission_control(:clear, armed.downstream, []))
+      assert_receive {:admission_clear, %{reason: :request_rejected, phase_from: :pending_compact}}
+    end
+  end
+
   test "forwarded admission follows one socket across per-turn correlation ids", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     {owner, seed_url} = start_seeded_owner(context, upstream)
@@ -5958,6 +6039,53 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       writer: fn _frame -> :ok end
     }
   end
+
+  # An owner with a forwarded native compaction admission armed in
+  # `pending_compact` after one ordinary success, bound to an attached
+  # downstream (this test process).
+  defp armed_admission!(context, opts \\ []) do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    {owner, seed_url} = start_seeded_owner(context, upstream, opts)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("admission-clear-reason"))
+
+    {binding, receipt} = OrdinarySuccessTestSeed.request(owner, downstream, forwarded_binding(context, downstream), seed_url)
+
+    assert {:ok, pending} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_ordinary_success, downstream,
+                 binding: binding,
+                 first_compact_collection: receipt,
+                 expires_at_ms: System.system_time(:millisecond) + 30_000
+               )
+             )
+
+    assert NativeCompactionAdmission.phase(pending) == :pending_compact
+    %{owner: owner, downstream: downstream, binding: binding}
+  end
+
+  # Forwards the lifecycle `:clear` observations of one admission (its
+  # lifecycle id is unique to the test) to the test process.
+  defp attach_admission_clear_observer(lifecycle_id) do
+    handler_id = "admission-clear-reason-#{System.unique_integer([:positive])}"
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :native_compaction, :lifecycle],
+        &__MODULE__.forward_admission_clear/4,
+        %{test: self(), lifecycle_id: lifecycle_id}
+      )
+  end
+
+  @doc false
+  def forward_admission_clear(_event, _measurements, %{operation: :clear, native_lifecycle_id: lifecycle_id} = observation, %{test: test, lifecycle_id: lifecycle_id}),
+    do: send(test, {:admission_clear, observation})
+
+  def forward_admission_clear(_event, _measurements, _observation, _config), do: :ok
 
   defp start_seeded_owner(context, upstream, opts \\ []) do
     {boundary, url} = OrdinarySuccessTestSeed.boundary(upstream)

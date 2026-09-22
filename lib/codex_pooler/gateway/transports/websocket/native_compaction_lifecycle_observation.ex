@@ -35,7 +35,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObse
     :send_failure,
     :caller_exit,
     :downstream_detached,
-    :downstream_cancelled
+    :downstream_cancelled,
+    :owner_drained,
+    :stale_owner,
+    :upstream_exited,
+    :capability_rejected,
+    :send_witness_rejected,
+    :handoff_timeout,
+    :replay_retired
   ]
   @phases [
     :ordinary_success,
@@ -82,6 +89,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObse
           | :caller_exit
           | :downstream_detached
           | :downstream_cancelled
+          | :owner_drained
+          | :stale_owner
+          | :upstream_exited
+          | :capability_rejected
+          | :send_witness_rejected
+          | :handoff_timeout
+          | :replay_retired
           | :unknown
   @type topology :: :direct | :forwarded | :unknown
   @type t :: %{
