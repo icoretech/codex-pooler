@@ -417,6 +417,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "responsesapi.websocket_timing are dropped before sequence numbering"
     end
 
+    test "states that the public websocket relays only the public Responses stream vocabulary" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+
+      assert feature.contract =~ "The public GET /v1/responses websocket relays the same vocabulary, response.* events and the error event, on direct and owner-forwarded turns"
+      assert feature.contract =~ "drops codex.* controls, responsesapi.* events and typeless non-terminal frames before sequence numbering"
+    end
+
     test "states that a replayed call item named by its own call_id is dropped before upstream dispatch" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
 

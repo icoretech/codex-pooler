@@ -1505,7 +1505,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     rate_limits = CodexPooler.JSON.encode!(%{"type" => "codex.rate_limits", "remaining" => 1})
 
-    assert {:push, {:text, _payload}, rate_limit_state} =
+    # A backend-internal control never reaches a public client (findings#254
+    # row 254-14), so it cannot commit output either.
+    assert {:ok, rate_limit_state} =
              CodexResponsesSocket.handle_info(
                {:codex_response_chunk, task_pid, rate_limits},
                state

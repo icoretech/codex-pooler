@@ -38,7 +38,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         decoded = PublicResponses.drop_provider_event_headers(decoded)
         event_type = string_value(decoded, "type")
 
-        case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do
+        case public_event(event_type, decoded, state) do
           {:emit, type, normalized, state} ->
             normalized =
               type
@@ -59,6 +59,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         {:drop, state}
     end
   end
+
+  # Only the public Responses vocabulary reaches a public websocket client, as
+  # on the public SSE relay: `response.*` (unknown ones included), the `error`
+  # terminal and `keepalive`. Backend-internal types (`codex.*` controls, the
+  # upstream websocket's `responsesapi.websocket_timing`) and typeless
+  # non-terminal frames are dropped before they take a sequence number
+  # (findings#254 row 254-14).
+  defp public_event(event_type, decoded, state) do
+    case PublicResponsesSequence.public_shape(event_type, decoded) do
+      {:ok, type, public_decoded} ->
+        if public_websocket_event?(type),
+          do: PublicResponsesSequence.assign(type, public_decoded, state, :websocket),
+          else: {:drop, state}
+
+      :drop ->
+        {:drop, state}
+    end
+  end
+
+  defp public_websocket_event?("error"), do: true
+  defp public_websocket_event?(type), do: PublicResponses.public_stream_event?(type)
 
   defp sequence_exhausted do
     %{

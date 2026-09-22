@@ -1207,9 +1207,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   # number: openai-node's `responses.stream()` throws `Unhandled response
   # stream event` on any type outside its vocabulary (findings#225). Unknown
   # `response.*` types stay relayed so new public events keep flowing.
-  defp public_stream_event?("response." <> _rest), do: true
-  defp public_stream_event?("keepalive"), do: true
-  defp public_stream_event?(_type), do: false
+  # The public websocket relay shares it (findings#254 row 254-14).
+  @doc false
+  @spec public_stream_event?(term()) :: boolean()
+  def public_stream_event?("response." <> _rest), do: true
+  def public_stream_event?("keepalive"), do: true
+  def public_stream_event?(_type), do: false
 
   defp stream_block_event(block) do
     data = StreamProtocol.sse_field(block, "data")
