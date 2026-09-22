@@ -58,6 +58,34 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
   end
 
   describe "continuity response aliases" do
+    # Before findings#255 a second key of the Pool that sent the same session
+    # header re-owned the first key's session and registered its own aliases on
+    # it, so rows written then can carry an alias of one key pointing at a
+    # session of another. Such an alias must not hand the other key's session to
+    # the key that owns the alias, whichever alias kind it is.
+    @tag :cross_key_window_session
+    test "an alias of one api key never resolves a session owned by another key" do
+      auth = auth_fixture()
+      %{api_key: other_key} = active_api_key_fixture(auth.pool, %{created_by_user_id: auth.pool.created_by_user_id})
+      other_auth = %{auth | api_key: other_key}
+      header = "legacy-shared-session-#{System.unique_integer([:positive])}"
+      opts = RequestOptions.for_websocket(%{session_header: header, response_id: "resp_legacy_shared_alias"})
+
+      assert {:ok, session} = Gateway.start_codex_session(auth, opts)
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      assert :ok = Aliases.register!(session, other_auth, opts, now)
+
+      assert is_nil(Aliases.active_session_for_update(auth.pool.id, other_key.id, "session_header", header, now))
+      assert is_nil(Aliases.previous_response_session_id(other_auth, "resp_legacy_shared_alias", now))
+      assert is_nil(Aliases.previous_response_assignment_id(other_auth, "resp_legacy_shared_alias", now))
+
+      assert {:ok, other} = Gateway.start_codex_session(other_auth, opts)
+      refute other.id == session.id
+      assert other.api_key_id == other_key.id
+      assert Repo.get!(CodexSession, session.id).api_key_id == auth.api_key.id
+    end
+
+    @tag :cross_key_window_session
     test "public websocket session headers create independent sessions without an HTTP warmup" do
       auth = auth_fixture()
 
@@ -80,8 +108,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
 
       other_auth = %{auth | api_key: other_key}
 
-      assert {:error, :owner_unavailable} =
-               Gateway.start_codex_session(other_auth, options.("public-session-one"))
+      # Another key of the Pool sending the same header opens its own session
+      # and never attaches to this key's (findings#255).
+      assert {:ok, other} = Gateway.start_codex_session(other_auth, options.("public-session-one"))
+      refute other.id == first.id
+      assert other.api_key_id == other_key.id
+      assert Repo.get!(CodexSession, first.id).api_key_id == auth.api_key.id
 
       anchored =
         options.("unknown-public-session")
@@ -565,7 +597,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
       end)
 
     message =
-      "session_start_conflict_recovered reason=codex_sessions_pool_session_key_uq outcome=reused_existing_session"
+      "session_start_conflict_recovered reason=codex_sessions_pool_api_key_session_key_uq outcome=reused_existing_session"
 
     assert log =~ message
     assert length(Regex.scan(Regex.compile!(Regex.escape(message)), log)) == 1
@@ -575,64 +607,57 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     refute log =~ request_body_like
   end
 
+  # Two API keys of one Pool racing to start a session on the same key used to
+  # meet on `(pool_id, lower(session_key))`: the loser of a plain start re-owned
+  # the winner's row and the loser of an owner attach was refused
+  # `session_start_conflict`. Uniqueness is `(pool_id, api_key_id,
+  # lower(session_key))`, so each key commits its own session on independent
+  # connections, and each key's next start resolves its own (findings#255).
   @tag :session_start_race
   @tag :session_conflict_recovery
-  test "recovered starts preserve normal pool scope and authenticated owner attach api key scope" do
+  @tag :cross_key_window_session
+  test "racing starts of two api keys on one session key each commit their own session" do
     %{primary_auth: primary_auth, alternate_auth: alternate_auth} = unboxed_same_pool_auths!()
-    normal_key = "session-conflict-pool-scope-#{System.unique_integer([:positive])}"
 
-    assert [
-             {:ok, %CodexSession{} = primary_session},
-             {:ok, %CodexSession{} = alternate_session}
-           ] =
-             contested_start_results(
-               [
-                 {primary_auth, %{owner_instance_id: "node-a"}},
-                 {alternate_auth, %{owner_instance_id: "node-b"}}
-               ],
-               normal_key,
-               :first_wins
-             )
+    for {label, alternate_opts} <- [
+          {"plain", %{}},
+          {"owner-attach", %{authenticated_owner_attach: true}}
+        ] do
+      session_key = "session-conflict-api-key-scope-#{label}-#{System.unique_integer([:positive])}"
 
-    assert alternate_session.id == primary_session.id
+      assert [
+               {:ok, %CodexSession{} = primary_session},
+               {:ok, %CodexSession{} = alternate_session}
+             ] =
+               contested_start_results(
+                 [
+                   {primary_auth, %{owner_instance_id: "node-a"}},
+                   {alternate_auth, Map.put(alternate_opts, :owner_instance_id, "node-b")}
+                 ],
+                 session_key,
+                 :first_wins
+               )
 
-    assert unboxed_active_session_count(primary_auth.pool.id, turn_state_session_key(normal_key)) ==
-             1
+      refute alternate_session.id == primary_session.id
+      assert unboxed_get_session!(primary_session.id).api_key_id == primary_auth.api_key.id
+      assert unboxed_get_session!(alternate_session.id).api_key_id == alternate_auth.api_key.id
+      assert unboxed_active_session_count(primary_auth.pool.id, turn_state_session_key(session_key)) == 2
+      unboxed_refute_raw_turn_state_session_key!(primary_auth.pool.id, session_key)
 
-    unboxed_refute_raw_turn_state_session_key!(primary_auth.pool.id, normal_key)
+      assert {:ok, %CodexSession{id: resumed_alternate_id}} =
+               Sandbox.unboxed_run(Repo, fn ->
+                 Gateway.start_codex_session(alternate_auth, Map.put(alternate_opts, :accepted_turn_state, session_key))
+               end)
 
-    owner_attach_key = "session-conflict-owner-attach-#{System.unique_integer([:positive])}"
+      assert resumed_alternate_id == alternate_session.id
 
-    assert [
-             {:ok, %CodexSession{} = owner_session},
-             {:error, %{status: 409, code: "session_start_conflict", param: "session_id"}}
-           ] =
-             contested_start_results(
-               [
-                 {primary_auth, %{owner_instance_id: "node-a"}},
-                 {alternate_auth, %{owner_instance_id: "node-b", authenticated_owner_attach: true}}
-               ],
-               owner_attach_key,
-               :first_wins
-             )
+      assert {:ok, %CodexSession{id: resumed_primary_id}} =
+               Sandbox.unboxed_run(Repo, fn ->
+                 Gateway.start_codex_session(primary_auth, %{accepted_turn_state: session_key})
+               end)
 
-    assert unboxed_get_session!(owner_session.id).api_key_id == primary_auth.api_key.id
-
-    assert unboxed_active_session_count(
-             primary_auth.pool.id,
-             turn_state_session_key(owner_attach_key)
-           ) ==
-             1
-
-    unboxed_refute_raw_turn_state_session_key!(primary_auth.pool.id, owner_attach_key)
-
-    assert {:error, :owner_unavailable} =
-             Sandbox.unboxed_run(Repo, fn ->
-               Gateway.start_codex_session(alternate_auth, %{
-                 accepted_turn_state: owner_attach_key,
-                 authenticated_owner_attach: true
-               })
-             end)
+      assert resumed_primary_id == primary_session.id
+    end
   end
 
   @tag :session_start_race
@@ -1348,8 +1373,40 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
       assert is_nil(replacement.recreated_from_assignment_id)
     end
 
-    # The partial unique index codex_sessions_pool_session_key_uq admits only
-    # one reconnectable session per (pool_id, lower(session_key)), so a
+    # The lease-expiry recreation closes only the requesting key's sessions:
+    # closing another key's expired session on the same key would also expire
+    # its `previous_response_id` aliases, which outlive an expired lease and
+    # carry that key's HTTP response-id continuity (findings#255).
+    @tag :cross_key_window_session
+    test "another api key's start on the same key leaves an expired session and its response alias alone" do
+      auth = auth_fixture()
+      %{api_key: other_api_key} = active_api_key_fixture(auth.pool)
+      other_auth = %{pool: auth.pool, api_key: other_api_key}
+      session_key = "recreation-foreign-close-#{System.unique_integer([:positive])}"
+      response_id = "resp_foreign_close_#{System.unique_integer([:positive])}"
+
+      assert {:ok, %CodexSession{} = expired} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 response_id: response_id,
+                 owner_instance_id: "node-expired"
+               })
+
+      expire_owner_lease!(expired.id)
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      assert Aliases.previous_response_session_id(auth, response_id, now) == expired.id
+
+      assert {:ok, %CodexSession{} = other} =
+               Gateway.start_codex_session(other_auth, %{session_key: session_key, owner_instance_id: "node-b"})
+
+      refute other.id == expired.id
+      assert Repo.get!(CodexSession, expired.id).status in ["active", "interrupted"]
+      assert Aliases.previous_response_session_id(auth, response_id, now) == expired.id
+    end
+
+    # The partial unique index codex_sessions_pool_api_key_session_key_uq admits
+    # only one reconnectable session per (pool_id, api_key_id,
+    # lower(session_key)), so a
     # multi-row database fixture cannot be built. The selection rule is
     # therefore proven as a pure function.
     test "picks the most recently active expired session regardless of input order" do

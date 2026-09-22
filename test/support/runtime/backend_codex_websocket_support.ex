@@ -533,4 +533,148 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
     assert List.last(frames)["type"] == expected_type
     List.last(frames)
   end
+
+  @released_client_terminal_types ["response.completed", "response.failed", "response.incomplete", "error"]
+
+  @doc """
+  Opens a public websocket the way the released Codex client (0.155.1,
+  observed on the wire for findings#255) opens one: `session-id`, `thread-id`
+  and `x-client-request-id` carry the thread, `x-codex-window-id` carries
+  `<thread>:<window number>`, and no `x-codex-turn-state` is ever sent on the
+  upgrade. The connection is owned by the calling process; open one at a time
+  per process so no receive can consume another connection's messages.
+  """
+  def released_client_connect!(port, authorization, thread, window, extra_headers \\ []) do
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
+
+    headers =
+      [
+        {"authorization", authorization},
+        {"session-id", thread},
+        {"thread-id", thread},
+        {"x-client-request-id", thread},
+        {"x-codex-window-id", window}
+      ] ++ extra_headers
+
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, "/backend-api/codex/responses", headers)
+    {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
+    {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
+    %{conn: conn, websocket: websocket, ref: ref, thread: thread, window: window}
+  end
+
+  @doc """
+  Sends one released-client `response.create` turn and returns
+  `{:terminal, client, type}` with the first terminal frame type, or
+  `{:closed, client, code, reason}` when the Pooler closes the connection
+  instead (an owner refusal closes right after the 101).
+  """
+  def released_client_turn(client, model_id) do
+    turn_id = Ecto.UUID.generate()
+
+    payload =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.create",
+        "model" => model_id,
+        "prompt_cache_key" => client.thread,
+        "input" => native_text_input("synthetic released client turn"),
+        "stream" => true,
+        "client_metadata" => %{
+          "session_id" => client.thread,
+          "thread_id" => client.thread,
+          "turn_id" => turn_id,
+          "x-codex-window-id" => client.window,
+          "x-codex-turn-metadata" =>
+            CodexPooler.JSON.encode!(%{
+              "session_id" => client.thread,
+              "thread_id" => client.thread,
+              "turn_id" => turn_id,
+              "window_id" => client.window,
+              "request_kind" => "turn"
+            })
+        }
+      })
+
+    {:ok, websocket, data} = Mint.WebSocket.encode(client.websocket, {:text, payload})
+    client = %{client | websocket: websocket}
+
+    case Mint.WebSocket.stream_request_body(client.conn, client.ref, data) do
+      {:ok, conn} -> receive_released_client_outcome(%{client | conn: conn}, released_client_deadline())
+      {:error, conn, _reason} -> receive_released_client_outcome(%{client | conn: conn}, released_client_deadline())
+    end
+  end
+
+  @doc "The outcome of `released_client_turn/2` without the connection state."
+  def released_client_outcome_summary({:terminal, _client, type}), do: {:terminal, type}
+  def released_client_outcome_summary({:closed, _client, code, reason}), do: {:closed, code, reason}
+
+  def released_client_close(client) do
+    Mint.HTTP.close(client.conn)
+    :ok
+  end
+
+  defp released_client_deadline, do: System.monotonic_time(:millisecond) + @connection_shutdown_timeout_ms
+
+  defp receive_released_client_outcome(client, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      message ->
+        case Mint.WebSocket.stream(client.conn, message) do
+          {:ok, conn, responses} ->
+            released_client_responses(%{client | conn: conn}, responses, deadline)
+
+          {:error, conn, _reason, responses} ->
+            case released_client_responses(%{client | conn: conn}, responses, :no_wait) do
+              :continue -> {:closed, %{client | conn: conn}, nil, "transport_closed"}
+              outcome -> outcome
+            end
+
+          :unknown ->
+            receive_released_client_outcome(client, deadline)
+        end
+    after
+      remaining -> flunk("timed out waiting for a released-client websocket outcome")
+    end
+  end
+
+  defp released_client_responses(client, responses, deadline) do
+    Enum.reduce_while(responses, {:cont, client}, fn
+      {:data, ref, data}, {:cont, client} when ref == client.ref ->
+        {:ok, websocket, frames} = Mint.WebSocket.decode(client.websocket, data)
+        client = %{client | websocket: websocket}
+
+        case released_client_frames_outcome(frames) do
+          {:terminal, type} -> {:halt, {:terminal, client, type}}
+          {:closed, code, reason} -> {:halt, {:closed, client, code, reason}}
+          :continue -> {:cont, {:cont, client}}
+        end
+
+      {:done, ref}, {:cont, client} when ref == client.ref ->
+        {:halt, {:closed, client, nil, "done"}}
+
+      _part, acc ->
+        {:cont, acc}
+    end)
+    |> case do
+      {:cont, _client} when deadline == :no_wait -> :continue
+      {:cont, client} -> receive_released_client_outcome(client, deadline)
+      outcome -> outcome
+    end
+  end
+
+  defp released_client_frames_outcome(frames) do
+    Enum.find_value(frames, :continue, fn
+      {:close, code, reason} ->
+        {:closed, code, reason}
+
+      {:text, text} ->
+        case CodexPooler.JSON.decode(text) do
+          {:ok, %{"type" => type}} when type in @released_client_terminal_types -> {:terminal, type}
+          _other -> nil
+        end
+
+      _frame ->
+        nil
+    end)
+  end
 end

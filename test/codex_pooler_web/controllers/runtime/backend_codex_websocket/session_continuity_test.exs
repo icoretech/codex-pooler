@@ -1512,6 +1512,167 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
              "x-codex-turn-state:" <> Base.encode16(:crypto.hash(:sha256, client_turn_state), case: :lower)
   end
 
+  # Two API keys of one Pool that send the same window id (one thread resumed
+  # from two machines configured with different keys) used to resolve the same
+  # session row by Pool and key alone, and each request rewrote the row's
+  # `api_key_id` to its own key (row 255-04). Session continuity is scoped to
+  # `(pool_id, api_key_id, session_key)`, as the lease-expiry recreation
+  # preference already was.
+  @tag :cross_key_window_session
+  test "two api keys of one pool on the same window keep separate websocket sessions" do
+    %{setup: setup, port: port, thread: thread, window: window, window_key: window_key} = cross_key_window_fixture()
+    alternate = CodexPooler.PoolerFixtures.active_api_key_fixture(setup.pool)
+
+    first = released_client_websocket_turn!(port, setup, thread, window)
+    first_session_id = first.request_metadata["codex_session_id"]
+
+    second = released_client_websocket_turn!(port, %{setup | authorization: alternate.authorization}, thread, window)
+    second_session = Repo.get!(CodexSession, second.request_metadata["codex_session_id"])
+
+    refute second_session.id == first_session_id
+    assert second_session.api_key_id == alternate.api_key.id
+    assert second_session.session_key == window_key
+
+    first_session = Repo.get!(CodexSession, first_session_id)
+    assert first_session.api_key_id == setup.api_key.id
+    assert first_session.status in ["active", "interrupted"]
+  end
+
+  @tag :cross_key_window_session
+  test "two api keys of one pool on the same window keep separate HTTP sessions", %{conn: conn} do
+    %{setup: setup, thread: thread, window: window, window_key: window_key} = cross_key_window_fixture()
+    alternate = CodexPooler.PoolerFixtures.active_api_key_fixture(setup.pool)
+
+    first = post_window_turn!(conn, setup.authorization, setup, thread, window)
+    first_session_id = first.request_metadata["codex_session_id"]
+
+    second = post_window_turn!(conn, alternate.authorization, setup, thread, window)
+    second_session = Repo.get!(CodexSession, second.request_metadata["codex_session_id"])
+
+    refute second_session.id == first_session_id
+    assert second_session.api_key_id == alternate.api_key.id
+    assert second_session.session_key == window_key
+    assert Repo.get!(CodexSession, first_session_id).api_key_id == setup.api_key.id
+
+    # Each key keeps resolving its own session on the next request.
+    assert post_window_turn!(conn, setup.authorization, setup, thread, window).request_metadata["codex_session_id"] ==
+             first_session_id
+
+    assert post_window_turn!(conn, alternate.authorization, setup, thread, window).request_metadata["codex_session_id"] ==
+             second_session.id
+  end
+
+  # A key that sends another key's window id over HTTP while that key holds a
+  # live websocket on it must not touch the websocket's session: not its API
+  # key, not its owner lease, and not the next turn on the live connection.
+  @tag :cross_key_window_session
+  test "another api key's HTTP turn on a live websocket window leaves the websocket session untouched", %{conn: conn} do
+    %{setup: setup, port: port, thread: thread, window: window} = cross_key_window_fixture()
+    alternate = CodexPooler.PoolerFixtures.active_api_key_fixture(setup.pool)
+    client = released_client_connect!(port, setup.authorization, thread, window)
+
+    try do
+      assert {:terminal, "response.completed"} ==
+               client
+               |> released_client_turn(setup.model.exposed_model_id)
+               |> released_client_outcome_summary()
+
+      first = await_latest_pool_request!(setup)
+      websocket_session = Repo.get!(CodexSession, first.request_metadata["codex_session_id"])
+
+      other = post_window_turn!(conn, alternate.authorization, setup, thread, window)
+      refute other.request_metadata["codex_session_id"] == websocket_session.id
+
+      after_other = Repo.get!(CodexSession, websocket_session.id)
+      assert after_other.api_key_id == setup.api_key.id
+      assert after_other.owner_lease_token == websocket_session.owner_lease_token
+      assert after_other.owner_instance_id == websocket_session.owner_instance_id
+
+      assert {:terminal, "response.completed"} ==
+               client
+               |> released_client_turn(setup.model.exposed_model_id)
+               |> released_client_outcome_summary()
+
+      assert await_latest_pool_request!(setup).request_metadata["codex_session_id"] == websocket_session.id
+    after
+      released_client_close(client)
+    end
+  end
+
+  defp cross_key_window_fixture do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{"usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}}
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    thread = "synthetic-thread-#{System.unique_integer([:positive])}"
+    window = thread <> ":0"
+
+    %{
+      setup: setup,
+      port: start_public_endpoint!(),
+      thread: thread,
+      window: window,
+      window_key: "x-codex-window-id:" <> Base.encode16(:crypto.hash(:sha256, window), case: :lower)
+    }
+  end
+
+  # One released-client HTTP turn on a window: the same identity headers the
+  # websocket upgrade carries, and the canonical turn metadata document.
+  defp post_window_turn!(conn, authorization, setup, thread, window) do
+    turn_id = Ecto.UUID.generate()
+
+    document =
+      CodexPooler.JSON.encode!(%{
+        "session_id" => thread,
+        "thread_id" => thread,
+        "turn_id" => turn_id,
+        "window_id" => window,
+        "request_kind" => "turn"
+      })
+
+    response =
+      conn
+      |> recycle()
+      |> put_req_header("authorization", authorization)
+      |> put_req_header("session-id", thread)
+      |> put_req_header("x-codex-window-id", window)
+      |> put_req_header("x-codex-turn-metadata", document)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("synthetic cross key window"),
+        "stream" => true
+      })
+
+    assert response.status == 200
+    assert response.resp_body =~ "response.completed"
+    latest_pool_request!(setup)
+  end
+
+  defp await_latest_pool_request!(setup) do
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                   @connection_shutdown_timeout_ms
+
+    latest_pool_request!(setup)
+  end
+
+  defp latest_pool_request!(setup) do
+    Repo.one!(
+      from request in Request,
+        where: request.pool_id == ^setup.pool.id,
+        order_by: [desc: request.admitted_at],
+        limit: 1
+    )
+  end
+
   defp released_client_websocket_turn!(port, setup, thread, window, extra_headers \\ []) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
 

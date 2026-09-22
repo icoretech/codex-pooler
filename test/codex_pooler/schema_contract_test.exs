@@ -178,7 +178,7 @@ defmodule CodexPooler.SchemaContractTest do
           "hourly_model_usage_rollups_bucket_pool_model_code_uq",
           "hourly_model_usage_rollups_pool_bucket_model_idx",
           "hourly_model_usage_rollups_model_bucket_pool_idx",
-          "codex_sessions_pool_session_key_uq",
+          "codex_sessions_pool_api_key_session_key_uq",
           "codex_turns_session_sequence_uq",
           "invite_acceptances_invite_id_uq",
           "alert_incidents_unresolved_dedupe_key_uq",

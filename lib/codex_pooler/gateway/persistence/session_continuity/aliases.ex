@@ -40,6 +40,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
         on: alias_record.codex_session_id == session.id,
         where:
           alias_record.pool_id == ^pool_id and alias_record.api_key_id == ^api_key_id and
+            session.api_key_id == ^api_key_id and
             alias_record.alias_kind == ^alias_kind and alias_record.alias_hash == ^alias_hash and
             alias_record.status == ^@alias_active and alias_record.expires_at > ^now and
             session.status in ^@session_reconnectable_statuses,
@@ -78,6 +79,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
         on: alias_record.codex_session_id == session.id,
         where:
           alias_record.pool_id == ^auth.pool.id and alias_record.api_key_id == ^auth.api_key.id and
+            session.api_key_id == ^auth.api_key.id and
             alias_record.alias_kind == "previous_response_id" and
             alias_record.alias_hash == ^alias_hash and
             alias_record.status == ^@alias_active and alias_record.expires_at > ^now and
@@ -98,6 +100,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
         on: alias_record.codex_session_id == session.id,
         where:
           alias_record.pool_id == ^auth.pool.id and alias_record.api_key_id == ^auth.api_key.id and
+            session.api_key_id == ^auth.api_key.id and
             alias_record.alias_kind == "previous_response_id" and
             alias_record.alias_hash == ^alias_hash and
             alias_record.status == ^@alias_active and alias_record.expires_at > ^now and
@@ -241,6 +244,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
       on: alias_record.codex_session_id == session.id,
       where:
         alias_record.pool_id == ^auth.pool.id and alias_record.api_key_id == ^auth.api_key.id and
+          session.api_key_id == ^auth.api_key.id and
           alias_record.status == ^@alias_active and alias_record.expires_at > ^now and
           session.status in ^@session_reconnectable_statuses and
           (alias_record.alias_kind == "previous_response_id" or

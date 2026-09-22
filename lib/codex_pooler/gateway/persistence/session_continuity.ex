@@ -474,9 +474,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
         ).preferred_assignment_id
       end
 
-    reject_blocked_authenticated_owner_attach!(auth, opts, session_key, now, resolved_session)
-
-    existing_session = resolved_session || active_session_for_update(auth, opts, session_key, now)
+    existing_session = resolved_session || active_session_for_update(auth, session_key, now)
 
     if is_nil(existing_session) and authenticated_owner_attach_requires_existing?(opts) do
       Repo.rollback(:owner_unavailable)
@@ -485,25 +483,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     {existing_session, preferred_assignment_id}
   end
 
-  defp reject_blocked_authenticated_owner_attach!(auth, opts, session_key, now, nil) do
-    if authenticated_owner_attach_blocked?(auth, opts, session_key, now) do
-      Repo.rollback(:owner_unavailable)
-    end
-  end
-
-  defp reject_blocked_authenticated_owner_attach!(
-         _auth,
-         _opts,
-         _session_key,
-         _now,
-         %CodexSession{}
-       ),
-       do: :ok
-
-  defp update_existing_session!(%CodexSession{} = session, auth, opts, owner, now) do
+  # Every lookup that reaches here is scoped to the requesting API key, so the
+  # row already belongs to it; the key is never rewritten, which is what let a
+  # second key of the Pool re-own another key's session (findings#255).
+  defp update_existing_session!(%CodexSession{} = session, _auth, opts, owner, now) do
     session
     |> Ecto.Changeset.change(%{
-      api_key_id: auth.api_key.id,
       status: @session_active,
       owner_instance_id: owner.node_name,
       owner_instance_boot_id: owner.boot_id,
@@ -561,15 +546,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     session
     |> Ecto.Changeset.change(attrs)
     |> Ecto.Changeset.unique_constraint(:session_key,
-      name: :codex_sessions_pool_session_key_uq
+      name: :codex_sessions_pool_api_key_session_key_uq
     )
   end
 
   defp recover_session_start_conflict!(changeset, auth, opts, session_key, owner, now) do
     if session_key_unique_constraint?(changeset) do
-      case active_session_for_update(auth, opts, session_key, now) do
+      case active_session_for_update(auth, session_key, now) do
         %CodexSession{} = session ->
-          Logger.info("session_start_conflict_recovered reason=codex_sessions_pool_session_key_uq outcome=reused_existing_session")
+          Logger.info("session_start_conflict_recovered reason=codex_sessions_pool_api_key_session_key_uq outcome=reused_existing_session")
 
           update_existing_session!(session, auth, opts, owner, now)
 
@@ -583,7 +568,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp session_key_unique_constraint?(%Ecto.Changeset{} = changeset) do
     Enum.any?(changeset.constraints, fn constraint ->
-      constraint.type == :unique and constraint.constraint == "codex_sessions_pool_session_key_uq"
+      constraint.type == :unique and
+        constraint.constraint == "codex_sessions_pool_api_key_session_key_uq"
     end) and
       Keyword.has_key?(changeset.errors, :session_key)
   end
@@ -640,53 +626,25 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp bind_session_assignment!(%CodexSession{} = session, _assignment_id, _now), do: session
 
-  defp active_session_for_update(auth, opts, session_key, now) do
-    query =
+  # A session is scoped to `(pool_id, api_key_id, session_key)`, as the unique
+  # index `codex_sessions_pool_api_key_session_key_uq` is. The client sends the
+  # same window and session headers whichever key it holds, so a second key of
+  # the Pool that sends them opens its own session instead of re-owning the
+  # first key's row (plain transports) or being refused `owner_unavailable`
+  # while the first key's lease lives (owner forwarding) (findings#255).
+  defp active_session_for_update(auth, session_key, now) do
+    Repo.one(
       from session in CodexSession,
         where:
-          session.pool_id == ^auth.pool.id and
+          session.pool_id == ^auth.pool.id and session.api_key_id == ^auth.api_key.id and
             fragment("lower(?)", session.session_key) == ^String.downcase(session_key) and
             session.status in ^@session_reconnectable_statuses and
             (is_nil(session.owner_lease_expires_at) or session.owner_lease_expires_at > ^now),
         order_by: [desc: session.updated_at, desc: session.created_at],
         limit: 1,
         lock: "FOR UPDATE"
-
-    query
-    |> maybe_scope_owner_attach_to_api_key(auth, opts)
-    |> Repo.one()
-  end
-
-  defp maybe_scope_owner_attach_to_api_key(query, auth, %RequestOptions{
-         continuity: %{authenticated_owner_attach: true}
-       }) do
-    where(query, [session], session.api_key_id == ^auth.api_key.id)
-  end
-
-  defp maybe_scope_owner_attach_to_api_key(query, _auth, _opts), do: query
-
-  defp authenticated_owner_attach_blocked?(
-         auth,
-         %RequestOptions{
-           continuity: %{authenticated_owner_attach: true}
-         },
-         session_key,
-         now
-       ) do
-    CodexSession
-    |> where(
-      [session],
-      session.pool_id == ^auth.pool.id and
-        session.api_key_id != ^auth.api_key.id and
-        fragment("lower(?)", session.session_key) == ^String.downcase(session_key) and
-        session.status in ^@session_reconnectable_statuses and
-        (is_nil(session.owner_lease_expires_at) or session.owner_lease_expires_at > ^now)
     )
-    |> limit(1)
-    |> Repo.exists?()
   end
-
-  defp authenticated_owner_attach_blocked?(_auth, _opts, _session_key, _now), do: false
 
   defp authenticated_owner_attach_requires_existing?(%RequestOptions{
          openai_compatibility: %{source_endpoint: "/v1/responses"},

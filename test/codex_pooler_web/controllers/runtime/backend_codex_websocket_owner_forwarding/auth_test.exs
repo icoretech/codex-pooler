@@ -11,6 +11,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.AuthTest d
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounts.{Scope, User}
+  alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.BridgeDemotion
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -333,6 +336,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.AuthTest d
     end
   end
 
+  @tag :cross_key_window_session
   test "owner forwarding keeps authenticated attaches scoped to the same api key" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_auth"}))
     setup = gateway_setup(upstream)
@@ -343,19 +347,123 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.AuthTest d
 
     {:ok, alternate_auth} = Access.authenticate_authorization_header(alternate_key.authorization)
 
-    assert Gateway.start_codex_session(alternate_auth, %{
-             accepted_turn_state: "stable-ws-auth",
-             authenticated_owner_attach: true
-           }) == {:error, :owner_unavailable}
+    # The other key never attaches to this key's session: it opens its own,
+    # under the same key, with its own owner lease (findings#255).
+    assert {:ok, %CodexSession{} = alternate_session} =
+             Gateway.start_codex_session(alternate_auth, %{
+               accepted_turn_state: "stable-ws-auth",
+               authenticated_owner_attach: true
+             })
 
-    refute Repo.get_by(CodexSession,
-             session_key: turn_state_session_key("stable-ws-auth"),
-             api_key_id: alternate_key.api_key.id
-           )
+    refute alternate_session.id == session.id
+    assert alternate_session.api_key_id == alternate_key.api_key.id
+    assert alternate_session.session_key == turn_state_session_key("stable-ws-auth")
+    refute alternate_session.owner_lease_token == session.owner_lease_token
 
     refute_raw_turn_state_session_key!(setup.pool.id, "stable-ws-auth")
 
-    assert Repo.get!(CodexSession, session.id).api_key_id == setup.api_key.id
+    unchanged = Repo.get!(CodexSession, session.id)
+    assert unchanged.api_key_id == setup.api_key.id
+    assert unchanged.owner_lease_token == session.owner_lease_token
+  end
+
+  # The released client keys every connection of a thread on the same
+  # `x-codex-window-id`, and since findings#255 the window outranks the turn
+  # state the Pooler issues per upgrade. A second API key of the same Pool
+  # resuming that window while the first key's owner lease is live used to be
+  # refused `owner_unavailable` until the lease lapsed (row 255-03), and a key
+  # that reached the window first locked the other key out the same way. Each
+  # key must get its own session and owner, and neither may attach to the
+  # other's.
+  @tag :cross_key_window_session
+  test "a second api key resuming a live window gets its own owner session and leaves the first key's alone" do
+    %{setup: setup, port: port, thread: thread, window: window, window_key: window_key} = released_window_fixture()
+    alternate = CodexPooler.PoolerFixtures.active_api_key_fixture(setup.pool)
+
+    first = released_window_turn!(port, setup.authorization, setup, thread, window)
+    first_session = Repo.get!(CodexSession, first.request_metadata["codex_session_id"])
+    assert first_session.session_key == window_key
+    assert first_session.api_key_id == setup.api_key.id
+    assert DateTime.compare(first_session.owner_lease_expires_at, DateTime.utc_now()) == :gt
+
+    second = released_window_turn!(port, alternate.authorization, setup, thread, window)
+    second_session = Repo.get!(CodexSession, second.request_metadata["codex_session_id"])
+
+    refute second_session.id == first_session.id
+    assert second_session.api_key_id == alternate.api_key.id
+    assert second_session.session_key == window_key
+    refute second_session.owner_lease_token == first_session.owner_lease_token
+    assert Repo.get!(CodexSession, first_session.id).api_key_id == setup.api_key.id
+
+    # The first key resumes its own session, not the one the second key opened.
+    resumed = released_window_turn!(port, setup.authorization, setup, thread, window)
+    assert resumed.request_metadata["codex_session_id"] == first_session.id
+  end
+
+  # Rotating a key replaces its secret and keeps its id, so a thread resumed
+  # with the rotated secret is the same key's continuity, not a second key.
+  @tag :cross_key_window_session
+  test "a rotated api key resuming a live window rejoins its own owner session" do
+    %{setup: setup, port: port, thread: thread, window: window} = released_window_fixture()
+
+    first = released_window_turn!(port, setup.authorization, setup, thread, window)
+    first_session_id = first.request_metadata["codex_session_id"]
+
+    creator = Repo.get!(User, setup.api_key.created_by_user_id)
+    scope = Scope.for_user(creator, ["instance_owner"])
+    assert {:ok, %{api_key: rotated, raw_key: raw_key}} = Access.rotate_api_key(scope, setup.api_key)
+    assert rotated.id == setup.api_key.id
+
+    resumed = released_window_turn!(port, "Bearer " <> raw_key, setup, thread, window)
+    assert resumed.request_metadata["codex_session_id"] == first_session_id
+  end
+
+  defp released_window_fixture do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{"usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}}
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    thread = "synthetic-thread-#{System.unique_integer([:positive])}"
+    window = thread <> ":0"
+
+    %{
+      setup: setup,
+      port: start_public_endpoint!(),
+      thread: thread,
+      window: window,
+      window_key: "x-codex-window-id:" <> Base.encode16(:crypto.hash(:sha256, window), case: :lower)
+    }
+  end
+
+  defp released_window_turn!(port, authorization, setup, thread, window) do
+    client = released_client_connect!(port, authorization, thread, window)
+
+    outcome =
+      try do
+        released_client_turn(client, setup.model.exposed_model_id)
+      after
+        released_client_close(client)
+      end
+
+    assert released_client_outcome_summary(outcome) == {:terminal, "response.completed"}
+
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, 15_000
+
+    Repo.one!(
+      from request in Request,
+        where: request.pool_id == ^setup.pool.id,
+        order_by: [desc: request.admitted_at],
+        limit: 1
+    )
   end
 
   test "owner forwarding rejects cross-pool and guessed authenticated attaches" do

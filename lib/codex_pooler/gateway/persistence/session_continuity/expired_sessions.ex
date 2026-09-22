@@ -39,7 +39,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions do
         }
 
   @doc """
-  Closes the sessions whose owner lease has expired for this key.
+  Closes this API key's sessions whose owner lease has expired for this key.
+
+  Another key's expired session on the same key is left alone: it does not
+  block this key's replacement under `codex_sessions_pool_api_key_session_key_uq`,
+  and closing it would expire that key's aliases, including the
+  `previous_response_id` aliases that outlive an expired lease.
 
   Returns how many sessions were closed plus the assignment the caller should
   softly prefer when it inserts the replacement session. The preference is the
@@ -48,7 +53,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions do
   """
   @spec close_for_key!(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), DateTime.t()) :: result()
   def close_for_key!(pool_id, api_key_id, session_key, %DateTime{} = now) do
-    expiring_sessions = lock_expired_sessions(pool_id, session_key, now)
+    expiring_sessions = lock_expired_sessions(pool_id, api_key_id, session_key, now)
     session_ids = Enum.map(expiring_sessions, & &1.id)
 
     lock_active_leases!(session_ids)
@@ -82,8 +87,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions do
   rank last instead of raising.
 
   More than one candidate is not reachable today: the partial unique index
-  `codex_sessions_pool_session_key_uq` admits at most one session per
-  `(pool_id, lower(session_key))` while its status is reconnectable, and only
+  `codex_sessions_pool_api_key_session_key_uq` admits at most one session per
+  `(pool_id, api_key_id, lower(session_key))` while its status is reconnectable, and only
   reconnectable sessions are closed here. The ordering exists so a legacy row
   or a future relaxation of that index still resolves deterministically, and it
   is covered as a pure function because the index makes a multi-row database
@@ -124,11 +129,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions do
   defp recency(%DateTime{} = at), do: {1, DateTime.to_unix(at, :microsecond)}
   defp recency(_missing), do: {0, 0}
 
-  defp lock_expired_sessions(pool_id, session_key, now) do
+  defp lock_expired_sessions(pool_id, api_key_id, session_key, now) do
     Repo.all(
       from session in CodexSession,
         where:
-          session.pool_id == ^pool_id and
+          session.pool_id == ^pool_id and session.api_key_id == ^api_key_id and
             fragment("lower(?)", session.session_key) == ^String.downcase(session_key) and
             session.status in ^@session_reconnectable_statuses and
             not is_nil(session.owner_lease_expires_at) and
