@@ -8,6 +8,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
   # own stage (findings#225).
   use CodexPoolerWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   @moduletag capture_log: true
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
@@ -16,6 +18,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
 
   alias CodexPooler.Access
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -103,6 +106,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayRefu
       assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
       assert :ok = CodexResponsesSocket.terminate(:closed, second_state)
       await_owner_cleanup!(first_state.codex_session.id)
+    end
+  end
+
+  test "a new turn on a socket whose session was closed underneath it gets owner_unavailable, not a counted duplicate" do
+    attach_duplicate_turn_counter!()
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} = owner_socket(auth, "ws-owner-refusal-closed", "ws-owner-refusal-closed")
+    session_id = state.codex_session.id
+
+    try do
+      # Another connection of the same key closed this session (an expired-lease
+      # recreation or an interruption) while this socket stayed open and idle.
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      Repo.update_all(from(row in CodexSession, where: row.id == ^session_id), set: [status: "closed", closed_at: now])
+
+      new_turn = turn_payload(setup, "ws-owner-refusal-closed-next", "a genuinely new turn")
+
+      {result, log} = with_info_log(fn -> CodexResponsesSocket.handle_in({new_turn, [opcode: :text]}, state) end)
+
+      assert {:push, {:text, error_frame}, _state} = result
+      error_frame = CodexPooler.JSON.decode!(error_frame)
+      assert error_frame["status"] == 503
+      assert error_frame["error"]["code"] == "owner_unavailable"
+      assert log =~ "stage=runtime_replay_preflight reason_code=session_not_reconnectable"
+      refute log =~ "reconnect_disposition=identity_rejected"
+      refute_received {:duplicate_turn_refused, _stage, _transport}
+      assert request_logs(setup.pool.id) == []
+      assert FakeUpstream.count(upstream) == 0
+    after
+      assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      await_owner_cleanup!(session_id)
     end
   end
 

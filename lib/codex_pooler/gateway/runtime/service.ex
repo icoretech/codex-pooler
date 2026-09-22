@@ -850,10 +850,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
+  # A replay-eligible frame always carries its session, runtime epoch and both
+  # digests, and the socket's auth always names its key and Pool, so a frame
+  # that reaches here is a gateway invariant breach rather than a resend of a
+  # recorded turn: it was never matched to one (findings#225, row 225-83).
   defp replay_preflight_context(_auth, %PreparedWebsocketFrame{request_options: request_options}) do
-    log_duplicate_turn(request_options, :invalid_replay_context, stage: "runtime_replay_preflight")
+    public_error = error(500, "server_error", "websocket replay context could not be established")
+    log_pre_classification_refusal(request_options, nil, :invalid_replay_context, public_error)
 
-    {:error, duplicate_turn_error()}
+    {:error, public_error}
   end
 
   defp prepare_replay_intent_transaction(context) do
@@ -867,12 +872,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
                context.api_key_runtime_epoch
              ),
            :ok <- validate_replay_api_key_pool(authorization.api_key, locked_session),
-           {:ok, pool} <- load_active_replay_pool(locked_session.pool_id),
+           {:ok, pool} <- load_active_replay_pool(locked_session.pool_id, authorization),
            {:ok, model} <- authorize_replay_model(authorization.api_key, pool, context) do
         classify_replay_intent(locked_session, authorization, model, context)
       else
-        {:error, {:duplicate_turn, reason}} ->
-          reject_replay_intent(context, context.session, reason)
+        {:error, {:pre_classification_refusal, reason, public_error}} ->
+          refuse_replay_before_classification(context, reason, public_error)
 
         {:error, reason} ->
           Repo.rollback(reason)
@@ -1115,17 +1120,24 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp valid_incremental_compaction_admission?(%RequestOptions{}), do: false
 
+  # These checks run before the frame is matched to any recorded turn, so they
+  # refuse a brand-new turn exactly as they refuse a resend and must not answer
+  # `duplicate_turn` or count as one (findings#225, row 225-83). A session the
+  # caller cannot continue gets the code the owner-lease and takeover paths
+  # give a non-reconnectable session, `503 owner_unavailable`; the released
+  # Codex client drops its websocket after any error frame, so its retry
+  # upgrades again and lands in a session scoped to its own key and Pool.
   defp validate_replay_session_binding(
          %CodexSession{pool_id: pool_id, api_key_id: api_key_id} = session,
          %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}
        ) do
     if CodexSession.reconnectable?(session),
       do: :ok,
-      else: {:error, {:duplicate_turn, :session_not_reconnectable}}
+      else: session_unavailable_refusal(:session_not_reconnectable)
   end
 
   defp validate_replay_session_binding(%CodexSession{}, _auth),
-    do: {:error, {:duplicate_turn, :session_binding_mismatch}}
+    do: session_unavailable_refusal(:session_binding_mismatch)
 
   defp validate_replay_api_key_pool(
          %{pool_id: pool_id},
@@ -1134,14 +1146,33 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        do: :ok
 
   defp validate_replay_api_key_pool(_api_key, %CodexSession{}),
-    do: {:error, {:duplicate_turn, :session_pool_mismatch}}
+    do: session_unavailable_refusal(:session_pool_mismatch)
 
-  defp load_active_replay_pool(pool_id) do
+  # The authorization read one statement earlier already refuses a key whose
+  # Pool is inactive or gone, as the runtime `pool_inactive` refusal carrying
+  # the key's epoch; this reload only sees a Pool disabled or deleted after that
+  # read, and answers the same refusal so the socket latches it the same way.
+  defp load_active_replay_pool(pool_id, authorization) do
+    maybe_test_replay_pool_hook()
+
     case Repo.get(Pool, pool_id) do
       %Pool{status: "active"} = pool -> {:ok, pool}
-      %Pool{} -> {:error, {:duplicate_turn, :pool_inactive}}
-      nil -> {:error, {:duplicate_turn, :pool_missing}}
+      %Pool{} -> pool_inactive_refusal(:pool_inactive, authorization)
+      nil -> pool_inactive_refusal(:pool_missing, authorization)
     end
+  end
+
+  defp session_unavailable_refusal(reason) do
+    {:error, {:pre_classification_refusal, reason, error(503, "owner_unavailable", "websocket owner session is unavailable")}}
+  end
+
+  defp pool_inactive_refusal(reason, %{runtime_revocation_epoch: epoch}) do
+    {:error, {:pre_classification_refusal, reason, %{status: 401, code: :pool_inactive, message: "pool is not active", disabling_epoch: epoch}}}
+  end
+
+  defp refuse_replay_before_classification(context, reason, public_error) do
+    log_pre_classification_refusal(context.request_options, context.session, reason, public_error)
+    Repo.rollback(public_error)
   end
 
   defp authorize_replay_model(api_key, pool, context) do
@@ -2318,6 +2349,25 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp emit_replay_rejection(request_options, session, reason, endpoint, stage, extra) do
+    :ok = DuplicateTurnTelemetry.emit_refused(stage, request_options.transport.transport)
+    log_replay_rejection_line(request_options, session, reason, endpoint, stage, extra)
+  end
+
+  # Same line as a counted refusal, so a grep for the stage still finds it, but
+  # not counted: the frame was refused before it was matched to any turn, and
+  # `public_code` says what the client actually received.
+  defp log_pre_classification_refusal(%RequestOptions{} = request_options, session, reason, public_error) do
+    log_replay_rejection_line(
+      request_options,
+      session || Map.get(request_options.continuity, :codex_session),
+      reason,
+      Map.get(request_options.transport, :upstream_endpoint, "unknown"),
+      "runtime_replay_preflight",
+      public_code: public_error.code
+    )
+  end
+
+  defp log_replay_rejection_line(request_options, session, reason, endpoint, stage, extra) do
     reason_code = replay_rejection_reason_code(reason)
     request_id = request_options.request_metadata.request_id
     session_id = if is_struct(session, CodexSession), do: session.id
@@ -2330,7 +2380,6 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       end)
 
     {label, transport} = replay_rejection_channel(request_options)
-    :ok = DuplicateTurnTelemetry.emit_refused(stage, request_options.transport.transport)
 
     Logger.info(fn ->
       label <>
@@ -2401,6 +2450,19 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   else
     defp maybe_test_runtime_authorization_barrier(_operation, _phase), do: :ok
+  end
+
+  if Mix.env() == :test do
+    defp maybe_test_replay_pool_hook do
+      case Process.get({__MODULE__, :replay_pool_hook}) do
+        hook when is_function(hook, 0) -> hook.()
+        _value -> :ok
+      end
+
+      :ok
+    end
+  else
+    defp maybe_test_replay_pool_hook, do: :ok
   end
 
   defp visible_model_context(

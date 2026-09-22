@@ -2160,6 +2160,15 @@ defmodule CodexPooler.CompatibilityMatrix do
         owner_replay_preflight: %{
           new_turn_refused_by_occupied_owner: "owner_error_payload_not_duplicate_turn",
           resend_of_recorded_turn: "duplicate_turn_counted_as_owner_replay_preflight"
+        },
+        runtime_replay_pre_classification: %{
+          session_not_reconnectable: "owner_unavailable",
+          session_binding_mismatch: "owner_unavailable",
+          session_pool_mismatch: "owner_unavailable",
+          pool_inactive: "pool_inactive_revocation",
+          pool_missing: "pool_inactive_revocation",
+          invalid_replay_context: "server_error",
+          counted_as_duplicate_turn: false
         }
       },
       prewarm: %{
