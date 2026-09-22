@@ -158,17 +158,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.HostedShellTest do
   end
 
   # Findings #119 item 5: a full-size output chunk used to cost ~400 ms of
-  # per-code-point scanning on the /v1 path. The count is the claim here.
-  test "classifies a 10 MiB output chunk well under 100 ms" do
+  # per-code-point scanning on the /v1 path. The claim is the work, not the
+  # runner's speed, so it is measured in reductions of this process, which a
+  # loaded scheduler does not change: classifying the chunk costs about one
+  # UTF-8 validity pass (1.50M reductions for 10 MiB), while a per-code-point
+  # walk adds about 10.9M and the old String.next_codepoint/1 scan about 37.9M.
+  test "classifies a 10 MiB output chunk with one validity pass instead of a per-code-point walk" do
     stdout = String.duplicate("x", 10_485_760)
     item = shell_output(%{"output" => [output_chunk(stdout, "", exit_outcome(0))]})
 
-    {elapsed_us, result} = :timer.tc(fn -> HostedShell.validate_item(item) end)
+    {validity_pass, true} = reductions(fn -> String.valid?(stdout, :fast_ascii) end)
+    {classification, result} = reductions(fn -> HostedShell.validate_item(item) end)
 
     assert {:ok, ^item} = result
 
-    assert elapsed_us < 100_000,
-           "10 MiB stdout classification took #{div(elapsed_us, 1_000)} ms"
+    assert classification < 2 * validity_pass,
+           "10 MiB stdout classification took #{classification} reductions against #{validity_pass} for one validity pass"
   end
 
   test "rejects invalid UTF-8 in identifiers and output text" do
@@ -326,6 +331,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.HostedShellTest do
     do: %{"stdout" => stdout, "stderr" => stderr, "outcome" => outcome}
 
   defp exit_outcome(exit_code), do: %{"type" => "exit", "exit_code" => exit_code}
+
+  defp reductions(fun) do
+    {:reductions, before} = Process.info(self(), :reductions)
+    result = fun.()
+    {:reductions, after_call} = Process.info(self(), :reductions)
+    {after_call - before, result}
+  end
 
   defp assert_accepted(item), do: assert({:ok, ^item} = HostedShell.validate_item(item))
 
