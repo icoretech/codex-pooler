@@ -2346,7 +2346,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert event_types(response.resp_body) == [
              "response.created",
+             "response.output_item.added",
+             "response.content_part.added",
              "response.output_text.delta",
+             "response.output_text.done",
+             "response.content_part.done",
+             "response.output_item.done",
              "response.completed"
            ]
 
@@ -2590,7 +2595,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     # Compact shape: the whole turn arrives as one response.completed event
     # carrying the output text. The bridge must commit on the terminal (it is
     # downstream-visible) and the public normalization synthesizes the
-    # created/delta prefix exactly as it does for HTTP dispatch.
+    # created snapshot and the announced message exactly as it does for HTTP
+    # dispatch (findings#254).
     compact_completed =
       {"response.completed",
        %{
@@ -2615,8 +2621,16 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert response.status == 200
 
-    assert event_types(response.resp_body) ==
-             ["response.created", "response.output_text.delta", "response.completed"]
+    assert event_types(response.resp_body) == [
+             "response.created",
+             "response.output_item.added",
+             "response.content_part.added",
+             "response.output_text.delta",
+             "response.output_text.done",
+             "response.content_part.done",
+             "response.output_item.done",
+             "response.completed"
+           ]
 
     assert completed_id(response.resp_body) == "resp_compact_t1"
     assert response.resp_body =~ "compact answer"

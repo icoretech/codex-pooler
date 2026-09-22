@@ -471,6 +471,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
               "id" => "resp_explicit_state",
               "output" => [
                 %{
+                  "type" => "message",
                   "content" => [
                     %{"type" => "output_text", "text" => "split terminal text"}
                   ]
@@ -535,6 +536,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
               "status" => "completed",
               "output" => [
                 %{
+                  "type" => "message",
                   "content" => [
                     %{
                       "type" => "output_text",
@@ -562,7 +564,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
 
       assert Enum.map(events, & &1["event"]) == [
                "response.created",
+               "response.output_item.added",
+               "response.content_part.added",
                "response.output_text.delta",
+               "response.output_text.done",
+               "response.content_part.done",
+               "response.output_item.done",
                "response.completed"
              ]
 

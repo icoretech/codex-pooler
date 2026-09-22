@@ -591,9 +591,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {chunk, state} =
                DownstreamStream.normalize_data(second, "/v1/responses", opts, state)
 
+      # A terminal-only stream is opened and its message announced before the
+      # terminal, in the order the SDK stream helpers require (findings#254).
       assert Enum.map(public_sse_events(chunk), & &1["event"]) == [
                "response.created",
+               "response.output_item.added",
+               "response.content_part.added",
                "response.output_text.delta",
+               "response.output_text.done",
+               "response.content_part.done",
+               "response.output_item.done",
                "response.completed"
              ]
 

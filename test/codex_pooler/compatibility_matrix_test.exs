@@ -376,6 +376,14 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              }
     end
 
+    test "states that a public /v1 Responses SSE terminal-only stream is opened with the Responses grammar" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+
+      assert feature.contract =~ "preceded by the Responses stream grammar"
+      assert feature.contract =~ "nothing is synthesized once the upstream relayed an output item or a text delta"
+      assert feature.contract =~ "reasoning content is never surfaced as output text"
+    end
+
     test "states that public /v1 surfaces relay no provider event header objects" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
       fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)

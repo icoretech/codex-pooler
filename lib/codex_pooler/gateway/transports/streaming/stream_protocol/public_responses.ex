@@ -33,6 +33,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:buffer_candidate?) => boolean(),
           required(:created?) => boolean(),
           required(:text_delta?) => boolean(),
+          required(:items_relayed?) => boolean(),
           required(:terminal_kind) => atom() | nil,
           required(:terminal_failure) => StreamProtocol.terminal_failure() | nil,
           required(:custom_tool_namespaces) => map(),
@@ -53,6 +54,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       buffer_candidate?: false,
       created?: false,
       text_delta?: false,
+      items_relayed?: false,
       terminal_kind: nil,
       terminal_failure: nil,
       custom_tool_namespaces: custom_tool_namespaces,
@@ -400,9 +402,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {block, if(emitted?, do: record_text_done(state, decoded), else: state)}
   end
 
+  defp normalize_public_block("response.output_item.added", decoded, state) do
+    {block, state, emitted?} = emit_public_sse("response.output_item.added", decoded, state)
+    {block, if(emitted?, do: state |> record_visible("response.output_item.added", decoded) |> record_item_relayed(), else: state)}
+  end
+
   defp normalize_public_block("response.output_item.done", decoded, state) do
     {block, state, emitted?} = emit_public_sse("response.output_item.done", decoded, state)
-    {block, if(emitted?, do: record_item_done(state), else: state)}
+    {block, if(emitted?, do: state |> record_item_done() |> record_item_relayed(), else: state)}
   end
 
   defp normalize_public_block(type, decoded, state) when is_binary(type) do
@@ -438,43 +445,138 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
        when type in ["response.failed", "response.incomplete", "error"],
        do: {[], state}
 
+  # A terminal that closes a response the upstream never opened is preceded by
+  # the grammar the Responses stream contract requires, so SDK stream helpers
+  # (openai-python `responses.stream()`, openai-node `responses.stream()`,
+  # `@ai-sdk/openai`) can follow it: a `response.created` snapshot, then every
+  # terminal output item announced in order with its content parts and text
+  # (findings#254). Only what the terminal carries is replayed; items the
+  # upstream already relayed, or text it already streamed, are never repeated.
   defp terminal_prefix(_type, decoded, state) do
-    {created_prefix, state} =
-      if state.created? do
-        {[], state}
-      else
-        response_id =
-          nested_string(decoded, ["response", "id"]) || decoded_string(decoded, "id") || ""
-
-        created = %{
-          "type" => "response.created",
-          "response" => %{"id" => response_id, "object" => "response", "status" => "in_progress"}
-        }
-
-        {block, state, emitted?} = emit_public_sse("response.created", created, state)
-        {block, if(emitted?, do: record_created(state), else: state)}
-      end
-
-    {delta_prefix, state} =
-      if state.text_delta? do
-        {[], state}
-      else
-        case terminal_output_text(decoded) do
-          "" ->
-            {[], state}
-
-          text ->
-            delta = %{"type" => "response.output_text.delta", "delta" => text}
-
-            {block, state, emitted?} =
-              emit_public_sse("response.output_text.delta", delta, state)
-
-            {block, if(emitted?, do: record_delta(state, delta), else: state)}
-        end
-      end
-
-    {[created_prefix, delta_prefix], state}
+    {created_prefix, state} = created_prefix(decoded, state)
+    {output_prefix, state} = output_prefix(decoded, state)
+    {[created_prefix, output_prefix], state}
   end
+
+  defp created_prefix(_decoded, %{created?: true} = state), do: {[], state}
+
+  defp created_prefix(decoded, state) do
+    created = %{"type" => "response.created", "response" => created_snapshot(decoded)}
+    {block, state, emitted?} = emit_public_sse("response.created", created, state)
+    {block, if(emitted?, do: record_created(state), else: state)}
+  end
+
+  # The opening snapshot carries the identity the terminal response states
+  # (id, creation time, model) with no output yet; a field the terminal does
+  # not carry stays absent rather than being invented.
+  defp created_snapshot(decoded) do
+    response = terminal_response(decoded)
+
+    %{"object" => "response", "status" => "in_progress", "output" => []}
+    |> maybe_put_created_field("id", nested_string(decoded, ["response", "id"]) || decoded_string(decoded, "id"))
+    |> maybe_put_created_field("created_at", Map.get(response, "created_at"))
+    |> maybe_put_created_field("model", Map.get(response, "model"))
+  end
+
+  defp maybe_put_created_field(snapshot, key, value) when key in ["id", "model"] and is_binary(value) and value != "",
+    do: Map.put(snapshot, key, value)
+
+  defp maybe_put_created_field(snapshot, "created_at", value) when is_integer(value) and value >= 0,
+    do: Map.put(snapshot, "created_at", value)
+
+  defp maybe_put_created_field(snapshot, _key, _value), do: snapshot
+
+  defp output_prefix(_decoded, %{text_delta?: true} = state), do: {[], state}
+  defp output_prefix(_decoded, %{items_relayed?: true} = state), do: {[], state}
+
+  defp output_prefix(decoded, state) do
+    decoded
+    |> terminal_response()
+    |> Map.get("output")
+    |> List.wrap()
+    |> Enum.filter(&is_map/1)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {item, output_index} -> output_item_events(item, output_index) end)
+    |> Enum.reduce({[], state}, fn {type, event}, {blocks, state} ->
+      {block, state, emitted?} = emit_public_sse(type, event, state)
+      {[blocks, block], if(emitted?, do: record_synthesized(state, type, event), else: state)}
+    end)
+  end
+
+  defp terminal_response(%{"response" => %{} = response}), do: response
+  defp terminal_response(%{} = decoded), do: decoded
+
+  # A message is announced empty and filled part by part, because the SDK
+  # accumulators append each content part and each delta onto the announced
+  # item; any other item is announced and closed as the terminal states it.
+  defp output_item_events(%{"type" => "message"} = item, output_index) do
+    item_id = Map.get(item, "id")
+
+    parts =
+      item
+      |> Map.get("content")
+      |> List.wrap()
+      |> Enum.filter(&is_map/1)
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {part, content_index} ->
+        content_part_events(part, %{"item_id" => item_id, "output_index" => output_index, "content_index" => content_index})
+      end)
+
+    [
+      {"response.output_item.added",
+       %{
+         "type" => "response.output_item.added",
+         "output_index" => output_index,
+         "item" => item |> Map.put("status", "in_progress") |> Map.put("content", [])
+       }}
+    ] ++ parts ++ [output_item_done(item, output_index)]
+  end
+
+  defp output_item_events(item, output_index) do
+    [
+      {"response.output_item.added", %{"type" => "response.output_item.added", "output_index" => output_index, "item" => item}},
+      output_item_done(item, output_index)
+    ]
+  end
+
+  defp output_item_done(item, output_index) do
+    {"response.output_item.done", %{"type" => "response.output_item.done", "output_index" => output_index, "item" => item}}
+  end
+
+  defp content_part_events(%{"type" => "output_text", "text" => text} = part, position) when is_binary(text) do
+    opening = part |> Map.put("text", "") |> reset_annotations()
+
+    [{"response.content_part.added", Map.merge(position, %{"type" => "response.content_part.added", "part" => opening})}] ++
+      text_events(text, position) ++
+      [{"response.content_part.done", Map.merge(position, %{"type" => "response.content_part.done", "part" => part})}]
+  end
+
+  defp content_part_events(part, position) do
+    [
+      {"response.content_part.added", Map.merge(position, %{"type" => "response.content_part.added", "part" => part})},
+      {"response.content_part.done", Map.merge(position, %{"type" => "response.content_part.done", "part" => part})}
+    ]
+  end
+
+  defp text_events("", position) do
+    [{"response.output_text.done", Map.merge(position, %{"type" => "response.output_text.done", "text" => ""})}]
+  end
+
+  defp text_events(text, position) do
+    [
+      {"response.output_text.delta", Map.merge(position, %{"type" => "response.output_text.delta", "delta" => text})},
+      {"response.output_text.done", Map.merge(position, %{"type" => "response.output_text.done", "text" => text})}
+    ]
+  end
+
+  defp reset_annotations(%{"annotations" => _annotations} = part), do: Map.put(part, "annotations", [])
+  defp reset_annotations(part), do: part
+
+  defp record_synthesized(state, "response.output_text.delta", event), do: record_delta(state, event)
+  defp record_synthesized(state, "response.output_text.done", event), do: record_text_done(state, event)
+  defp record_synthesized(state, "response.output_item.done", _event), do: state |> record_item_done() |> record_item_relayed()
+  defp record_synthesized(state, "response.output_item.added", _event), do: state |> put_summary(:visible_seen, true) |> record_item_relayed()
+  defp record_synthesized(state, _type, _event), do: state
 
   defp public_sse_block(event_type, decoded) when is_binary(event_type) and is_map(decoded) do
     [
@@ -505,26 +607,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
         {[public_sse_block("response.failed", failed)], state, false}
     end
-  end
-
-  defp terminal_output_text(decoded) do
-    response = if is_map(decoded["response"]), do: decoded["response"], else: decoded
-
-    response
-    |> Map.get("output", [])
-    |> List.wrap()
-    |> Enum.flat_map(fn
-      %{"content" => content} -> List.wrap(content)
-      %{"text" => text} when is_binary(text) -> [%{"text" => text}]
-      _item -> []
-    end)
-    |> Enum.map(fn
-      %{"text" => text} when is_binary(text) -> text
-      %{"type" => "output_text", "text" => text} when is_binary(text) -> text
-      _content -> ""
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("")
   end
 
   defp normalize_public_event(type, %{} = decoded)
@@ -897,6 +979,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         buffer_candidate?: false,
         created?: false,
         text_delta?: false,
+        items_relayed?: false,
         passthrough?: false,
         passthrough_terminal: nil
     }
@@ -922,6 +1005,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         state
     end
   end
+
+  defp record_item_relayed(state), do: %{state | items_relayed?: true}
 
   defp record_text_done(state, decoded) do
     text_bytes = decoded |> decoded_string("text") |> safe_byte_size()
