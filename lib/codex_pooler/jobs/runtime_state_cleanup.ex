@@ -9,6 +9,7 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
   alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Platform.InstancePresence
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
 
   @type orchestration_result :: {:ok, map()} | {:error, term()}
@@ -46,7 +47,8 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
       {:execution_proofs, fn -> ExecutionTerminalProofs.prune(now) end},
       {:instance_presence, fn -> InstancePresence.prune(now) end},
       {:catalog_sync_runs, fn -> Catalog.cleanup_stale_sync_runs(now) end},
-      {:account_reconciliation, fn -> AccountReconciliation.cleanup_stale_state(now) end}
+      {:account_reconciliation, fn -> AccountReconciliation.cleanup_stale_state(now) end},
+      {:expired_quota_windows, fn -> QuotaWindows.prune_expired_windows(now) end}
     ]
   end
 

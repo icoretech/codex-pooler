@@ -12,6 +12,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     Quota.RoutingQuotaSnapshot,
     Quota.Windows.Attributes,
     Quota.Windows.EvidenceStore,
+    Quota.Windows.ExpiredPruning,
     Quota.Windows.Routing,
     Quota.WindowSelector
   }
@@ -149,6 +150,17 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   @spec list_evidence(identity_ref()) :: [Quota.AccountQuotaWindow.t()]
   def list_evidence(identity_or_id) do
     EvidenceStore.list_evidence(identity_or_id)
+  end
+
+  @doc """
+  Deletes evidence rows whose reset passed more than
+  `ExpiredPruning.retention_seconds/0` before `now`, except rows carrying the
+  saved-reset confirmation marker or locked by another transaction. Runs from
+  runtime state cleanup.
+  """
+  @spec prune_expired_windows(DateTime.t(), keyword()) :: {:ok, ExpiredPruning.summary()}
+  def prune_expired_windows(%DateTime{} = now, opts \\ []) do
+    ExpiredPruning.prune(now, opts)
   end
 
   defp maybe_delete_missing_quota_windows(multi, _identity, _windows, false, _coverage),

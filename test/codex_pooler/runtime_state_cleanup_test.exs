@@ -618,7 +618,8 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
           :absent_instance_attempts_recovered,
           :instance_presence_rows_pruned,
           :stale_catalog_sync_runs_failed,
-          :stale_account_reconciliations_failed
+          :stale_account_reconciliations_failed,
+          :expired_quota_windows_pruned
         ] do
       assert Map.has_key?(summary, key), "the summary does not report #{key}"
     end

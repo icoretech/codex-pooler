@@ -98,12 +98,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp) do
     with {:ok, evidence} <- Evidence.new(attrs, observed_at),
          identity_id when is_binary(identity_id) <- evidence_identity_id(identity_or_id, attrs) do
-      advisory_lock_evidence_identity(identity_id)
-      # Acquire the identity advisory mutex before any row lock. Import and
-      # lifecycle paths use the same order; taking FOR KEY SHARE first can
-      # deadlock with a writer that already owns the advisory lock and then
-      # waits for FOR UPDATE.
-      lock_evidence_identity_reference(identity_id)
+      lock_evidence_identity!(identity_id)
 
       attrs =
         evidence
@@ -163,6 +158,20 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       end
 
     is_nil(previous_at) or DateTime.compare(observed_at, previous_at) != :lt
+  end
+
+  @doc """
+  Takes the locks every evidence writer holds for an identity, in the order
+  they must be taken: the identity advisory mutex first, then `FOR KEY SHARE`
+  on the identity row. Import and lifecycle paths use the same order; taking
+  FOR KEY SHARE first can deadlock with a writer that already owns the
+  advisory lock and then waits for FOR UPDATE. Must run inside a transaction:
+  both locks are released when it ends.
+  """
+  @spec lock_evidence_identity!(Ecto.UUID.t()) :: :ok
+  def lock_evidence_identity!(identity_id) when is_binary(identity_id) do
+    advisory_lock_evidence_identity(identity_id)
+    lock_evidence_identity_reference(identity_id)
   end
 
   defp lock_evidence_identity_reference(identity_id) do
