@@ -273,6 +273,8 @@ These routes live under `/backend-api` or legacy usage paths. They are still Poo
   </tbody>
 </table>
 
+The usage routes report the account quota evidence Codex Pooler keeps. A window whose reset time has passed is still reported, marked by its reset time, for 30 days after that reset. After that it is no longer evidence, and an account with nothing newer answers `404` with error code `no_upstream_usage`, the same answer as for an account that has never reported usage. The next successful usage read reports the account again.
+
 The app-server JSON-RPC reset-credit method
 `account/rateLimitResetCredit/consume` remains unsupported. Codex Pooler does
 not add a wildcard backend app-server proxy for reset-credit methods.

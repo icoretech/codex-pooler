@@ -1246,6 +1246,44 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     refute response_text =~ "Free-looking label"
   end
 
+  # The usage routes report what the retention keeps: an elapsed window is
+  # still reported until 30 days after its reset, after which the account has
+  # no usage to report, exactly as after the runtime-cleanup prune deleted it.
+  for {label, days_since_reset, expected_status} <- [{"inside", 29, 200}, {"past", 31, 404}] do
+    test "GET /api/codex/usage for an account whose only evidence reset #{days_since_reset} days ago is #{expected_status} (#{label} retention)",
+         %{conn: conn} do
+      pool = pool_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(now, -unquote(days_since_reset), :day)
+      account_id = "retention-account-#{System.unique_integer([:positive])}"
+
+      %{identity: identity} = upstream_assignment_fixture(pool, %{chatgpt_account_id: account_id, account_label: "Retention usage account"})
+
+      assert {:ok, _secret} = Upstreams.store_encrypted_secret(identity, %{secret_kind: "access_token", plaintext: "retention-usage-token"})
+
+      observed_at = DateTime.add(reset_at, -3, :day)
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 monthly_only_account_primary_quota_window_attrs(%{observed_at: observed_at, last_sync_at: observed_at, reset_at: DateTime.add(now, 1, :day)})
+               ])
+
+      from(window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id)
+      |> Repo.update_all(set: [reset_at: reset_at])
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer retention-usage-token")
+        |> put_req_header("chatgpt-account-id", account_id)
+        |> get("/api/codex/usage")
+
+      case unquote(expected_status) do
+        200 -> assert %{"rate_limit" => %{"primary_window" => %{"limit_window_seconds" => 2_592_000}}} = json_response(conn, 200)
+        404 -> assert %{"error" => %{"code" => "no_upstream_usage"}} = json_response(conn, 404)
+      end
+    end
+  end
+
   test "GET /api/codex/usage returns a statusful gateway error for inactive ChatGPT account usage",
        %{conn: conn} do
     pool = pool_fixture()
