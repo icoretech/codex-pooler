@@ -93,6 +93,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Logger 
   end
 
   @spec owner_exit_persistence_failure(atom(), map(), atom(), term()) :: :ok
+  # A later turn of the session (an HTTP fallback the owner never held) was
+  # already running when the owner exited, so the owner-scoped interrupt stood
+  # down on purpose and the lease stays with that turn: routine, not a failure
+  # (findings#225, row 225-85).
+  def owner_exit_persistence_failure(operation, state, owner_exit_reason, :superseded_owner_cleanup) do
+    Logger.info(
+      "websocket owner exit persistence superseded " <>
+        "codex_session_id=#{safe_log_value(state.codex_session_id)} " <>
+        "operation=#{operation} " <>
+        "owner_exit_reason=#{owner_exit_reason} " <>
+        "reason_code=replacement_turn_active"
+    )
+
+    :ok
+  end
+
   def owner_exit_persistence_failure(operation, state, owner_exit_reason, reason) do
     Logger.warning(
       "websocket owner exit persistence failed " <>

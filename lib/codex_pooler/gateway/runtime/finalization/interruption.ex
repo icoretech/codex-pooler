@@ -1434,6 +1434,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   defp owner_recovery_reason("owner_crashed"), do: "owner_crashed"
   defp owner_recovery_reason(_reason), do: "owner_unavailable"
 
+  # Standing down because a later turn of the session is running is the
+  # intended outcome of a recovery, not a failed one (findings#225, row 225-85).
+  defp log_owner_lifecycle_recovery_failure(session_id, reason, :superseded_owner_cleanup) do
+    Logger.info(
+      "websocket owner lifecycle recovery superseded " <>
+        "codex_session_id=#{safe_log_value(session_id)} " <>
+        "recovery_reason=#{safe_log_value(reason)} " <>
+        "reason_code=replacement_turn_active"
+    )
+
+    :ok
+  end
+
   defp log_owner_lifecycle_recovery_failure(session_id, reason, failure) do
     Logger.warning(
       "websocket owner lifecycle recovery failed " <>

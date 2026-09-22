@@ -692,6 +692,10 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   defp log_monitor_recovery({:ok, _result}, _state, _reason), do: :ok
 
+  # The recovery stood down for a later running turn; its producer already
+  # logged that at info, and the lease correctly stays with that turn.
+  defp log_monitor_recovery({:error, :superseded_owner_cleanup}, _state, _reason), do: :ok
+
   defp log_monitor_recovery({:error, recovery_reason}, state, owner_reason) do
     Logger.warning(
       "websocket owner monitor recovery failed " <>
@@ -748,6 +752,8 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     :ok
   end
 
+  defp log_detach_failure({:error, _reason}, _state, {:error, :superseded_owner_cleanup}), do: :ok
+
   defp log_detach_failure({:error, reason}, state, {:error, _recovery_failure}) do
     log_detach_failure({:error, reason}, state, :log_warning)
   end
@@ -756,6 +762,9 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   defp interrupted_turn_count(_recovery), do: 0
 
   defp log_lifecycle_recovery_failure({:ok, _result} = result, _state), do: result
+
+  defp log_lifecycle_recovery_failure({:error, :superseded_owner_cleanup} = result, _state),
+    do: result
 
   defp log_lifecycle_recovery_failure({:error, reason}, state) do
     Logger.warning(

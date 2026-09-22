@@ -675,18 +675,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp log_interrupt_failure({:ok, _result}, _state), do: :ok
   defp log_interrupt_failure(:ok, _state), do: :ok
 
-  # A later turn of the session was already running, so the owner-scoped
-  # interrupt stood down on purpose (findings#225): routine, not a failure.
-  defp log_interrupt_failure({:error, :superseded_owner_cleanup}, state) do
-    Logger.info(
-      "websocket interrupt cleanup superseded " <>
-        "codex_session_id=#{codex_session_id(state)} " <>
-        "cleanup_path=socket_close reason_code=replacement_turn_active"
-    )
-
-    :ok
-  end
-
+  # No socket-close path can produce `:superseded_owner_cleanup`: only the
+  # owner-scoped interrupt returns it, and it needs an owner cleanup witness in
+  # the options, which only the owner detach and the owner itself bind; the
+  # socket's own connection options never carry one. The owner detach logs
+  # that outcome as routine (findings#225, row 225-85).
   defp log_interrupt_failure({:error, reason}, state) do
     Logger.warning(
       "websocket interrupt cleanup failed " <>

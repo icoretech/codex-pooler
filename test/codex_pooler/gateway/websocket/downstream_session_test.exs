@@ -237,6 +237,58 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
              fixture.owner_lease.lease_token
   end
 
+  # The owner exits (idle expiry, drain, crash) while an HTTP fallback turn it
+  # never held runs in the same session: its interrupt stands down on purpose
+  # and the lease stays with that turn. That is routine and logs at info; a
+  # genuinely stale witness (the test above) still warns (findings#225, row
+  # 225-85).
+  test "owner exit with a newer turn it never held logs the stand-down at info and keeps the lease", fixture do
+    websocket_turn = active_turn_fixture(fixture, "websocket")
+    finalize_turn(websocket_turn, "succeeded", nil)
+    http_turn = unowned_turn_fixture(fixture, "http_sse")
+
+    owner_log = capture_info_log(fn -> assert :ok = GenServer.stop(fixture.owner_pid) end)
+
+    assert owner_log =~ "[info] websocket owner exit persistence superseded"
+    assert owner_log =~ "codex_session_id=#{fixture.session.id} operation=interrupt_codex_session"
+    assert owner_log =~ "reason_code=replacement_turn_active"
+    refute owner_log =~ "[warning]"
+    refute owner_log =~ "websocket owner exit persistence failed"
+
+    assert Repo.get!(Request, http_turn.request.id).status == "in_progress"
+    assert Repo.get!(CodexTurn, http_turn.turn.id).status == "in_progress"
+    assert Repo.get!(CodexTurn, websocket_turn.turn.id).status == "succeeded"
+    assert Repo.get!(BridgeOwnerLease, fixture.owner_lease.id).status == "active"
+    assert Repo.get!(CodexSession, fixture.session.id).status == "active"
+  end
+
+  test "owner death recovery that stands down for a newer turn logs at info, not as failed recovery", fixture do
+    websocket_turn = active_turn_fixture(fixture, "websocket")
+    finalize_turn(websocket_turn, "succeeded", nil)
+    http_turn = unowned_turn_fixture(fixture, "http_sse")
+
+    state =
+      websocket_turn.state
+      |> Map.put(:codex_session, fixture.session)
+      |> Map.put(:websocket_owner_pid, fixture.owner_pid)
+
+    log =
+      capture_info_log(fn ->
+        assert {:stop, {1011, "websocket owner crashed"}, _state} =
+                 DownstreamSession.handle_monitor_down(state, fixture.owner_pid, :crashed)
+      end)
+
+    assert log =~ "[info] websocket owner lifecycle recovery superseded"
+    assert log =~ "codex_session_id=#{fixture.session.id} recovery_reason=owner_crashed reason_code=replacement_turn_active"
+    refute log =~ "[warning]"
+    refute log =~ "lifecycle recovery failed"
+    refute log =~ "monitor recovery failed"
+
+    assert Repo.get!(Request, http_turn.request.id).status == "in_progress"
+    assert Repo.get!(CodexTurn, http_turn.turn.id).status == "in_progress"
+    assert_lease_preserved!(fixture)
+  end
+
   test "successful detach preserves a failed terminal winner and its single settlement",
        fixture do
     turn = active_turn_fixture(fixture, "websocket")
@@ -260,6 +312,46 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
            ) == 1
 
     assert_lease_preserved!(fixture)
+  end
+
+  # A turn the owner never held: an HTTP fallback of the same session runs
+  # outside the websocket owner, so nothing is submitted to it and the owner's
+  # own witness still names its last websocket turn.
+  defp unowned_turn_fixture(fixture, transport) do
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               fixture.setup.auth,
+               fixture.setup.model,
+               %{"model" => fixture.setup.model.exposed_model_id},
+               %{
+                 endpoint: "/backend-api/codex/responses",
+                 transport: transport,
+                 correlation_id: "unowned-#{System.unique_integer([:positive, :monotonic])}",
+                 request_metadata: %{"codex_session_id" => fixture.session.id}
+               }
+             )
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, fixture.setup.assignment)
+    assert {:ok, turn} = Gateway.start_codex_turn(fixture.session, reserved.request)
+
+    on_exit(fn ->
+      current_request = Repo.reload!(reserved.request)
+
+      if current_request.status == "in_progress" do
+        assert {:ok, result} =
+                 Accounting.finalize_request(current_request, Repo.reload!(attempt), %{
+                   request_status: "failed",
+                   attempt_status: "failed",
+                   response_status_code: 499,
+                   last_error_code: "client_disconnected",
+                   usage: %{status: "usage_unknown", source: "fixture_cleanup"}
+                 })
+
+        SessionContinuity.complete_codex_turn({:ok, result}, "failed", "client_disconnected")
+      end
+    end)
+
+    %{request: reserved.request, attempt: attempt, turn: turn}
   end
 
   defp active_turn_fixture(fixture, transport) do
