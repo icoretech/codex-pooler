@@ -465,10 +465,14 @@ model_provider = "codex-pooler-ws"
 [model_providers.codex-pooler-ws]
 name = "OpenAI"
 base_url = "http://localhost:4000/backend-api/codex"
+model_catalog_url = "http://localhost:4000/backend-api/codex/models"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true
+
+[features]
+api_key_model_discovery = true
 ```
 
 Keep an HTTP/SSE provider when you need to force non-websocket behavior for a
@@ -480,6 +484,7 @@ model_provider = "codex-pooler-http"
 [model_providers.codex-pooler-http]
 name = "OpenAI"
 base_url = "http://localhost:4000/backend-api/codex"
+model_catalog_url = "http://localhost:4000/backend-api/codex/models"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = false
@@ -487,7 +492,21 @@ requires_openai_auth = true
 ```
 
 For deployed instances, change `base_url` to
-`https://codex-pooler.example.com/backend-api/codex`.
+`https://codex-pooler.example.com/backend-api/codex` and `model_catalog_url` to
+`https://codex-pooler.example.com/backend-api/codex/models`.
+
+Codex 0.156.0 and later read the Pool's model catalog only through
+`model_catalog_url` together with `api_key_model_discovery = true` under
+`[features]` (keep a single `[features]` table in the file). Without them Codex
+keeps the catalog bundled with the release, so models only your Pool serves and
+the Pool's context windows are missing, even when a ChatGPT account is signed
+in. Earlier Codex releases ignore both settings and read the catalog from
+`base_url` while a ChatGPT account is signed in. Codex Desktop and the IDE
+extension follow the same rule once their bundled Codex core reaches 0.156.0.
+Codex still marks `api_key_model_discovery` as under development and prints a
+startup warning while it is on. Point `model_catalog_url` at the final URL (the
+`https` one for a deployed instance), because Codex refuses redirects there;
+Codex also refuses a catalog response larger than 1 MiB on that path.
 
 Leave `requires_openai_auth = true` unless you are deliberately running Codex
 Pooler as a gateway-only provider. With `true`, Codex still shows the local
@@ -502,9 +521,9 @@ runtime auth, but Codex will no longer appear signed in for that provider and
 account-dependent features, including mobile/app-server features, may be
 unavailable.
 
-When Codex Pooler serves current model metadata, Codex CLI and Codex Desktop
-derive their effective context window and automatic compaction boundary from
-that metadata. Leave context sizing automatic so the client follows per-model
+When Codex reads the Pool's model catalog as configured above, Codex CLI and
+Codex Desktop derive their effective context window and automatic compaction
+boundary from that metadata. Leave context sizing automatic so the client follows per-model
 catalog changes without stale local overrides. Provider catalog rollout can be
 account-scoped: one upstream can still report a 272000-token maximum while
 another reports the newer 872000-token ceiling for the same model. Pooler

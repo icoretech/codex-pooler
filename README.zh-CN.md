@@ -436,10 +436,14 @@ model_provider = "codex-pooler-ws"
 [model_providers.codex-pooler-ws]
 name = "OpenAI"
 base_url = "http://localhost:4000/backend-api/codex"
+model_catalog_url = "http://localhost:4000/backend-api/codex/models"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true
+
+[features]
+api_key_model_discovery = true
 ```
 
 当你需要为客户端检查强制非 websocket 行为，或某个 Codex 运行时无法打开后端
@@ -451,6 +455,7 @@ model_provider = "codex-pooler-http"
 [model_providers.codex-pooler-http]
 name = "OpenAI"
 base_url = "http://localhost:4000/backend-api/codex"
+model_catalog_url = "http://localhost:4000/backend-api/codex/models"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = false
@@ -458,9 +463,20 @@ requires_openai_auth = true
 ```
 
 对于已部署实例，把 `base_url` 改为
-`https://codex-pooler.example.com/backend-api/codex`。
+`https://codex-pooler.example.com/backend-api/codex`，并把 `model_catalog_url` 改为
+`https://codex-pooler.example.com/backend-api/codex/models`。
 
-当 Codex Pooler 提供当前模型元数据时，Codex CLI 和 Codex Desktop 会从这些元数据
+Codex 0.156.0 及更高版本只有在同时配置 `model_catalog_url` 和 `[features]` 下的
+`api_key_model_discovery = true` 时才会读取 Pool 的模型目录（配置文件中只保留一个
+`[features]` 表）。缺少这两项时，Codex 会继续使用随版本内置的目录，因此只由你的
+Pool 提供的模型以及 Pool 的上下文窗口都不会出现，即使已登录 ChatGPT 账号也是如此。
+更早的 Codex 版本会忽略这两项设置，并在已登录 ChatGPT 账号时从 `base_url` 读取目录。
+Codex Desktop 和 IDE 扩展在其内置的 Codex core 升级到 0.156.0 后遵循同样的规则。
+Codex 仍把 `api_key_model_discovery` 标记为开发中功能，启用时会在启动时打印警告。
+`model_catalog_url` 请指向最终 URL（已部署实例使用 `https` URL），因为 Codex 在该请求上
+拒绝重定向；Codex 在该路径上也会拒绝超过 1 MiB 的目录响应。
+
+当 Codex 按上述配置读取 Pool 的模型目录时，Codex CLI 和 Codex Desktop 会从这些元数据
 派生有效上下文窗口和自动压缩边界。保持上下文大小自动配置，让客户端跟随每个模型的
 目录变化，避免本地覆盖过期。Provider 目录 rollout 可能按 account 分批：同一模型的
 一个 upstream 仍可能报告 272000-token maximum，而另一个已经报告 872000-token ceiling。
