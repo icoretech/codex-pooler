@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   alias CodexPooler.Accounting.RequestReplayEntitlement
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus, OwnerRenewalSchedule}
+  alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
@@ -67,6 +68,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :first_compact_result,
     :ordinary_success_result,
     :codex_session_id,
+    :turn_claim_session,
     :owner_lease_token,
     :owner_instance_id,
     :downstream,
@@ -1106,6 +1108,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:ok,
        %__MODULE__{
          codex_session_id: codex_session_id,
+         turn_claim_session: turn_claim_session(codex_session_id, opts),
          owner_lease_token: owner_lease_token,
          owner_instance_id: owner_instance_id,
          upstream_pid: upstream_pid,
@@ -3339,7 +3342,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     if native_message_mapper?(mapper) do
       with {:ok, decoded} when is_map(decoded) <- CodexPooler.JSON.decode(payload),
            {:ok, %{semantic_turn_key: semantic_turn_key}} <-
-             WebsocketTurnIdentity.resolve(decoded, state.codex_session_id) do
+             WebsocketTurnIdentity.resolve(decoded, turn_claim_scope(state, decoded)) do
         %{kind: :native, semantic_turn_key: semantic_turn_key}
       else
         _missing_or_invalid -> :unknown
@@ -3350,6 +3353,41 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp upstream_turn_descriptor(_state, _payload), do: :unknown
+
+  # The socket derives a native frame's semantic turn key under
+  # `WebsocketCodec.native_turn_claim_scope/2`: an HMAC of Pool, key and thread
+  # when the turn metadata names a thread, else the session id. A turn the owner
+  # accepts without a preflight descriptor (a frame the socket queued behind a
+  # running task and submitted at dequeue) must get the same key, or a
+  # same-turn resend of a thread-naming client never matches the running turn
+  # (findings#225, row 225-91). The owner has the upstream body only, so a
+  # thread named solely in a forwarded header resolves under the session id, as
+  # it did before; an owner started without the session's Pool and key (an
+  # older start path) keeps the session scope too.
+  defp turn_claim_scope(%{turn_claim_session: %{} = session}, decoded) do
+    thread_id =
+      case decoded do
+        %{"client_metadata" => %{"x-codex-turn-metadata" => document}} ->
+          NativeTurnContinuation.thread_identity(document)
+
+        _no_turn_metadata ->
+          nil
+      end
+
+    WebsocketTurnIdentity.claim_scope(session, thread_id)
+  end
+
+  defp turn_claim_scope(state, _decoded), do: state.codex_session_id
+
+  defp turn_claim_session(codex_session_id, opts) do
+    case {Keyword.get(opts, :pool_id), Keyword.get(opts, :api_key_id)} do
+      {pool_id, api_key_id} when is_binary(pool_id) and is_binary(api_key_id) ->
+        %{id: codex_session_id, pool_id: pool_id, api_key_id: api_key_id}
+
+      _older_start_path ->
+        nil
+    end
+  end
 
   defp put_next_turn_descriptor(state, downstream, semantic_turn_key)
        when is_map(downstream) and is_binary(semantic_turn_key) and
@@ -3933,7 +3971,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
        when target in [:reattaching, :suspending] do
     allowed_statuses = if target == :suspending, do: [:attached, :lost], else: [:lost]
 
-    if current == expected and current.downstream_status in allowed_statuses do
+    if current == expected and Map.get(current, :downstream_status) in allowed_statuses do
       {:ok, put_in(state.active_turn.descriptor.downstream_status, target)}
     else
       {:error, :owner_busy}
@@ -3967,6 +4005,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp mark_active_downstream_lost(_state, _downstream), do: {:error, :owner_busy}
+
+  # A descriptor the owner derived itself (a turn accepted without a replay
+  # preflight) carries no replay binding, so no control can match it; reading
+  # the binding fields off it used to crash the owner with a KeyError
+  # (findings#225, row 225-101).
+  defp replay_descriptor_match?(descriptor, _control)
+       when not is_map_key(descriptor, :authorization_snapshot),
+       do: false
 
   defp replay_descriptor_match?(descriptor, control),
     do:

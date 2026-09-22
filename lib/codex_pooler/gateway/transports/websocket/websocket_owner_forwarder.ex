@@ -1783,6 +1783,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp start_recovered_remote_owner(%CodexSession{} = session, opts) do
     start_opts = [
       codex_session_id: session.id,
+      pool_id: session.pool_id,
+      api_key_id: session.api_key_id,
       owner_lease_token: session.owner_lease_token,
       owner_instance_id: session.owner_instance_id,
       request_id: Keyword.get(opts, :request_id),

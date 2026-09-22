@@ -988,6 +988,8 @@ defmodule CodexPooler.Gateway.Websocket do
     if session.owner_instance_id == owner_instance_id do
       start_opts = [
         codex_session_id: session.id,
+        pool_id: session.pool_id,
+        api_key_id: session.api_key_id,
         owner_lease_token: session.owner_lease_token,
         owner_instance_id: owner_instance_id,
         request_id: request_id(opts),
