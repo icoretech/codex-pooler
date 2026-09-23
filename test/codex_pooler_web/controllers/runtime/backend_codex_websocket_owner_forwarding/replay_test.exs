@@ -1768,32 +1768,148 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
-  # A stall longer than the sandbox checkout queue (about 400 ms here) makes the
-  # early arm's transaction fail. The owner arms inside its own call, so that
-  # failure must come back as a failed suspension, which keeps the turn attached
-  # for the socket's ordinary detach after its drain, not as an exception that
-  # stops the owner and every turn it holds. Whether that later detach can still
-  # arm depends on where the stall ends, so only the owner's survival and a
-  # settled request are asserted.
+  # A connection-checkout stall long enough for the pool to drop the queued
+  # checkout makes the early arm's transaction raise. The owner arms inside its
+  # own call, so that failure must come back as a failed suspension, which keeps
+  # the turn attached for the socket's ordinary detach after its drain, not as an
+  # exception that stops the owner and every turn it holds. The test sandbox no
+  # longer drops a queued checkout below 10 s (`queue_target: 5_000`), so the
+  # owner's first arm runs the real `RequestReplay.arm/1` against a test-owned
+  # Repo instance whose only connection this test holds and whose queue drops a
+  # waiter after a few milliseconds: the same `DBConnection.ConnectionError` a
+  # production pool raises. The provider's output stays held, so the ordinary
+  # detach arms on the sandbox and the resend is served as the turn's successor.
   @tag :replay_matrix
   @tag :replay_race
-  @tag slow: "holds the shared sandbox connection for 600 ms, beyond the sandbox checkout queue, to fail the replay arm"
   test "a replay arm that cannot check out a database connection fails the suspension without stopping the owner" do
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        scenario = stalled_previsible_cut(600)
-        send(self(), {:stalled_scenario, scenario})
+        cut = open_previsible_cut!(held_output?: false)
+        unavailable_repo = hold_unavailable_repo!()
+        codex_session_id = Repo.get_by!(CodexTurn, request_id: cut.request_id).codex_session_id
+        {:ok, owner_pid} = WebsocketOwnerSession.lookup(codex_session_id)
+        owner_monitor = Process.monitor(owner_pid)
+        fail_first_replay_arm!(owner_pid, unavailable_repo.repo)
+
+        _result = Mint.HTTP.close(cut.conn)
+        assert_receive {:unavailable_replay_arm, first_arm}, @handoff_detection_timeout_ms
+        release_unavailable_repo!(unavailable_repo)
+
+        # The failed early arm kept the turn attached, so the socket's ordinary
+        # detach after its drain arms the replay, later than a released client's
+        # first resend would come.
+        scenario = finish_previsible_cut!(cut, @handoff_detection_timeout_ms)
+        refute_received {:DOWN, ^owner_monitor, :process, _pid, _reason}
+        send(self(), {:unavailable_arm_scenario, first_arm, Process.alive?(owner_pid), scenario})
       end)
 
-    assert_received {:stalled_scenario, %{request_id: request_id, retry_result: retry_result}}
+    assert_received {:unavailable_arm_scenario, first_arm, owner_alive?, scenario}
+    %{setup: setup, upstream: upstream, release_ref: release_ref, request_id: request_id} = scenario
+    assert {first_arm, owner_alive?} == {{:error, :database_unavailable}, true}
     refute log =~ "WebsocketOwnerSession.Registry"
     refute log =~ "phase=terminate reason=process_exit"
-    assert retry_result["type"] in ["response.completed", "error"]
+
+    assert {scenario.armed, scenario.visible_before_retry, scenario.retry_result["type"]} == {:armed, nil, "response.completed"}
     assert_request_settled!(request_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
-    assert Repo.get!(Request, request_id).status in ["succeeded", "failed"]
+    assert [%Request{id: ^request_id, status: "succeeded"}] = request_logs(setup.pool.id)
+
+    assert [%Attempt{replay_generation: 0, status: "retryable_failed"}, %Attempt{replay_generation: 1, status: "succeeded"}] =
+             pool_attempts(setup.pool.id)
+
+    assert %RequestReplayEntitlement{status: "consumed"} = Repo.get_by!(RequestReplayEntitlement, request_id: request_id)
+    assert FakeUpstream.count(upstream) == 2
+    _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  # A second instance of the Repo, outside the sandbox, with one connection that
+  # a test task holds and a queue that drops a waiter after a few milliseconds.
+  defp hold_unavailable_repo! do
+    repo =
+      start_supervised!(
+        {Repo, name: nil, pool: DBConnection.ConnectionPool, pool_size: 1, queue_target: 1, queue_interval: 10},
+        id: :unavailable_replay_arm_repo
+      )
+
+    test_pid = self()
+    release_ref = make_ref()
+
+    holder =
+      Task.async(fn ->
+        _previous = Repo.put_dynamic_repo(repo)
+
+        Repo.checkout(fn ->
+          send(test_pid, {:unavailable_repo_held, release_ref})
+
+          receive do
+            {:release_unavailable_repo, ^release_ref} -> :released
+          end
+        end)
+      end)
+
+    assert_receive {:unavailable_repo_held, ^release_ref}, @handoff_detection_timeout_ms
+    %{repo: repo, holder: holder, release_ref: release_ref}
+  end
+
+  defp release_unavailable_repo!(%{holder: holder, release_ref: release_ref}) do
+    send(holder.pid, {:release_unavailable_repo, release_ref})
+    assert Task.await(holder, @handoff_detection_timeout_ms) == :released
+  end
+
+  # Only the owner's first arm, the socket's early one, runs against the
+  # unavailable Repo; later arms reach the sandbox as usual.
+  defp fail_first_replay_arm!(owner_pid, repo) do
+    test_pid = self()
+    first_arm = :atomics.new(1, [])
+
+    arm = fn input ->
+      if :atomics.compare_exchange(first_arm, 1, 0, 1) == :ok do
+        previous = Repo.put_dynamic_repo(repo)
+
+        try do
+          result = Accounting.arm_request_replay(input)
+          send(test_pid, {:unavailable_replay_arm, result})
+          result
+        after
+          Repo.put_dynamic_repo(previous)
+        end
+      else
+        Accounting.arm_request_replay(input)
+      end
+    end
+
+    :sys.replace_state(owner_pid, fn owner_state ->
+      %{owner_state | callbacks: %{owner_state.callbacks | replay_suspender: arm}}
+    end)
+
+    :ok
   end
 
   defp stalled_previsible_cut(stall_ms) do
+    cut = open_previsible_cut!()
+    test_pid = self()
+
+    stall =
+      Task.async(fn ->
+        send(test_pid, :database_stall_started)
+        Repo.query!("SELECT pg_sleep($1::float / 1000)", [stall_ms])
+      end)
+
+    assert_receive :database_stall_started
+    Process.sleep(30)
+    _result = Mint.HTTP.close(cut.conn)
+    Process.sleep(150)
+    assert :ok = FakeUpstream.release_frame(cut.upstream, cut.release_ref)
+    _stalled = Task.await(stall)
+
+    finish_previsible_cut!(cut)
+  end
+
+  # Barrier 2 holds the provider's first output item, or, without it, the
+  # silent tail of the stream: a tail barrier is acknowledged when the test
+  # releases it, whether or not the predecessor's upstream connection is still
+  # open by then.
+  defp open_previsible_cut!(opts \\ []) do
     release_ref = make_ref()
     created = %{"type" => "response.created", "response" => %{"id" => "resp_stalled_cut", "status" => "in_progress", "output" => []}}
     in_progress = %{"type" => "response.in_progress", "response" => %{"id" => "resp_stalled_cut", "status" => "in_progress", "output" => []}}
@@ -1804,6 +1920,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
       "item" => %{"type" => "message", "id" => "msg_stalled_cut", "role" => "assistant", "status" => "in_progress", "content" => []}
     }
 
+    held_frames = if Keyword.get(opts, :held_output?, true), do: [output_added], else: []
+
     upstream =
       start_upstream(
         # provenance: observed findings#232 row 232-202 (released Codex client, production, pre-visible cut during a connection-checkout stall)
@@ -1811,7 +1929,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
           strict_native_request(
             1,
             FakeUpstream.barrier_websocket_frames(
-              Enum.map([created, in_progress, output_added], &CodexPooler.JSON.encode!/1),
+              Enum.map([created, in_progress | held_frames], &CodexPooler.JSON.encode!/1),
               notify: self(),
               release_ref: release_ref
             )
@@ -1841,22 +1959,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert Enum.map([first, second], &CodexPooler.JSON.decode!(&1)["type"]) == ["response.created", "response.in_progress"]
     assert [%Request{id: request_id, status: "in_progress"}] = request_logs(setup.pool.id)
 
-    test_pid = self()
+    %{
+      setup: setup,
+      upstream: upstream,
+      release_ref: release_ref,
+      request_id: request_id,
+      conn: conn,
+      port: port,
+      turn_state: turn_state,
+      raw_payload: raw_payload
+    }
+  end
 
-    stall =
-      Task.async(fn ->
-        send(test_pid, :database_stall_started)
-        Repo.query!("SELECT pg_sleep($1::float / 1000)", [stall_ms])
-      end)
-
-    assert_receive :database_stall_started
-    Process.sleep(30)
-    _result = Mint.HTTP.close(conn)
-    Process.sleep(150)
-    assert :ok = FakeUpstream.release_frame(upstream, release_ref)
-    _stalled = Task.await(stall)
-
-    armed = await_replay_armed(request_id, System.monotonic_time(:millisecond) + released_client_stream_retry_ms())
+  defp finish_previsible_cut!(%{setup: setup, upstream: upstream, release_ref: release_ref, request_id: request_id, port: port, turn_state: turn_state, raw_payload: raw_payload}, arm_budget_ms \\ released_client_stream_retry_ms()) do
+    armed = await_replay_armed(request_id, System.monotonic_time(:millisecond) + arm_budget_ms)
     visible_before_retry = Repo.get_by!(CodexTurn, request_id: request_id).first_visible_output_at
 
     {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
