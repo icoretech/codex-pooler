@@ -1455,12 +1455,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => input,
-        "previous_response_id" => "resp_continuation_anchor",
         "client_metadata" => %{"x-codex-turn-metadata" => turn_metadata(@turn_id)}
       })
     end
 
+    # A native HTTP tool continuation carries the full history: the provider
+    # refuses `previous_response_id` over HTTP (findings#232 rows 232-275 and
+    # 232-276), and the released client anchors only on its websocket.
     tool_output = [
+      %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "run the tool"}]},
+      %{"type" => "function_call", "call_id" => "call_212_continuation", "name" => "sample_tool", "arguments" => "{}"},
       %{
         "type" => "function_call_output",
         "call_id" => "call_212_continuation",

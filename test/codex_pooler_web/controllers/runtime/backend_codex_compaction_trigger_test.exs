@@ -362,16 +362,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert attempt.network_error_code == "invalid_compaction_response"
   end
 
+  # Only the unanchored scenario has an HTTP path: the provider resolves
+  # `previous_response_id` only on the websocket connection that produced the
+  # response and refuses the parameter over HTTP (findings#232 rows 232-275 and
+  # 232-276), and the released client anchors a compaction only on its
+  # websocket, where `backend_codex_websocket_compaction_trigger_test.exs`
+  # covers the anchored scenarios.
   test "backend HTTP preserves source-derived incremental compaction lineage and ordering", %{
     conn: conn
   } do
     fixture = codex_incremental_compaction_fixture!()
 
-    for scenario_name <- [
-          "anchored_tool_output_and_trigger",
-          "anchored_trigger_only",
-          "full_history_without_anchor"
-        ] do
+    for scenario_name <- ["full_history_without_anchor"] do
       compact_item = %{
         "type" => "compaction",
         "encrypted_content" => "synthetic-http-incremental-#{scenario_name}"
@@ -398,10 +400,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       source_frame =
         get_in(fixture, ["scenarios", scenario_name, "projection_relevant_frame_subset"])
 
-      if scenario_name == "anchored_tool_output_and_trigger" do
-        assert get_in(source_frame, ["input", Access.at(0), "output"]) == ""
-      end
-
       payload =
         source_frame
         |> Map.put("model", setup.model.exposed_model_id)
@@ -425,9 +423,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert captured.json["store"] == false, scenario_name
       assert captured.json["stream"] == true, scenario_name
 
-      assert Map.get(captured.json, "previous_response_id") ==
-               Map.get(source_frame, "previous_response_id"),
-             scenario_name
+      refute Map.has_key?(captured.json, "previous_response_id"), scenario_name
 
       assert get_in(payload, ["client_metadata", "x-codex-turn-metadata"]) ==
                get_in(fixture, ["v2_trigger_metadata", "x-codex-turn-metadata"]),

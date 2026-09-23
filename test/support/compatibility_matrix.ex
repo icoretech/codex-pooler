@@ -1557,7 +1557,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         },
         continuation: %{
           stateless_full_history_replay: "accepted",
-          previous_response_id_semantic_tool_output: "accepted",
+          previous_response_id_semantic_tool_output: "producing_websocket_connection_only",
           call_output_pairing: "not_enforced",
           item_order: "not_enforced"
         },

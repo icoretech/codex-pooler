@@ -1864,20 +1864,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
     end
   end
 
-  test "HTTP custom tool output continuations keep previous_response_id", %{conn: conn} do
-    upstream =
-      start_upstream(
-        FakeUpstream.require_json_field(
-          "previous_response_id",
-          %{
-            "id" => "resp_http_custom_tool_continuation",
-            "object" => "response",
-            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-          },
-          %{"error" => %{"code" => "missing_custom_tool_context"}}
-        )
-      )
-
+  # The anchor is kept by semantic tool-result shape (AGENTS invariant), but
+  # the provider resolves it only on the websocket connection that produced
+  # the response and refuses the parameter over HTTP (findings#232 rows
+  # 232-275 and 232-276); FakeUpstream answers the same way. The client gets
+  # the refusal naming the parameter instead of a delta served without its
+  # context.
+  test "HTTP custom tool output continuations keep previous_response_id and relay its HTTP refusal", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_http_custom_tool_never_served"}))
     setup = gateway_setup(upstream)
 
     conn =
@@ -1896,10 +1890,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
         "previous_response_id" => "resp_http_custom_tool_origin"
       })
 
-    assert %{"id" => "resp_http_custom_tool_continuation"} = json_response(conn, 200)
+    assert %{"error" => %{"code" => "unsupported_parameter", "param" => "previous_response_id"}} = json_response(conn, 400)
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.json["previous_response_id"] == "resp_http_custom_tool_origin"
+    assert [%{"type" => "custom_tool_call_output", "call_id" => "call_sample"}] = captured.json["input"]
     refute Map.has_key?(captured.json, "type")
   end
 

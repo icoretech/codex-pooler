@@ -15,18 +15,18 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
 
   @endpoint_path "/backend-api/codex/responses"
 
-  test "a same-model tool continuation keeps its explicit response anchor", %{conn: conn} do
+  # The Codex backend resolves `previous_response_id` only on the websocket
+  # connection that produced the response and refuses the parameter over HTTP
+  # (findings#232 rows 232-275 and 232-276); FakeUpstream answers the same way.
+  # A native HTTP tool continuation still carries its explicit anchor upstream
+  # (dropping it would hand the provider a delta without its context) and the
+  # client receives the refusal naming the parameter, so it can resend the
+  # full history.
+  test "a same-model tool continuation keeps its explicit response anchor, which the provider refuses over HTTP", %{conn: conn} do
     upstream =
       start_upstream(
         FakeUpstream.strict_sequence([
-          strict_http_turn(tool_response(), valid: true, forbidden: ["previous_response_id"]),
-          strict_http_turn(success(),
-            valid: true,
-            equals: %{
-              "previous_response_id" => "resp_example_transition_anchor",
-              "input.0.type" => "function_call_output"
-            }
-          )
+          strict_http_turn(tool_response(), valid: true, forbidden: ["previous_response_id"])
         ])
       )
 
@@ -39,8 +39,7 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
       |> auth(setup)
       |> post(@endpoint_path, continuation(setup.model, anchor, call_id))
 
-    assert %{"id" => "resp_example_transition_complete"} = json_response(response, 200)
-    assert anchor != "resp_example_transition_complete"
+    assert %{"error" => %{"code" => "unsupported_parameter", "param" => "previous_response_id"}} = json_response(response, 400)
     assert [_first, second] = FakeUpstream.requests(upstream)
     assert second.json["previous_response_id"] == anchor
     assert [%{"type" => "function_call_output", "call_id" => ^call_id}] = second.json["input"]
@@ -49,18 +48,11 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
-  test "a target-model error with an explicit prior-model anchor stays terminal", %{conn: conn} do
+  test "a target-model continuation with an explicit prior-model anchor stays terminal", %{conn: conn} do
     upstream =
       start_upstream(
         FakeUpstream.strict_sequence([
-          strict_http_turn(tool_response(), valid: true, forbidden: ["previous_response_id"]),
-          strict_http_turn(model_error(),
-            valid: true,
-            equals: %{
-              "previous_response_id" => "resp_example_transition_anchor",
-              "input.0.type" => "function_call_output"
-            }
-          )
+          strict_http_turn(tool_response(), valid: true, forbidden: ["previous_response_id"])
         ])
       )
 
@@ -74,7 +66,7 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
       |> auth(setup)
       |> post(@endpoint_path, continuation(target, anchor, call_id))
 
-    assert %{"error" => %{"code" => "model_not_found"}} = json_response(response, 404)
+    assert %{"error" => %{"code" => "unsupported_parameter", "param" => "previous_response_id"}} = json_response(response, 400)
     assert [first, second] = FakeUpstream.requests(upstream)
     refute first.json["model"] == second.json["model"]
     assert second.json["previous_response_id"] == anchor
@@ -204,28 +196,5 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
       ],
       "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
     })
-  end
-
-  defp success do
-    FakeUpstream.json_response(%{
-      "id" => "resp_example_transition_complete",
-      "status" => "completed",
-      "output" => [],
-      "object" => "response",
-      "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-    })
-  end
-
-  defp model_error do
-    FakeUpstream.json_response(
-      %{
-        "error" => %{
-          "code" => "model_not_found",
-          "type" => "invalid_request_error",
-          "param" => "model"
-        }
-      },
-      404
-    )
   end
 end

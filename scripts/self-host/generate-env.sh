@@ -1,6 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
+# The target is created before the secrets are written into it, so it must be owner-only from the
+# start; a later chmod leaves a window in which another local user can open it.
+umask 077
+
 target="${1:-.env}"
 
 if [ -e "$target" ]; then

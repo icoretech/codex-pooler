@@ -978,9 +978,44 @@ defmodule CodexPooler.FakeUpstream do
       json: decode_json(body)
     }
 
-    mode = take_response_mode(pid, request)
+    if provider_rejects_http_previous_response_id?(request) do
+      record_rejected_request(pid, request)
+      respond_http_previous_response_id_rejection(conn)
+    else
+      mode = take_response_mode(pid, request)
 
-    respond(pid, conn, mode, request)
+      respond(pid, conn, mode, request)
+    end
+  end
+
+  # The ChatGPT Codex backend resolves `previous_response_id` only on the
+  # websocket connection that produced the response. Over HTTP it refuses the
+  # parameter before any lookup, whatever `store` or a forwarded `session-id`
+  # (findings#232 rows 232-275 and 232-276, live probe 2026-09-23), with this
+  # exact body (a 43-byte detail). The fake answers the same way so no test can
+  # certify an anchored HTTP continuation the provider never serves; the
+  # refused request is still captured, and no scripted response is consumed
+  # because the provider generates nothing for it.
+  @http_previous_response_id_rejection ~s({"detail":"Unsupported parameter: previous_response_id"})
+
+  @doc "The body the Codex backend answers, with status 400, to `previous_response_id` over HTTP."
+  @spec http_previous_response_id_rejection_body() :: String.t()
+  def http_previous_response_id_rejection_body, do: @http_previous_response_id_rejection
+
+  defp provider_rejects_http_previous_response_id?(%{method: "POST", path: path, json: %{} = json}) do
+    String.ends_with?(path, "/codex/responses") and not is_nil(Map.get(json, "previous_response_id"))
+  end
+
+  defp provider_rejects_http_previous_response_id?(_request), do: false
+
+  defp record_rejected_request(pid, request) do
+    Agent.update(pid, fn state -> %{state | requests: [request | state.requests]} end)
+  end
+
+  defp respond_http_previous_response_id_rejection(conn) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(400, @http_previous_response_id_rejection)
   end
 
   defp read_body(conn), do: read_body(conn, [])

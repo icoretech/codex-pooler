@@ -898,18 +898,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
       anchor_id = "resp_http_anchor_unsupported_sample"
       tool_output = %{"type" => "function_call_output", "call_id" => "call_http_anchor_unsupported", "output" => @prompt_sentinel}
 
-      upstream =
-        start_upstream(
-          # provenance: observed findings#232 row 232-275 live probe (HTTP 400, `{"detail": ...}` body whose 43-byte text fingerprints to the unsupported previous_response_id message, on an anchored native HTTP tool-output continuation)
-          FakeUpstream.strict_sequence([
-            FakeUpstream.expect_request(
-              method: "POST",
-              path: "/backend-api/codex/responses",
-              json: [valid: true, equals: %{"previous_response_id" => anchor_id}],
-              respond: {:json_error, 400, %{"detail" => "Unsupported parameter: previous_response_id"}}
-            )
-          ])
-        )
+      # FakeUpstream answers an HTTP body carrying `previous_response_id` the
+      # way the provider does (observed findings#232 row 232-275 live probe:
+      # HTTP 400 with the `{"detail": "Unsupported parameter: ..."}` body)
+      # before any scripted response (row 232-276).
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_http_anchor_never_served"}))
 
       setup = gateway_setup(upstream)
 
@@ -929,7 +922,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                {:ok, %{"error" => refusal_error("unsupported_parameter", "previous_response_id")}}
 
       refute response.resp_body =~ @prompt_sentinel
-      FakeUpstream.verify!(upstream)
+      assert [%{method: "POST", path: "/backend-api/codex/responses", json: %{"previous_response_id" => ^anchor_id}}] = FakeUpstream.requests(upstream)
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.status == "failed"
