@@ -22,7 +22,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
   import Ecto.Query
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [gateway_setup: 1, native_text_input: 1, start_upstream: 1]
+    only: [gateway_setup: 1, native_text_input: 1, start_upstream: 1, stream_retry_setup: 2]
 
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport,
     only: [assert_single_native_turn_terminal!: 2, collect_native_turn_frames!: 1, stop_registered_websocket_owner_sessions: 0, strict_native_request: 2]
@@ -88,12 +88,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
     assert Repo.all(from(demotion in BridgeDemotion, select: demotion.reason_code)) == []
   end
 
-  test "native websocket provider 403 whose code demotes the account stays retryable" do
-    {frames, _request, _attempt} = native_refusal_turn!("ws-final-refusal-demoting-403", 403, provider_error("unauthorized", nil))
+  test "native websocket provider 403 whose code demotes the account stays retryable when the Pool has another assignment" do
+    {frames, _request, _attempt} = native_refusal_turn!("ws-final-refusal-demoting-403", 403, provider_error("unauthorized", nil), :two_assignments)
 
     terminal = assert_single_native_turn_terminal!(frames, "response.failed")
     assert %{"status" => 403, "response" => %{"status" => "failed", "error" => %{"code" => "unauthorized"}}} = terminal
     assert Repo.all(from(demotion in BridgeDemotion, select: demotion.reason_code)) == ["unauthorized"]
+  end
+
+  # With no other routable assignment for the model the client's retry and its
+  # HTTPS fallback reach the demoted account again (P33 lane, one assignment:
+  # four refused websocket resends and one HTTPS provider request), so the
+  # refusal is final like the others; the account is still demoted
+  # (findings#254 row 254-93).
+  for topology <- [:direct, :local_owner] do
+    @tag topology: topology
+    test "native websocket #{topology} provider 403 whose code demotes the only assignment of the Pool is final", %{topology: topology} do
+      if topology == :local_owner, do: enable_owner_forwarding!()
+      {frames, _request, _attempt} = native_refusal_turn!("ws-final-refusal-demoting-403-sole-#{topology}", 403, provider_error("unauthorized", nil))
+
+      assert %{"type" => "error", "status" => 400, "error" => %{"code" => "unauthorized", "message" => "upstream rejected the request (unauthorized); upstream status 403"}} =
+               assert_single_native_turn_terminal!(frames, "error")
+
+      refute CodexPooler.JSON.encode!(frames) =~ @provider_sentinel
+      assert Repo.all(from(demotion in BridgeDemotion, select: demotion.reason_code)) == ["unauthorized"]
+    end
   end
 
   # An unknown code demotes nothing since row 254-81, as the HTTP answer of the
@@ -117,7 +136,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
          %{topology: topology, provider_status: status, provider_code: code, relayed_code: relayed} do
       if topology == :local_owner, do: enable_owner_forwarding!()
 
-      {frames, _request, attempt} = native_refusal_turn!("ws-final-refusal-account-#{topology}-#{status}", status, provider_error(code, nil))
+      {frames, _request, attempt} = native_refusal_turn!("ws-final-refusal-account-#{topology}-#{status}", status, provider_error(code, nil), :two_assignments)
       message = "upstream rejected the request (#{relayed}); upstream status #{status}"
 
       assert %{"status" => ^status, "error" => %{"message" => ^message}, "response" => %{"status" => "failed", "error" => %{"message" => ^message}}} =
@@ -150,10 +169,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
     assert %{"status" => 404, "response" => %{"error" => %{"code" => "invalid_prompt"}}} = assert_single_native_turn_terminal!(frames, "response.failed")
   end
 
-  defp native_refusal_turn!(request_id, status, provider_error) do
+  defp native_refusal_turn!(request_id, status, provider_error, pool \\ :one_assignment) do
     frame = CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => provider_error})
-    upstream = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([frame]))]))
-    setup = gateway_setup(upstream)
+    refusal = fn -> FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([frame]))]) end
+
+    {setup, upstreams} =
+      case pool do
+        :one_assignment ->
+          upstream = start_upstream(refusal.())
+          {gateway_setup(upstream), [upstream]}
+
+        # Either assignment may take the turn; both refuse it the same way.
+        :two_assignments ->
+          {setup, first, second} = stream_retry_setup(refusal.(), refusal.())
+          {setup, [first, second]}
+      end
+
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     {:ok, state} = CodexResponsesSocket.init(%{auth: auth, opts: %{request_id: request_id, accepted_turn_state: Ecto.UUID.generate(), client_ip: "127.0.0.1"}})
 
@@ -163,7 +194,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
 
       assert {:ok, turn_state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
       {turn_state, frames} = collect_native_turn_frames!(turn_state)
-      assert :ok = FakeUpstream.verify!(upstream)
+      assert Enum.sum(Enum.map(upstreams, &FakeUpstream.count/1)) == 1
       assert [request] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
       assert [attempt] = Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
       assert :ok = CodexResponsesSocket.terminate(:closed, turn_state)

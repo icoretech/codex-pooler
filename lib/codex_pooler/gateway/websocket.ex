@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Websocket do
   alias CodexPooler.Gateway.Payloads.{ContinuityPayload, PayloadNormalizer, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
+  alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Admission
@@ -847,6 +848,32 @@ defmodule CodexPooler.Gateway.Websocket do
 
   def detach_previsible_websocket_owner_downstream(_session, _owner_lease_token, _downstream, _opts),
     do: :not_previsible
+
+  @doc """
+  True when the websocket session's Pool has no routable assignment for the
+  turn's model other than the one the session is pinned to (or, unpinned, at
+  most one): a refusal that demotes that account then has nowhere else to go,
+  so the native client must read it as final instead of resending it
+  (findings#254 row 254-93). Any lookup failure answers `false` and keeps the
+  retryable refusal.
+  """
+  @spec sole_routable_assignment?(CodexSession.t() | nil, String.t() | nil) :: boolean()
+  def sole_routable_assignment?(%CodexSession{pool_id: pool_id, pool_upstream_assignment_id: pinned}, model)
+      when is_binary(pool_id) and is_binary(model) do
+    case CandidateEligibility.visible_model_context(pool_id, model) do
+      %{candidate_snapshots: candidates} when is_list(candidates) -> other_candidates(candidates, pinned) == []
+      _no_context -> false
+    end
+  rescue
+    _error -> false
+  end
+
+  def sole_routable_assignment?(_session, _model), do: false
+
+  defp other_candidates(candidates, pinned) when is_binary(pinned),
+    do: Enum.reject(candidates, fn {assignment, _identity} -> assignment.id == pinned end)
+
+  defp other_candidates(candidates, _unpinned), do: Enum.drop(candidates, 1)
 
   @spec cancel_websocket_owner_turn(
           CodexSession.t() | nil,

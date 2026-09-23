@@ -115,11 +115,19 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   end
 
   @spec downstream_response_chunk(binary()) :: binary()
-  def downstream_response_chunk(data) when is_binary(data) do
+  def downstream_response_chunk(data) when is_binary(data), do: native_downstream_response_chunk(data, fn -> false end)
+
+  @doc """
+  The native frame the client receives. `sole_account?` is asked only for a
+  provider 403 that demotes the account: when the Pool has no other routable
+  assignment for the turn, that refusal goes out final (row 254-93).
+  """
+  @spec native_downstream_response_chunk(binary(), (-> boolean())) :: binary()
+  def native_downstream_response_chunk(data, sole_account?) when is_binary(data) and is_function(sole_account?, 0) do
     case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         {canonical, canonical_decoded} = StreamProtocol.canonicalize_native_codex_responses_json_message(data, decoded)
-        native_refusal_frame(canonical, canonical_decoded)
+        native_refusal_frame(canonical, canonical_decoded, sole_account?)
 
       _other ->
         StreamProtocol.canonicalize_native_codex_responses_json_message(data)
@@ -162,22 +170,23 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   # the client's HTTPS fallback is then routed to another assignment first and
   # its retry can succeed, while a 403 that demotes nothing (codeless, a
   # health-neutral code, or an unknown code since row 254-81) would reach the
-  # same account again.
+  # same account again. A demoting 403 on a Pool with no other routable
+  # assignment for the turn's model is final too (row 254-93).
   #
   # Provider message text never travels in a wrapped refusal: it can quote
   # Pooler-rewritten request fields. A kept 401 or demoting 403 carries the
   # Pooler message naming the status instead (row 254-91). The socket holds no per-turn input index map, so an `input[N]`
   # param loses its index rather than name a position a Lite rewrite moved
   # (row 254-61). Every other frame passes unchanged.
-  defp native_refusal_frame(canonical, %{"type" => "response.failed", "error" => %{} = error} = canonical_decoded) do
+  defp native_refusal_frame(canonical, %{"type" => "response.failed", "error" => %{} = error} = canonical_decoded, sole_account?) do
     case wrapped_status(canonical_decoded) do
       400 = status -> native_400_refusal_frame(canonical, status, error)
-      status when is_integer(status) -> native_final_refusal_frame(canonical, canonical_decoded, status, error)
+      status when is_integer(status) -> native_final_refusal_frame(canonical, canonical_decoded, status, error, sole_account?)
       _other -> canonical
     end
   end
 
-  defp native_refusal_frame(canonical, _canonical_decoded), do: canonical
+  defp native_refusal_frame(canonical, _canonical_decoded, _sole_account?), do: canonical
 
   defp native_400_refusal_frame(canonical, status, error) do
     response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
@@ -193,22 +202,33 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     end
   end
 
-  defp native_final_refusal_frame(canonical, canonical_decoded, status, error) do
-    code = Map.get(error, "code")
+  defp native_final_refusal_frame(canonical, canonical_decoded, status, error, sole_account?) do
+    case final_refusal_projection(status, Map.get(error, "code"), sole_account?) do
+      :final -> wrapped_refusal(400, ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status))
+      :account -> account_refusal_frame(canonical_decoded, status, error)
+      :canonical -> canonical
+    end
+  end
 
+  defp final_refusal_projection(401, code, _sole_account?) do
+    if ErrorCodes.codex_response_failed_classified_code?(code), do: :canonical, else: :account
+  end
+
+  defp final_refusal_projection(403 = status, code, sole_account?) do
     cond do
-      account_refusal_status?(status) and not ErrorCodes.codex_response_failed_classified_code?(code) and
-          (status == 401 or not ErrorCodes.provider_refusal_health_neutral?(status, code)) ->
-        account_refusal_frame(canonical_decoded, status, error)
+      not demoting_account_refusal?(status, code) -> ordinary_final_refusal_projection(status, code)
+      sole_account?.() -> :final
+      true -> :account
+    end
+  end
 
-      not ValidationRejection.final_refusal_status?(status) ->
-        canonical
+  defp final_refusal_projection(status, code, _sole_account?), do: ordinary_final_refusal_projection(status, code)
 
-      classified_or_retryable_code?(code) ->
-        canonical
-
-      true ->
-        wrapped_refusal(400, ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status))
+  defp ordinary_final_refusal_projection(status, code) do
+    cond do
+      not ValidationRejection.final_refusal_status?(status) -> :canonical
+      classified_or_retryable_code?(code) -> :canonical
+      true -> :final
     end
   end
 
@@ -219,7 +239,15 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   # A code the client classifies keeps its provider message (row 254-83), and a
   # 408 or 429 keeps the provider's retry or limit detail the client acts on
   # (findings#254 row 254-91).
-  defp account_refusal_status?(status), do: status in [401, 403]
+  #
+  # A demoting 403 is retryable because its HTTPS fallback meets another
+  # assignment first. With no other routable assignment the retry reaches the
+  # demoted account again: on a single-assignment Pool the released client spent
+  # four refused websocket resends and one HTTPS provider request on it (P33
+  # lane), so it goes out as the final wrapped 400 naming the status instead
+  # (findings#254 row 254-93).
+  defp demoting_account_refusal?(status, code),
+    do: not ErrorCodes.codex_response_failed_classified_code?(code) and not ErrorCodes.provider_refusal_health_neutral?(status, code)
 
   defp account_refusal_frame(canonical_decoded, status, error) do
     %{"message" => message} = ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status)

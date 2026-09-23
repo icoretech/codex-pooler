@@ -233,7 +233,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           |> maybe_accept_response_task_terminal(task_pid, data)
           |> maybe_schedule_accepted_response_task_delivery(task_pid)
 
-        {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+        {:push, {:text, Adapter.native_downstream_response_chunk(data, sole_account_check(state, task_pid))}, state}
 
       true ->
         {:ok, maybe_record_skipped_downstream_terminal(state, task_pid, data)}
@@ -1367,7 +1367,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           state
       end
 
-    {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+    {:push, {:text, Adapter.native_downstream_response_chunk(data, sole_account_check(state, active_native_owner_turn_pid(state)))}, state}
   end
 
   defp handle_non_public_owner_payload({:error, :owner_drained, payload}, state) do
@@ -3123,6 +3123,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         state
         |> track_response_task(pid, monitor)
         |> put_direct_context(pid, direct_ref, parent)
+        |> put_response_task_model(pid, prepared)
         |> maybe_open_public_turn(prepared, pid)
 
       {:error, reason} ->
@@ -3135,6 +3136,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         start_owner_retarget_error_task(reason, prepared, state)
     end
   end
+
+  # Asked only for a provider 403 that demotes the account (row 254-93): the
+  # turn's model is the one its frame named when the socket started its task.
+  defp sole_account_check(state, task_pid) do
+    model = state |> Map.get(:response_task_models, %{}) |> Map.get(task_pid)
+    session = Map.get(state, :codex_session)
+    fn -> Websocket.sole_routable_assignment?(session, model) end
+  end
+
+  defp put_response_task_model(state, pid, %PreparedWebsocketFrame{payload: %{"model" => model}}) when is_binary(model),
+    do: Map.update(state, :response_task_models, %{pid => model}, &Map.put(&1, pid, model))
+
+  defp put_response_task_model(state, _pid, _prepared), do: state
 
   defp put_prepared_public_context(%PreparedWebsocketFrame{} = prepared, state) do
     if prepared.variant == :public_response_create do
@@ -4403,6 +4417,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state
     |> Map.update(:tasks, MapSet.new(), &MapSet.delete(&1, pid))
+    |> Map.update(:response_task_models, %{}, &Map.delete(&1, pid))
     |> clear_direct_cleanup(pid)
     |> DownstreamSession.clear_cleanup_witness(pid)
   end

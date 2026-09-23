@@ -661,7 +661,9 @@ The same code exceptions apply. A `401`, a `408` and a `429` keep their
 `response.failed` event, and so does a `403` whose code makes Codex Pooler
 demote the account (a code it knows as an account failure, such as a
 credential code): the Codex client's HTTPS fallback is then routed to another
-account of the Pool first. A `403` that demotes nothing, with no code or an
+account of the Pool first. When the Pool has no other routable account for the
+model, that `403` is final like the others, since a retry could only reach the
+demoted account again. A `403` that demotes nothing, with no code or an
 unknown one, would only reach the same account again and is final like the
 others. The kept `401` and demoting `403` are about the Pool's upstream
 account, not the client's request, so their message is the Codex
