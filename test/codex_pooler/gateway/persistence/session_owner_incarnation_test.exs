@@ -41,7 +41,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
     _turn = turn_row(session, request, attempt, dispatched_at)
     {:ok, _} = InstancePresence.record_heartbeat(local, DateTime.add(now(), -180, :second))
 
-    assert RuntimeCleanup.active_runtime_request?(request, now())
+    assert RuntimeCleanup.active_runtime_request?(request, now(), [])
 
     assert {:ok, renewed} =
              SessionContinuity.renew_owner_token(

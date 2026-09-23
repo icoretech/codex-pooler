@@ -49,10 +49,6 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     end
   end
 
-  @spec active_runtime_request?(request_ref(), DateTime.t()) :: boolean()
-  def active_runtime_request?(request_ref, %DateTime{} = now),
-    do: active_runtime_request?(request_ref, now, [])
-
   @doc """
   Whether this request still has an in-progress turn held by a live owner.
 

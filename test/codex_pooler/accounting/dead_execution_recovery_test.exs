@@ -592,7 +592,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
 
       session = Repo.reload!(session)
 
-      assert RuntimeCleanup.active_runtime_request?(request, now)
+      assert RuntimeCleanup.active_runtime_request?(request, now, [])
       assert ExecutionIdentity.status(attempt) == :alive
 
       assert {:ok, %{dead_execution_attempts_recovered: 0}} =
@@ -603,7 +603,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
       assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 15_000
       assert Repo.reload!(attempt).status == "in_progress"
       assert ExecutionIdentity.status(attempt) == :dead
-      assert RuntimeCleanup.active_runtime_request?(request, now)
+      assert RuntimeCleanup.active_runtime_request?(request, now, [])
       CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
 
       assert {:ok, %{dead_execution_attempts_recovered: 0}} =

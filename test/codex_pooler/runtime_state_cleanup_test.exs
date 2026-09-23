@@ -1086,7 +1086,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     refute InstancePresence.absent?(peer, now)
     assert InstancePresence.status(crashed) == :unknown
     assert InstancePresence.superseded?(crashed)
-    assert RuntimeCleanup.active_runtime_request?(reserved.request, now)
+    assert RuntimeCleanup.active_runtime_request?(reserved.request, now, [])
 
     capture_stream_outcomes(fn ->
       assert {:ok, summary} = Jobs.cleanup_runtime_state(now)

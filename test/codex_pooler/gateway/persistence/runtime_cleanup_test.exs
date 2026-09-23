@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
   alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Platform.InstancePresence.Identity
 
-  test "active_runtime_request?/2 detects in-progress turns with a live owner lease" do
+  test "active_runtime_request?/3 detects in-progress turns with a live owner lease" do
     pool = pool_fixture()
     %{api_key: api_key} = active_api_key_fixture(pool)
     %{assignment: assignment} = upstream_assignment_fixture(pool)
@@ -44,8 +44,8 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     _expired_turn =
       turn_fixture(expired_session, expired_request, stale_started_at, status: CodexTurn.in_progress_status())
 
-    assert RuntimeCleanup.active_runtime_request?(request, now)
-    refute RuntimeCleanup.active_runtime_request?(expired_request.id, now)
+    assert RuntimeCleanup.active_runtime_request?(request, now, [])
+    refute RuntimeCleanup.active_runtime_request?(expired_request.id, now, [])
   end
 
   test "an active owner lease row holds the request after the session owner stamp has run out" do
@@ -79,9 +79,9 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     # Only the lease row separates the two requests: both session stamps have
     # run out, so the lease branch alone decides.
     assert RuntimeCleanup.active_runtime_request?(leased_request, leased_attempt, now, [])
-    assert RuntimeCleanup.active_runtime_request?(leased_request.id, now)
+    assert RuntimeCleanup.active_runtime_request?(leased_request.id, now, [])
     refute RuntimeCleanup.active_runtime_request?(unleased_request, unleased_attempt, now, [])
-    refute RuntimeCleanup.active_runtime_request?(unleased_request.id, now)
+    refute RuntimeCleanup.active_runtime_request?(unleased_request.id, now, [])
   end
 
   test "a disconnected successor incarnation proves the old runtime owner is gone" do
@@ -113,7 +113,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     assert InstancePresence.status(first) == :unknown
     assert InstancePresence.superseded?(first)
 
-    refute RuntimeCleanup.active_runtime_request?(request, now)
+    refute RuntimeCleanup.active_runtime_request?(request, now, [])
   end
 
   test "an attempt whose incarnation is gone is not sheltered by the live owner of its session" do
@@ -155,7 +155,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     # The session is held, so the session-scoped question still answers "held"
     # for this request, and an attempt that names no incarnation keeps that
     # shelter. Only the attempt whose own incarnation is provably gone loses it.
-    assert RuntimeCleanup.active_runtime_request?(request, now)
+    assert RuntimeCleanup.active_runtime_request?(request, now, [])
     assert RuntimeCleanup.active_runtime_request?(request, legacy, now, [])
     refute RuntimeCleanup.active_runtime_request?(request, stranded, now, [])
   end
