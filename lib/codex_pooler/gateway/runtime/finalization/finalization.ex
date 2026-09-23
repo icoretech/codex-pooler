@@ -555,6 +555,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         headers =
           Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
 
+        # The client reads the rejection's `input[N]` in its own positions;
+        # the attempt above keeps the provider's (findings#254 row 254-61).
+        index_map = request_options.runtime.upstream_input_index_map
+
         result =
           failure_result(
             status,
@@ -563,8 +567,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
             request_options,
             payload,
             error_code,
-            Keyword.put(opts, :validation_rejection, validation_rejection),
-            Metadata.rejection_error(response)
+            Keyword.put(opts, :validation_rejection, ValidationRejection.for_client(validation_rejection, index_map)),
+            response |> Metadata.rejection_error() |> ValidationRejection.for_client(index_map)
           )
 
         case result do

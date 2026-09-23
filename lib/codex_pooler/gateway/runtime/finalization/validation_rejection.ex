@@ -133,6 +133,43 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
 
   defp put_supported_values(metadata, _values), do: metadata
 
+  @doc """
+  Renders the rejection's `input[N]` param in the client's input positions for
+  the relay (findings#254 row 254-61). The persisted attempt metadata keeps
+  the provider's own path; only what the client reads is mapped. An index the
+  map places on a Pooler-inserted item, and every index under an unknown map
+  (including a surface that holds no per-turn map, such as a websocket event
+  built in the socket), is dropped (`input[]...`), never guessed.
+  """
+  @spec for_client(map() | nil, term()) :: map() | nil
+  def for_client(%{param: param} = rejection, index_map) when is_binary(param),
+    do: %{rejection | param: client_input_param(param, index_map)}
+
+  def for_client(rejection, _index_map), do: rejection
+
+  @spec client_input_param(String.t() | nil, term()) :: String.t() | nil
+  def client_input_param("input[" <> rest = param, index_map) do
+    case Integer.parse(rest) do
+      {index, "]" <> path} when index >= 0 -> client_input_index(index, index_map, path) || param
+      _other -> param
+    end
+  end
+
+  def client_input_param(param, _index_map), do: param
+
+  defp client_input_index(_index, :identity, _path), do: nil
+
+  defp client_input_index(index, {:shift, leading, inserted}, path)
+       when is_integer(leading) and is_integer(inserted) do
+    cond do
+      index < leading -> nil
+      index < leading + inserted -> "input[]" <> path
+      true -> "input[#{index - inserted}]" <> path
+    end
+  end
+
+  defp client_input_index(_index, _index_map, path), do: "input[]" <> path
+
   @spec error(rejection(), param_mapper()) :: relayed_error()
   def error(%{code: code} = rejection, param_mapper \\ &Function.identity/1)
       when is_function(param_mapper, 1) do

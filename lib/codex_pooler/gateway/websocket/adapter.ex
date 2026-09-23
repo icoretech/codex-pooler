@@ -133,13 +133,15 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   # the provider message, which can quote Pooler-rewritten request fields). The
   # released client's parser reads a wrapped 400 as a non-retryable invalid
   # request, as it reads the HTTP 400, and a `response.failed` naming one of
-  # these codes as a retryable stream error (findings#254 row 254-31). Every
+  # these codes as a retryable stream error (findings#254 row 254-31). The
+  # socket holds no per-turn input index map, so an `input[N]` param loses its
+  # index rather than name a position a Lite rewrite moved (row 254-61). Every
   # other frame passes unchanged.
   defp native_validation_rejection_frame(canonical, %{"type" => "response.failed", "status" => 400 = status, "error" => %{} = error}) do
     response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
 
     case ValidationRejection.fetch_ordinary_route(response) do
-      %{} = rejection -> CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => ValidationRejection.error(rejection)})
+      %{} = rejection -> CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => ValidationRejection.error(ValidationRejection.for_client(rejection, :unknown))})
       nil -> canonical
     end
   end

@@ -292,7 +292,10 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> put_upstream_previous_response_id(upstream_payload)
       |> put_gateway_debug_payload(debug_payload)
       |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
-      |> RequestOptions.put_runtime_context(prompt_cache_controls_downgraded: prompt_cache_controls_downgraded)
+      |> RequestOptions.put_runtime_context(
+        prompt_cache_controls_downgraded: prompt_cache_controls_downgraded,
+        upstream_input_index_map: upstream_input_index_map(payload, upstream_payload, endpoint, request_options)
+      )
 
     with :ok <- validate(payload, request_options),
          {:ok, encoded} <- CodexPooler.JSON.encode(upstream_payload) do
@@ -301,6 +304,45 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
       {:ok, encoded, request_options}
     end
+  end
+
+  # How a provider's `input[N]` maps back to the client's input, so a relayed
+  # validation rejection names the item the client sent (findings#254 row
+  # 254-61). Between the two lists the Pooler only drops items (unusable
+  # encrypted reasoning) or, under Lite, puts the tool manifest and the
+  # instructions message in front (`normalize_backend_codex_responses_lite_input/2`);
+  # every other step rewrites items in place. Equal lengths without Lite are
+  # therefore the identity, and a Lite list that grew by exactly the inserted
+  # count is a shift. Anything else, including a Lite list that also lost an
+  # item, is `:unknown`, and the relayed param then drops the index rather
+  # than name another item.
+  defp upstream_input_index_map(%{"input" => client} = payload, %{"input" => upstream}, endpoint, %RequestOptions{} = request_options)
+       when is_list(client) and is_list(upstream) do
+    cond do
+      endpoint == "/backend-api/codex/responses/compact" or
+        request_options.transport.upstream_endpoint == "/backend-api/codex/responses/compact" or
+          request_options.payload_context.compaction_trigger_bridge? ->
+        :unknown
+
+      not RequestOptions.use_responses_lite?(request_options) ->
+        if length(client) == length(upstream), do: :identity, else: :unknown
+
+      true ->
+        responses_lite_index_map(payload, client, upstream)
+    end
+  end
+
+  defp upstream_input_index_map(_payload, _upstream_payload, _endpoint, _request_options), do: :unknown
+
+  defp responses_lite_index_map(payload, client, upstream) do
+    {tools_present?, tools, _payload} = pop_responses_lite_tools(payload)
+    {prefix, rest} = responses_lite_tools_prefix(client, tools_present?, tools)
+    instructions = payload |> Map.get("instructions") |> maybe_responses_lite_instructions() |> length()
+
+    {leading, inserted} =
+      if length(rest) < length(client), do: {1, instructions}, else: {0, length(prefix) + instructions}
+
+    if length(upstream) == length(client) + inserted, do: {:shift, leading, inserted}, else: :unknown
   end
 
   defp multipart_payload(payload, _model, %RequestOptions{} = request_options) do

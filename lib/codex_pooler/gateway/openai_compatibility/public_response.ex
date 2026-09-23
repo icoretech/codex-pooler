@@ -61,7 +61,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   projection, i.e. the relayed parameter-validation rejection when it
   qualifies and otherwise the redacted upstream error under the stream
   startup code `upstream_status` (findings#254 row 254-15). Provider message
-  text never travels.
+  text never travels. The socket holds no per-turn input index map, so an
+  `input[N]` param loses its index (`input[]...`) rather than name a position
+  a Lite rewrite may have moved (findings#254 row 254-61).
   """
   @spec provider_rejection_websocket_event(400..499, map()) :: map()
   def provider_rejection_websocket_event(status, %{} = error) when status in 400..499 do
@@ -69,7 +71,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
     public_error =
       case ValidationRejection.fetch_ordinary_route(response) do
-        %{} = rejection -> validation_rejection_error(rejection)
+        %{} = rejection -> rejection |> ValidationRejection.for_client(:unknown) |> validation_rejection_error()
         nil -> normalize_error(error, status: status, source_code: "upstream_status")
       end
 

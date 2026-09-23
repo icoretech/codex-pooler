@@ -49,13 +49,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
       event = CodexPooler.JSON.decode!(text)
 
       assert %{"type" => "error", "status" => 400, "error" => error} = event
-      assert error == http_error.body["error"]
+
+      # The HTTP answer maps the param to the client's input position through
+      # the turn's index map; the socket holds none, so the event keeps the
+      # path without its index rather than risk naming a position a Lite
+      # rewrite moved (findings#254 row 254-61).
+      assert http_error.body["error"]["param"] == @param
+      assert error == %{http_error.body["error"] | "param" => "input[].id", "message" => "upstream rejected parameter input[].id (invalid_value)"}
 
       assert error == %{
-               "message" => "upstream rejected parameter #{@param} (invalid_value)",
+               "message" => "upstream rejected parameter input[].id (invalid_value)",
                "type" => "invalid_request_error",
                "code" => "invalid_value",
-               "param" => @param
+               "param" => "input[].id"
              }
 
       # The websocket turn keeps settling under the provider's terminal code

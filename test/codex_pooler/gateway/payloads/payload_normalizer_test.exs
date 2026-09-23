@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
+  alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -3939,6 +3940,52 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         "Legacy" => %{"type" => "array", "items" => %{"enum" => ["legacy"]}}
       }
     }
+  end
+
+  describe "upstream input index map (findings#254 row 254-61)" do
+    # The map a relayed validation param is rendered through: every client
+    # position it claims to map must hold that client item upstream, and a
+    # payload the Pooler also dropped an item from must be `:unknown`.
+    manifest = %{"type" => "additional_tools", "role" => "developer", "tools" => [%{"type" => "custom", "name" => "client_manifest"}]}
+    stale_reasoning = %{"type" => "reasoning", "summary" => [], "encrypted_content" => "stale-ciphertext"}
+
+    for {name, mode, fields, expected} <- [
+          {"Full keeps positions", "full", %{}, :identity},
+          {"Full with a dropped item is unknown", "full", %{"leading" => [stale_reasoning]}, :unknown},
+          {"Lite without tools inserts an empty manifest", "lite", %{}, {:shift, 0, 1}},
+          {"Lite with tools and instructions inserts two items", "lite", %{"tools" => [%{"type" => "custom", "name" => "t"}], "instructions" => "Be brief."}, {:shift, 0, 2}},
+          {"Lite keeps a leading client manifest in place", "lite", %{"leading" => [manifest]}, {:shift, 1, 0}},
+          {"Lite keeps a leading client manifest and inserts instructions after it", "lite", %{"leading" => [manifest], "instructions" => "Be brief."}, {:shift, 1, 1}},
+          {"Lite with a dropped item is unknown", "lite", %{"leading" => [stale_reasoning]}, :unknown}
+        ] do
+      @tag mode: mode, fields: fields, expected: expected
+      test name, %{mode: mode, fields: fields, expected: expected} do
+        {leading, fields} = Map.pop(fields, "leading", [])
+        items = for index <- 0..2, do: %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "client-item-#{index}"}]}
+        client_input = leading ++ items
+        payload = Map.merge(%{"model" => "gpt-5.6-terra", "input" => client_input}, fields)
+        request_options = RequestOptions.build(serving_mode_opts(mode), "/backend-api/codex/responses", payload)
+
+        assert {:ok, encoded, request_options} =
+                 PayloadNormalizer.prepare_upstream_payload(payload, %Model{upstream_model_id: "provider-model"}, "/backend-api/codex/responses", request_options)
+
+        index_map = request_options.runtime.upstream_input_index_map
+        assert index_map == expected
+        upstream_input = CodexPooler.JSON.decode!(encoded)["input"]
+
+        for {upstream_item, upstream_index} <- Enum.with_index(upstream_input) do
+          case ValidationRejection.client_input_param("input[#{upstream_index}]", index_map) do
+            "input[]" ->
+              :ok
+
+            "input[" <> rest ->
+              {client_index, "]"} = Integer.parse(rest)
+              assert upstream_item["type"] == Enum.at(client_input, client_index)["type"]
+              assert upstream_item["content"] == Enum.at(client_input, client_index)["content"]
+          end
+        end
+      end
+    end
   end
 
   defp prepare_lite_payload(payload, endpoint \\ "/backend-api/codex/responses") do

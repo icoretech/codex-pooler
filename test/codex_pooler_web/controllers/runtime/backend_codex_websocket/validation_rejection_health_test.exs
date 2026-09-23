@@ -100,7 +100,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
           # request, as it reads the HTTP 400, where a `response.failed` naming
           # this code is a retryable stream error (findings#254 row 254-31).
           terminal = assert_single_native_turn_terminal!(frames, "error")
-          assert terminal == %{"type" => "error", "status" => 400, "error" => pooler_error(code)}
+          # The socket holds no per-turn input index map, so the param keeps
+          # its path but not its index (findings#254 row 254-61).
+          assert terminal == %{"type" => "error", "status" => 400, "error" => pooler_error(code, "input[].content")}
           refute CodexPooler.JSON.encode!(frames) =~ @provider_sentinel
 
           assert :ok = FakeUpstream.verify!(upstream)
@@ -176,8 +178,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
     end
   end
 
-  defp pooler_error(code) do
-    %{"type" => "invalid_request_error", "code" => code, "param" => @param, "message" => "upstream rejected parameter #{@param} (#{code})"}
+  defp pooler_error(code, param \\ @param) do
+    %{"type" => "invalid_request_error", "code" => code, "param" => param, "message" => "upstream rejected parameter #{param} (#{code})"}
   end
 
   defp provider_error(code) do

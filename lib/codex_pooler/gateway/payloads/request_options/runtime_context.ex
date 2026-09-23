@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
     :payload_compression,
     :reasoning_effort_snapshot,
     :prompt_cache_controls_downgraded,
+    :upstream_input_index_map,
     :replay_authorization_binding,
     :replay_lifecycle_binding,
     :replay_generation,
@@ -37,6 +38,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
           payload_compression: map() | nil,
           reasoning_effort_snapshot: map() | nil,
           prompt_cache_controls_downgraded: boolean(),
+          upstream_input_index_map: upstream_input_index_map() | nil,
           replay_authorization_binding: map() | nil,
           replay_lifecycle_binding: map() | nil,
           replay_generation: non_neg_integer() | nil,
@@ -47,6 +49,14 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
           session_owner_witness: OwnerWitness.t() | nil,
           tenant_scope: tenant_scope() | nil
         }
+
+  # How an upstream `input[N]` maps back to the input the client sent, set when
+  # the upstream JSON payload is prepared: the same position (`:identity`), a
+  # Lite shift (`{:shift, leading, inserted}`: positions below `leading` are the
+  # client's own, the next `inserted` are Pooler items, the rest moved up by
+  # `inserted`), or `:unknown`.
+  @type upstream_input_index_map ::
+          :identity | {:shift, non_neg_integer(), non_neg_integer()} | :unknown
 
   # Trusted Pool and API key ids of the authenticated runtime principal. Only
   # `RequestOptions.capture_tenant_scope/2` sets it; controller opts and
