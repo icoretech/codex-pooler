@@ -19,9 +19,9 @@ defmodule CodexPooler.Catalog.SyncRun do
     field :discovered_model_count, :integer
     field :upserted_model_count, :integer
     field :stale_marked_count, :integer
-    # `sync_runs.retired_count` (`DEFAULT 0 NOT NULL`) stays in the table for
-    # good: the sync never retires a model (a dropped model stays `stale`), and
-    # older releases still select and insert the column during an upgrade.
+    # The table keeps the always-zero `retired_count` column (`DEFAULT 0 NOT
+    # NULL`), unmapped here: retained-column debt, see
+    # https://github.com/icoretech/codex-pooler-findings/issues/261
     field :error_message, :string
     field :stats, :map
   end
