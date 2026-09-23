@@ -8,11 +8,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [cleanup_local_owner_sessions: 0]
 
+  alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   # The released Codex client (openai/codex#46541) runs an opt-in compaction right
   # after the final answer when `model_post_turn_compact_threshold_percent` is
@@ -33,6 +36,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
   @resumed_turn_id "019a0000-0000-7000-8000-00000000a006"
   @resumed_window_id "#{@thread_id}:1"
   @resumed_response_id "resp_post_turn_resumed_00001"
+  @socket_messages [
+    :codex_response_chunk,
+    :websocket_owner_frame,
+    :websocket_owner_output_commit_probe,
+    :websocket_owner_cleanup_witness,
+    :websocket_response_activity,
+    :codex_response_done,
+    :websocket_response_delivery_complete,
+    :direct_request_cleanup
+  ]
 
   for topology <- [:direct, :owner_forwarded] do
     @tag topology: topology
@@ -180,16 +193,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
         )
 
       try do
+        # Each frame is asserted as it arrives: a refusal is a terminal, so
+        # waiting for a second frame first would turn it into a receive timeout
+        # that hides its code (Drone 1525).
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, resume_prewarm_frame(setup))
         {conn, websocket, prewarm_created} = public_websocket_receive_text!(conn, websocket, ref)
-        {conn, websocket, prewarm_completed} = public_websocket_receive_text!(conn, websocket, ref)
         assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(prewarm_created)
+        {conn, websocket, prewarm_completed} = public_websocket_receive_text!(conn, websocket, ref)
         assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(prewarm_completed)
 
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, resumed_turn_frame(setup, compact_item))
         {conn, websocket, created} = public_websocket_receive_text!(conn, websocket, ref)
-        {_conn, _websocket, completed} = public_websocket_receive_text!(conn, websocket, ref)
         assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created)
+        {_conn, _websocket, completed} = public_websocket_receive_text!(conn, websocket, ref)
         assert %{"type" => "response.completed", "response" => %{"id" => @resumed_response_id}} = CodexPooler.JSON.decode!(completed)
 
         assert [first_turn, compact, resumed] = FakeUpstream.requests(upstream)
@@ -206,6 +222,70 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
         assert :ok = FakeUpstream.verify!(upstream)
       after
         Mint.HTTP.close(conn)
+      end
+    end
+  end
+
+  # Drone 1525: the resumed turn above can reach the new socket while the
+  # prewarm's response task is still tracked (it pushed its terminal and has not
+  # reported its result yet). The turn carries a compaction item (native phase
+  # `final`) and the new connection holds no admission, so the socket defers the
+  # reservation behind that task. Once the task reports, the reservation still
+  # finds no admission; the turn must then run as the ordinary turn it runs when
+  # no task is tracked, not be refused `503 owner_unavailable`. The prewarm's
+  # result is left in the mailbox until the resumed turn has been handed to the
+  # socket, which is the interleaving the loaded CI run hit.
+  for topology <- [:direct, :owner_forwarded] do
+    @tag topology: topology
+    test "#{topology} resumed compacted turn sent before the prewarm's task reported runs as the ordinary turn", %{topology: topology} do
+      put_owner_forwarding!(topology == :owner_forwarded)
+      compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-post-turn-held-prewarm-#{topology}"}
+
+      upstream =
+        start_upstream(
+          # provenance: observed released-binary resume frame shapes; reply frames synthetic
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create", "input.1.type" => "compaction"}, forbidden: ["previous_response_id"]],
+              respond: completed_frames(@resumed_response_id)
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      turn_state = "post-turn-held-prewarm-#{topology}"
+
+      {:ok, state} =
+        CodexResponsesSocket.init(%{auth: auth, opts: %{request_id: turn_state, accepted_turn_state: turn_state, client_ip: "127.0.0.1"}})
+
+      Process.put(:held_prewarm_socket_state, state)
+
+      try do
+        assert {:ok, state} = CodexResponsesSocket.handle_in({resume_prewarm_frame(setup), [opcode: :text]}, state)
+        assert {:push, {:text, prewarm_created}, state} = receive_socket_push(state)
+        assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(prewarm_created)
+        assert {:push, {:text, prewarm_completed}, state} = receive_socket_push(state)
+        assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(prewarm_completed)
+        assert [_prewarm_task] = MapSet.to_list(state.tasks)
+        Process.put(:held_prewarm_socket_state, state)
+
+        assert {:ok, state} = CodexResponsesSocket.handle_in({resumed_turn_frame(setup, compact_item), [opcode: :text]}, state)
+        assert [%{request_options: %{native_compaction_reservation: %{phase: :final}}}] = :queue.to_list(state.queued_response_payloads)
+        Process.put(:held_prewarm_socket_state, state)
+
+        {state, frames} = collect_until_idle!(state, [])
+        Process.put(:held_prewarm_socket_state, state)
+
+        assert [%{"type" => "response.created"}, %{"type" => "response.completed", "response" => %{"id" => @resumed_response_id}}] = frames
+        assert [resumed] = FakeUpstream.requests(upstream)
+        assert compact_item in resumed.json["input"]
+        assert await_settled_rows!(setup) == [{"/backend-api/codex/responses", "websocket", "succeeded"}]
+        assert :ok = FakeUpstream.verify!(upstream)
+      after
+        CodexResponsesSocket.terminate(:closed, Process.delete(:held_prewarm_socket_state))
       end
     end
   end
@@ -251,6 +331,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
     clears = log |> String.split("\n") |> Enum.filter(&(&1 =~ "native compaction lifecycle" and &1 =~ "operation: :clear"))
     assert Enum.any?(clears, &(&1 =~ "reason: :downstream_detached" and &1 =~ "phase_from: :pending_final")), inspect(clears)
     refute Enum.any?(clears, &(&1 =~ "reason: :request_rejected"))
+  end
+
+  # Drives the socket callbacks until no response task is tracked and nothing
+  # is queued, returning every client-visible frame in push order. Every
+  # producer of a frame for a task has fired before the task reports its
+  # result, so the closing mailbox sweep needs no timer. An error terminal ends
+  # the turn without an owner `:complete`, so the owner's reply is not awaited.
+  defp collect_until_idle!(state, frames) do
+    if MapSet.size(state.tasks) == 0 and :queue.is_empty(state.queued_response_payloads) do
+      sweep_socket_mailbox(state, frames)
+    else
+      receive do
+        message when is_tuple(message) and elem(message, 0) in @socket_messages ->
+          {state, frames} = handle_socket_message(message, state, frames)
+          collect_until_idle!(state, frames)
+      after
+        15_000 -> flunk("socket never went idle; frames so far: #{inspect(Enum.reverse(frames))}")
+      end
+    end
+  end
+
+  defp sweep_socket_mailbox(state, frames) do
+    receive do
+      message when is_tuple(message) and elem(message, 0) in @socket_messages ->
+        {state, frames} = handle_socket_message(message, state, frames)
+        sweep_socket_mailbox(state, frames)
+    after
+      0 -> {state, frames |> Enum.reverse() |> Enum.map(&CodexPooler.JSON.decode!/1)}
+    end
+  end
+
+  defp handle_socket_message(message, state, frames) do
+    case CodexResponsesSocket.handle_info(message, state) do
+      {:push, {:text, frame}, state} ->
+        if StreamProtocol.internal_control_event?(frame), do: {state, frames}, else: {state, [frame | frames]}
+
+      {:ok, state} ->
+        {state, frames}
+
+      {:stop, _reason, close_detail, _state} ->
+        flunk("socket closed with #{inspect(close_detail)}; frames so far: #{inspect(Enum.reverse(frames))}")
+    end
   end
 
   defp post_turn_compacted_socket!(port, setup, turn_state) do

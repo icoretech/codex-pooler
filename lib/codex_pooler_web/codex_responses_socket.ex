@@ -3202,17 +3202,40 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp start_deferred_or_tracked_response(prepared, state),
     do: prepared |> attach_queued_owner_replay_intent(state) |> start_tracked_response_task(state)
 
+  # The deferral only moves the reservation behind the active task, which may
+  # arm the admission when it settles; it never changes what a turn without an
+  # admission gets. A final turn (history carrying a compaction item) whose
+  # owner answered but holds no admission for it runs as the ordinary turn
+  # `maybe_defer_native_compaction/6` runs when no task is tracked. It used to
+  # be refused `503 owner_unavailable`, so the released client's resumed turn
+  # after a post-turn compaction was refused or served depending on whether its
+  # prewarm's task had reported yet (Drone 1525, both topologies). An owner
+  # that could not be asked at all keeps the retryable refusal the reconnect
+  # route answers (findings#168), and an incremental compaction keeps it as
+  # `refuse_unadmitted_native_compaction/3` does.
   defp reserve_and_start_deferred_response(prepared, metadata, phase, control_ref, state) do
     case reserve_owner_capability(prepared, metadata, phase, control_ref, state) do
       {:ok, prepared} ->
         start_tracked_response_task(prepared, state)
 
-      {:error, {:owner_unavailable, _cause}} ->
-        start_owner_retarget_error_task(owner_error(:owner_unavailable), prepared, state)
+      {:error, {:owner_unavailable, cause}} ->
+        if phase == :final and not admission_owner_unreachable?(cause, state),
+          do: start_deferred_or_tracked_response(prepared, state),
+          else: start_owner_retarget_error_task(owner_error(:owner_unavailable), prepared, state)
 
       {:error, reason} ->
         start_owner_retarget_error_task(owner_error(reason), prepared, state)
     end
+  end
+
+  # Whether a reservation failed because its owner could not be asked at all.
+  # The forwarder folds every owner resolution and transport failure into
+  # `owner_unavailable` (an owner that answers without an admission says
+  # `no_admission` or its own reason); a direct upstream session answers
+  # `owner_unavailable` itself when nothing is armed, and only a session that
+  # is gone yields `unavailable`.
+  defp admission_owner_unreachable?(cause, state) do
+    if owner_forwarded_socket?(state), do: cause == :owner_unavailable, else: cause == :unavailable
   end
 
   defp start_tracked_response_task(%PreparedWebsocketFrame{} = prepared, state) do
