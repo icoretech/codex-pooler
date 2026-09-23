@@ -67,29 +67,35 @@ defmodule CodexPooler.Accounting.RequestLogs do
   end
 
   # Every requested model a Pool's request history holds, read as a loose index
-  # scan over `requests_pool_requested_model_idx`: each step asks the index for
-  # the first model after the previous one, so the work grows with the number
-  # of distinct models per Pool, not with the history. A plain `DISTINCT` read
-  # the whole table on every request-log load (findings#206 row 206-373).
+  # scan over `requests_pool_listed_model_idx`: each step asks the index for the
+  # first model after the previous one, so the work grows with the number of
+  # distinct models per Pool, not with the history. A plain `DISTINCT` read the
+  # whole table on every request-log load (findings#206 row 206-373).
   # Blank models and endpoint paths recorded as the model of a metadata request
-  # (`/backend-api/...`) are not models; every non-empty string sorts after ''.
+  # (`/backend-api/...`) are not models. The index is partial on exactly that
+  # row condition, so every step repeats it word for word: without it PostgreSQL
+  # cannot prove the step's rows are in the index and falls back to reading the
+  # Pool's history. The partial index is also what keeps it away from queries
+  # that filter by Pool alone, such as the Observatory aggregate (row 206-389).
   @request_models_sql """
   WITH RECURSIVE models(pool_id, requested_model) AS (
     SELECT pool.id,
            (SELECT r.requested_model FROM requests r
-             WHERE r.pool_id = pool.id AND r.requested_model > ''
+             WHERE r.pool_id = pool.id
+               AND r.requested_model > '' AND r.requested_model NOT LIKE '/%'
              ORDER BY r.requested_model LIMIT 1)
       FROM unnest($1::uuid[]) AS pool(id)
     UNION ALL
     SELECT models.pool_id,
            (SELECT r.requested_model FROM requests r
              WHERE r.pool_id = models.pool_id AND r.requested_model > models.requested_model
+               AND r.requested_model > '' AND r.requested_model NOT LIKE '/%'
              ORDER BY r.requested_model LIMIT 1)
       FROM models
      WHERE models.requested_model IS NOT NULL
   )
   SELECT DISTINCT requested_model FROM models
-   WHERE requested_model IS NOT NULL AND requested_model NOT LIKE '/%'
+   WHERE requested_model IS NOT NULL
   """
 
   @spec list_models(term(), keyword()) :: [String.t()]
