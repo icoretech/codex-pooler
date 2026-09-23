@@ -111,6 +111,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   alias CodexPooler.Gateway.Persistence.CodexSession
 
   @metadata_key "x-codex-turn-metadata"
+  @websocket_lite_marker "ws_request_header_x_openai_internal_codex_responses_lite"
 
   @type claim_arm ::
           :opening
@@ -283,7 +284,62 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
     end
   end
 
+  # The opening request of a turn the released client falls back to HTTPS for
+  # after its websocket retries failed: the body is the websocket request's own
+  # (measured with Codex 0.156.1 through a recording proxy, findings#232 row
+  # 232-231), except the frame's `type` and the Lite marker the websocket frame
+  # carries in `client_metadata` and HTTP sends as a request header instead
+  # (`ws_request_header_x_openai_internal_codex_responses_lite`, rust-v0.156.1
+  # `core/src/client.rs` `build_ws_client_metadata/2`). Its witness is therefore
+  # the websocket frame's, under both Lite variants, together with the
+  # trailing-slice digests an anchored websocket original is recognised by
+  # (row 232-160). Without it the HTTP turn claim had no witness, and
+  # `FailedPredecessorResend` refused every HTTPS fallback of a websocket
+  # predecessor, whichever shape the websocket resend itself was admitted for.
+  defp native_client_retry_witness(identity, %{"input" => input} = payload, request_options, :opening)
+       when is_list(input) do
+    frame = Map.put(payload, "type", "response.create")
+    variants = [frame, put_websocket_lite_marker(frame)]
+
+    with {:ok, [digest | variant_digests]} <- collect_digests(variants, &WebsocketTurnIdentity.replay_claim_digest(identity.semantic_turn_key, &1)),
+         {:ok, tail_digests} <- collect_digests(variants, &WebsocketTurnIdentity.replay_claim_alternates(identity.semantic_turn_key, &1)),
+         {:ok, witness} <-
+           ClientRetry.original_witness(
+             digest,
+             request_options.runtime.api_key_runtime_epoch,
+             Enum.uniq(variant_digests ++ List.flatten(tail_digests)) -- [digest]
+           ) do
+      witness
+    else
+      _unavailable -> nil
+    end
+  end
+
   defp native_client_retry_witness(_identity, _payload, _request_options, _arm), do: nil
+
+  defp put_websocket_lite_marker(%{"client_metadata" => metadata} = frame) when is_map(metadata),
+    do: Map.put(frame, "client_metadata", Map.put(metadata, @websocket_lite_marker, "true"))
+
+  defp put_websocket_lite_marker(%{"client_metadata" => nil} = frame),
+    do: Map.put(frame, "client_metadata", %{@websocket_lite_marker => "true"})
+
+  defp put_websocket_lite_marker(frame) when not is_map_key(frame, "client_metadata"),
+    do: Map.put(frame, "client_metadata", %{@websocket_lite_marker => "true"})
+
+  defp put_websocket_lite_marker(frame), do: frame
+
+  defp collect_digests(variants, fun) do
+    Enum.reduce_while(variants, {:ok, []}, fn variant, {:ok, acc} ->
+      case fun.(variant) do
+        {:ok, value} -> {:cont, {:ok, [value | acc]}}
+        _error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      :error -> :error
+    end
+  end
 
   defp input_count(%{"input" => input}, :post_compaction_resume) when is_list(input),
     do: length(input)

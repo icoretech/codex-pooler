@@ -782,6 +782,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
       request = insert_reserved_request!(request_context)
       RequestLogFacts.record_request_created!(request)
+      # An HTTPS resend admitted under the turn's semantic claim is linked to its
+      # predecessor like the websocket claim's (findings#232 row 232-231).
+      link_semantic_execution_retry!(opts, client_resend, request, timestamp)
 
       reservation =
         request

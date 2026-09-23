@@ -29,8 +29,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   @timeout_ms 15_000
+  # provenance: observed findings#232 row 232-231 (the released client's Lite websocket frame carries the marker in client_metadata, its HTTPS fallback a header)
+  @websocket_lite_marker "ws_request_header_x_openai_internal_codex_responses_lite"
   # With owner forwarding off the closing socket used to leave a direct task it
   # had shown output running for its whole 5 s post-cleanup grace after the
   # 250 ms drain, so with the provider held its receipt could not exist before
@@ -90,9 +93,41 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
       assert FakeUpstream.count(upstream) == 1
       assert %{"outcome" => "aborted", "terminal_class" => "none", "highest_frame_class" => "item_done"} = receipt
     end
+
+    # The released client falls back to HTTPS after its websocket retries fail
+    # and resends the same body there, without the frame's `type` and with the
+    # websocket's Lite marker moved into a request header (findings#232 row
+    # 232-231, measured with the released client). The HTTP turn claim used to
+    # carry no witness, so no HTTPS fallback of a websocket predecessor was ever
+    # admitted, whatever shape the websocket resend itself was admitted for.
+    @tag forwarding: forwarding
+    @tag cut: :item_added
+    @tag slow: "a real socket cut, its cleanup, the recorded receipt and the HTTPS fallback resend"
+    test "owner forwarding #{forwarding}: the HTTPS fallback of an item_added cut is served as one successor", %{forwarding: forwarding} do
+      %{setup: setup, upstream: upstream, request_id: request_id, resend: resend} = scenario!(forwarding, :item_added, :held, :https)
+
+      assert {200, body} = resend
+      assert body =~ "response.completed"
+      assert [%Request{id: ^request_id, status: "failed"}, %Request{id: successor_id, status: "succeeded", transport: "http_sse"}] = pool_requests(setup.pool.id)
+      assert [%RequestClientRetryLink{predecessor_request_id: ^request_id, successor_request_id: ^successor_id}] = Repo.all(RequestClientRetryLink)
+      assert_one_settlement_each!([request_id, successor_id])
+      assert FakeUpstream.count(upstream) == 2
+    end
+
+    @tag forwarding: forwarding
+    @tag cut: :item_done
+    @tag slow: "a real socket cut after a completed item, its cleanup, the recorded receipt and the HTTPS fallback resend"
+    test "owner forwarding #{forwarding}: the HTTPS fallback after a completed item reached the client stays a duplicate", %{forwarding: forwarding} do
+      %{setup: setup, upstream: upstream, request_id: request_id, resend: resend} = scenario!(forwarding, :item_done, :held, :https)
+
+      assert {409, body} = resend
+      assert %{"error" => %{"code" => "duplicate_turn"}} = CodexPooler.JSON.decode!(body)
+      assert [%Request{id: ^request_id}] = pool_requests(setup.pool.id)
+      assert FakeUpstream.count(upstream) == 1
+    end
   end
 
-  defp scenario!(forwarding, cut, provider) do
+  defp scenario!(forwarding, cut, provider, resend_transport \\ :websocket) do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, false)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, forwarding)
     if forwarding, do: on_exit(&stop_registered_websocket_owner_sessions/0)
@@ -103,7 +138,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
       start_upstream(
         FakeUpstream.strict_sequence([
           native_request(FakeUpstream.barrier_websocket_frames(stream_frames("resp_partial_original"), notify: self(), release_ref: release_ref)),
-          native_request(FakeUpstream.websocket_text_frames(stream_frames("resp_partial_successor")))
+          successor_request(resend_transport)
         ])
       )
 
@@ -126,31 +161,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
     assert_receive {:fake_upstream_frame_barrier, ^hold_at, _handler, ^release_ref}, @timeout_ms
     conn = receive_until!(conn, websocket, ref, last)
     assert [%Request{id: request_id}] = pool_requests(setup.pool.id)
-    _closed = Mint.HTTP.close(conn)
-    closed_at = System.monotonic_time(:millisecond)
-
-    if provider == :completes, do: :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
-
-    receipt =
-      if provider == :held and cut != :item_done do
-        # Nothing released the provider: the receipt exists only once the
-        # original's generation was stopped (the owner's detach, or the closing
-        # socket's cleanup with forwarding off).
-        receipt = await_receipt!(request_id, closed_at + @stopped_receipt_budget_ms)
-        :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
-        receipt
-      else
-        _settled = await_settled!(request_id, closed_at + @timeout_ms)
-        if provider == :held, do: :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
-        await_receipt!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
-      end
-
+    receipt = close_and_await_receipt!(conn, request_id, cut, provider, upstream, release_ref)
     _settled = await_settled!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
 
-    resend = send_and_receive_terminal!(port, setup, turn_state, raw_payload)
+    resend = resend!(resend_transport, port, setup, turn_state, raw_payload)
 
     await_all_settled!(setup.pool.id, System.monotonic_time(:millisecond) + @timeout_ms)
     %{setup: setup, upstream: upstream, request_id: request_id, resend: resend, receipt: receipt}
+  end
+
+  # The provider completes only once the closing socket entered `terminate`
+  # and pushes nothing more; released earlier, the socket could still write the
+  # rest of the answer, terminal included, into the closed connection, which is
+  # a turn the client was pushed a terminal of (the fence stays).
+  defp close_and_await_receipt!(conn, request_id, cut, :completes, upstream, release_ref) do
+    trace_socket_terminate!()
+    _closed = Mint.HTTP.close(conn)
+    closed_at = System.monotonic_time(:millisecond)
+    assert_receive {:trace, _socket, :call, {CodexResponsesSocket, :terminate, [_reason, _state]}}, @timeout_ms
+    stop_socket_terminate_trace()
+    :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
+    await_settled_receipt!(request_id, cut, closed_at)
+  end
+
+  # Nothing released the provider: the receipt exists only once the original's
+  # generation was stopped (the owner's detach, or the closing socket's cleanup
+  # with forwarding off).
+  defp close_and_await_receipt!(conn, request_id, cut, :held, upstream, release_ref) when cut != :item_done do
+    _closed = Mint.HTTP.close(conn)
+    receipt = await_receipt!(request_id, System.monotonic_time(:millisecond) + @stopped_receipt_budget_ms)
+    :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
+    receipt
+  end
+
+  # A completed item keeps the direct task running with forwarding off, so the
+  # provider is released once the interrupt settled the request.
+  defp close_and_await_receipt!(conn, request_id, cut, :held, upstream, release_ref) do
+    _closed = Mint.HTTP.close(conn)
+    _settled = await_settled!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
+    :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
+    await_settled_receipt!(request_id, cut, System.monotonic_time(:millisecond))
+  end
+
+  defp await_settled_receipt!(request_id, _cut, started_at) do
+    _settled = await_settled!(request_id, started_at + @timeout_ms)
+    await_receipt!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
+  end
+
+  defp resend!(:websocket, port, setup, turn_state, raw_payload), do: send_and_receive_terminal!(port, setup, turn_state, raw_payload)
+  defp resend!(:https, _port, setup, turn_state, raw_payload), do: post_https_fallback!(setup, turn_state, raw_payload)
+
+  defp trace_socket_terminate! do
+    on_exit(&stop_socket_terminate_trace/0)
+    _matched = :erlang.trace_pattern({CodexResponsesSocket, :terminate, 2}, true, [:local])
+    _traced = :erlang.trace(:all, true, [:call, {:tracer, self()}])
+    :ok
+  end
+
+  defp stop_socket_terminate_trace do
+    _traced = :erlang.trace(:all, false, [:call])
+    _matched = :erlang.trace_pattern({CodexResponsesSocket, :terminate, 2}, false, [:local])
+    :ok
   end
 
   defp assert_one_settlement_each!(request_ids) do
@@ -158,6 +229,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
       assert Repo.all(from(l in LedgerEntry, where: l.request_id == ^id and l.amount_status == "recorded", select: l.entry_kind)) |> Enum.frequencies() ==
                %{"reservation" => 1, "settlement" => 1, "release" => 1}
     end
+  end
+
+  defp successor_request(:websocket), do: native_request(FakeUpstream.websocket_text_frames(stream_frames("resp_partial_successor")))
+
+  defp successor_request(:https) do
+    FakeUpstream.expect_request(
+      method: "POST",
+      path: "/backend-api/codex/responses",
+      respond: FakeUpstream.sse_stream(Enum.map(stream_frames("resp_partial_successor"), &CodexPooler.JSON.decode!/1))
+    )
+  end
+
+  # The released client's HTTPS fallback of the websocket request: the same body
+  # without the frame's `type` and without the websocket-only client metadata,
+  # the Lite marker sent as a header.
+  defp post_https_fallback!(setup, turn_state, raw_payload) do
+    body =
+      raw_payload
+      |> CodexPooler.JSON.decode!()
+      |> Map.delete("type")
+      |> Map.update!("client_metadata", &Map.drop(&1, ["x-codex-ws-stream-request-start-ms", @websocket_lite_marker]))
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("x-codex-turn-state", turn_state)
+      |> put_req_header("x-openai-internal-codex-responses-lite", "true")
+      |> put_req_header("content-type", "application/json")
+      |> post("/backend-api/codex/responses", CodexPooler.JSON.encode!(body))
+
+    {conn.status, conn.resp_body}
   end
 
   defp native_request(respond) do
@@ -198,7 +300,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
         "turn_id" => "partial-output-turn",
         "x-codex-window-id" => thread_id <> ":0",
         "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"session_id" => thread_id, "thread_id" => thread_id, "turn_id" => "partial-output-turn", "request_kind" => "turn"}),
-        "x-codex-ws-stream-request-start-ms" => 100
+        "x-codex-ws-stream-request-start-ms" => 100,
+        @websocket_lite_marker => "true"
       },
       "input" => [%{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic partial output turn"}]}]
     }
