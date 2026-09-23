@@ -588,7 +588,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     @tag :schema_position_aware
     test "keeps malformed schema-position branches bounded without deleting encrypted names" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [%{"role" => "user", "content" => "hello"}],
         "tools" => [
           %{
@@ -683,7 +683,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       }
 
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [%{"role" => "user", "content" => "hello"}],
         "tools" => [strict_tool]
       }
@@ -739,7 +739,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "removes backend Codex encrypted-only agent messages from websocket upstream JSON" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [
           %{"type" => "message", "role" => "user", "content" => "hello"},
           %{
@@ -801,7 +801,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "preserves backend Codex plaintext input_text agent messages while stripping encrypted-only siblings" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [
           %{"type" => "message", "role" => "user", "content" => "hello"},
           %{
@@ -851,7 +851,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "removes backend Codex mixed encrypted agent messages from websocket upstream JSON" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [
           %{"type" => "message", "role" => "user", "content" => "hello"},
           %{
@@ -916,7 +916,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         "encrypted_content" => "synthetic-current-reasoning"
       }
 
-      payload = %{"model" => "gpt-5.5", "input" => [reasoning]}
+      payload = %{"model" => "gpt-6-sol", "input" => [reasoning]}
       model = %Model{upstream_model_id: "provider-model"}
       http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
       websocket_options = RequestOptions.for_websocket(http_options, payload)
@@ -946,7 +946,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     @tag :encrypted_reasoning_continuity
     test "characterizes ordinary prompt cache key routing as HTTP soft locality only" do
       raw_key = "synthetic-ordinary-prompt-cache-key"
-      payload = %{"model" => "gpt-5.5", "input" => "hello", "prompt_cache_key" => raw_key}
+      payload = %{"model" => "gpt-6-sol", "input" => "hello", "prompt_cache_key" => raw_key}
       expected_hash = :crypto.hash(:sha256, raw_key) |> Base.encode16(case: :lower)
 
       http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
@@ -974,7 +974,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       Enum.each(invalid_reasoning_items, fn item ->
         refute ContinuityPayload.current_encrypted_reasoning?(item)
 
-        payload = %{"model" => "gpt-5.5", "input" => [item]}
+        payload = %{"model" => "gpt-6-sol", "input" => [item]}
 
         options = [
           RequestOptions.build(%{}, "/backend-api/codex/responses", payload),
@@ -1004,7 +1004,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "preserves malformed agent message content shapes while removing encrypted markers" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [
           %{"type" => "agent_message", "content" => nil},
           %{"type" => "agent_message", "content" => "not-a-list"},
@@ -1163,7 +1163,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       namespace_tools = AgentV2ContractFixture.namespace_tools!()
 
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [%{"role" => "user", "content" => "hello"}],
         "tools" => namespace_tools
       }
@@ -1303,7 +1303,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       previous_response_id = "  response-fixture  "
 
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "previous_response_id" => previous_response_id,
         "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}]
       }
@@ -1359,7 +1359,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       for {label, previous_response_id, transport, input, final_id_present?, expected_marker} <-
             cases do
         payload = %{
-          "model" => "gpt-5.5",
+          "model" => "gpt-6-sol",
           "previous_response_id" => previous_response_id,
           "input" => input
         }
@@ -1393,7 +1393,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "derives connection-bound state on the actual upstream websocket request struct" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "previous_response_id" => "response-fixture",
         "input" => ordinary_input()
       }
@@ -1417,7 +1417,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "retained semantic native HTTP state is not connection-bound at dispatch" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "previous_response_id" => "response-fixture",
         "input" => tool_result_input()
       }
@@ -1690,7 +1690,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       for effort <- ["max", "ultra"] do
         payload = %{
-          "model" => "gpt-5.6-sol",
+          "model" => "gpt-6-sol",
           "input" => native_text_input("hello"),
           "thinking" => effort
         }
@@ -1933,7 +1933,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "adds required Responses Lite controls for HTTP, compact, and websocket JSON" do
       payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "input" => native_text_input("hello"),
         "parallel_tool_calls" => true,
         "reasoning" => %{"effort" => "max", "summary" => "auto"}
@@ -1979,7 +1979,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     end
 
     test "adds Responses Lite reasoning context when the client omits reasoning" do
-      payload = %{"model" => "gpt-5.6-terra", "input" => native_text_input("hello")}
+      payload = %{"model" => "gpt-6-sol", "input" => native_text_input("hello")}
 
       request_options =
         RequestOptions.build(
@@ -2016,7 +2016,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         payload =
           Map.merge(
             %{
-              "model" => "gpt-5.6-terra",
+              "model" => "gpt-6-sol",
               "instructions" => "preserve separately",
               "tools" => [%{"type" => "custom", "name" => "lookup"}],
               "input" => [%{"type" => "message", "role" => "user", "content" => []}],
@@ -2060,9 +2060,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "native Responses rejects scalar input and non-list tools for Full HTTP and websocket" do
       for {payload, param} <- [
-            {%{"model" => "gpt-5.6-terra", "input" => "synthetic scalar input"}, "input"},
+            {%{"model" => "gpt-6-sol", "input" => "synthetic scalar input"}, "input"},
             {%{
-               "model" => "gpt-5.6-terra",
+               "model" => "gpt-6-sol",
                "input" => [],
                "tools" => "synthetic non-list tools"
              }, "tools"}
@@ -2089,7 +2089,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "effective snapshot survives compact and websocket retargeting without legacy flag control" do
       payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "input" => native_text_input("hello"),
         "parallel_tool_calls" => true,
         "client_metadata" => %{
@@ -2137,7 +2137,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "full websocket envelopes scrub client Lite metadata without changing payload fields" do
       payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "input" => [%{"type" => "message", "role" => "user", "content" => []}],
         "instructions" => "keep websocket instructions",
         "tools" => [%{"type" => "custom", "name" => "lookup"}],
@@ -2205,7 +2205,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         payload =
           Map.merge(
             %{
-              "model" => "gpt-5.6-terra",
+              "model" => "gpt-6-sol",
               "input" => native_text_input("hello"),
               "reasoning" => %{
                 "effort" => "high",
@@ -2240,7 +2240,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       for reasoning <- [nil, "unsupported", ["unsupported"]] do
         payload = %{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "input" => native_text_input("hello"),
           "reasoning" => reasoning
         }
@@ -2271,7 +2271,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             "unsupported"
           ] do
         payload = %{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "input" => native_text_input("hello"),
           "include" => [
             "output_text.logprobs",
@@ -2408,7 +2408,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       ]
 
       for {name, fields, expected_prefix_count, _source_tools} <- cases do
-        payload = Map.merge(%{"model" => "gpt-5.6-terra"}, fields)
+        payload = Map.merge(%{"model" => "gpt-6-sol"}, fields)
         first = prepare_lite_payload(payload)
         second = prepare_lite_payload(first)
 
@@ -2463,7 +2463,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     # provider already holds, and that context carries the Lite prefix of the
     # request that opened it. Repeating the tool manifest and the instructions
     # message on every anchored turn appended them to the conversation again (the
-    # released Codex 0.156.1 app-server, websocket, one node, 9.6 KB manifest and
+    # released Codex app-server, websocket, one node, 9.6 KB manifest and
     # 21 KB instructions per anchored delta), and a Lite-shaped client's anchored
     # delta got an empty manifest appended after its own (findings#232 row
     # 232-184). The client itself sends neither on an anchored delta.
@@ -2473,7 +2473,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       anchored = %{
         "type" => "response.create",
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "previous_response_id" => "resp_ordinary_lite_continuation_0001",
         "instructions" => "synthetic base instructions",
         "input" => [tool_output],
@@ -2538,7 +2538,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       # Native HTTP drops the anchor of a turn that is not a tool-result
       # continuation, so the request opens a context and must carry the prefix.
       payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "previous_response_id" => "resp_ordinary_http_continuation_0001",
         "instructions" => "synthetic base instructions",
         "input" => [%{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "next"}]}],
@@ -2562,7 +2562,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       tool_choice = %{"type" => "custom", "name" => custom_tool["name"]}
 
       payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "input" => [],
         "tools" => [custom_tool],
         "tool_choice" => tool_choice
@@ -2633,7 +2633,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "rewrites compact Lite bodies without forwarding include or top-level tools" do
       payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "instructions" => "compact instructions",
         "include" => ["reasoning.encrypted_content"],
         "tools" => [%{"type" => "custom", "name" => "compact_tool"}],
@@ -2717,7 +2717,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           ],
           transport <- ["websocket", "http_compact_json"] do
         source = %{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "input" => [
             %{"type" => "message", "role" => "user", "content" => "synthetic"},
             %{"type" => "compaction_trigger"}
@@ -2808,7 +2808,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             {"future custom output", [custom_output, trigger], [strip_image_detail(custom_output), trigger]}
           ] do
         source_payload = %{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "previous_response_id" => "resp_incremental_projection_fixture",
           "stream" => true,
           "instructions" => "incremental instructions must not become input",
@@ -2860,7 +2860,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       trigger = %{"type" => "compaction_trigger"}
 
       source_payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "previous_response_id" => "resp_existing_input_fixture",
         "stream" => true,
         "instructions" => "nonblank incremental instructions",
@@ -2917,7 +2917,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       # manifest count at once instead of stopping at the first failing shape.
       upstream_manifests =
         for {name, input} <- variants do
-          source_payload = %{"model" => "gpt-5.6-terra", "stream" => true, "input" => input}
+          source_payload = %{"model" => "gpt-6-sol", "stream" => true, "input" => input}
 
           {first, second, request_options} = prepare_full_history_lite_compact(source_payload)
 
@@ -2962,7 +2962,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       {trigger_only, _second, options} =
         prepare_full_history_lite_compact(%{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "stream" => true,
           "input" => [trigger]
         })
@@ -2976,7 +2976,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       {projected, _second, _options} =
         prepare_full_history_lite_compact(%{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "stream" => true,
           "tools" => top_level_tools,
           "input" => [client_manifest, trigger]
@@ -3016,7 +3016,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       upstream_manifests =
         for {name, input} <- variants do
-          first = prepare_lite_payload(%{"model" => "gpt-5.6-terra", "input" => input})
+          first = prepare_lite_payload(%{"model" => "gpt-6-sol", "input" => input})
           second = prepare_lite_payload(first)
 
           assert second == first, name
@@ -3036,7 +3036,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       # message and no injected second manifest, with its own manifest in place.
       with_instructions =
         prepare_lite_payload(%{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "instructions" => "ordinary instructions",
           "input" => [user_message, canonical_manifest]
         })
@@ -3076,7 +3076,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       trigger = %{"type" => "compaction_trigger"}
       model = %Model{upstream_model_id: "provider-model"}
       endpoint = "/backend-api/codex/responses"
-      payload = %{"model" => "gpt-5.5", "input" => [canonical, omitted_content]}
+      payload = %{"model" => "gpt-6-sol", "input" => [canonical, omitted_content]}
       http_options = RequestOptions.build(%{}, endpoint, payload)
 
       for request_options <- [http_options, RequestOptions.for_websocket(http_options, payload)] do
@@ -3088,7 +3088,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       {compact, _second, _options} =
         prepare_full_history_lite_compact(%{
-          "model" => "gpt-5.6-terra",
+          "model" => "gpt-6-sol",
           "stream" => true,
           "input" => [canonical, omitted_content, trigger]
         })
@@ -3509,7 +3509,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         %{"type" => "function_call_output", "call_id" => "call_1", "output" => "done"}
       ]
 
-      payload = %{"model" => "gpt-5.5", "input" => input}
+      payload = %{"model" => "gpt-6-sol", "input" => input}
       model = %Model{upstream_model_id: "provider-model"}
       http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
@@ -3551,7 +3551,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         %{"type" => "message", "role" => "assistant", "content" => [], "id" => nil}
       ]
 
-      payload = %{"model" => "gpt-5.5", "input" => input}
+      payload = %{"model" => "gpt-6-sol", "input" => input}
       model = %Model{upstream_model_id: "provider-model"}
 
       public_options =
@@ -3606,8 +3606,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     test "rejects non-list backend Codex input and leaves missing input unchanged" do
       model = %Model{upstream_model_id: "provider-model"}
 
-      invalid_payload = %{"model" => "gpt-5.5", "input" => %{"id" => "msg-1"}}
-      missing_payload = %{"model" => "gpt-5.5", "metadata" => %{"id" => "msg-1"}}
+      invalid_payload = %{"model" => "gpt-6-sol", "input" => %{"id" => "msg-1"}}
+      missing_payload = %{"model" => "gpt-6-sol", "metadata" => %{"id" => "msg-1"}}
 
       for payload <- [invalid_payload, missing_payload] do
         http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
@@ -3633,7 +3633,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
     test "does not sanitize response item IDs for unrelated endpoints" do
       payload = %{
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "input" => [%{"type" => "message", "id" => "msg-1", "content" => []}]
       }
 
@@ -3658,7 +3658,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
   defp encrypted_tool_schema_payload do
     %{
-      "model" => "gpt-5.5",
+      "model" => "gpt-6-sol",
       "input" => [%{"role" => "user", "content" => "hello"}],
       "tools" => [
         %{
@@ -3705,7 +3705,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
   defp schema_position_aware_tool_payload do
     %{
-      "model" => "gpt-5.5",
+      "model" => "gpt-6-sol",
       "input" => [%{"role" => "user", "content" => "hello"}],
       "tools" => [
         %{
@@ -3816,7 +3816,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
   defp non_strict_tool_schema_payload do
     %{
-      "model" => "gpt-5.5",
+      "model" => "gpt-6-sol",
       "input" => [%{"role" => "user", "content" => "hello"}],
       "tools" => [
         %{
@@ -3845,7 +3845,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
   defp backend_mixed_tool_payload(namespace_tool) do
     %{
-      "model" => "gpt-5.5",
+      "model" => "gpt-6-sol",
       "input" => [%{"role" => "user", "content" => "hello"}],
       "tools" => [
         namespace_tool,
@@ -4004,7 +4004,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         {leading, fields} = Map.pop(fields, "leading", [])
         items = for index <- 0..2, do: %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "client-item-#{index}"}]}
         client_input = leading ++ items
-        payload = Map.merge(%{"model" => "gpt-5.6-terra", "input" => client_input}, fields)
+        payload = Map.merge(%{"model" => "gpt-6-sol", "input" => client_input}, fields)
         request_options = RequestOptions.build(serving_mode_opts(mode), "/backend-api/codex/responses", payload)
 
         assert {:ok, encoded, request_options} =
