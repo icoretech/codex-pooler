@@ -139,18 +139,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           required(:active_turn?) => boolean()
         }
 
+  # An owner is registered before its `init/1` runs and marks itself ready
+  # once its upstream has started, the last step of `init/1`; a call sent
+  # before then waits for the whole start (findings#206 row 206-216).
+  @registry_starting :starting
+  @registry_ready :ready
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     codex_session_id = Keyword.fetch!(opts, :codex_session_id)
 
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {@registry, codex_session_id}})
+    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {@registry, codex_session_id, @registry_starting}})
   end
 
   @spec start(keyword()) :: GenServer.on_start()
   def start(opts) do
     codex_session_id = Keyword.fetch!(opts, :codex_session_id)
 
-    GenServer.start(__MODULE__, opts, name: {:via, Registry, {@registry, codex_session_id}})
+    GenServer.start(__MODULE__, opts, name: {:via, Registry, {@registry, codex_session_id, @registry_starting}})
   end
 
   @spec start_owner(keyword()) :: start_result()
@@ -319,17 +325,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   armed instead of the predecessor still attached (findings#232, 232-100).
   Every other shape answers `:not_previsible` and stays with the ordinary
   detach after the drain.
+
+  An owner that is still starting answers `:not_previsible` without a call.
+  Its first state has no downstream, no turn and no replay, and a call queued
+  during its start is answered before anything a caller sends once the start
+  returns (a recovery restores the downstream and re-submits only then), so
+  that is the answer the call would get; making it waited for the whole
+  upstream start, up to the call timeout, while the closing socket's drains
+  and delivery acknowledgements queued behind it (findings#206 row 206-216).
   """
   @spec detach_previsible_downstream(GenServer.server(), map()) ::
           :suspended | :detached | :not_previsible | {:error, WebsocketOwnerContract.owner_error()}
   def detach_previsible_downstream(owner, %{pid: pid, epoch: epoch, correlation_id: correlation_id})
       when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
-    GenServer.call(
-      owner,
-      {:detach_previsible_downstream, pid, epoch, correlation_id},
-      owner_call_timeout()
-    )
+    if starting?(owner) do
+      :not_previsible
+    else
+      GenServer.call(
+        owner,
+        {:detach_previsible_downstream, pid, epoch, correlation_id},
+        owner_call_timeout()
+      )
+    end
   end
+
+  @doc false
+  @spec starting?(GenServer.server()) :: boolean()
+  def starting?(owner) when is_pid(owner) do
+    @registry
+    |> Registry.keys(owner)
+    |> Enum.any?(&(Registry.values(@registry, &1, owner) == [@registry_starting]))
+  end
+
+  def starting?(_owner), do: false
 
   @spec cancel_downstream(GenServer.server(), per_call_downstream(), :owner_drained) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
@@ -1131,6 +1159,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     persistence = persistence_boundary(opts)
 
     with {:ok, upstream_pid} <- upstream.start.() do
+      _marked = Registry.update_value(@registry, codex_session_id, fn _starting -> @registry_ready end)
+
       {:ok,
        %__MODULE__{
          codex_session_id: codex_session_id,

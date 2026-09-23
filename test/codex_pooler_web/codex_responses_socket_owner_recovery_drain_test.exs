@@ -68,47 +68,108 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerRecoveryDrainTest do
     assert_receive {:recovery_start_blocked, recovery_start_pid, release_ref},
                    @detection_timeout_ms
 
-    send(scenario.socket, {:terminate_socket, scenario.state})
-    assert_receive {:socket_terminating, socket}, @detection_timeout_ms
-    assert socket == scenario.socket
+    socket = scenario.socket
+    cleanup_finished = attach_cleanup_finished_handler!(socket)
 
-    # The replacement owner is registered but still starting (its upstream
-    # start is held), so the socket's early owner call waits in its mailbox.
-    # Released before that call is queued, the recovery can attach the
-    # socket's downstream first; the early call then finds an idle attached
-    # downstream, fences it (findings#232 rows 232-171/232-175) and the
-    # re-submit is refused before any upstream send (Drone 1512). Release only
-    # once the call is queued, so the owner answers it before the attach and the
-    # socket learns about the replacement from the recovery notification.
-    await_queued_early_owner_call!(recovery_start_pid)
-    send(recovery_start_pid, {:release_recovery_start, release_ref})
-    assert_receive {:recovery_submit_started, _recovery_worker}, @detection_timeout_ms
+    logs =
+      capture_log(fn ->
+        send(socket, {:terminate_socket, scenario.state})
+        assert_receive {:socket_terminating, ^socket}, @detection_timeout_ms
 
-    assert_socket_drained_on_signal(scenario)
+        # The replacement owner is registered but still starting (its upstream
+        # start is held). The socket's early owner call answers without
+        # waiting for that start, so the socket reaches its owner cleanup, and
+        # the notification can only arrive during its post-cleanup drain.
+        # Released only then: released earlier, the recovery can attach the
+        # socket's downstream before the early call, which then fences it and
+        # the re-submit is refused before any upstream send (Drone 1512).
+        assert_receive {^cleanup_finished, ^socket}, @detection_timeout_ms
+        assert WebsocketOwnerSession.starting?(recovery_start_pid)
+        send(recovery_start_pid, {:release_recovery_start, release_ref})
+        assert_receive {:recovery_submit_started, _recovery_worker}, @detection_timeout_ms
+
+        assert_socket_drained_on_signal(scenario)
+      end)
+
+    # The early owner call used to wait for the whole upstream start and exit
+    # at its five-second call timeout (findings#206 row 206-216).
+    refute logs =~ "websocket control path failed phase=terminate reason=process_exit"
   end
 
-  defp await_queued_early_owner_call!(owner) do
-    deadline_ms = System.monotonic_time(:millisecond) + @detection_timeout_ms
-    await_queued_early_owner_call!(owner, deadline_ms)
-  end
+  test "an owner still starting its upstream answers the early detach without a call", %{auth: auth} do
+    assert {:ok, %CodexSession{} = session} =
+             Gateway.start_codex_session(auth, %{
+               accepted_turn_state: "starting-owner-#{System.unique_integer([:positive])}",
+               owner_instance_id: Atom.to_string(node())
+             })
 
-  # Nothing but the socket's early owner call sends to the replacement owner
-  # while its init holds the upstream start: the recovery waits for that init
-  # to return before it attaches and re-submits. `:messages` can still read an
-  # in-transit call as an empty queue; `:message_queue_len` counts it.
-  defp await_queued_early_owner_call!(owner, deadline_ms) do
-    case Process.info(owner, :message_queue_len) do
-      {:message_queue_len, queued} when queued > 0 ->
-        :ok
+    session = Repo.get!(CodexSession, session.id)
+    on_exit(fn -> stop_local_owner_session(session.id) end)
+    parent = self()
+    release_ref = make_ref()
 
-      info ->
-        if System.monotonic_time(:millisecond) >= deadline_ms do
-          flunk("the closing socket's early owner call never reached the starting replacement owner: #{inspect(info)}")
-        else
-          Process.sleep(5)
-          await_queued_early_owner_call!(owner, deadline_ms)
+    held_upstream = %{
+      start: fn ->
+        send(parent, {:owner_start_held, self(), release_ref})
+
+        receive do
+          {:release_owner_start, ^release_ref} -> Agent.start_link(fn -> :ready end)
         end
-    end
+      end,
+      send: fn _upstream_pid, _request, _writer -> :ok end,
+      close: fn upstream_pid ->
+        if Process.alive?(upstream_pid), do: Agent.stop(upstream_pid)
+        :ok
+      end
+    }
+
+    starter =
+      Task.async(fn ->
+        WebsocketOwnerSession.start_owner(
+          codex_session_id: session.id,
+          owner_lease_token: session.owner_lease_token,
+          owner_instance_id: Atom.to_string(node()),
+          upstream: held_upstream
+        )
+      end)
+
+    assert_receive {:owner_start_held, owner, ^release_ref}, @detection_timeout_ms
+    assert {:ok, ^owner} = WebsocketOwnerSession.lookup(session.id)
+    assert WebsocketOwnerSession.starting?(owner)
+
+    closing_downstream = %{pid: self(), epoch: 1, correlation_id: "corr-starting-owner"}
+
+    # Answered from the registry while the start is still held: the owner has
+    # nothing queued.
+    assert WebsocketOwnerSession.detach_previsible_downstream(owner, closing_downstream) == :not_previsible
+    assert {:message_queue_len, 0} = Process.info(owner, :message_queue_len)
+
+    send(owner, {:release_owner_start, release_ref})
+    assert {:ok, ^owner} = Task.await(starter, @detection_timeout_ms)
+    refute WebsocketOwnerSession.starting?(owner)
+
+    # A started owner is asked, and it answers the same for a downstream it
+    # never had.
+    assert WebsocketOwnerSession.detach_previsible_downstream(owner, closing_downstream) == :not_previsible
+  end
+
+  defp attach_cleanup_finished_handler!(socket) do
+    handler_id = {__MODULE__, :cleanup_finished, make_ref()}
+    message_tag = make_ref()
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+        fn _event, _measurements, %{caller: caller}, _config ->
+          if caller == socket, do: send(parent, {message_tag, caller})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    message_tag
   end
 
   defp assert_socket_drained_on_signal(scenario) do
