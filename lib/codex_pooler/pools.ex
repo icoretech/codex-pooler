@@ -8,6 +8,7 @@ defmodule CodexPooler.Pools do
   alias CodexPooler.Access.DashboardSessions
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Alerts
   alias CodexPooler.Audit
   alias CodexPooler.Events
 
@@ -321,7 +322,8 @@ defmodule CodexPooler.Pools do
          :ok <- ensure_confirmation_slug(pool, confirmation_slug) do
       record_pool_audit_event(scope, "pool.delete", pool)
 
-      Repo.delete(pool)
+      # The Pool's alert incident targets go with it by database cascade.
+      Alerts.invalidate_notifications_after_cascade({:pool, pool.id}, fn -> Repo.delete(pool) end)
       |> tap(fn
         {:ok, deleted_pool} ->
           Events.broadcast_pools(deleted_pool.id, "pool_deleted", %{

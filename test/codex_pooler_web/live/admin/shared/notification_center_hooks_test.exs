@@ -177,6 +177,58 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     refute_received {:DOWN, ^page_ref, :process, _pid, _reason}
   end
 
+  # Deleting a rule drops its incident targets by database cascade, which sends
+  # nothing: an open notification center kept an incident its viewer could no
+  # longer see (findings#206 row 206-301). Every page that sees a Pool of the
+  # incident reloads once, including one whose Pool keeps its target (its
+  # impacted Pool counts change); a page that sees none of them does not.
+  test "deleting an alert rule reloads the notification centers of its incidents' Pools once", %{
+    conn: owner_conn,
+    scope: owner_scope
+  } do
+    [rule_pool, other_pool, unrelated_pool] = for label <- ["rule", "other", "unrelated"], do: pool!(owner_scope, label)
+    {incident, [rule, _other_rule]} = record_shared_incident_with_rules!([rule_pool, other_pool])
+    incident_id = incident.id
+    [owner_view, rule_pool_view, other_pool_view, unrelated_view] = views = open_notification_centers!(owner_conn, owner_scope, [rule_pool, other_pool, unrelated_pool])
+
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(rule_pool_view)
+    assert %{rows: [%{id: ^incident_id, total_impacted_pool_count: 2, hidden_impacted_pool_count: 1}]} = notification_center(other_pool_view)
+
+    assert {:ok, _deleted} = Alerts.delete_rule(owner_scope, rule)
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 1, 1, 0]
+    assert %{badge_count: 1, rows: [%{id: ^incident_id, total_impacted_pool_count: 1}]} = notification_center(owner_view)
+    assert %{badge_count: 0, rows: [], empty?: true} = notification_center(rule_pool_view)
+    assert %{rows: [%{id: ^incident_id, total_impacted_pool_count: 1, hidden_impacted_pool_count: 0}]} = notification_center(other_pool_view)
+    assert %{badge_count: 0, rows: []} = notification_center(unrelated_view)
+  end
+
+  # Only an archived Pool can be deleted, and no notification center shows an
+  # archived Pool's incidents, so what the cascade changes is the impacted Pool
+  # counts of an incident it shared with an active Pool: those pages reload
+  # once. A page that sees only the archived Pool, or an unrelated one, does
+  # not.
+  test "deleting a Pool reloads the notification centers of the Pools its incidents shared once", %{conn: owner_conn, scope: owner_scope} do
+    [deleted_pool, other_pool, unrelated_pool] = for label <- ["deleted", "kept", "unrelated"], do: pool!(owner_scope, label)
+    {shared, _rules} = record_shared_incident_with_rules!([deleted_pool, other_pool])
+    _own = record_bell_incident!(deleted_pool)
+    shared_id = shared.id
+    assert {:ok, archived_pool} = Pools.change_pool_status(owner_scope, deleted_pool, "archived")
+    [owner_view, deleted_pool_view, other_pool_view, unrelated_view] = views = open_notification_centers!(owner_conn, owner_scope, [deleted_pool, other_pool, unrelated_pool])
+
+    assert %{badge_count: 1, rows: [%{id: ^shared_id, total_impacted_pool_count: 2, hidden_impacted_pool_count: 1}]} = notification_center(owner_view)
+    assert %{badge_count: 0} = notification_center(deleted_pool_view)
+    assert %{rows: [%{id: ^shared_id, total_impacted_pool_count: 2, hidden_impacted_pool_count: 1}]} = notification_center(other_pool_view)
+
+    assert {:ok, _deleted} = Pools.delete_archived_pool(owner_scope, archived_pool, archived_pool.slug)
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 0, 1, 0]
+    assert %{badge_count: 1, rows: [%{id: ^shared_id, total_impacted_pool_count: 1, hidden_impacted_pool_count: 0}]} = notification_center(owner_view)
+    assert %{badge_count: 0, rows: []} = notification_center(deleted_pool_view)
+    assert %{rows: [%{id: ^shared_id, total_impacted_pool_count: 1, hidden_impacted_pool_count: 0}]} = notification_center(other_pool_view)
+    assert %{badge_count: 0, rows: []} = notification_center(unrelated_view)
+  end
+
   # A newer release may send a notification message of a shape this one does
   # not know during a rolling update. These pages have no catch-all
   # `handle_info/2`, so a message the hook passed on would crash them; the hook
@@ -363,8 +415,14 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   end
 
   defp record_shared_incident!(pools) do
+    {incident, _rules} = record_shared_incident_with_rules!(pools)
+    incident
+  end
+
+  defp record_shared_incident_with_rules!(pools) do
     %{identity: identity} = upstream_assignment_fixture(hd(pools))
-    targets = Enum.map(pools, &%{rule_id: alert_rule_fixture(&1, %{display_name: "Shared #{unique_suffix()}"}).id, pool_id: &1.id})
+    rules = Enum.map(pools, &alert_rule_fixture(&1, %{display_name: "Shared #{unique_suffix()}"}))
+    targets = Enum.zip_with(rules, pools, &%{rule_id: &1.id, pool_id: &2.id})
 
     assert {:ok, incident} =
              Alerts.record_incident_match(%{
@@ -377,7 +435,19 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
                targets: targets
              })
 
-    incident
+    {incident, rules}
+  end
+
+  # The owner's page and one page per Pool, of an admin assigned to that Pool
+  # only, each counting its notification center reloads from here on.
+  defp open_notification_centers!(owner_conn, owner_scope, pools) do
+    conns = [owner_conn | Enum.map(pools, &assigned_admin_conn(owner_scope, &1))]
+
+    for conn <- conns do
+      {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+      trace_notification_reloads!(view)
+      view
+    end
   end
 
   defp await_notification_center!(view, predicate) do

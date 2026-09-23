@@ -11,6 +11,7 @@ defmodule CodexPooler.Alerts do
   alias CodexPooler.Alerts.Evaluation.Evaluator
   alias CodexPooler.Alerts.Incidents.IncidentLifecycle
   alias CodexPooler.Alerts.Incidents.IncidentNotifications
+  alias CodexPooler.Alerts.Incidents.NotificationEvents
   alias CodexPooler.Alerts.Rules.RuleEvaluation
   alias CodexPooler.Alerts.Rules.RuleManagement
 
@@ -109,6 +110,11 @@ defmodule CodexPooler.Alerts do
 
   @spec resolve_orphaned_incidents(DateTime.t()) :: {:ok, [AlertIncident.t()]} | {:error, Ecto.Changeset.t()}
   defdelegate resolve_orphaned_incidents(timestamp), to: IncidentLifecycle
+
+  @spec invalidate_notifications_after_cascade(NotificationEvents.cascade_owner(), (-> {:ok, result} | {:error, reason})) ::
+          {:ok, result} | {:error, reason}
+        when result: term(), reason: term()
+  defdelegate invalidate_notifications_after_cascade(cascade_owner, delete), to: NotificationEvents, as: :invalidate_after_cascade
 
   @spec clear_incident_condition(IncidentLifecycle.clear_attrs() | map() | String.t()) ::
           IncidentLifecycle.clear_result()

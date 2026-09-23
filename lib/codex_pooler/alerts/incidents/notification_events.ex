@@ -35,6 +35,7 @@ defmodule CodexPooler.Alerts.Incidents.NotificationEvents do
   @type broadcast_result :: :ok | {:error, term()}
   @type invalidation_id :: String.t()
   @type invalidation_message :: {module(), :invalidated, invalidation_id()}
+  @type cascade_owner :: {:rule | :pool, Ecto.UUID.t()}
 
   @spec subscribe_pool(Ecto.UUID.t()) :: :ok | {:error, term()}
   def subscribe_pool(pool_id) when is_binary(pool_id) do
@@ -62,6 +63,29 @@ defmodule CodexPooler.Alerts.Incidents.NotificationEvents do
   @spec broadcast_operator_invalidation(operator_ref()) :: broadcast_result()
   def broadcast_operator_invalidation(operator_id) when is_binary(operator_id) do
     broadcast_invalidation("operator", operator_id, Ecto.UUID.generate())
+  end
+
+  @doc """
+  Runs `delete`, which removes a rule or a Pool, and on success invalidates the
+  notification centers of every Pool whose incidents lost targets by the
+  delete's database cascade, as one invalidation. The cascade sends nothing
+  itself, so without this an open notification center kept an incident the
+  viewer can no longer see (findings#206 row 206-301). The Pools are read
+  before `delete` runs, because the targets that name them are gone after it.
+  """
+  @spec invalidate_after_cascade(cascade_owner(), (-> {:ok, result} | {:error, reason})) :: {:ok, result} | {:error, reason}
+        when result: term(), reason: term()
+  def invalidate_after_cascade({owner, owner_id} = cascade_owner, delete) when owner in [:rule, :pool] and is_binary(owner_id) do
+    pool_ids = cascade_impacted_pool_ids(cascade_owner)
+
+    case delete.() do
+      {:ok, _deleted} = deleted ->
+        _ = broadcast_pool_invalidations(pool_ids, Ecto.UUID.generate())
+        deleted
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   @spec postgres_channel() :: String.t()
@@ -122,6 +146,37 @@ defmodule CodexPooler.Alerts.Incidents.NotificationEvents do
         select: target.pool_id
     )
   end
+
+  # Every Pool targeted by an incident in the notification center (open or
+  # acknowledged) that loses a target with the rule or the Pool. The Pool that
+  # loses the target is among them, and every other one is a Pool whose
+  # centers show the incident's impacted Pool counts. A Pool's own incidents,
+  # deleted with it, always target it: evaluation writes an incident with its
+  # targets, and one that lost them is already out of every center. Only Pools
+  # are invalidated, so a page hears of it only for a Pool it subscribed to,
+  # one it can see.
+  defp cascade_impacted_pool_ids(cascade_owner) do
+    incident_ids = cascaded_incident_ids(cascade_owner)
+
+    Repo.all(
+      from target in AlertIncidentTarget,
+        where: target.incident_id in subquery(incident_ids),
+        distinct: true,
+        select: target.pool_id
+    )
+  end
+
+  defp cascaded_incident_ids({owner, owner_id}) do
+    from target in AlertIncidentTarget,
+      join: incident in AlertIncident,
+      on: incident.id == target.incident_id,
+      where: field(target, ^cascade_target_field(owner)) == ^owner_id,
+      where: incident.state in ^[AlertIncident.open_state(), AlertIncident.acknowledged_state()],
+      select: target.incident_id
+  end
+
+  defp cascade_target_field(:rule), do: :rule_id
+  defp cascade_target_field(:pool), do: :pool_id
 
   defp broadcast_pool_invalidations(pool_ids, invalidation_id) do
     Enum.reduce_while(pool_ids, :ok, fn pool_id, :ok ->

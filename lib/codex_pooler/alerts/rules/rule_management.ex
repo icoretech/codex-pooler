@@ -7,6 +7,7 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
   alias CodexPooler.Alerts.AuditLog, as: AlertAudit
   alias CodexPooler.Alerts.Authorization
   alias CodexPooler.Alerts.ChannelManagement
+  alias CodexPooler.Alerts.Incidents.NotificationEvents
 
   alias CodexPooler.Alerts.Schemas.{
     AlertRule,
@@ -111,8 +112,11 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
     end
   end
 
+  # The rule's incident targets go with it by database cascade.
   defp delete_rule_transaction(rule) do
-    Repo.transaction(fn -> delete_rule_in_transaction(rule) end)
+    NotificationEvents.invalidate_after_cascade({:rule, rule.id}, fn ->
+      Repo.transaction(fn -> delete_rule_in_transaction(rule) end)
+    end)
   end
 
   defp delete_rule_in_transaction(rule) do
