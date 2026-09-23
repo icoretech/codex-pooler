@@ -139,7 +139,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
           String.t(),
           RequestOptions.t(),
           RouteState.t() | nil,
-          Ecto.UUID.t() | nil
+          String.t() | nil
         ) :: map()
   def attrs(
         auth,
@@ -174,7 +174,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
           String.t(),
           RequestOptions.t(),
           RouteState.t() | nil,
-          Ecto.UUID.t() | nil,
+          String.t() | nil,
           {:ok, NativeHttpTurnIdentity.request_claim()} | :none
         ) :: map()
   def attrs(

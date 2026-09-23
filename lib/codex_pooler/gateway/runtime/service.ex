@@ -99,7 +99,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           required(:candidates) => list(),
           required(:route_state) => RouteState.t(),
           required(:turn_claim) => CodexPooler.Accounting.Request.t() | nil,
-          optional(:authorized_correlation_id) => Ecto.UUID.t() | nil
+          optional(:authorized_correlation_id) => String.t() | nil
         }
   @typep session_routable_result ::
            {:ok, map(), list(), opts(), RouteState.t()} | {:error, term()}
@@ -1811,7 +1811,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          {:ok, correlation_id} <-
            PreparedFrameCapability.redeem_runtime_admission(proof, expected_digest) do
       :ok = emit_runtime_proof_redeemed(request_options)
-      claim_admitted_compaction_resume(auth, model, payload, endpoint, request_options, route_state, correlation_id)
+
+      case WebsocketCodec.admitted_compaction_claim(endpoint, payload, request_options) do
+        compaction_claim when is_binary(compaction_claim) -> {:ok, nil, compaction_claim}
+        nil -> claim_admitted_compaction_resume(auth, model, payload, endpoint, request_options, route_state, correlation_id)
+      end
     else
       _invalid -> {:error, invalid_runtime_admission_error()}
     end
@@ -1866,6 +1870,17 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        ),
        do: {:ok, nil, nil}
 
+  # An admitted native compaction is recorded under the durable claim its own
+  # full-history resend derives instead of the runtime proof's generated
+  # correlation: a client cut during it resends the whole history on a new
+  # socket, and with owner forwarding off that resend found no claim, was
+  # served and billed a second time after the first one had been billed, or
+  # raced the closing socket into the active-turn index and left an accepted
+  # row behind (findings#206 row 206-310). The claim is written by the
+  # reservation itself, so a reservation that rolls back leaves no row that
+  # would fence the client's retry. An anchored request never takes the
+  # failed-predecessor resend path, so claiming it first would add nothing.
+  #
   # The resume of a turn after its mid-turn compaction is admitted by the
   # runtime proof, yet the same resume sent again on another socket or over
   # HTTP derives the durable `codex-resume:` claim and would find it free, so

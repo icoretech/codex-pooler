@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @request_claim_prefix "codex-request:"
   @request_claim_domain "native_websocket_response_claim_v1"
   @compaction_claim_domain "native_websocket_compaction_claim_v1"
+  @native_compaction_claim_domain "native_websocket_compaction_claim_v2"
   @kind_claim_domain_prefix "native_turn_kind_claim_v1:"
   @resume_claim_domain "native_turn_compaction_resume_claim_v1"
 
@@ -212,6 +213,35 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   def compaction_claim_key(semantic_turn_key, payload)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
     scoped_request_claim_key(semantic_turn_key, payload, @compaction_claim_domain)
+  end
+
+  @doc """
+  The claim of one native websocket compaction, the same whether the client
+  sent it anchored or as full history.
+
+  The released client builds a remote compaction as one prompt and lets the
+  websocket layer compress it: on the connection that produced the previous
+  response it sends the items added since, anchored on that response; after
+  any reconnect it sends the whole history without the anchor, with every
+  other field unchanged (findings#232 row 232-160). An admitted anchored
+  compaction used to hold no durable claim, so when its connection was cut the
+  full-history resend found its payload-scoped claim free: with owner
+  forwarding off it was served and billed again after the first one had been
+  billed, or it raced the closing socket into the active-turn index
+  (findings#206 row 206-310). Both forms therefore derive this claim, which
+  binds the turn and every field except `input` and `previous_response_id`
+  (`x-codex-window-id` among them). A second compaction of the same turn is a
+  different claim, because the client advances the window after every
+  compaction it completes.
+  """
+  @spec native_compaction_claim_key(<<_::256>>, map()) :: String.t()
+  def native_compaction_claim_key(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
+    scoped_request_claim_key(
+      semantic_turn_key,
+      Map.drop(payload, ["input", "previous_response_id"]),
+      @native_compaction_claim_domain
+    )
   end
 
   @doc """

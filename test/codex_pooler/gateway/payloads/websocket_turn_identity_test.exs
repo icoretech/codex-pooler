@@ -22,6 +22,38 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
              )
   end
 
+  # The anchored form of a native compaction and its full-history resend after
+  # a reconnect differ only in `input` and `previous_response_id`; both must
+  # name one claim, while the next compaction of the turn (on the window the
+  # client advances after a completed compaction) or another turn must not
+  # (findings#206 row 206-310).
+  test "a native compaction claim is the same for the anchored form and its full-history resend" do
+    semantic = :crypto.hash(:sha256, "synthetic-compaction-turn")
+    trigger = %{"type" => "compaction_trigger"}
+    history = [%{"type" => "message", "role" => "user", "content" => "synthetic"}, %{"type" => "message", "role" => "assistant", "content" => "synthetic answer"}]
+
+    full_history = %{
+      "type" => "response.create",
+      "model" => "gpt-test-model",
+      "input" => history ++ [trigger],
+      "client_metadata" => %{"x-codex-window-id" => "synthetic-thread:0", "x-codex-ws-stream-request-start-ms" => "1"}
+    }
+
+    anchored =
+      full_history
+      |> Map.put("input", [trigger])
+      |> Map.put("previous_response_id", "resp_synthetic_anchor")
+      |> put_in(["client_metadata", "x-codex-ws-stream-request-start-ms"], "2")
+
+    claim = WebsocketTurnIdentity.native_compaction_claim_key(semantic, full_history)
+
+    assert WebsocketTurnIdentity.request_claim?(claim)
+    assert claim == WebsocketTurnIdentity.native_compaction_claim_key(semantic, anchored)
+    refute claim == WebsocketTurnIdentity.compaction_claim_key(semantic, full_history)
+    refute claim == WebsocketTurnIdentity.native_compaction_claim_key(semantic, put_in(full_history, ["client_metadata", "x-codex-window-id"], "synthetic-thread:1"))
+    refute claim == WebsocketTurnIdentity.native_compaction_claim_key(:crypto.hash(:sha256, "synthetic-other-turn"), full_history)
+  end
+
   describe "claim_scope/2" do
     # The scope has to be the one thing a remote compaction does not move. The
     # client rotates `x-codex-window-id` after compacting

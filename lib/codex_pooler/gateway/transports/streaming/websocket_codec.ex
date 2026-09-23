@@ -1008,6 +1008,31 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def post_compaction_resume_claim(_payload, %RequestOptions{}), do: nil
 
+  @doc """
+  The durable claim of a native compaction admitted through the owner's
+  runtime proof, or nil for any other frame.
+
+  It is the claim the same compaction's full-history resend derives
+  (`WebsocketTurnIdentity.native_compaction_claim_key/2`), so a client cut
+  during the admitted compaction resends into the predecessor's claim and meets
+  the resend policy instead of being served and billed a second time
+  (findings#206 row 206-310).
+  """
+  @spec admitted_compaction_claim(String.t(), map(), RequestOptions.t()) :: String.t() | nil
+  def admitted_compaction_claim(
+        "/backend-api/codex/responses/compact",
+        payload,
+        %RequestOptions{
+          native_compaction_admission: %RequestOptions.NativeCompactionAdmission{},
+          continuity: %{semantic_turn_key: semantic_turn_key},
+          payload_context: %{native_codex_turn_metadata: %NativeCodexTurnMetadata{request_kind: :compaction}}
+        }
+      )
+      when is_map(payload) and is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32,
+      do: WebsocketTurnIdentity.native_compaction_claim_key(semantic_turn_key, payload)
+
+  def admitted_compaction_claim(_endpoint, _payload, %RequestOptions{}), do: nil
+
   defp put_native_turn_identity(%RequestOptions{} = request_options, :missing),
     do: request_options
 
@@ -1087,7 +1112,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
     cond do
       full_history_native_compaction?(prepared.endpoint, request_options) ->
-        WebsocketTurnIdentity.compaction_claim_key(semantic_turn_key, payload)
+        WebsocketTurnIdentity.native_compaction_claim_key(semantic_turn_key, payload)
 
       post_compaction_resume?(payload, request_options) ->
         {:post_compaction_resume, anchor} = NativeTurnContinuation.turn_role(payload)
