@@ -780,9 +780,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   # (`{"type": "error", "status": 4xx, "error": {...}}`) records the rejection
   # fields the HTTP path records for the same provider response, read from that
   # frame as the equivalent HTTP response (findings#254 row 254-15). Nothing is
-  # recorded outside `Metadata.rejection_metadata_status?/1`.
+  # recorded outside `Metadata.rejection_metadata_status?/1`. A native turn
+  # collects the frame after its canonicalization into `response.failed`,
+  # which keeps the wrapped frame's integer `status` next to the error object
+  # (a provider `response.failed` carries none), so that shape records the same
+  # fields (findings#254 row 254-30).
   defp provider_rejection_metadata(body, request_options) do
-    with {:ok, %{"type" => "error", "error" => %{} = error} = frame} <- last_terminal_frame(body),
+    with {:ok, %{"type" => type, "error" => %{} = error} = frame} when type in ["error", "response.failed"] <- last_terminal_frame(body),
          status = Map.get(frame, "status", Map.get(frame, "status_code")),
          true <- Metadata.rejection_metadata_status?(status) do
       response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}

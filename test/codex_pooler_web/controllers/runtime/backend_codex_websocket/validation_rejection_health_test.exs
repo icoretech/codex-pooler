@@ -102,6 +102,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
           assert request.status == "failed"
           assert request.last_error_code == code
           assert attempt.transport == "websocket"
+
+          # The native socket relays the refusal as its canonical
+          # `response.failed`; the attempt still records the rejection fields the
+          # HTTP path records for the same provider response (findings#254 row
+          # 254-30).
+          assert Map.take(attempt.response_metadata, ["rejection_error_code", "rejection_error_type", "rejection_error_param"]) == %{
+                   "rejection_error_code" => code,
+                   "rejection_error_type" => "invalid_request_error",
+                   "rejection_error_param" => @param
+                 }
+
           assert_route_health_untouched!(request)
           assert :ok = CodexResponsesSocket.terminate(:closed, turn_state)
         after
