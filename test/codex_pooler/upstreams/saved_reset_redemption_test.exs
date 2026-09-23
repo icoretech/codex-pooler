@@ -5229,7 +5229,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
       on_exit(fn -> FakeUpstream.stop(fake) end)
 
-      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 200)
+      # Only the target (index 0) is a capacity and routable candidate, so the
+      # claim reads the 199 siblings' identity rows (cohort lock, sibling
+      # consume fence) and never their weekly windows or confirmation receipts;
+      # skipping that evidence keeps the committed fixture from dominating the test.
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 200, sibling_evidence?: false)
       on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
 
       input_ids =
@@ -8609,6 +8613,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp create_gateway_auto_cohort_fixture!(fake, pool_mode, identity_count, unique, opts) do
     as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     after_entry = Keyword.get(opts, :after_entry, fn _entry -> :ok end)
+    sibling_evidence? = Keyword.get(opts, :sibling_evidence?, true)
 
     pools = gateway_auto_cohort_pools(pool_mode, unique, identity_count)
 
@@ -8636,11 +8641,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
         identity = enable_saved_reset_auto_redeem!(identity)
 
-        upsert_weekly_exhausted_quota!(identity,
-          observed_at: as_of,
-          last_sync_at: as_of,
-          reset_at: DateTime.add(as_of, 2, :hour)
-        )
+        if index == 0 or sibling_evidence? do
+          upsert_weekly_exhausted_quota!(identity,
+            observed_at: as_of,
+            last_sync_at: as_of,
+            reset_at: DateTime.add(as_of, 2, :hour)
+          )
+        end
 
         entry = %{assignment_id: assignment.id, identity_id: identity.id}
 
