@@ -25,12 +25,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
                              identity_rejected
                              owner_busy
                            )
-  # The predecessor shape a byte-identical websocket resend was admitted after.
+  # The predecessor shape a byte-identical websocket resend was admitted after:
+  # every shape `FailedPredecessorResend` admits, or the admission line reads
+  # `predecessor_shape=unknown` for a known fact.
   @resend_predecessor_shapes ~w(
                                provider_terminal
                                task_exception
                                lifecycle_cut
                                partial_reasoning_cut
+                               quota_rejection
+                               advanced_http_resume
                                previsible_disconnect
                              )
   @handoff_outcomes ~w(
