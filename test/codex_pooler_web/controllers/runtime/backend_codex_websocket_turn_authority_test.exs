@@ -42,7 +42,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnAuthorityTest do
     refute rejoined.opts.request_id == request.correlation_id
     assert Map.get(rejoined, :direct_cleanup_contexts) == %{}
 
-    logs = with_interruption_info(fn -> CodexResponsesSocket.terminate(:closed, rejoined) end)
+    logs = with_interruption_info(fn -> terminate_and_await_cleanup(rejoined) end)
 
     assert logs =~ "websocket interrupt selector resolved no turn"
     assert logs =~ "codex_session_id=#{parked.state.codex_session.id}"
@@ -110,7 +110,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnAuthorityTest do
     {setup, upstream, state} = fixture()
     session = state.codex_session
 
-    logs = with_interruption_info(fn -> CodexResponsesSocket.terminate(:closed, state) end)
+    logs = with_interruption_info(fn -> terminate_and_await_cleanup(state) end)
 
     refute logs =~ "websocket interrupt selector resolved no turn"
 
@@ -134,7 +134,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnAuthorityTest do
     Process.exit(parked.task, :kill)
     assert_receive {:DOWN, ^monitor, :process, _, _}, @budget
 
-    logs = with_interruption_info(fn -> CodexResponsesSocket.terminate(:closed, parked.state) end)
+    logs = with_interruption_info(fn -> terminate_and_await_cleanup(parked.state) end)
 
     refute logs =~ "websocket interrupt selector resolved no turn"
 
@@ -188,6 +188,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnAuthorityTest do
 
     assert rejoined.codex_session.id == state.codex_session.id
     rejoined
+  end
+
+  # `terminate/2` waits 100 ms for the session cleanup that interrupts the turn
+  # and logs the selector refusal; a cleanup that outlives that wait is
+  # deferred (`cleanup_deferred`) and finishes in its supervised task after
+  # `terminate/2` returned, which is what left the request `in_progress` at
+  # the reload under gate load (findings#206 row 206-341). The rows and the log
+  # line are read only once that cleanup has signalled it finished.
+  defp terminate_and_await_cleanup(state) do
+    caller = self()
+    handler = make_ref()
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+        fn
+          _event, _measurements, %{caller: ^caller}, _config -> send(caller, {handler, :cleanup_finished})
+          _event, _measurements, _metadata, _config -> :ok
+        end,
+        nil
+      )
+
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    assert_receive {^handler, :cleanup_finished}, @budget
+    :telemetry.detach(handler)
+    :ok
   end
 
   # The suite runs at :warning; the selector-refusal line is an :info the
