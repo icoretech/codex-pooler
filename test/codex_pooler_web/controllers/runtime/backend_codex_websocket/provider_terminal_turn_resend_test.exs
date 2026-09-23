@@ -5,6 +5,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ProviderTerminalTurnResen
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [stop_pool_owners_on_exit: 1]
+
   alias CodexPooler.Accounting.{LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
@@ -53,6 +55,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ProviderTerminalTurnResen
         )
 
       setup = gateway_setup(upstream)
+      # With owner forwarding on, the turn's owner outlives both sockets; left
+      # running it counted in later tests' owner registry reads (findings#206
+      # rows 206-375/206-377).
+      stop_pool_owners_on_exit(setup.pool)
       assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
       port = start_public_endpoint!()
       thread = "ws-provider-terminal-#{System.unique_integer([:positive])}"

@@ -1461,6 +1461,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     assert_no_leak!("owner cleanup logs", logs)
   end
 
+  # An owner the test's sockets started can outlive the test: it stays in the
+  # application-global `WebsocketOwnerSession.Registry`, where a later test that
+  # counts owners or drains the registry sees it (findings#206 rows
+  # 206-375/206-377), and at suite teardown it writes its exit persistence
+  # without a sandbox owner (206-328). Call right after the Pool exists, before
+  # any socket can start an owner: the `on_exit` then runs before the sandbox
+  # owner stops and stops only this Pool's owners.
+  def stop_pool_owners_on_exit(pool) do
+    on_exit(fn -> stop_pool_owners!(pool) end)
+  end
+
+  def stop_pool_owners!(pool) do
+    pool
+    |> pool_codex_session_ids()
+    |> Enum.each(&await_owner_cleanup!/1)
+  end
+
+  # The owners registered for this Pool's sessions only, never another test's.
+  def pool_owner_pids(pool) do
+    pool
+    |> pool_codex_session_ids()
+    |> Enum.flat_map(&Registry.lookup(WebsocketOwnerSession.Registry, &1))
+    |> Enum.map(fn {owner_pid, _value} -> owner_pid end)
+  end
+
+  defp pool_codex_session_ids(pool) do
+    Repo.all(from(session in CodexSession, where: session.pool_id == ^pool.id, select: session.id))
+  end
+
   def await_owner_cleanup!(codex_session_id) do
     case WebsocketOwnerSession.lookup(codex_session_id) do
       {:ok, owner_pid} ->

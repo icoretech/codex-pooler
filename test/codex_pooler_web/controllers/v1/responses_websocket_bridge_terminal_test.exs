@@ -12,9 +12,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   @detection_timeout_ms 15_000
   @terminal_cases [
@@ -88,16 +88,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn session_id ->
-          with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
-            GenServer.stop(owner_pid, :shutdown, 1_000)
-          end
-        end)
-      end)
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
@@ -138,6 +128,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       )
 
     setup = gateway_setup(upstream)
+    stop_own_pool_owners_on_exit(setup.pool)
     session_id = "zero-visible-bridge-#{System.unique_integer([:positive])}"
     parent = self()
 
@@ -254,6 +245,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
         )
 
       setup = gateway_setup(upstream)
+      stop_own_pool_owners_on_exit(setup.pool)
       session_id = "terminal-close-#{@terminal_type}-#{System.unique_integer([:positive])}"
       parent = self()
 
@@ -274,7 +266,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
                      @detection_timeout_ms
 
-      owner = sole_owner_pid!()
+      owner = sole_owner_pid!(setup.pool)
       active_turn = :sys.get_state(owner).active_turn
       task_pid = active_turn.task_pid
       task_monitor = Process.monitor(task_pid)
@@ -384,6 +376,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       )
 
     setup = gateway_setup(upstream)
+    stop_own_pool_owners_on_exit(setup.pool)
     session_id = "missing-terminal-close-#{System.unique_integer([:positive])}"
     parent = self()
 
@@ -478,6 +471,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       )
 
     setup = gateway_setup(upstream)
+    stop_own_pool_owners_on_exit(setup.pool)
     parent = self()
 
     request_task =
@@ -718,12 +712,17 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
 
   defp terminal_request_status(_type), do: "failed"
 
-  defp sole_owner_pid! do
-    assert [owner_pid] =
-             Registry.select(WebsocketOwnerSession.Registry, [
-               {{:"$1", :"$2", :_}, [], [:"$2"]}
-             ])
-
+  # The owner of this test's own Pool, never one another test left in the
+  # application-global registry (findings#206 row 206-377).
+  defp sole_owner_pid!(pool) do
+    assert [owner_pid] = BackendCodexWebsocketOwnerForwardingSupport.pool_owner_pids(pool)
     owner_pid
+  end
+
+  # Stops only this test's Pool owners, while the sandbox is still up; the
+  # module used to stop every owner in the global registry, which hid another
+  # test's leaked owner instead of failing it.
+  defp stop_own_pool_owners_on_exit(pool) do
+    on_exit(fn -> capture_log(fn -> BackendCodexWebsocketOwnerForwardingSupport.stop_pool_owners!(pool) end) end)
   end
 end
