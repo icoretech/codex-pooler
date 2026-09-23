@@ -201,7 +201,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   def relayed_code(_rejection_error), do: @invalid_request_code
 
   @doc """
-  The Codex Pooler-authored error for a provider 400 refusal that is not a
+  The Codex Pooler-authored error for a provider 4xx refusal that is not a
   relayable parameter-validation rejection, built only from its sanitized
   tokens (`Metadata.rejection_error/1`): the relayed code, the bounded param
   and the message this module authors. Provider message text never travels.
@@ -212,6 +212,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
       default `:unknown` drops the index, for a caller that holds no per-turn
       map (the native websocket socket); `:identity` keeps a param the caller
       already mapped.
+    * `:upstream_status` - the provider's status (default 400). Any other
+      status is named in the message, because the caller answers the refusal
+      as a 400: the native websocket sends a final 4xx as the wrapped 400 the
+      released client reads as a final invalid request (row 254-71).
 
   The native websocket sends it for a refusal the released client would
   otherwise retry (findings#254 row 254-52), and native HTTP for a 400 it used
@@ -219,9 +223,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   """
   @spec refusal_error(map(), keyword()) :: relayed_error()
   def refusal_error(rejection_error, opts \\ []) when is_map(rejection_error) and is_list(opts) do
-    %{code: relayed_code(rejection_error), param: Map.get(rejection_error, :param), supported_values: nil, supported_values_state: nil}
-    |> for_client(Keyword.get(opts, :index_map, :unknown))
-    |> error()
+    error =
+      %{code: relayed_code(rejection_error), param: Map.get(rejection_error, :param), supported_values: nil, supported_values_state: nil}
+      |> for_client(Keyword.get(opts, :index_map, :unknown))
+      |> error()
+
+    case Keyword.get(opts, :upstream_status, @rejection_status) do
+      @rejection_status -> error
+      status -> Map.update!(error, "message", &(&1 <> "; upstream status #{status}"))
+    end
   end
 
   @doc """

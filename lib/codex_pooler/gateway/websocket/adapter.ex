@@ -146,14 +146,27 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   #     its sanitized tokens only (`ValidationRejection.refusal_error/1`,
   #     row 254-52).
   #
+  # A refusal with a final status other than 400 (404, 409, 413, 422, ...)
+  # goes out as the same wrapped 400, never as a wrapped event of its own
+  # status: the client maps any other wrapped status to a retryable unexpected
+  # status, so the 400 is the one status it reads as final; the message names
+  # the provider status (findings#254 row 254-71, released Codex 0.156.0 lane:
+  # before, four websocket resends refused 409 and then six HTTPS requests that
+  # all reached the provider; after, one final failure). The same exceptions
+  # keep the canonical frame, and so do 401 and 408 (credentials the Pooler
+  # refreshes, a timeout) and a 403 whose code is not health-neutral: that
+  # refusal demotes the assignment, so the client's HTTPS fallback is routed
+  # to another assignment first and its retry can succeed, while a
+  # health-neutral 403 demotes nothing and would reach the same account again.
+  #
   # Provider message text never travels: it can quote Pooler-rewritten request
   # fields. The socket holds no per-turn input index map, so an `input[N]`
   # param loses its index rather than name a position a Lite rewrite moved
-  # (row 254-61). Every other frame, and a refusal of any other status, passes
-  # unchanged.
+  # (row 254-61). Every other frame passes unchanged.
   defp native_refusal_frame(canonical, %{"type" => "response.failed", "error" => %{} = error} = canonical_decoded) do
     case wrapped_status(canonical_decoded) do
       400 = status -> native_400_refusal_frame(canonical, status, error)
+      status when is_integer(status) -> native_final_refusal_frame(canonical, status, error)
       _other -> canonical
     end
   end
@@ -173,6 +186,22 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
           else: wrapped_refusal(status, ValidationRejection.refusal_error(provider_rejection_error(status, error)))
     end
   end
+
+  defp native_final_refusal_frame(canonical, status, error) do
+    code = Map.get(error, "code")
+
+    cond do
+      not final_refusal_status?(status) -> canonical
+      classified_or_retryable_code?(code) -> canonical
+      status == 403 and not ErrorCodes.health_neutral_error_code?(code) -> canonical
+      true -> wrapped_refusal(400, ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status))
+    end
+  end
+
+  # Every 4xx the released client would only retry into the same refusal:
+  # 400 has its own projection above, 401 is the upstream credential the
+  # Pooler refreshes, 408 a timeout and 429 a throttle.
+  defp final_refusal_status?(status), do: status in 402..499 and status not in [408, 429]
 
   # Only the wrapped provider frame keeps an integer `status` through the
   # canonicalization; a provider `response.failed` carries none.

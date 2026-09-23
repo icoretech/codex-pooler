@@ -650,9 +650,23 @@ itself keeps its `response.failed` event, so the client still compacts on
 `misalignment_policy_violation` as it would from the provider; overload and
 rate-limit codes stay retryable.
 
-A native HTTP `POST /backend-api/codex/responses` answers such a `400`
-refusal (no code, an unknown code, another error type, or a `{"detail": ...}`
-body) with the same Codex Pooler-authored error object as JSON, streaming or
+A native websocket refusal with another final `4xx` status, such as `404`,
+`409`, `413` or `422`, reaches the client the same way, as one wrapped error
+event with status `400`, because the Codex client treats a wrapped event of any
+other status as a retryable unexpected status: before, it resent the turn over
+the websocket, then fell back to HTTPS and retried there, and every HTTPS
+attempt reached the provider again. The message names the provider status, for
+example `upstream rejected the request (invalid_request); upstream status 404`.
+The same code exceptions apply. A `401`, a `408` and a `429` keep their
+`response.failed` event, and so does a `403` whose code makes Codex Pooler
+demote the account: the Codex client's HTTPS fallback is then routed to another
+account of the Pool first. A `403` that demotes nothing would only reach the
+same account again and is final like the others.
+
+A native HTTP `POST /backend-api/codex/responses` answers a `400` refusal
+outside the relayed validation codes (no code, an unknown code, another error
+type, or a `{"detail": ...}` body) with the same Codex Pooler-authored error
+object as the websocket event, as JSON, streaming or
 not, keeping the `400` status; an `input[N]` param keeps the index the client
 sent. A streaming request used to receive the `400` with an empty body, which
 the Codex client showed as an error with no text, and a non-streaming one the
