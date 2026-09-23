@@ -68,6 +68,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   defmodule ClosedChunkAdapter do
     def chunk(_payload, _chunk), do: {:error, :closed}
   end
@@ -388,7 +392,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPoolerWeb.Runtime.V1BridgedAnchorSupport, as: BridgedAnchor
   alias Ecto.Adapters.SQL.Sandbox
 
-  @websocket_frame_timeout 1_000
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
   @connection_shutdown_timeout_ms 15_000
@@ -432,7 +435,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                       reason: "request_finalized",
                       payload: %{"status" => "succeeded"}
                     }},
-                   @websocket_frame_timeout
+                   @detection_timeout_ms
   end
 
   defp perform_public_continuity_websocket_request!(port, setup, extra_headers) do
@@ -818,7 +821,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                           reason: "request_finalized",
                           payload: %{"request_id" => request_id, "status" => "succeeded"}
                         }},
-                       @websocket_frame_timeout
+                       @detection_timeout_ms
 
         request = Repo.get!(Request, request_id)
         assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
@@ -8544,7 +8547,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     assert %CodexTurn{first_visible_output_at: %DateTime{}} =
              turn = await_committed_public_turn(setup.pool.id)
@@ -9747,7 +9750,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       })
 
     assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref},
-                   @timing_observation_timeout_ms
+                   @detection_timeout_ms
 
     try do
       {http_conn, status, response_headers, elapsed_ms, chunks, done?} =
@@ -9798,7 +9801,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           })
 
         assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                       @timing_observation_timeout_ms
+                       @detection_timeout_ms
 
         try do
           {http_conn, status, _response_headers, header_elapsed_ms, chunks, done?} =
@@ -9936,7 +9939,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       })
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_pid, ^release_ref},
-                   @timing_observation_timeout_ms
+                   @detection_timeout_ms
 
     try do
       {http_conn, status, response_headers, header_elapsed_ms, chunks, done?} =
@@ -10005,7 +10008,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       })
 
     assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid, ^release_ref},
-                   @timing_observation_timeout_ms
+                   @detection_timeout_ms
 
     try do
       {http_conn, status, response_headers, header_elapsed_ms, chunks, done?} =
@@ -10088,7 +10091,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       })
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_pid, ^release_ref},
-                   @timing_observation_timeout_ms
+                   @detection_timeout_ms
 
     try do
       {http_conn, status, response_headers, header_elapsed_ms, chunks, done?} =
@@ -10312,7 +10315,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                         reason: "request_finalized",
                         payload: %{"status" => "failed"}
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.endpoint == "/v1/responses"

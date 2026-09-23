@@ -16,6 +16,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @codex_remote_compaction_fixture_path Path.expand(
                                           "../../../fixtures/codex/rust-v0.153.3-b1a547b1f73ce86205d9222ac19cff334b3b7a2e/remote_compaction_v2_request.json",
                                           __DIR__
@@ -2586,7 +2590,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     |> Task.Supervisor.children()
     |> Enum.each(fn task_pid ->
       monitor_ref = Process.monitor(task_pid)
-      assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :normal}, 1_000
+      assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :normal}, @detection_timeout_ms
     end)
   end
 
