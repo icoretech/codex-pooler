@@ -12,6 +12,12 @@ defmodule CodexPooler.Events.PostgresBridge do
   # lost still reaches its pages through a peer. A notification from
   # PostgreSQL and a peer's copy of it are delivered once, whichever arrives
   # first; two notifications from PostgreSQL are always both delivered.
+  #
+  # A notification that raises while it is relayed (a decoder or subscriber
+  # bug) is logged and skipped: the bridge keeps its state and relays the next
+  # one, instead of exiting and losing every notification queued behind it
+  # until its supervisor restarts it and it listens again (findings#206 row
+  # 206-303).
 
   use GenServer
 
@@ -40,6 +46,7 @@ defmodule CodexPooler.Events.PostgresBridge do
           required(:relisten_token) => reference() | nil,
           required(:relisten_attempt) => non_neg_integer(),
           required(:pubsub_nodes) => (-> [node()]),
+          required(:relays) => %{optional(String.t()) => (String.t() -> :ok | {:error, term()})},
           required(:delivered) => %{optional(binary()) => {:postgres | :peer, integer()}},
           required(:delivered_order) => :queue.queue({binary(), integer()}),
           required(:delivered_count) => non_neg_integer()
@@ -74,6 +81,7 @@ defmodule CodexPooler.Events.PostgresBridge do
       relisten_token: nil,
       relisten_attempt: 0,
       pubsub_nodes: Keyword.get(opts, :pubsub_nodes, &pubsub_peer_nodes/0),
+      relays: Map.merge(default_relays(), Map.new(Keyword.get(opts, :relays, %{}))),
       delivered: %{},
       delivered_order: :queue.new(),
       delivered_count: 0
@@ -84,14 +92,14 @@ defmodule CodexPooler.Events.PostgresBridge do
 
   @impl true
   def handle_info({:notification, _pid, listen_ref, channel, payload}, state) when is_reference(listen_ref) do
-    {:noreply, relay_notification(channel_for(listen_ref, state), channel, payload, state)}
+    {:noreply, guarded_relay(state, channel, fn -> relay_notification(channel_for(listen_ref, state), channel, payload, state) end)}
   end
 
   # A peer's bridge relayed a notification it received from PostgreSQL. It is
   # delivered here unless this bridge already delivered a copy of it, and it is
   # never handed on again.
   def handle_info({__MODULE__, :relayed, channel, payload}, state) when is_binary(channel) and is_binary(payload) do
-    {:noreply, relay_peer_copy(state, channel, payload)}
+    {:noreply, guarded_relay(state, channel, fn -> relay_peer_copy(state, channel, payload) end)}
   end
 
   # The notifications process sent every notification it relayed before it
@@ -110,6 +118,19 @@ defmodule CodexPooler.Events.PostgresBridge do
   end
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  # The log names only the channel and the kind of failure: the payload and
+  # the exception can carry ids and are never logged.
+  defp guarded_relay(state, channel, relay) do
+    relay.()
+  catch
+    kind, _reason ->
+      Logger.error("postgres event relay skipped a notification that raised channel=#{channel_label(channel, state)} kind=#{kind}")
+      state
+  end
+
+  defp channel_label(channel, %{relays: relays}) when is_map_key(relays, channel), do: channel
+  defp channel_label(_channel, _state), do: "unknown"
 
   # A registration this bridge no longer holds maps to no channel and relays
   # nothing, as does a channel other than the one the registration was for.
@@ -177,7 +198,7 @@ defmodule CodexPooler.Events.PostgresBridge do
         remember_delivery(state, key, :postgres, now)
 
       _none_or_postgres ->
-        case deliver(channel, payload) do
+        case deliver(state, channel, payload) do
           :ok ->
             _ = PubSub.broadcast_from(@pubsub, self(), @peer_topic, {__MODULE__, :relayed, channel, payload})
             remember_delivery(state, key, :postgres, now)
@@ -195,7 +216,7 @@ defmodule CodexPooler.Events.PostgresBridge do
 
     case recent_delivery(state, key, now) do
       nil ->
-        case deliver(channel, payload) do
+        case deliver(state, channel, payload) do
           :ok -> :ok
           {:error, reason} -> log_ignored(channel, reason)
         end
@@ -247,13 +268,20 @@ defmodule CodexPooler.Events.PostgresBridge do
     end
   end
 
-  defp deliver(channel, payload) do
-    cond do
-      channel == Events.postgres_channel() -> relay_payload(payload)
-      channel == StatusEvents.postgres_channel() -> StatusEvents.relay_payload(payload)
-      channel == NotificationEvents.postgres_channel() -> NotificationEvents.relay_payload(payload)
-      true -> {:error, :unknown_channel}
+  defp deliver(state, channel, payload) do
+    case state.relays do
+      %{^channel => relay} -> relay.(payload)
+      _unknown -> {:error, :unknown_channel}
     end
+  end
+
+  # Tests replace a channel's relay through the `:relays` option.
+  defp default_relays do
+    %{
+      Events.postgres_channel() => &relay_payload/1,
+      StatusEvents.postgres_channel() => &StatusEvents.relay_payload/1,
+      NotificationEvents.postgres_channel() => &NotificationEvents.relay_payload/1
+    }
   end
 
   defp log_ignored(channel, reason) do

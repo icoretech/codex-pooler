@@ -135,6 +135,59 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     refute_received {PostgresBridge, :relayed, ^channel, ^peer_only_payload}
   end
 
+  # A relay that raises on one notification (a decoder bug) used to exit the
+  # bridge, losing every notification queued behind it until the supervisor
+  # restarted it and it listened again (findings#206 row 206-303). The poison
+  # arrives from PostgreSQL and as a peer's copy; the notifications behind it
+  # are still relayed by the same process, and the log names only the channel.
+  test "skips a notification whose relay raises and keeps relaying the next ones", ctx do
+    notifications = start_notifications!(ctx, :permanent)
+    alert_channel = NotificationEvents.postgres_channel()
+    poison = remote_alert_payload(Ecto.UUID.generate())
+    peer_poison = remote_alert_payload(Ecto.UUID.generate())
+    poison_payloads = [poison, peer_poison]
+
+    raising_decoder = fn payload ->
+      if payload in poison_payloads, do: raise(ArgumentError, "decoder bug in " <> payload), else: NotificationEvents.relay_payload(payload)
+    end
+
+    bridge = start_bridge!(ctx, relays: %{alert_channel => raising_decoder})
+    await_bridge_listening!(bridge, notifications)
+    bridge_ref = Process.monitor(bridge)
+    pool_id = subscribe!()
+    :ok = Phoenix.PubSub.subscribe(CodexPooler.PubSub, PostgresBridge.peer_topic())
+    healthy = remote_alert_payload(pool_id)
+    healthy_invalidation_id = CodexPooler.JSON.decode!(healthy)["invalidation_id"]
+    {marker, marker_payload} = remote_pool_event(pool_id, "after_poison")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        notify!(ctx.sender, alert_channel, poison)
+        send(bridge, {PostgresBridge, :relayed, alert_channel, peer_poison})
+        notify!(ctx.sender, alert_channel, healthy)
+        notify!(ctx.sender, Events.postgres_channel(), marker_payload)
+
+        assert_receive {Events, ^marker}, @relay_detection_timeout_ms
+        _ = :sys.get_state(bridge)
+      end)
+
+    assert_received {NotificationEvents, :invalidated, ^healthy_invalidation_id}
+    refute_received {NotificationEvents, :invalidated, _invalidation_id}
+    refute_received {:DOWN, ^bridge_ref, :process, ^bridge, _reason}
+    assert Process.alive?(bridge)
+    # What failed is not handed to the peers.
+    refute_received {PostgresBridge, :relayed, ^alert_channel, ^poison}
+
+    skipped = "postgres event relay skipped a notification that raised channel=#{alert_channel} kind=error"
+    assert log |> String.split(skipped) |> length() == 3
+    refute log =~ "decoder bug"
+
+    for payload <- poison_payloads,
+        {_key, value} <- payload |> CodexPooler.JSON.decode!() |> Map.take(["id", "invalidation_id", "target_id", "origin_id"]) do
+      refute log =~ value
+    end
+  end
+
   defp start_notifications!(ctx, restart, id \\ :notifications) do
     opts = Keyword.merge(connection_config(), name: ctx.notifications, auto_reconnect: true)
 
