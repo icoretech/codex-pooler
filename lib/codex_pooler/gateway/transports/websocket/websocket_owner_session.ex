@@ -2627,7 +2627,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          payload
        )
        when is_binary(request_id) and is_binary(attempt_id) do
-    if StreamProtocol.internal_control_event?(payload) do
+    # A lifecycle frame before any output does not commit visibility, so it is
+    # delivered under the same current-generation check as a control frame.
+    if StreamProtocol.lifecycle_only_event?(payload) do
       deliver_internal_frame(state, request_id, attempt_id, payload)
     else
       send_downstream(
@@ -2682,8 +2684,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          payload
        )
        when is_binary(request_id) and is_binary(attempt_id) do
+    # Only output or a terminal commits visibility: a cut after nothing but
+    # `response.created`/`response.in_progress` showed the client nothing, and
+    # its resend must still find the turn replay-active (findings#232 row
+    # 232-161).
     if Map.has_key?(descriptor, :replay_claim_digest) and
-         StreamProtocol.downstream_visible_event?(payload) do
+         StreamProtocol.client_visible_output_event?(payload) do
       attempt = %{
         id: attempt_id,
         request_id: request_id,

@@ -479,7 +479,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
       committed_visibility?(attempt) ->
         callback.(authority)
 
-      StreamProtocol.internal_control_event?(data) ->
+      StreamProtocol.lifecycle_only_event?(data) ->
         if current_generation_snapshot?(request_id, attempt), do: callback.(authority), else: :ok
 
       true ->
@@ -511,7 +511,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
       committed_visibility?(attempt) ->
         callback.(authority)
 
-      StreamProtocol.internal_control_event?(data) ->
+      # Control and lifecycle frames never commit the turn's visibility: a
+      # client cut after only `response.created` saw nothing (findings#232
+      # row 232-161).
+      StreamProtocol.lifecycle_only_event?(data) ->
         with_current_internal_attempt(request_id, attempt, fn -> callback.(authority) end)
 
       true ->

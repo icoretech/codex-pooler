@@ -2175,8 +2175,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
 
   # Runs the cut turn over the public endpoint and returns the finalized rows.
   # The predecessor shape both resend paths judge: every row failed with
-  # `upstream_stream_error`, the turn counted `response.created` as visible,
-  # and the attempt carries the exact Mint closed evidence with no terminal.
+  # `upstream_stream_error`, the turn shows visible output only when a frame
+  # past the lifecycle ones reached the client (lifecycle frames never commit
+  # visibility, findings#232 row 232-161), and the attempt carries the exact
+  # Mint closed evidence with no terminal.
   defp stream_cut_first_turn!(setup, port, turn_state, payload, last_event_type) do
     {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
     {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
@@ -2208,7 +2210,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
              turn: {"failed", "upstream_stream_error", attempt.id}
            }
 
-    refute is_nil(turn.first_visible_output_at)
+    assert is_nil(turn.first_visible_output_at) ==
+             last_event_type in ["response.created", "response.in_progress"]
 
     assert Map.take(
              attempt.response_metadata["transport_failure"],

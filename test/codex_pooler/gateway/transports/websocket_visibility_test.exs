@@ -82,7 +82,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
     parent = self()
     observation = observation(fixture)
     observer = WebsocketRequestCallbacks.frame_observer(fixture.identity, observation)
-    {:ok, upstream} = FakeUpstream.start_link(FakeUpstream.websocket_text_frames(frames(1)))
+    # The first frame written must commit visibility: a lifecycle frame never
+    # does (findings#232 row 232-161), so the writer fails on output.
+    {:ok, upstream} = FakeUpstream.start_link(FakeUpstream.websocket_text_frames(tl(frames(1))))
     on_exit(fn -> FakeUpstream.stop(upstream) end)
 
     request = %UpstreamWebsocketSession.Request{

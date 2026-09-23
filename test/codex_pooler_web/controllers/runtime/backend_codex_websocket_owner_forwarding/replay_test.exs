@@ -1572,6 +1572,88 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  # `response.created` and `response.in_progress` show the client nothing: the
+  # released client maps the first to a bare Created event and ignores the
+  # second. A cut after only those frames is still pre-visible, so the owner
+  # arms the replay and the byte-identical resend is served (findings#232 row
+  # 232-161).
+  @tag :replay_matrix
+  @tag :replay_race
+  test "a disconnect after only response.created and response.in_progress still arms the replay the identical resend redeems" do
+    release_ref = make_ref()
+    created = %{"type" => "response.created", "response" => %{"id" => "resp_lifecycle_cut", "status" => "in_progress", "output" => []}}
+    in_progress = %{"type" => "response.in_progress", "response" => %{"id" => "resp_lifecycle_cut", "status" => "in_progress", "output" => []}}
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings#232 row 232-161 (released Codex client cut after response.created/in_progress)
+        FakeUpstream.strict_sequence([
+          strict_native_request(
+            1,
+            FakeUpstream.barrier_websocket_frames(
+              [CodexPooler.JSON.encode!(created), CodexPooler.JSON.encode!(in_progress)],
+              notify: self(),
+              release_ref: release_ref
+            )
+          ),
+          strict_native_request(2, FakeUpstream.websocket_text_frames([completed_frame("resp_lifecycle_cut_replayed")]))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, "lite")
+    turn_state = Ecto.UUID.generate()
+    thread_id = Ecto.UUID.generate()
+    raw_payload = CodexPooler.JSON.encode!(native_turn_payload(thread_id, setup.model.exposed_model_id, "lifecycle-cut-turn", 100, [synthetic_user_item("lifecycle cut")]))
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, raw_payload)
+
+    for ordinal <- [0, 1] do
+      assert_receive {:fake_upstream_frame_barrier, ^ordinal, _handler, ^release_ref}, @handoff_detection_timeout_ms
+      assert :ok = FakeUpstream.release_frame(upstream, release_ref)
+    end
+
+    assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^release_ref}, @handoff_detection_timeout_ms
+    {conn, websocket, first} = public_websocket_receive_text!(conn, websocket, ref)
+    {conn, _websocket, second} = public_websocket_receive_text!(conn, websocket, ref)
+
+    assert Enum.map([first, second], &CodexPooler.JSON.decode!(&1)["type"]) == ["response.created", "response.in_progress"]
+    assert [%Request{id: request_id, status: "in_progress"}] = request_logs(setup.pool.id)
+    visible_before_cut = Repo.get_by!(CodexTurn, request_id: request_id).first_visible_output_at
+
+    retry_deadline_ms = System.monotonic_time(:millisecond) + released_client_stream_retry_ms()
+    _result = Mint.HTTP.close(conn)
+    armed_before_retry = await_replay_armed(request_id, retry_deadline_ms)
+
+    {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+    {retry_conn, retry_websocket} = public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, raw_payload)
+    {retry_conn, retry_websocket, retry_result} = receive_until_terminal!(retry_conn, retry_websocket, retry_ref)
+
+    assert {armed_before_retry, retry_result["type"], get_in(retry_result, ["error", "code"])} ==
+             {:armed, "response.completed", nil}
+
+    assert is_nil(visible_before_cut)
+    assert_request_settled!(request_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
+    assert [%Request{id: ^request_id, status: "succeeded"}] = request_logs(setup.pool.id)
+
+    assert [%Attempt{replay_generation: 0, status: "retryable_failed"}, %Attempt{replay_generation: 1, status: "succeeded"}] =
+             pool_attempts(setup.pool.id)
+
+    assert %RequestReplayEntitlement{status: "consumed"} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request_id)
+
+    assert pool_ledger_entries(setup.pool.id) |> Enum.map(& &1.entry_kind) |> Enum.frequencies() ==
+             %{"reservation" => 1, "settlement" => 1, "release" => 1}
+
+    assert FakeUpstream.count(upstream) == 2
+    _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
+    assert :ok = FakeUpstream.verify!(upstream)
+    _result = Mint.HTTP.close(retry_conn)
+    _websocket = retry_websocket
+  end
+
   defmodule PrevisibleArmUnsupportedNodeClient do
     @moduledoc false
     # An owner node from a release that predates
@@ -1730,6 +1812,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
   # (findings#232, row 232-100). The closing socket used to arm only after its
   # 250 ms pre-cleanup response-task drain.
   @released_client_stream_retry_ms 200
+
+  defp released_client_stream_retry_ms, do: @released_client_stream_retry_ms
 
   defp assert_previsible_disconnect_replays_retry(payload_builder) do
     release_ref = make_ref()

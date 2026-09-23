@@ -21,6 +21,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   ]
   @downstream_visible_event_types @terminal_event_types ++
                                     @retry_window_preamble_event_types
+  # Lifecycle frames announce a response and carry nothing a client shows: the
+  # released Codex client maps `response.created` to a bare Created event and
+  # ignores `response.in_progress` and `response.queued`
+  # (`codex-api/src/sse/responses.rs`, rust-v0.156.0). The client retry
+  # observation already treats a cut after only these frames as nothing shown
+  # (`ClientRetry.visible_frame?/1`); pre-visible replay classification uses
+  # the same rule (findings#232 row 232-161). `response.metadata` is not one of
+  # them: it can switch the client's safety buffering UI on.
+  @lifecycle_only_event_types ["response.created", "response.in_progress", "response.queued"]
 
   @type terminal_failure :: %{
           required(:code) => String.t(),
@@ -210,6 +219,57 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   end
 
   def retry_window_preamble_event?(_event), do: false
+
+  @doc """
+  True for a frame that carries neither model output nor a terminal: an
+  internal control event or a response lifecycle event (`response.created`,
+  `response.in_progress`, `response.queued`). A binary is such a frame when
+  every complete SSE block is, or when it decodes to one JSON event that is.
+  """
+  @spec lifecycle_only_event?(term()) :: boolean()
+  def lifecycle_only_event?(%{} = event) do
+    {event_type, data_type} = event_stream_types(event)
+
+    internal_control_event?(event) or
+      ((is_nil(event_type) or event_type in @lifecycle_only_event_types) and
+         (is_nil(data_type) or data_type in @lifecycle_only_event_types) and
+         not (is_nil(event_type) and is_nil(data_type)))
+  end
+
+  def lifecycle_only_event?(data) when is_binary(data) do
+    case SSEParser.complete_sse_blocks(data, bounded?: false) do
+      {[_block | _rest] = blocks, ""} ->
+        Enum.all?(blocks, fn block ->
+          decoded = block |> SSEParser.sse_field("data") |> SSEParser.decode_sse_data()
+
+          lifecycle_only_event?(%{
+            event_type: SSEParser.sse_field(block, "event"),
+            data_type: ErrorCanonicalization.decoded_string(decoded, "type")
+          })
+        end)
+
+      {[_block | _rest], _remaining} ->
+        false
+
+      {[], _remaining} ->
+        case CodexPooler.JSON.decode(data) do
+          {:ok, %{} = decoded} -> lifecycle_only_event?(decoded)
+          _other -> false
+        end
+    end
+  end
+
+  def lifecycle_only_event?(_data), do: false
+
+  @doc """
+  True for a downstream-visible frame that shows the client something: a
+  terminal or model output, never a lifecycle-only frame
+  (`lifecycle_only_event?/1`). This is the visibility a pre-visible replay is
+  classified by (findings#232 row 232-161).
+  """
+  @spec client_visible_output_event?(term()) :: boolean()
+  def client_visible_output_event?(event),
+    do: downstream_visible_event?(event) and not lifecycle_only_event?(event)
 
   @spec internal_control_event?(term()) :: boolean()
   def internal_control_event?(%{} = event) do
