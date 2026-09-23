@@ -588,6 +588,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
       assert Map.drop(next_state, [
                :native_turn_output_task_pids,
+               :native_turn_client_output_task_pids,
                :response_task_terminals_accepted,
                :response_task_completed_terminals,
                :downstream_delivery_evidence

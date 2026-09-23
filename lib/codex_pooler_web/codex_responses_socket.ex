@@ -228,6 +228,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         state =
           state
           |> maybe_mark_native_turn_output_pushed(task_pid, data)
+          |> maybe_mark_client_visible_output(task_pid, data)
           |> count_downstream_frame(task_pid, data)
           |> maybe_accept_response_task_terminal(task_pid, data)
           |> maybe_schedule_accepted_response_task_delivery(task_pid)
@@ -4781,16 +4782,40 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp cleanup_direct_response(state, pid, context) do
-    if Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :task_exception do
-      opts =
-        state.opts
-        |> RequestOptions.for_websocket()
-        |> RequestOptions.put_runtime_context(direct_cleanup: context)
+    cond do
+      Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :task_exception ->
+        opts =
+          state.opts
+          |> RequestOptions.for_websocket()
+          |> RequestOptions.put_runtime_context(direct_cleanup: context)
 
-      finalize_response_task_exception(opts, state)
-    else
-      cancel_direct_response(state, pid, context)
+        finalize_response_task_exception(opts, state)
+
+      previsible_direct_task?(state, pid) ->
+        result = DirectCleanup.terminate_admission(context, "client_disconnected")
+        # The stopped task never hands its result to the drain, which is where
+        # a running task's delivery receipt is recorded (findings#225 row
+        # 225-100), so its single aborted receipt is recorded here.
+        record_downstream_delivery_receipt(state, pid, :aborted)
+        result
+
+      true ->
+        cancel_direct_response(state, pid, context)
     end
+  end
+
+  # A direct task whose client left before it was shown anything is stopped
+  # before its request is interrupted: the interrupt settles the request
+  # `client_disconnected`, and a task left running settled it a second time
+  # when the provider answered afterwards, flipping it to `succeeded` behind a
+  # resend that had already been admitted (findings#232 row 232-172, measured
+  # with the released client at owner forwarding off). The owner path stops
+  # its generation the same way when it arms a pre-visible replay. A task that
+  # already reported its result keeps the ordinary cancel.
+  defp previsible_direct_task?(state, pid) do
+    not client_visible_output?(state, pid) and
+      not Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid) and
+      Process.alive?(pid)
   end
 
   defp cancel_direct_response(state, pid, context) do
@@ -4987,6 +5012,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp remove_native_turn_output(state, pid) when is_pid(pid) do
+    state =
+      case Map.fetch(state, :native_turn_client_output_task_pids) do
+        {:ok, task_pids} -> Map.put(state, :native_turn_client_output_task_pids, MapSet.delete(task_pids, pid))
+        :error -> state
+      end
+
     case Map.fetch(state, :native_turn_output_task_pids) do
       {:ok, task_pids} ->
         Map.put(state, :native_turn_output_task_pids, MapSet.delete(task_pids, pid))
@@ -4995,6 +5026,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         state
     end
   end
+
+  # What the client was actually shown: model output or a terminal, never a
+  # lifecycle or control frame (`StreamProtocol.client_visible_output_event?/1`).
+  # A direct response task without it is still pre-visible when the socket
+  # closes (findings#232 row 232-172).
+  defp maybe_mark_client_visible_output(state, pid, data) when is_pid(pid) do
+    if StreamProtocol.client_visible_output_event?(data),
+      do: Map.update(state, :native_turn_client_output_task_pids, MapSet.new([pid]), &MapSet.put(&1, pid)),
+      else: state
+  end
+
+  defp client_visible_output?(state, pid),
+    do: state |> Map.get(:native_turn_client_output_task_pids, MapSet.new()) |> MapSet.member?(pid)
 
   defp websocket_turn_visible_output(true), do: :after_visible_output
   defp websocket_turn_visible_output(false), do: :before_visible_output
