@@ -43,6 +43,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
@@ -214,13 +215,21 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     |> sse_block_context()
   end
 
+  # The HTTP SSE client and the relay after it parse this block as one SSE
+  # event, so a frame whose text spans several lines (a pretty-printed
+  # provider object) gets one `data:` line per text line, the rule the
+  # retained upstream body follows; before, every line after the first fell
+  # outside the event (findings#254 row 254-53). A single-line frame keeps its
+  # exact bytes.
   defp sse_block_context(%{text: text, event_type: event_type}) do
+    data = IO.iodata_to_binary(SSEParser.data_lines(text))
+
     case event_type do
       type when is_binary(type) and type != "" ->
-        "event: " <> type <> "\ndata: " <> text <> "\n\n"
+        "event: " <> type <> "\n" <> data <> "\n\n"
 
       _other ->
-        "data: " <> text <> "\n\n"
+        data <> "\n\n"
     end
   end
 

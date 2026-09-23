@@ -30,6 +30,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   @spec new_block_state() :: block_state()
   def new_block_state, do: %{buffer: "", skip_leading_lf?: false}
 
+  @doc """
+  The `data:` field lines of one SSE event carrying a websocket text frame,
+  without the terminating blank line. A frame whose text spans several lines,
+  such as a pretty-printed provider object, needs one `data:` line per text
+  line: otherwise every line after the first falls outside the event and the
+  event decodes to nothing (findings#254 rows 254-60 and 254-53). A
+  single-line frame keeps its exact bytes.
+  """
+  @spec data_lines(binary()) :: iodata()
+  def data_lines(text) when is_binary(text) do
+    if String.contains?(text, ["\n", "\r"]) do
+      text
+      |> String.split(["\r\n", "\r", "\n"])
+      |> Enum.map_intersperse("\n", &["data: ", &1])
+    else
+      ["data: ", text]
+    end
+  end
+
   # A trailing standalone CR completes its line immediately. If that CR is the
   # last byte in a chunk, the next chunk may start with its optional LF
   # continuation; retaining that one bit of state prevents the LF from being

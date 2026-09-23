@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedOwnerRequestHandoff
@@ -1904,19 +1905,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   # The retained and collected bodies are SSE, and the finalizer reads the
   # turn's terminal back out of them (usage, terminal code, provider rejection
-  # fields). A frame whose text spans several lines, such as a pretty-printed
-  # provider error object, needs one `data:` line per text line; otherwise
-  # every line after the first falls outside the event and the terminal
-  # decodes to nothing (findings#254 row 254-60). A single-line frame keeps
-  # its exact bytes.
-  defp sse_data_block(text) do
-    if String.contains?(text, ["\n", "\r"]) do
-      lines = String.split(text, ["\r\n", "\r", "\n"])
-      [Enum.map_intersperse(lines, "\n", &["data: ", &1]), "\n\n"]
-    else
-      ["data: ", text, "\n\n"]
-    end
-  end
+  # fields), so a multi-line frame gets one `data:` line per text line
+  # (findings#254 row 254-60).
+  defp sse_data_block(text), do: [SSEParser.data_lines(text), "\n\n"]
 
   defp append_collected_body(collected_body, data, telemetry_opts) do
     appended = CollectedBody.append(collected_body, data)

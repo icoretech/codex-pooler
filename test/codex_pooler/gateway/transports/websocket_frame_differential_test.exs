@@ -34,13 +34,20 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
       end
     end
 
+    # One `data:` line per text line, so a multi-line frame stays one whole
+    # SSE event (findings#254 row 254-53); a single-line frame keeps its bytes.
     def sse_block(text) do
+      data =
+        if String.contains?(text, ["\n", "\r"]),
+          do: text |> String.split(["\r\n", "\r", "\n"]) |> Enum.map_join("\n", &("data: " <> &1)),
+          else: "data: " <> text
+
       case CodexPooler.JSON.decode(text) do
         {:ok, %{"type" => type}} when is_binary(type) and type != "" ->
-          "event: " <> type <> "\ndata: " <> text <> "\n\n"
+          "event: " <> type <> "\n" <> data <> "\n\n"
 
         _other ->
-          "data: " <> text <> "\n\n"
+          data <> "\n\n"
       end
     end
 
