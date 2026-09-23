@@ -63,6 +63,20 @@ defmodule CodexPooler.Pools.Authorization do
 
   def list_assigned_pool_ids(_scope), do: []
 
+  @doc """
+  The operators who can operate a Pool: every active owner and every active
+  admin with an active assignment to it, and nobody while the Pool is not
+  active. The inverse of `list_pools_for_capability/3` for `pool.operate` on
+  active Pools, for notifying the operators who can newly see a Pool.
+  """
+  @spec list_pool_operator_ids(pool_ref()) :: [Ecto.UUID.t()]
+  def list_pool_operator_ids(pool_or_id) do
+    case pool_id(pool_or_id) do
+      pool_id when is_binary(pool_id) -> if active_pool?(pool_id), do: list_active_operator_ids(pool_id), else: []
+      nil -> []
+    end
+  end
+
   @spec list_pools_for_capability(Scope.t(), String.t(), [pool_status()]) ::
           {:ok, [Pool.t()]} | {:error, access_error()}
   def list_pools_for_capability(%Scope{user: %{id: user_id}}, capability, statuses)
@@ -227,6 +241,25 @@ defmodule CodexPooler.Pools.Authorization do
           membership.user_id == ^user_id and membership.status == ^@status_active and
             user.status == ^@status_active and is_nil(user.deleted_at),
         order_by: [asc: membership.created_at]
+    )
+  end
+
+  defp list_active_operator_ids(pool_id) do
+    assigned_user_ids =
+      from assignment in OperatorPoolAssignment,
+        where: assignment.pool_id == ^pool_id and assignment.status == ^@status_active,
+        select: assignment.user_id
+
+    Repo.all(
+      from membership in Membership,
+        join: user in User,
+        on: user.id == membership.user_id,
+        where: membership.status == ^@status_active and user.status == ^@status_active and is_nil(user.deleted_at),
+        where:
+          membership.role == ^@role_instance_owner or
+            (membership.role == ^@role_instance_admin and membership.user_id in subquery(assigned_user_ids)),
+        distinct: true,
+        select: membership.user_id
     )
   end
 

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   import Phoenix.LiveViewTest
 
   alias CodexPooler.Accounts
+  alias CodexPooler.Admin.PoolWorkflow
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Incidents.NotificationEvents
   alias CodexPooler.Events
@@ -229,6 +230,102 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     assert %{badge_count: 0, rows: []} = notification_center(unrelated_view)
   end
 
+  # A notification center shows only active Pools' incidents, and a Pool status
+  # change sent nothing: an open page kept a disabled Pool's incident and went
+  # on listening to the Pool (findings#206 row 206-308). The pages that saw the
+  # Pool reload once and stop listening; a page that never saw it does not.
+  test "disabling a Pool reloads the notification centers that saw it once and stops listening to it", %{conn: owner_conn, scope: owner_scope} do
+    [pool, unrelated_pool] = for label <- ["disabled", "unrelated"], do: pool!(owner_scope, label)
+    incident_id = record_bell_incident!(pool).id
+    [owner_view, pool_view, unrelated_view] = views = open_notification_centers!(owner_conn, owner_scope, [pool, unrelated_pool])
+
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(owner_view)
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(pool_view)
+
+    assert {:ok, _disabled} = Pools.change_pool_status(owner_scope, pool, "disabled")
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 1, 0]
+    assert %{badge_count: 0, rows: []} = notification_center(owner_view)
+    assert %{badge_count: 0, rows: []} = notification_center(pool_view)
+    assert %{badge_count: 0, rows: []} = notification_center(unrelated_view)
+
+    _hidden = record_bell_incident!(pool)
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 0, 0]
+  end
+
+  # A page subscribes only to the Pools its viewer can see, so a reactivated
+  # Pool's incidents never reached an open page until it navigated. The
+  # operators who see the Pool again are told on their own topics; their pages
+  # reload once and listen to it from then on. A page of an admin not assigned
+  # to it hears nothing and never listens to it.
+  test "reactivating a Pool reloads the notification centers of the operators who see it again and listens to it", %{conn: owner_conn, scope: owner_scope} do
+    [pool, unrelated_pool] = for label <- ["reactivated", "unrelated"], do: pool!(owner_scope, label)
+    first_id = record_bell_incident!(pool).id
+    assert {:ok, disabled} = Pools.change_pool_status(owner_scope, pool, "disabled")
+    [owner_view, pool_view, unrelated_view] = views = open_notification_centers!(owner_conn, owner_scope, [pool, unrelated_pool])
+
+    assert Enum.map(views, &notification_center(&1).badge_count) == [0, 0, 0]
+
+    assert {:ok, _active} = Pools.change_pool_status(owner_scope, disabled, "active")
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 1, 0]
+    assert %{badge_count: 1, rows: [%{id: ^first_id}]} = notification_center(owner_view)
+    assert %{badge_count: 1, rows: [%{id: ^first_id}]} = notification_center(pool_view)
+    assert %{badge_count: 0, rows: []} = notification_center(unrelated_view)
+
+    second_id = record_bell_incident!(pool).id
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 1, 0]
+    assert %{badge_count: 2, rows: rows} = notification_center(pool_view)
+    assert rows |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([first_id, second_id])
+    assert %{badge_count: 0} = notification_center(unrelated_view)
+  end
+
+  # The Pool editor changes the status inside a transaction with the rest of
+  # the Pool's settings, so the notification centers hear of it after the
+  # commit, and an edit that keeps the status reloads nobody. Archiving revokes
+  # the admin's assignment and restoring does not bring it back, so only the
+  # owner sees the restored Pool's incident again.
+  test "archiving a Pool in the Pool editor and restoring it reloads the notification centers whose Pools it changes once", %{conn: owner_conn, scope: owner_scope} do
+    [pool, unrelated_pool] = for label <- ["archived", "unrelated"], do: pool!(owner_scope, label)
+    incident_id = record_bell_incident!(pool).id
+    [owner_view, pool_view, _unrelated_view] = views = open_notification_centers!(owner_conn, owner_scope, [pool, unrelated_pool])
+
+    assert {:ok, %{status: "active"}} = PoolWorkflow.update_pool_with_related_settings(owner_scope, pool.id, pool_edit_attrs(pool, "active", "Renamed"))
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 0, 0]
+
+    assert {:ok, %{status: "archived"} = archived} = PoolWorkflow.update_pool_with_related_settings(owner_scope, pool.id, pool_edit_attrs(pool, "archived"))
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 1, 0]
+    assert Enum.map(views, &notification_center(&1).badge_count) == [0, 0, 0]
+
+    assert {:ok, %{status: "active"}} = Pools.change_pool_status(owner_scope, archived, "active")
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 0, 0]
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(owner_view)
+    assert %{badge_count: 0} = notification_center(pool_view)
+  end
+
+  # The same through the Pools page an operator uses: its form submit is the
+  # producer, so the pages are awaited on their notification centers.
+  test "disabling a Pool from the Pools page empties the notification centers that saw its incidents", %{conn: owner_conn, scope: owner_scope} do
+    pool = pool!(owner_scope, "pools-page")
+    incident_id = record_bell_incident!(pool).id
+    [owner_view, pool_view] = open_notification_centers!(owner_conn, owner_scope, [pool])
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(pool_view)
+    {:ok, pools_view, _html} = live(owner_conn, ~p"/admin/pools")
+    _ = render_async(pools_view, 2_000)
+
+    pools_view |> element("#edit-pool-#{pool.id}") |> render_click()
+    pools_view |> element("#pool-edit-form") |> render_submit(%{"pool_edit" => %{"id" => pool.id, "name" => pool.name, "status" => "disabled"}})
+
+    assert Repo.get!(CodexPooler.Pools.Pool, pool.id).status == "disabled"
+    assert %{badge_count: 0, rows: []} = await_notification_center!(owner_view, &(&1.badge_count == 0))
+    assert %{badge_count: 0, rows: []} = await_notification_center!(pool_view, &(&1.badge_count == 0))
+  end
+
   # A newer release may send a notification message of a shape this one does
   # not know during a rolling update. These pages have no catch-all
   # `handle_info/2`, so a message the hook passed on would crash them; the hook
@@ -412,6 +509,10 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   defp pool!(scope, label) do
     {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug(label), name: "Notification #{label}"})
     pool
+  end
+
+  defp pool_edit_attrs(pool, status, name \\ nil) do
+    %{"name" => name || pool.name, "status" => status, "routing_strategy" => "bridge_ring", "api_key_ids" => []}
   end
 
   defp record_shared_incident!(pools) do

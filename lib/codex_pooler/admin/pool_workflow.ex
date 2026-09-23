@@ -58,9 +58,11 @@ defmodule CodexPooler.Admin.PoolWorkflow do
           pool_result()
   def update_pool_with_related_settings(%Scope{} = scope, pool_or_id, attrs) when is_map(attrs) do
     Repo.transaction(fn ->
-      update_pool_with_related_settings_transaction(scope, pool_or_id, attrs)
+      previous_status = committed_pool_status(pool_or_id)
+      {update_pool_with_related_settings_transaction(scope, pool_or_id, attrs), previous_status}
     end)
     |> normalize_transaction_result()
+    |> invalidate_notifications_after_status_change()
     |> maybe_broadcast_pool_workflow("pool_updated")
     |> maybe_enqueue_assignment_catalog_sync(attrs)
   end
@@ -206,6 +208,25 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
   end
+
+  # The status the Pool had before this transaction changed it, read inside it.
+  defp committed_pool_status(%Pool{id: pool_id}), do: committed_pool_status(pool_id)
+
+  defp committed_pool_status(pool_id) do
+    case Pools.get_pool(pool_id) do
+      %Pool{status: status} -> status
+      nil -> nil
+    end
+  end
+
+  # Pools.update_pool/4 runs with `broadcast?: false` inside the transaction,
+  # so the notification centers hear of a status change only after the commit.
+  defp invalidate_notifications_after_status_change({:ok, {%Pool{} = pool, previous_status}}) do
+    :ok = Pools.invalidate_notifications_after_status_change(previous_status, pool)
+    {:ok, pool}
+  end
+
+  defp invalidate_notifications_after_status_change({:error, _reason} = error), do: error
 
   defp normalize_transaction_result({:ok, result}), do: {:ok, result}
   defp normalize_transaction_result({:error, reason}), do: {:error, reason}

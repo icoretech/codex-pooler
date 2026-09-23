@@ -28,12 +28,18 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   @recent_invalidations_key :alert_notification_recent_invalidations
   @recent_invalidation_limit 32
 
+  # The Pools whose notification topics this page subscribed to: the Pools its
+  # viewer can see, re-read on every invalidation it reloads for, because a Pool
+  # status change changes them (findings#206 row 206-308).
+  @subscribed_pools_key :alert_notification_subscribed_pools
+
   @spec on_mount(:default, map(), map(), Socket.t()) :: {:cont, Socket.t()}
   def on_mount(:default, _params, _session, %Socket{} = socket) do
     socket =
       socket
       |> assign_notification_center()
       |> Phoenix.LiveView.put_private(@recent_invalidations_key, [])
+      |> Phoenix.LiveView.put_private(@subscribed_pools_key, MapSet.new())
       |> subscribe_to_scoped_topics()
       |> Phoenix.LiveView.attach_hook(
         :alert_notification_center,
@@ -72,7 +78,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
       {:halt,
        socket
        |> Phoenix.LiveView.put_private(@recent_invalidations_key, recent)
-       |> assign_notification_center()}
+       |> reload_notification_center()}
     end
   end
 
@@ -80,7 +86,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   # bare message during a rolling update; the page reloads rather than handing
   # it to a `handle_info/2` that would crash on it.
   defp handle_notification_event({NotificationEvents, :invalidated}, socket) do
-    {:halt, assign_notification_center(socket)}
+    {:halt, reload_notification_center(socket)}
   end
 
   # Any other message under the same tag is a shape a newer release sends
@@ -90,7 +96,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   # rolling-update contract: a new shape keeps it.
   defp handle_notification_event(message, socket)
        when is_tuple(message) and tuple_size(message) > 0 and elem(message, 0) == NotificationEvents do
-    {:halt, assign_notification_center(socket)}
+    {:halt, reload_notification_center(socket)}
   end
 
   defp handle_notification_event(_message, socket), do: {:cont, socket}
@@ -159,28 +165,51 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
 
   defp notification_center(_scope), do: empty_notification_center()
 
+  # An invalidation can follow a change of the viewer's visible Pools, so the
+  # page re-reads them first: it then subscribes before it reads, and an
+  # invalidation of a Pool it just subscribed to reloads it again, never less.
+  defp reload_notification_center(%Socket{} = socket) do
+    socket
+    |> sync_pool_subscriptions()
+    |> assign_notification_center()
+  end
+
   defp subscribe_to_scoped_topics(%Socket{} = socket) do
     if Phoenix.LiveView.connected?(socket) do
-      subscribe_to_scope(socket.assigns[:current_scope])
+      subscribe_to_operator(socket.assigns[:current_scope])
+      sync_pool_subscriptions(socket)
+    else
+      socket
     end
-
-    socket
   end
 
-  defp subscribe_to_scope(%Scope{user: %{id: operator_id}} = scope) when is_binary(operator_id) do
+  defp subscribe_to_operator(%Scope{user: %{id: operator_id}}) when is_binary(operator_id) do
     :ok = NotificationEvents.subscribe_operator(operator_id)
+  end
 
+  defp subscribe_to_operator(_scope), do: :ok
+
+  # Subscribes to the Pools the viewer can see now and unsubscribes from the
+  # ones it no longer can, so a page never listens to a Pool its viewer cannot
+  # see and picks up one that became visible (an owner's reactivated Pool).
+  defp sync_pool_subscriptions(%Socket{} = socket) do
+    subscribed = Map.get(socket.private, @subscribed_pools_key, MapSet.new())
+    visible = visible_pool_ids(socket.assigns[:current_scope])
+
+    visible |> MapSet.difference(subscribed) |> Enum.each(&(:ok = NotificationEvents.subscribe_pool(&1)))
+    subscribed |> MapSet.difference(visible) |> Enum.each(&(:ok = NotificationEvents.unsubscribe_pool(&1)))
+
+    Phoenix.LiveView.put_private(socket, @subscribed_pools_key, visible)
+  end
+
+  defp visible_pool_ids(%Scope{user: %{id: operator_id}} = scope) when is_binary(operator_id) do
     case Alerts.list_manageable_pools(scope) do
-      {:ok, pools} -> Enum.each(pools, &subscribe_pool!/1)
-      {:error, _reason} -> :ok
+      {:ok, pools} -> MapSet.new(pools, & &1.id)
+      {:error, _reason} -> MapSet.new()
     end
   end
 
-  defp subscribe_to_scope(_scope), do: :ok
-
-  defp subscribe_pool!(%{id: pool_id}) when is_binary(pool_id) do
-    :ok = NotificationEvents.subscribe_pool(pool_id)
-  end
+  defp visible_pool_ids(_scope), do: MapSet.new()
 
   defp badge_label(count) when is_integer(count) and count > 99, do: "99+"
   defp badge_label(count) when is_integer(count) and count >= 0, do: Integer.to_string(count)

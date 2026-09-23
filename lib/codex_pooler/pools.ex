@@ -153,6 +153,9 @@ defmodule CodexPooler.Pools do
   @spec list_assigned_pool_ids(term()) :: [Ecto.UUID.t()]
   defdelegate list_assigned_pool_ids(scope), to: Authorization
 
+  @spec list_pool_operator_ids(pool_ref()) :: [Ecto.UUID.t()]
+  defdelegate list_pool_operator_ids(pool_or_id), to: Authorization
+
   @spec scope_assigned_pool_ids(term()) :: [Ecto.UUID.t()]
   defdelegate scope_assigned_pool_ids(scope), to: Scope, as: :assigned_pool_ids
 
@@ -245,6 +248,7 @@ defmodule CodexPooler.Pools do
          {:ok, update_attrs} <- pool_update_attrs(attrs),
          {:ok, _decision} <- require_pool_update_capability(scope, pool, update_attrs) do
       now = now()
+      previous_status = pool.status
 
       update_pool_and_revoke_archived_assignments(
         pool,
@@ -260,6 +264,7 @@ defmodule CodexPooler.Pools do
           })
 
           maybe_broadcast_pool_change(opts, pool, "pool_updated")
+          maybe_invalidate_notifications_after_status_change(opts, previous_status, pool)
 
         _result ->
           :ok
@@ -302,6 +307,8 @@ defmodule CodexPooler.Pools do
             status: pool.status
           })
 
+          invalidate_notifications_after_status_change(previous_status, pool)
+
         _result ->
           :ok
       end)
@@ -342,6 +349,21 @@ defmodule CodexPooler.Pools do
 
   def delete_archived_pool(_scope, _pool_or_id, _confirmation_slug),
     do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @doc """
+  Invalidates the notification centers after a committed Pool status change,
+  and does nothing when the status did not change: a notification center shows
+  only active Pools' incidents, so a status change changes which ones a viewer
+  sees (findings#206 row 206-308). A workflow that updates a Pool with
+  `broadcast?: false` inside its transaction calls this after the commit.
+  """
+  @spec invalidate_notifications_after_status_change(String.t() | nil, Pool.t()) :: :ok
+  def invalidate_notifications_after_status_change(status, %Pool{status: status}), do: :ok
+
+  def invalidate_notifications_after_status_change(_previous_status, %Pool{id: pool_id}) do
+    _ = Alerts.invalidate_notifications_after_pool_status_change(pool_id)
+    :ok
+  end
 
   @spec create_membership(Scope.t(), map()) :: membership_result()
   def create_membership(%Scope{} = scope, attrs) when is_map(attrs) do
@@ -678,6 +700,14 @@ defmodule CodexPooler.Pools do
   defp maybe_put(map, _key, nil), do: map
 
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # A caller that passes `broadcast?: false` runs inside its own transaction
+  # and invalidates after the commit.
+  defp maybe_invalidate_notifications_after_status_change(opts, previous_status, %Pool{} = pool) do
+    if Keyword.get(opts, :broadcast?, true),
+      do: invalidate_notifications_after_status_change(previous_status, pool),
+      else: :ok
+  end
 
   defp maybe_broadcast_pool_change(opts, %Pool{} = pool, reason) do
     if Keyword.get(opts, :broadcast?, true) do

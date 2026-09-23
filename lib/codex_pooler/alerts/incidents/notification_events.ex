@@ -17,6 +17,7 @@ defmodule CodexPooler.Alerts.Incidents.NotificationEvents do
 
   alias CodexPooler.Alerts.Schemas.{AlertIncident, AlertIncidentTarget}
   alias CodexPooler.Events
+  alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL
   alias Phoenix.PubSub
@@ -40,6 +41,11 @@ defmodule CodexPooler.Alerts.Incidents.NotificationEvents do
   @spec subscribe_pool(Ecto.UUID.t()) :: :ok | {:error, term()}
   def subscribe_pool(pool_id) when is_binary(pool_id) do
     PubSub.subscribe(@pubsub, pool_topic(pool_id))
+  end
+
+  @spec unsubscribe_pool(Ecto.UUID.t()) :: :ok
+  def unsubscribe_pool(pool_id) when is_binary(pool_id) do
+    PubSub.unsubscribe(@pubsub, pool_topic(pool_id))
   end
 
   @spec subscribe_operator(operator_ref()) :: :ok | {:error, term()}
@@ -85,6 +91,27 @@ defmodule CodexPooler.Alerts.Incidents.NotificationEvents do
 
       {:error, _reason} = error ->
         error
+    end
+  end
+
+  @doc """
+  Invalidates the notification centers whose visible Pools a committed Pool
+  status change changed, as one invalidation: the pages that could see the Pool
+  hear it on the Pool's topic, and the operators who can see it now (none unless
+  it is active) on their own topics, because a page subscribes only to the
+  Pools it could see. A notification center shows only active Pools' incidents,
+  and counts an incident's other Pools as visible or hidden by the same rule,
+  so no other page changes (findings#206 row 206-308). Every page that hears it
+  re-reads its visible Pools and its subscriptions with them.
+  """
+  @spec invalidate_pool_visibility(Ecto.UUID.t()) :: broadcast_result()
+  def invalidate_pool_visibility(pool_id) when is_binary(pool_id) do
+    invalidation_id = Ecto.UUID.generate()
+
+    with :ok <- broadcast_invalidation("pool", pool_id, invalidation_id) do
+      pool_id
+      |> Pools.list_pool_operator_ids()
+      |> broadcast_invalidations("operator", invalidation_id)
     end
   end
 
@@ -178,9 +205,11 @@ defmodule CodexPooler.Alerts.Incidents.NotificationEvents do
   defp cascade_target_field(:rule), do: :rule_id
   defp cascade_target_field(:pool), do: :pool_id
 
-  defp broadcast_pool_invalidations(pool_ids, invalidation_id) do
-    Enum.reduce_while(pool_ids, :ok, fn pool_id, :ok ->
-      case broadcast_invalidation("pool", pool_id, invalidation_id) do
+  defp broadcast_pool_invalidations(pool_ids, invalidation_id), do: broadcast_invalidations(pool_ids, "pool", invalidation_id)
+
+  defp broadcast_invalidations(target_ids, scope, invalidation_id) do
+    Enum.reduce_while(target_ids, :ok, fn target_id, :ok ->
+      case broadcast_invalidation(scope, target_id, invalidation_id) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end

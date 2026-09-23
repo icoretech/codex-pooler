@@ -743,6 +743,44 @@ defmodule CodexPooler.PoolsTest do
       assert Repo.get!(Pools.Pool, archived_pool.id).status == "archived"
     end
 
+    # The operators a Pool status change newly shows the Pool to are told so on
+    # their own notification topics (findings#206 row 206-308).
+    test "a Pool's operators are the active owners and its assigned active admins while it is active" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      owner_scope = Scope.for_user(owner, ["instance_owner"])
+      assert {:ok, pool} = Pools.create_pool(owner_scope, %{slug: "operators", name: "Operators"})
+      assert {:ok, other_pool} = Pools.create_pool(owner_scope, %{slug: "operators-other", name: "Operators Other"})
+
+      [assigned, unassigned, revoked] =
+        for label <- ["assigned", "unassigned", "revoked"] do
+          admin = user_fixture(%{"email" => "operators-#{label}@example.com"})
+          assert {:ok, _membership} = Pools.create_membership(owner_scope, %{user_id: admin.id, role: "instance_admin"})
+          admin
+        end
+
+      operator_pool_assignment_fixture(assigned, pool, created_by_user_id: owner.id)
+      operator_pool_assignment_fixture(unassigned, other_pool, created_by_user_id: owner.id)
+      operator_pool_assignment_fixture(revoked, pool, created_by_user_id: owner.id)
+      revoked_membership = Repo.get_by!(Membership, user_id: revoked.id)
+      assert {:ok, _revoked} = Pools.revoke_membership(owner_scope, revoked_membership)
+
+      assert Enum.sort(Pools.list_pool_operator_ids(pool)) == Enum.sort([owner.id, assigned.id])
+      assert Enum.sort(Pools.list_pool_operator_ids(other_pool.id)) == Enum.sort([owner.id, unassigned.id])
+
+      assert {:ok, disabled} = Pools.change_pool_status(owner_scope, pool, "disabled")
+      assert Pools.list_pool_operator_ids(disabled) == []
+
+      assert {:ok, active} = Pools.change_pool_status(owner_scope, disabled, "active")
+      assert Enum.sort(Pools.list_pool_operator_ids(active)) == Enum.sort([owner.id, assigned.id])
+
+      # Archiving revokes the assignments and restoring does not bring them back.
+      assert {:ok, archived} = Pools.change_pool_status(owner_scope, active, "archived")
+      assert Pools.list_pool_operator_ids(archived) == []
+      assert {:ok, restored} = Pools.change_pool_status(owner_scope, archived, "active")
+      assert Pools.list_pool_operator_ids(restored) == [owner.id]
+      assert Pools.list_pool_operator_ids(Ecto.UUID.generate()) == []
+    end
+
     test "creates instance admin memberships through the pools boundary" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       owner_scope = Scope.for_user(owner, ["instance_owner"])

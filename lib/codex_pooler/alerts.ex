@@ -116,6 +116,9 @@ defmodule CodexPooler.Alerts do
         when result: term(), reason: term()
   defdelegate invalidate_notifications_after_cascade(cascade_owner, delete), to: NotificationEvents, as: :invalidate_after_cascade
 
+  @spec invalidate_notifications_after_pool_status_change(Ecto.UUID.t()) :: :ok | {:error, term()}
+  defdelegate invalidate_notifications_after_pool_status_change(pool_id), to: NotificationEvents, as: :invalidate_pool_visibility
+
   @spec clear_incident_condition(IncidentLifecycle.clear_attrs() | map() | String.t()) ::
           IncidentLifecycle.clear_result()
   defdelegate clear_incident_condition(attrs), to: IncidentLifecycle
