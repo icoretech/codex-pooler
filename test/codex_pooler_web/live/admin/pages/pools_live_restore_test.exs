@@ -132,8 +132,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveRestoreTest do
     _ = await_pool_traffic(view)
   end
 
-  # An owner demoted to admin while their Pools page is open still has the
-  # card on screen; the click is refused and the Pool stays disabled.
+  # An owner demoted to admin while their Pools page is open loses the
+  # disabled Pool's card and its Reactivate action (the page follows the role,
+  # findings#206 row 206-325); a Reactivate the page sent before it re-read is
+  # refused and the Pool stays disabled.
   test "an owner demoted while the Pools page is open cannot reactivate from it", %{scope: scope} do
     pool = pool!(scope, "demoted")
     assert {:ok, _disabled} = Pools.change_pool_status(scope, pool, "disabled")
@@ -145,7 +147,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveRestoreTest do
 
     assert {:ok, _demoted} = Accounts.update_operator(scope, second_owner, %{"role" => "instance_admin", "pool_ids" => []})
 
-    view |> element("#reactivate-pool-#{pool.id}") |> render_click()
+    # The role change reaches the page as an invalidation this process sent,
+    # and the page re-reads behind a message to itself: two fences.
+    _ = :sys.get_state(view.pid)
+    _ = :sys.get_state(view.pid)
+    _ = await_pool_traffic(view)
+    refute has_element?(view, "#pool-row-#{pool.id}")
+    refute has_element?(view, "#reactivate-pool-#{pool.id}")
+
+    render_click(view, "reactivate_pool", %{"id" => pool.id})
 
     assert has_element?(view, "#flash-error")
     assert %Pool{status: "disabled"} = Repo.get!(Pool, pool.id)

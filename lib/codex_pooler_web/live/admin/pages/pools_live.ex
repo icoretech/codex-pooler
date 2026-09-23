@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.LiveUpdatesHooks
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.PoolListComponents
@@ -66,6 +67,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_traffic_cooldown_timer: nil,
        pool_traffic_cooldown_token: nil
      )
+     |> NotificationCenterHooks.follow_viewer_visibility()
      |> maybe_start_connected_refresh()}
   end
 
@@ -554,6 +556,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   # reload that deferral was protecting.
   def handle_info(:live_updates_resumed, socket) do
     {:noreply, socket |> cancel_pool_traffic_refresh_timer() |> start_pool_traffic_load()}
+  end
+
+  # The viewer's role or visible Pools changed while the page is open: a
+  # demoted owner loses the owner controls and the Pools it no longer sees, a
+  # newly assigned admin gets the new Pool's card (findings#206 row 206-325).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    {:noreply, follow_viewer_visibility_change(socket)}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
@@ -1253,6 +1262,62 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       |> load_structural()
       |> start_pool_traffic_load()
     end
+  end
+
+  # The structure is re-read at once, even behind an open dialog, so no card
+  # of a Pool the viewer can no longer see stays on screen; only a create,
+  # edit or delete dialog the viewer may still use (an owner's) defers it like
+  # a lifecycle event, and an owner sees every Pool whatever its assignments.
+  # A dialog the viewer lost closes first.
+  defp follow_viewer_visibility_change(socket) do
+    socket = close_dialogs_the_viewer_lost(socket)
+
+    if owner_dialog_open?(socket) do
+      reload_pools_or_defer(socket)
+    else
+      socket
+      |> clear_pool_traffic_refresh()
+      |> load_structural()
+      |> start_pool_traffic_load()
+    end
+  end
+
+  defp close_dialogs_the_viewer_lost(socket) do
+    before = dialog_state(socket)
+
+    socket =
+      if Pools.can_manage_pools?(socket.assigns.current_scope),
+        do: socket,
+        else: socket |> close_create_dialog() |> clear_deleting()
+
+    socket = close_pool_editor_the_viewer_lost(socket)
+
+    if dialog_state(socket) == before, do: socket, else: put_flash(socket, :info, "Your Pool access changed")
+  end
+
+  defp close_pool_editor_the_viewer_lost(%{assigns: %{pool_editor_mode: :edit, editing_pool: %{id: pool_id}}} = socket) do
+    case editable_pool(socket, pool_id) do
+      {:ok, _pool} -> socket
+      {:error, _reason} -> socket |> clear_editing() |> push_patch(to: pool_path(socket.assigns.pool_filters))
+    end
+  end
+
+  defp close_pool_editor_the_viewer_lost(%{assigns: %{pool_editor_mode: :models, editing_pool: %{} = pool}} = socket) do
+    case ensure_can_operate_pool(socket, pool) do
+      :ok -> socket
+      {:error, _reason} -> clear_editing(socket)
+    end
+  end
+
+  defp close_pool_editor_the_viewer_lost(socket), do: socket
+
+  defp dialog_state(socket) do
+    {socket.assigns.creating_pool, socket.assigns.pool_editor_mode, socket.assigns.deleting_pool}
+  end
+
+  defp owner_dialog_open?(socket) do
+    socket.assigns.creating_pool or socket.assigns.pool_editor_mode == :edit or
+      not is_nil(socket.assigns.deleting_pool)
   end
 
   defp reload_model_serving_or_defer(socket, pool_id) do

@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Incidents.NotificationEvents
+  alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.AlertNotificationsReadModel
   alias Phoenix.LiveView.Socket
 
@@ -33,6 +34,11 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   # status change changes them (findings#206 row 206-308).
   @subscribed_pools_key :alert_notification_subscribed_pools
 
+  # Set only on a page that follows its viewer's visibility: whether the viewer
+  # is an owner and the Pools it can see, as of the last invalidation this page
+  # reloaded for (findings#206 row 206-325).
+  @viewer_visibility_key :alert_notification_viewer_visibility
+
   @spec on_mount(:default, map(), map(), Socket.t()) :: {:cont, Socket.t()}
   def on_mount(:default, _params, _session, %Socket{} = socket) do
     socket =
@@ -53,6 +59,24 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
       )
 
     {:cont, socket}
+  end
+
+  @doc """
+  Makes a connected page follow its viewer's role and visible Pools. A role
+  change, a Pool assignment granted or revoked and a Pool status change each
+  send an invalidation this hook already reloads for; when that reload finds
+  the viewer's role or visible Pools changed, the page receives
+  `{#{inspect(__MODULE__)}, :viewer_visibility_changed}` in its
+  `handle_info/2` and re-reads what it shows with its own scope. An incident
+  invalidation that changes neither sends nothing (findings#206 row 206-325).
+  """
+  @spec follow_viewer_visibility(Socket.t()) :: Socket.t()
+  def follow_viewer_visibility(%Socket{} = socket) do
+    if Phoenix.LiveView.connected?(socket) do
+      Phoenix.LiveView.put_private(socket, @viewer_visibility_key, viewer_visibility(socket))
+    else
+      socket
+    end
   end
 
   @spec assign_notification_center(Socket.t()) :: Socket.t()
@@ -171,7 +195,28 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   defp reload_notification_center(%Socket{} = socket) do
     socket
     |> sync_pool_subscriptions()
+    |> notify_viewer_visibility_change()
     |> assign_notification_center()
+  end
+
+  # The operator topic was subscribed before the page read its baseline, so a
+  # change committed after that read reaches this comparison; one committed
+  # before it is already in what the page read at mount.
+  defp notify_viewer_visibility_change(%Socket{private: private} = socket) do
+    case Map.fetch(private, @viewer_visibility_key) do
+      {:ok, previous} ->
+        current = viewer_visibility(socket)
+        if current != previous, do: send(self(), {__MODULE__, :viewer_visibility_changed})
+        Phoenix.LiveView.put_private(socket, @viewer_visibility_key, current)
+
+      :error ->
+        socket
+    end
+  end
+
+  # The visible Pools are the ones `sync_pool_subscriptions/1` just read.
+  defp viewer_visibility(%Socket{} = socket) do
+    {Pools.owner?(socket.assigns[:current_scope]), Map.get(socket.private, @subscribed_pools_key, MapSet.new())}
   end
 
   defp subscribe_to_scoped_topics(%Socket{} = socket) do
