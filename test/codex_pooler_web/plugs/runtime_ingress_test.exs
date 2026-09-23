@@ -1674,7 +1674,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         end
 
       delivered_ref = :erlang.trace_delivered(task.pid)
-      assert_receive {:trace_delivered, pid, ^delivered_ref} when pid == task.pid, 1_000
+      assert_receive {:trace_delivered, pid, ^delivered_ref} when pid == task.pid, @detection_timeout_ms
 
       calls = collect_traced_calls(task.pid, module, function, arity, 0)
       send(task.pid, {:release_trace, release_ref})

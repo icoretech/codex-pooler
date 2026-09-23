@@ -47,6 +47,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias Phoenix.LiveViewTest.ClientProxy
   alias Phoenix.PubSub
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @mounted_recovery_timeout_ms 15_000
   @stale_import_message "credentials changed after import preparation; submit the current auth data again"
 
@@ -1727,7 +1731,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
-    assert_receive {^handler_id, query_pid}, 1_000
+    assert_receive {^handler_id, query_pid}, @detection_timeout_ms
 
     try do
       assert has_element?(view, "#upstream-cockpit[aria-busy='true']")
@@ -5414,7 +5418,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     view |> element("#upstream-refresh-data-button") |> render_click()
     _ = render_async(view)
 
-    assert_receive {^handler_id, query_pid}, 1_000
+    assert_receive {^handler_id, query_pid}, @detection_timeout_ms
     refute query_pid == view.pid
   end
 

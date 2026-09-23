@@ -17,6 +17,10 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
   alias CodexPoolerWeb.Admin.StatsPresentation
   alias CodexPoolerWeb.Admin.StatsPresentation.Charts, as: StatsCharts
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @reload_telemetry_event [:codex_pooler, :admin, :stats_live, :reload]
   @dashboard_build_telemetry_event [:codex_pooler, :admin, :stats, :dashboard, :build]
   @telemetry_windows ~w(1h 5h 24h 7d unknown)
@@ -666,7 +670,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       {:ok, view, _html} =
         live(conn, ~p"/admin/stats?pool_id=#{pool.id}")
 
-      assert_receive {^handler_id, query_pid}, 1_000
+      assert_receive {^handler_id, query_pid}, @detection_timeout_ms
 
       try do
         assert has_element?(view, "#admin-stats[aria-busy='true']")

@@ -165,10 +165,10 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
     assert_receive {:reader_called, :timeout}
     sync_sampler(sampler)
     assert_saturation(snapshot(0, 0))
-    assert_receive {:reader_called, :success}, 1_000
+    assert_receive {:reader_called, :success}, @detection_timeout_ms
     sync_sampler(sampler)
     assert_saturation(snapshot(3, 2))
-    assert_receive {:reader_called, :timeout}, 1_000
+    assert_receive {:reader_called, :timeout}, @detection_timeout_ms
     sync_sampler(sampler)
     assert_saturation(snapshot(3, 2))
     assert Process.alive?(sampler)

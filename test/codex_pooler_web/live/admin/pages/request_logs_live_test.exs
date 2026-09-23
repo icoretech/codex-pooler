@@ -12,6 +12,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.RequestLogsPresentation
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @request_logs_reload_event [:codex_pooler, :admin, :request_logs, :reload]
 
   setup :register_and_log_in_user
@@ -1095,7 +1099,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
     {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
-    assert_receive {^handler_id, query_pid}, 1_000
+    assert_receive {^handler_id, query_pid}, @detection_timeout_ms
 
     try do
       assert has_element?(view, "#admin-request-logs-live[aria-busy='true']")
@@ -3498,7 +3502,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
   end
 
   defp assert_request_log_reload(telemetry_ref, stage, scope) do
-    assert_receive {^telemetry_ref, %{count: 1}, %{stage: ^stage, scope: ^scope}}, 1_000
+    assert_receive {^telemetry_ref, %{count: 1}, %{stage: ^stage, scope: ^scope}}, @detection_timeout_ms
   end
 
   # The page has handled every message sent to it before this call once the

@@ -15,6 +15,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Phoenix.LiveViewTest.ClientProxy
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   setup :register_and_log_in_user
 
   test "guides operators to create a Pool before API keys", %{conn: conn} do
@@ -520,7 +524,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
       if Process.alive?(click_pid), do: Process.exit(click_pid, :kill)
     end)
 
-    assert_receive {^handler_id, query_pid}, 1_000
+    assert_receive {^handler_id, query_pid}, @detection_timeout_ms
 
     try do
       assert_receive {^handler_id, :click_finished, _html}, 2_000

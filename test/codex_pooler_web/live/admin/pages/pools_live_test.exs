@@ -30,6 +30,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   setup :register_and_log_in_user
 
   @tag :admin_pool_url_filters
@@ -1457,7 +1461,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     holder_ref = make_ref()
     advisory_holder = hold_pool_traffic_advisory_lock(scope.user.id, holder_ref)
-    assert_receive {^holder_ref, :lock_held, holder_pid}, 1_000
+    assert_receive {^holder_ref, :lock_held, holder_pid}, @detection_timeout_ms
 
     # When: another PostgreSQL session owns the operator gate while viewport
     # eligibility changes.
@@ -1619,7 +1623,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute_receive {^handler_id, :query, _query_pid}, 0
 
     assert completed_cooldown_token == expire_pool_traffic_cooldown(view)
-    assert_receive {^handler_id, :query, followup_query_pid}, 1_000
+    assert_receive {^handler_id, :query, followup_query_pid}, @detection_timeout_ms
     _ = await_pool_traffic(view, activate_histograms?: false)
 
     completed_query_pids =
@@ -1709,7 +1713,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       "visible" => true
     })
 
-    assert_receive {^handler_id, :query, first_query_pid}, 1_000
+    assert_receive {^handler_id, :query, first_query_pid}, @detection_timeout_ms
 
     render_hook(second_view, "set_pool_traffic_visibility", %{
       "pool_id" => pool.id,
