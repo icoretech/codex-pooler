@@ -34,6 +34,8 @@ Use a simple severity model when writing operator-facing alerts:
 
 Keep severity tied to user-visible impact and operator action. Avoid implementation details and infrastructure labels.
 
+An incident is resolved when the condition of the rule that raised it clears. Deleting a rule also removes its targets from its incidents. An incident that no remaining rule targets can no longer clear by itself, so the scheduled evaluation pass, which runs every five minutes, resolves it and records `resolved_reason` `no_rule_target`. This also covers incidents left open by rules deleted with an earlier release. An incident that another rule still targets stays open and keeps following that rule.
+
 ## Pool signals
 
 Pool alerts usually mean a routing boundary isn't ready for the clients that depend on it.

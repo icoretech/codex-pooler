@@ -107,6 +107,9 @@ defmodule CodexPooler.Alerts do
   @spec safe_projected_metadata_for_admin(map()) :: map()
   defdelegate safe_projected_metadata_for_admin(metadata), to: IncidentNotifications
 
+  @spec resolve_orphaned_incidents(DateTime.t()) :: {:ok, [AlertIncident.t()]} | {:error, Ecto.Changeset.t()}
+  defdelegate resolve_orphaned_incidents(timestamp), to: IncidentLifecycle
+
   @spec clear_incident_condition(IncidentLifecycle.clear_attrs() | map() | String.t()) ::
           IncidentLifecycle.clear_result()
   defdelegate clear_incident_condition(attrs), to: IncidentLifecycle

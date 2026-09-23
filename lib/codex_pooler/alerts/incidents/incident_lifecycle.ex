@@ -70,6 +70,72 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycle do
          "incident clear attributes must be a map"
        )}
 
+  @orphan_batch_limit 100
+  @orphan_resolved_reason "no_rule_target"
+
+  @doc """
+  Resolves unresolved incidents that no rule can clear any more.
+
+  Every match writes its incident together with at least one target, and only
+  a resolution resolves targets, so an unresolved incident without an
+  unresolved target has lost all of them to a cascade: its rules, or the Pools
+  of its targets, were deleted. No evaluation produces its dedupe key's clear
+  again, so such an incident would stay open forever (findings#260 row 260-31).
+  Each one is re-checked under its row lock, because a concurrent match inserts
+  targets while holding that lock.
+  """
+  @spec resolve_orphaned_incidents(DateTime.t()) :: {:ok, [AlertIncident.t()]} | {:error, Ecto.Changeset.t()}
+  def resolve_orphaned_incidents(%DateTime{} = timestamp) do
+    Repo.transaction(fn ->
+      candidate_ids =
+        Repo.all(
+          from incident in orphaned_incidents_query(),
+            order_by: [asc: incident.first_seen_at, asc: incident.id],
+            limit: @orphan_batch_limit,
+            lock: "FOR UPDATE SKIP LOCKED",
+            select: incident.id
+        )
+
+      Repo.all(from incident in orphaned_incidents_query(), where: incident.id in ^candidate_ids)
+      |> Enum.map(&resolve_orphaned_incident(&1, timestamp))
+    end)
+    |> case do
+      {:ok, resolved} ->
+        Enum.each(resolved, &NotificationEvents.broadcast_incident_invalidation/1)
+        {:ok, resolved}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  defp orphaned_incidents_query do
+    from incident in AlertIncident,
+      as: :incident,
+      where: incident.state in ^@unresolved_states,
+      where:
+        not exists(
+          from target in AlertIncidentTarget,
+            where: target.incident_id == parent_as(:incident).id and is_nil(target.resolved_at),
+            select: 1
+        )
+  end
+
+  defp resolve_orphaned_incident(%AlertIncident{} = incident, timestamp) do
+    incident
+    |> AlertIncident.changeset(%{
+      state: AlertIncident.resolved_state(),
+      resolved_at: timestamp,
+      suppression_metadata: Map.put(incident.suppression_metadata || %{}, "resolved_reason", @orphan_resolved_reason),
+      updated_at: timestamp
+    })
+    |> Repo.update()
+    |> case do
+      {:ok, incident} -> incident
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   defp record_incident_match_transaction(match) do
     Repo.transaction(fn -> record_incident_match_in_transaction(match) end)
   end

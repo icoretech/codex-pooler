@@ -13,6 +13,9 @@ defmodule CodexPooler.Jobs.AlertEvaluationEnqueueWorker do
       period: {5, :minutes}
     ]
 
+  require Logger
+
+  alias CodexPooler.Alerts
   alias CodexPooler.Jobs
 
   @impl Oban.Worker
@@ -20,6 +23,14 @@ defmodule CodexPooler.Jobs.AlertEvaluationEnqueueWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{scheduled_at: %DateTime{} = scheduled_at}) do
+    # Incidents whose rules were all deleted are resolved here, because no
+    # per-rule evaluation will ever clear them (findings#260 row 260-31). A
+    # failed resolution never holds back the evaluations themselves.
+    case Alerts.resolve_orphaned_incidents(scheduled_at) do
+      {:ok, _resolved} -> :ok
+      {:error, %Ecto.Changeset{}} -> Logger.warning("alert orphaned incident resolution failed error=invalid_incident_changeset")
+    end
+
     case Jobs.enqueue_alert_evaluations_for_active_rules(
            trigger_kind: "scheduled",
            now: scheduled_at
