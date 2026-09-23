@@ -337,6 +337,83 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              Smoke.accept_catalog_sync_result(:unexpected)
   end
 
+  # findings#206 206-138: the certification only considers the exact gpt-6
+  # family the Pool advertises; a lookalike id or a retired family must never
+  # become the model a tool-compatibility receipt certifies.
+  test "certification discovery keeps only exact gpt-6 family models the Pool advertises", %{
+    run_id: run_id,
+    run_dir: run_dir
+  } do
+    raw_key = "sk-test-#{random_hex(8)}"
+
+    advertised =
+      ~w(gpt-6 gpt-6-sol gpt-6-astra gpt-6-luna gpt-60 gpt-6sol gpt-5.5 gpt-5.6-sol gpt-6-sol-context)
+
+    {:ok, pid} =
+      Bandit.start_link(
+        plug: fn conn, _opts ->
+          authorized? = Plug.Conn.get_req_header(conn, "authorization") == ["Bearer #{raw_key}"]
+
+          if conn.request_path == "/v1/models" and authorized? do
+            body = CodexPooler.JSON.encode!(%{"data" => Enum.map(advertised, &%{"id" => &1})})
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(200, body)
+          else
+            Plug.Conn.send_resp(conn, 401, "{}")
+          end
+        end,
+        port: 0,
+        ip: {127, 0, 0, 1}
+      )
+
+    Process.unlink(pid)
+    on_exit(fn -> Supervisor.stop(pid) end)
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+
+    model = fn id, attrs ->
+      struct!(
+        CodexPooler.Catalog.Model,
+        Map.merge(
+          %{exposed_model_id: id, upstream_model_id: id, metadata: %{}, supports_responses: true, supports_streaming: true, supports_tools: true},
+          attrs
+        )
+      )
+    end
+
+    models = [
+      model.("gpt-6", %{}),
+      model.("gpt-6-sol", %{metadata: %{"upstream_model" => %{"slug" => "gpt-6-sol"}}}),
+      model.("gpt-6-astra", %{}),
+      model.("gpt-6-luna", %{}),
+      model.("gpt-60", %{}),
+      model.("gpt-6sol", %{}),
+      model.("gpt-5.5", %{}),
+      model.("gpt-5.6-sol", %{}),
+      model.("gpt-6-sol-context", %{supports_tools: false}),
+      model.("gpt-6-nano", %{})
+    ]
+
+    fixture = %{raw_key: raw_key, models: models, pool: %{id: Ecto.UUID.generate()}}
+
+    assert {:error, "candidate capability probe completed without certification"} =
+             Smoke.candidate_capability_matrix_runner(
+               URI.parse("http://127.0.0.1:#{port}"),
+               nil,
+               %{"run_id" => run_id},
+               [fixture],
+               run_dir,
+               candidate_profiles: ["lite"]
+             )
+
+    # Each surviving model reaches its profile setup, which fails on the absent
+    # run journal before any database write, so its id is the only signal.
+    results = Process.get(:responses_tool_candidate_capability_results)
+    assert Enum.map(results, & &1.model) == ~w(gpt-6 gpt-6-astra gpt-6-sol)
+    assert Enum.all?(results, &(&1.status == "profile_setup_failed"))
+  end
+
   test "candidate probe classification sanitizes binary and non-binary failures" do
     assert Smoke.classify_candidate_probe_result(:ok) == "passed_terminal_and_settlement"
 
