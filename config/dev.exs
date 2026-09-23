@@ -33,6 +33,12 @@ config :codex_pooler, CodexPoolerWeb.Endpoint,
     tailwind: {Tailwind, :install_and_run, [:codex_pooler, ~w(--watch)]}
   ]
 
+# Live reload watches only the directories its patterns cover. The default is
+# the whole working directory, and the patterns are relative, so every Pooler
+# copy other tooling writes under `tmp/` reloaded this server (findings#232).
+config :phoenix_live_reload,
+  dirs: Enum.map(["priv/static", "priv/gettext", "lib/codex_pooler_web"], &Path.expand(&1, Path.expand("..", __DIR__)))
+
 config :codex_pooler, CodexPoolerWeb.Endpoint,
   live_reload: [
     web_console_logger: true,
