@@ -2,6 +2,7 @@ defmodule CodexPooler.Platform.HeartbeatWriteBudgetTest do
   use CodexPooler.DataCase, async: false
   import CodexPooler.UnboxedFixture
   alias CodexPooler.Platform.InstancePresence
+  alias CodexPooler.StallingPostgresProxy
   alias CodexPooler.Telemetry.Relay
 
   @tag capture_log: true
@@ -56,12 +57,9 @@ defmodule CodexPooler.Platform.HeartbeatWriteBudgetTest do
   # heartbeat misses at once), the disconnect closes the socket under the
   # statement, Postgrex answers `disconnect_and_retry`, and DBConnection used to
   # check out a second connection under the same, already expired deadline and
-  # disconnect that one too. The stall is injected at the boundary: a loopback
-  # proxy in front of PostgreSQL stops relaying bytes on the connections it
-  # already carries, while new connections (the cancel request, reconnects) pass.
-  # A table lock is not a substitute: PostgreSQL answers the cancel of a lock
-  # wait at once, so the error arrives before the socket closes and no retry
-  # runs. The writes use the production pool (`DBConnection.ConnectionPool`) with
+  # disconnect that one too. The stall is injected at the boundary by
+  # `CodexPooler.StallingPostgresProxy`, which also explains why a table lock
+  # is not a substitute. The writes use the production pool (`DBConnection.ConnectionPool`) with
   # two connections, so a retry has a second one to take.
   @tag slow: "each of the three heartbeat writes waits out its one-second production budget against a stalled server"
   test "a heartbeat write that outlives its budget disconnects one pooled connection, not a second one on a retry" do
@@ -84,16 +82,9 @@ defmodule CodexPooler.Platform.HeartbeatWriteBudgetTest do
     ]
 
     for {{name, call}, index} <- Enum.with_index(calls) do
-      proxy = start_stalling_proxy!()
-
-      repo =
-        start_supervised!(
-          {Repo, name: nil, pool: DBConnection.ConnectionPool, pool_size: 2, idle_interval: 60_000, hostname: "127.0.0.1", port: proxy.port},
-          id: {:heartbeat_budget_repo, index}
-        )
-
-      await_pool_connected!(repo, 2)
-      stall!(proxy)
+      proxy = StallingPostgresProxy.start!()
+      repo = StallingPostgresProxy.start_repo!(proxy, {:heartbeat_budget_repo, index}, 2)
+      StallingPostgresProxy.stall!(proxy)
 
       {{outcome, elapsed_ms}, log} =
         ExUnit.CaptureLog.with_log(fn ->
@@ -119,91 +110,11 @@ defmodule CodexPooler.Platform.HeartbeatWriteBudgetTest do
         end)
 
       :ok = stop_supervised({:heartbeat_budget_repo, index})
-      stop_stalling_proxy!(proxy)
+      StallingPostgresProxy.stop!(proxy)
 
       disconnects = length(Regex.scan(~r/timed out because it queued and checked out the connection/, log))
       # The budget is one second; the margin covers the disconnect and scheduling, not a second attempt.
       assert {name, outcome, disconnects, elapsed_ms < 1_500} == {name, :bounded_failure, 1, true}
-    end
-  end
-
-  # Both pooled connections must have finished their handshake before the stall,
-  # or the stall would freeze a connect instead of a statement.
-  defp await_pool_connected!(repo, size) do
-    test_pid = self()
-    ref = make_ref()
-
-    holders = for _ <- 1..size, do: Task.async(fn -> hold_pool_connection(repo, test_pid, ref) end)
-
-    for _ <- holders, do: assert_receive({:pool_connection_held, ^ref}, 15_000)
-    for holder <- holders, do: send(holder.pid, {:release_pool_connection, ref})
-    for holder <- holders, do: assert(Task.await(holder, 15_000) == :released)
-    :ok
-  end
-
-  defp hold_pool_connection(repo, test_pid, ref) do
-    _previous = Repo.put_dynamic_repo(repo)
-
-    Repo.checkout(fn ->
-      send(test_pid, {:pool_connection_held, ref})
-
-      receive do
-        {:release_pool_connection, ^ref} -> :released
-      end
-    end)
-  end
-
-  defp start_stalling_proxy! do
-    config = Repo.config()
-    target = {String.to_charlist(config[:hostname]), config[:port]}
-    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
-    {:ok, port} = :inet.port(listen)
-    # slot 1: connections accepted so far; slot 2: connections with a sequence at or below it are frozen
-    counters = :atomics.new(2, [])
-    acceptor = spawn(fn -> accept_loop(listen, target, counters) end)
-    %{port: port, listen: listen, acceptor: acceptor, counters: counters}
-  end
-
-  defp stall!(%{counters: counters}), do: :atomics.put(counters, 2, :atomics.get(counters, 1))
-
-  defp stop_stalling_proxy!(%{listen: listen, acceptor: acceptor}) do
-    Process.exit(acceptor, :kill)
-    :ok = :gen_tcp.close(listen)
-  end
-
-  defp accept_loop(listen, {host, port} = target, counters) do
-    case :gen_tcp.accept(listen) do
-      {:ok, client} ->
-        sequence = :atomics.add_get(counters, 1, 1)
-        {:ok, upstream} = :gen_tcp.connect(host, port, [:binary, active: false])
-        spawn(fn -> relay(client, upstream, sequence, counters) end)
-        spawn(fn -> relay(upstream, client, sequence, counters) end)
-        accept_loop(listen, target, counters)
-
-      {:error, _closed} ->
-        :ok
-    end
-  end
-
-  # Relays in bounded receive slices so a frozen connection keeps its bytes
-  # unread without spinning.
-  defp relay(from, to, sequence, counters) do
-    if sequence <= :atomics.get(counters, 2) do
-      Process.sleep(20)
-      relay(from, to, sequence, counters)
-    else
-      case :gen_tcp.recv(from, 0, 50) do
-        {:ok, data} ->
-          _sent = :gen_tcp.send(to, data)
-          relay(from, to, sequence, counters)
-
-        {:error, :timeout} ->
-          relay(from, to, sequence, counters)
-
-        {:error, _closed} ->
-          _closed = :gen_tcp.close(to)
-          :ok
-      end
     end
   end
 end

@@ -580,10 +580,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     end
   end
 
+  # DBConnection enforces the budget by disconnecting the pooled connection the
+  # renewal holds. A `BEGIN` cut that way is retriable, and without
+  # `checkout_retries: 0` DBConnection retried it on another pooled connection
+  # under the already expired deadline and disconnected that one too, so a
+  # stalled database cost the pool three connections per missed renewal
+  # (findings#206 row 206-369, the heartbeat shape of row 206-358).
   defp transaction_options(renewal_opts) do
     case Keyword.get(renewal_opts, :timeout_ms) do
       timeout when is_integer(timeout) and timeout > 0 ->
-        [timeout: timeout, deadline: System.monotonic_time(:millisecond) + timeout]
+        [timeout: timeout, deadline: System.monotonic_time(:millisecond) + timeout, checkout_retries: 0]
 
       _no_bound ->
         []
