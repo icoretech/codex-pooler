@@ -103,6 +103,12 @@ config :codex_pooler, dev_features_build_enabled: true
 # Tests must never reach the real provider: an identity without an explicit
 # base URL points at a closed local port and fails with connection refused.
 config :codex_pooler, codex_upstream_base_url: "http://127.0.0.1:9"
+
+# The same holds for the provider token endpoint: an identity without a local
+# `base_url`/`token_url` refreshes against the CodexAuth issuer, so a test that
+# forgets to point it at its fake fails fast here instead of calling the real
+# issuer. Tests that exercise OAuth replace the issuer with their own fake.
+config :codex_pooler, CodexPooler.Upstreams.Auth.CodexAuth, issuer: "http://127.0.0.1:9"
 config :codex_pooler, dev_features_enabled: false
 config :codex_pooler, dev_seeds_enabled: true
 
