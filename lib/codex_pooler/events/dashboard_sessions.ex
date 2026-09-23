@@ -43,12 +43,12 @@ defmodule CodexPooler.Events.DashboardSessions do
     Events.broadcast_pool_event_after_commit(pool_id, [@topic], reason, payload)
   end
 
-  @spec broadcast_local(Event.t(), term()) :: :ok | {:error, term()}
-  def broadcast_local(%Event{topics: topics, payload: payload}, message) do
+  @spec broadcast_local(Event.t(), term(), :cluster | :node) :: :ok | {:error, term()}
+  def broadcast_local(%Event{topics: topics, payload: payload}, message, reach) do
     if @topic in topics do
       case Map.get(payload, "api_key_id") do
         api_key_id when is_binary(api_key_id) ->
-          PubSub.broadcast_from(@pubsub, self(), pubsub_topic(api_key_id), message)
+          Events.publish_from(reach, pubsub_topic(api_key_id), message)
 
         _missing_api_key_id ->
           {:error, :api_key_id_required}

@@ -255,14 +255,33 @@ defmodule CodexPooler.Events do
 
   def validate_topics(_topics), do: {:error, :invalid_topics}
 
+  @doc """
+  Broadcasts an event to its subscribers on every node of this node's PubSub
+  cluster (the origin of an immediate event).
+  """
   @spec broadcast_local_event(Event.t()) :: :ok | {:error, term()}
-  def broadcast_local_event(%Event{} = event) do
+  def broadcast_local_event(%Event{} = event), do: publish_event(event, :cluster)
+
+  @doc """
+  Delivers an event relayed from PostgreSQL to its subscribers on this node
+  only. Every node's `CodexPooler.Events.PostgresBridge` delivers its own copy,
+  so a cluster-wide broadcast here would deliver it once per node.
+  """
+  @spec deliver_relayed_event(Event.t()) :: :ok | {:error, term()}
+  def deliver_relayed_event(%Event{} = event), do: publish_event(event, :node)
+
+  @doc false
+  @spec publish_from(:cluster | :node, String.t(), term()) :: :ok | {:error, term()}
+  def publish_from(:cluster, topic, message), do: PubSub.broadcast_from(@pubsub, self(), topic, message)
+  def publish_from(:node, topic, message), do: PubSub.local_broadcast_from(@pubsub, self(), topic, message)
+
+  defp publish_event(%Event{} = event, reach) do
     message = {@message_tag, event}
 
-    with :ok <- PubSub.broadcast_from(@pubsub, self(), pubsub_topic(event.pool_id), message),
-         :ok <- broadcast_scoped_topics(event, message),
-         :ok <- DashboardSessionEvents.broadcast_local(event, message) do
-      PubSub.broadcast_from(@pubsub, self(), @all_topic, message)
+    with :ok <- publish_from(reach, pubsub_topic(event.pool_id), message),
+         :ok <- broadcast_scoped_topics(event, message, reach),
+         :ok <- DashboardSessionEvents.broadcast_local(event, message, reach) do
+      publish_from(reach, @all_topic, message)
     end
   end
 
@@ -271,13 +290,17 @@ defmodule CodexPooler.Events do
     event_to_postgres_payload(event, origin_id())
   end
 
-  defp event_to_postgres_payload(%Event{} = event, event_origin_id) do
+  defp event_to_postgres_payload(%Event{} = event, event_origin_id, origin_node \\ nil) do
     event
     |> Map.from_struct()
     |> Map.update!(:emitted_at, &DateTime.to_iso8601/1)
     |> Map.put(:origin_id, event_origin_id)
+    |> maybe_put_origin_node(origin_node)
     |> CodexPooler.JSON.encode()
   end
+
+  defp maybe_put_origin_node(attrs, nil), do: attrs
+  defp maybe_put_origin_node(attrs, origin_node), do: Map.put(attrs, :origin_node, origin_node)
 
   defp normalize_topics(topics), do: validate_topics(topics)
 
@@ -310,9 +333,12 @@ defmodule CodexPooler.Events do
     end
   end
 
+  # The origin node already reached its PubSub cluster, so the notification
+  # names that node: a bridge on a connected node skips it and only the nodes
+  # outside the cluster (unclustered roles) deliver it from PostgreSQL.
   defp broadcast_immediate_event(%Event{} = event) do
     with :ok <- broadcast_local_event(event),
-         :ok <- broadcast_postgres_event(event, origin_id()) do
+         :ok <- broadcast_postgres_event(event, origin_id(), Atom.to_string(node())) do
       {:ok, event}
     end
   end
@@ -338,14 +364,9 @@ defmodule CodexPooler.Events do
     :ok
   end
 
-  defp broadcast_scoped_topics(%Event{} = event, message) do
+  defp broadcast_scoped_topics(%Event{} = event, message, reach) do
     Enum.reduce_while(event.topics, :ok, fn topic, :ok ->
-      case PubSub.broadcast_from(
-             @pubsub,
-             self(),
-             scoped_pubsub_topic(event.pool_id, topic),
-             message
-           ) do
+      case publish_from(reach, scoped_pubsub_topic(event.pool_id, topic), message) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -354,8 +375,8 @@ defmodule CodexPooler.Events do
 
   defp scoped_pubsub_topic(pool_id, topic), do: pubsub_topic(pool_id) <> ":" <> topic
 
-  defp broadcast_postgres_event(%Event{} = event, event_origin_id) do
-    with {:ok, payload} <- event_to_postgres_payload(event, event_origin_id),
+  defp broadcast_postgres_event(%Event{} = event, event_origin_id, origin_node \\ nil) do
+    with {:ok, payload} <- event_to_postgres_payload(event, event_origin_id, origin_node),
          {:ok, _result} <-
            SQL.query(Repo, "SELECT pg_notify($1, $2)", [@postgres_channel, payload]) do
       :ok

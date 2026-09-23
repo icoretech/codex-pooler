@@ -1,17 +1,34 @@
 defmodule CodexPooler.Events.PostgresBridge do
   @moduledoc false
 
+  # Relays the PostgreSQL notifications of pool events and OpenAI status
+  # events to this node's PubSub subscribers.
+  #
+  # Every node runs one bridge, and each delivers what it relays on its own
+  # node only. A notification whose origin node is in this node's PubSub
+  # cluster is skipped, because the origin's PubSub broadcast already reached
+  # this node. Every other notification is delivered here and also handed to
+  # the bridges of the PubSub cluster, so a notification one node's connection
+  # lost still reaches its pages through a peer. A notification from
+  # PostgreSQL and a peer's copy of it are delivered once, whichever arrives
+  # first; two notifications from PostgreSQL are always both delivered.
+
   use GenServer
 
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
   alias CodexPooler.Status.Events, as: StatusEvents
+  alias Phoenix.PubSub
 
   require Logger
 
   @notifications CodexPooler.Events.PostgresNotifications
+  @pubsub CodexPooler.PubSub
+  @peer_topic "postgres_bridge:relayed"
   @relisten_initial_interval_ms 100
   @relisten_max_interval_ms 5_000
+  @delivered_limit 4_096
+  @delivered_ttl_ms 30_000
 
   @type state :: %{
           required(:notifications) => GenServer.server(),
@@ -19,7 +36,11 @@ defmodule CodexPooler.Events.PostgresBridge do
           required(:status_listen_ref) => reference() | nil,
           required(:notifications_monitor) => reference() | nil,
           required(:relisten_token) => reference() | nil,
-          required(:relisten_attempt) => non_neg_integer()
+          required(:relisten_attempt) => non_neg_integer(),
+          required(:pubsub_nodes) => (-> [node()]),
+          required(:delivered) => %{optional(binary()) => {:postgres | :peer, integer()}},
+          required(:delivered_order) => :queue.queue({binary(), integer()}),
+          required(:delivered_count) => non_neg_integer()
         }
 
   @spec start_link(term()) :: GenServer.on_start()
@@ -28,58 +49,46 @@ defmodule CodexPooler.Events.PostgresBridge do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
+  @spec peer_topic() :: String.t()
+  def peer_topic, do: @peer_topic
+
   @spec relay_payload(String.t()) :: :ok | {:error, term()}
   def relay_payload(payload) when is_binary(payload) do
     with {:ok, event} <- decode_event(payload) do
-      Events.broadcast_local_event(event)
+      Events.deliver_relayed_event(event)
     end
   end
 
   @impl true
   def init(opts) do
+    :ok = PubSub.subscribe(@pubsub, @peer_topic)
+
     state = %{
       notifications: Keyword.get(opts, :notifications, @notifications),
       listen_ref: nil,
       status_listen_ref: nil,
       notifications_monitor: nil,
       relisten_token: nil,
-      relisten_attempt: 0
+      relisten_attempt: 0,
+      pubsub_nodes: Keyword.get(opts, :pubsub_nodes, &pubsub_peer_nodes/0),
+      delivered: %{},
+      delivered_order: :queue.new(),
+      delivered_count: 0
     }
 
     {:ok, listen(state)}
   end
 
   @impl true
-  def handle_info(
-        {:notification, _pid, listen_ref, channel, payload},
-        %{listen_ref: listen_ref} = state
-      ) do
-    case relay_remote_notification(channel, payload) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("pool event postgres relay ignored payload: #{inspect(reason)}")
-    end
-
-    {:noreply, state}
+  def handle_info({:notification, _pid, listen_ref, channel, payload}, state) when is_reference(listen_ref) do
+    {:noreply, relay_notification(channel_for(listen_ref, state), channel, payload, state)}
   end
 
-  def handle_info(
-        {:notification, _pid, listen_ref, channel, payload},
-        %{status_listen_ref: listen_ref} = state
-      ) do
-    if channel == StatusEvents.postgres_channel() do
-      case StatusEvents.relay_payload(payload) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("status postgres relay ignored payload: #{inspect(reason)}")
-      end
-    end
-
-    {:noreply, state}
+  # A peer's bridge relayed a notification it received from PostgreSQL. It is
+  # delivered here unless this bridge already delivered a copy of it, and it is
+  # never handed on again.
+  def handle_info({__MODULE__, :relayed, channel, payload}, state) when is_binary(channel) and is_binary(payload) do
+    {:noreply, relay_peer_copy(state, channel, payload)}
   end
 
   # The notifications process sent every notification it relayed before it
@@ -99,26 +108,151 @@ defmodule CodexPooler.Events.PostgresBridge do
 
   def handle_info(_message, state), do: {:noreply, state}
 
-  defp relay_remote_notification(channel, payload) do
-    if channel == Events.postgres_channel() do
-      relay_remote_payload(payload)
-    else
-      :ok
+  # A registration this bridge no longer holds maps to no channel and relays
+  # nothing, as does a channel other than the one the registration was for.
+  defp channel_for(listen_ref, %{listen_ref: listen_ref}), do: Events.postgres_channel()
+  defp channel_for(listen_ref, %{status_listen_ref: listen_ref}), do: StatusEvents.postgres_channel()
+  defp channel_for(_listen_ref, _state), do: nil
+
+  defp relay_notification(channel, channel, payload, state) do
+    case origin(payload) do
+      {:ok, origin_id, origin_node} ->
+        if reached_by_origin?(origin_id, origin_node, state) do
+          state
+        else
+          relay_new_notification(state, channel, payload)
+        end
+
+      {:error, reason} ->
+        log_ignored(channel, reason)
+        state
     end
   end
 
-  defp relay_remote_payload(payload) do
-    case local_origin?(payload) do
-      {:ok, false} -> relay_payload(payload)
-      {:ok, true} -> :ok
+  defp relay_notification(_expected_channel, _channel, _payload, state), do: state
+
+  # This node's own notification, or one from a node whose PubSub broadcast
+  # already reached this node. Status notifications carry no origin: their
+  # producer broadcasts through PostgreSQL only.
+  defp reached_by_origin?(origin_id, origin_node, state) do
+    origin_id == Events.origin_id() or
+      (is_binary(origin_node) and Enum.any?(state.pubsub_nodes.(), &(Atom.to_string(&1) == origin_node)))
+  end
+
+  # The other nodes whose PubSub server has joined this node's PubSub group,
+  # which the origin's cluster-wide broadcast reaches. A node that is only
+  # connected (a remote shell, a VM sharing just the database) is not one of
+  # them. Anything unexpected reads as no node, so the notification is
+  # delivered rather than lost.
+  defp pubsub_peer_nodes do
+    Phoenix.PubSub
+    |> :pg.get_members(Module.concat(@pubsub, "Adapter"))
+    |> Enum.map(&node/1)
+    |> Enum.reject(&(&1 == node()))
+  catch
+    _kind, _reason -> []
+  end
+
+  defp origin(payload) do
+    case CodexPooler.JSON.decode(payload) do
+      {:ok, %{} = attrs} -> {:ok, attrs["origin_id"], attrs["origin_node"]}
+      {:ok, _other} -> {:error, :invalid_payload}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp local_origin?(payload) do
-    with {:ok, attrs} <- CodexPooler.JSON.decode(payload) do
-      {:ok, attrs["origin_id"] == Events.origin_id()}
+  # A notification from PostgreSQL is delivered unless a peer's copy of it was
+  # delivered first; a repeated identical notification is delivered again.
+  # Only what it delivers is handed to the peers.
+  defp relay_new_notification(state, channel, payload) do
+    key = delivery_key(channel, payload)
+    now = System.monotonic_time(:millisecond)
+
+    case recent_delivery(state, key, now) do
+      :peer ->
+        remember_delivery(state, key, :postgres, now)
+
+      _none_or_postgres ->
+        case deliver(channel, payload) do
+          :ok ->
+            _ = PubSub.broadcast_from(@pubsub, self(), @peer_topic, {__MODULE__, :relayed, channel, payload})
+            remember_delivery(state, key, :postgres, now)
+
+          {:error, reason} ->
+            log_ignored(channel, reason)
+            state
+        end
     end
+  end
+
+  defp relay_peer_copy(state, channel, payload) do
+    key = delivery_key(channel, payload)
+    now = System.monotonic_time(:millisecond)
+
+    case recent_delivery(state, key, now) do
+      nil ->
+        case deliver(channel, payload) do
+          :ok -> :ok
+          {:error, reason} -> log_ignored(channel, reason)
+        end
+
+        remember_delivery(state, key, :peer, now)
+
+      _delivered ->
+        state
+    end
+  end
+
+  defp delivery_key(channel, payload), do: :crypto.hash(:sha256, [channel, 0, payload])
+
+  defp recent_delivery(state, key, now) do
+    case state.delivered do
+      %{^key => {source, at}} when now - at <= @delivered_ttl_ms -> source
+      _unknown_or_expired -> nil
+    end
+  end
+
+  defp remember_delivery(state, key, source, now) do
+    prune_deliveries(
+      %{
+        state
+        | delivered: Map.put(state.delivered, key, {source, now}),
+          delivered_order: :queue.in({key, now}, state.delivered_order),
+          delivered_count: state.delivered_count + 1
+      },
+      now
+    )
+  end
+
+  defp prune_deliveries(state, now) do
+    case :queue.peek(state.delivered_order) do
+      {:value, {key, at}} when now - at > @delivered_ttl_ms or state.delivered_count > @delivered_limit ->
+        delivered =
+          case state.delivered do
+            %{^key => {_source, ^at}} -> Map.delete(state.delivered, key)
+            delivered -> delivered
+          end
+
+        prune_deliveries(
+          %{state | delivered: delivered, delivered_order: :queue.drop(state.delivered_order), delivered_count: state.delivered_count - 1},
+          now
+        )
+
+      _within_bounds ->
+        state
+    end
+  end
+
+  defp deliver(channel, payload) do
+    cond do
+      channel == Events.postgres_channel() -> relay_payload(payload)
+      channel == StatusEvents.postgres_channel() -> StatusEvents.relay_payload(payload)
+      true -> {:error, :unknown_channel}
+    end
+  end
+
+  defp log_ignored(channel, reason) do
+    Logger.warning("postgres event relay ignored payload channel=#{channel} reason=#{inspect(reason)}")
   end
 
   defp decode_event(payload) do
@@ -194,7 +328,7 @@ defmodule CodexPooler.Events.PostgresBridge do
     monitor_ref = Process.monitor(pid)
 
     with {:ok, listen_ref} <- listen_channel(pid, Events.postgres_channel()),
-         {:ok, status_listen_ref} <- listen_channel(pid, StatusEvents.postgres_channel(), listen_ref) do
+         {:ok, status_listen_ref} <- listen_channel(pid, StatusEvents.postgres_channel(), [listen_ref]) do
       %{
         state
         | listen_ref: listen_ref,
@@ -210,21 +344,19 @@ defmodule CodexPooler.Events.PostgresBridge do
     end
   end
 
-  defp listen_channel(pid, channel, previous_ref \\ nil) do
+  defp listen_channel(pid, channel, previous_refs \\ []) do
     case Postgrex.Notifications.listen(pid, channel) do
       {:ok, listen_ref} -> {:ok, listen_ref}
       {:eventually, listen_ref} -> {:ok, listen_ref}
     end
   catch
     :exit, _reason ->
-      _ = unlisten(pid, previous_ref)
+      Enum.each(previous_refs, &unlisten(pid, &1))
       :error
   end
 
-  # A listen that failed after an earlier channel succeeded drops that
-  # registration, so the retry does not leave a second one behind.
-  defp unlisten(_pid, nil), do: :ok
-
+  # A listen that failed after earlier channels succeeded drops those
+  # registrations, so the retry does not leave a second one behind.
   defp unlisten(pid, listen_ref) do
     Postgrex.Notifications.unlisten(pid, listen_ref)
   catch

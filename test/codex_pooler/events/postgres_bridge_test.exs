@@ -66,17 +66,85 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     assert_relays_once!(ctx, bridge, pool_id, "after_replacement", 3)
   end
 
+  test "skips a notification whose origin node reached this node through PubSub", ctx do
+    notifications = start_notifications!(ctx, :permanent)
+    peer = :"postgres-bridge-test-peer@127.0.0.1"
+    bridge = start_bridge!(ctx, pubsub_nodes: fn -> [peer] end)
+    await_bridge_listening!(bridge, notifications)
+    pool_id = subscribe!()
+
+    {event, payload} = remote_pool_event(pool_id, "from_connected_peer", Atom.to_string(peer))
+    {marker, marker_payload} = remote_pool_event(pool_id, "from_unclustered_node", "postgres-bridge-test-worker@127.0.0.1")
+    notify!(ctx.sender, Events.postgres_channel(), payload)
+    notify!(ctx.sender, Events.postgres_channel(), marker_payload)
+
+    assert_receive {Events, ^marker}, @relay_detection_timeout_ms
+    refute_received {Events, ^event}
+    refute_received {Events, ^marker}
+  end
+
+  test "delivers a notification once whether its own copy or a peer's copy arrives first", ctx do
+    notifications = start_notifications!(ctx, :permanent)
+    bridge = start_bridge!(ctx)
+    await_bridge_listening!(bridge, notifications)
+    pool_id = subscribe!()
+    :ok = Phoenix.PubSub.subscribe(CodexPooler.PubSub, PostgresBridge.peer_topic())
+    channel = Events.postgres_channel()
+
+    # A peer's copy first, then the notification from PostgreSQL.
+    {peer_first, peer_first_payload} = remote_pool_event(pool_id, "peer_first")
+    send(bridge, {PostgresBridge, :relayed, channel, peer_first_payload})
+    assert_receive {Events, ^peer_first}, @relay_detection_timeout_ms
+    notify!(ctx.sender, channel, peer_first_payload)
+
+    # The notification from PostgreSQL first: it is handed to the peers, and
+    # their copy coming back is not delivered again.
+    {own_first, own_first_payload} = remote_pool_event(pool_id, "own_first")
+    notify!(ctx.sender, channel, own_first_payload)
+    assert_receive {PostgresBridge, :relayed, ^channel, ^own_first_payload}, @relay_detection_timeout_ms
+    assert_receive {Events, ^own_first}, @relay_detection_timeout_ms
+    send(bridge, {PostgresBridge, :relayed, channel, own_first_payload})
+
+    # A notification this node's connection lost reaches it through a peer.
+    {peer_only, peer_only_payload} = remote_pool_event(pool_id, "peer_only")
+    send(bridge, {PostgresBridge, :relayed, channel, peer_only_payload})
+    assert_receive {Events, ^peer_only}, @relay_detection_timeout_ms
+
+    # Two identical notifications from PostgreSQL are two notifications.
+    repeated = status_payload(41)
+    notify!(ctx.sender, StatusEvents.postgres_channel(), repeated)
+    notify!(ctx.sender, StatusEvents.postgres_channel(), repeated)
+
+    # A trailing marker from PostgreSQL: once it is delivered, every earlier
+    # notification and copy has been handled by the bridge.
+    {marker, marker_payload} = remote_pool_event(pool_id, "dedupe_marker")
+    notify!(ctx.sender, channel, marker_payload)
+    assert_receive {Events, ^marker}, @relay_detection_timeout_ms
+    _ = :sys.get_state(bridge)
+
+    refute_received {Events, ^peer_first}
+    refute_received {Events, ^own_first}
+    refute_received {Events, ^peer_only}
+    refute_received {Events, ^marker}
+    assert_received {:openai_status_updated, %{aggregate_revision: 41}}
+    assert_received {:openai_status_updated, %{aggregate_revision: 41}}
+    refute_received {:openai_status_updated, %{aggregate_revision: 41}}
+    # A copy received from a peer is never handed on again.
+    refute_received {PostgresBridge, :relayed, ^channel, ^peer_first_payload}
+    refute_received {PostgresBridge, :relayed, ^channel, ^peer_only_payload}
+  end
+
   defp start_notifications!(ctx, restart, id \\ :notifications) do
     opts = Keyword.merge(connection_config(), name: ctx.notifications, auto_reconnect: true)
 
     start_supervised!(%{id: id, start: {Postgrex.Notifications, :start_link, [opts]}, restart: restart})
   end
 
-  defp start_bridge!(ctx) do
-    start_supervised!(%{
-      id: :bridge,
-      start: {PostgresBridge, :start_link, [[name: ctx.bridge_name, notifications: ctx.notifications]]}
-    })
+  # No PubSub peer by default: whatever else runs in the test VM must not
+  # decide whether a notification is relayed.
+  defp start_bridge!(ctx, opts \\ []) do
+    opts = Keyword.merge([name: ctx.bridge_name, notifications: ctx.notifications, pubsub_nodes: fn -> [] end], opts)
+    start_supervised!(%{id: :bridge, start: {PostgresBridge, :start_link, [opts]}})
   end
 
   defp subscribe! do
@@ -205,7 +273,7 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     end
   end
 
-  defp remote_pool_event(pool_id, label) do
+  defp remote_pool_event(pool_id, label, origin_node \\ nil) do
     event = %Event{
       version: 1,
       id: Ecto.UUID.generate(),
@@ -222,6 +290,7 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
       local_payload
       |> CodexPooler.JSON.decode!()
       |> Map.put("origin_id", "postgres-bridge-test-remote-" <> Ecto.UUID.generate())
+      |> then(&if(origin_node, do: Map.put(&1, "origin_node", origin_node), else: &1))
       |> CodexPooler.JSON.encode!()
 
     {event, payload}

@@ -55,11 +55,14 @@ defmodule CodexPooler.Status.Events do
     end
   end
 
+  # Every node's bridge relays its own copy of the notification, so the relay
+  # delivers on this node only; a cluster-wide broadcast would reach each
+  # clustered node once per bridge.
   @spec relay_payload(String.t()) :: :ok | {:error, term()}
   def relay_payload(payload) when is_binary(payload) do
     with {:ok, attrs} <- CodexPooler.JSON.decode(payload),
          {:ok, event} <- decode_notification(attrs),
-         :ok <- PubSub.broadcast(CodexPooler.PubSub, @topic, notification(event)) do
+         :ok <- PubSub.local_broadcast(CodexPooler.PubSub, @topic, notification(event)) do
       :ok
     else
       {:error, _reason} -> {:error, :invalid_event}
