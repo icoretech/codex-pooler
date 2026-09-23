@@ -2627,7 +2627,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
 
     attempt_fixture(request, assignment, %{
       upstream_model_id: "gpt-6-astra",
-      served_model: "gpt-5.6-luna",
+      served_model: "gpt-6-luna",
       latency_ms: 120
     })
 
@@ -2643,10 +2643,10 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert [item] = result["structuredContent"]["items"]
     assert item["requested_model"] == "gpt-6-astra"
     assert item["upstream_model"] == "gpt-6-astra"
-    assert item["served_model"] == "gpt-5.6-luna"
+    assert item["served_model"] == "gpt-6-luna"
 
     assert [%{"type" => "text", "text" => text}] = result["content"]
-    assert text =~ "gpt-5.6-luna"
+    assert text =~ "gpt-6-luna"
 
     assert {:ok, detail} =
              ToolDispatch.call(
@@ -2657,10 +2657,10 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
 
     assert detail["isError"] == false
     assert :ok = Redaction.assert_mcp_output_safe!(detail)
-    assert detail["structuredContent"]["item"]["served_model"] == "gpt-5.6-luna"
+    assert detail["structuredContent"]["item"]["served_model"] == "gpt-6-luna"
     assert detail["structuredContent"]["item"]["upstream_model"] == "gpt-6-astra"
     assert [%{"type" => "text", "text" => detail_text}] = detail["content"]
-    assert detail_text =~ "gpt-5.6-luna"
+    assert detail_text =~ "gpt-6-luna"
     assert detail_text =~ "gpt-6-astra"
   end
 

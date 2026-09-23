@@ -42,7 +42,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
 
   test "canonical fixture source preserves released-client capability booleans" do
     source = %{
-      "slug" => "gpt-5.5",
+      "slug" => "gpt-6-sol",
       "supports_responses" => true,
       "supports_streaming" => true,
       "supports_tools" => true,
@@ -56,7 +56,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       }
     }
 
-    assert {:ok, result} = selected([{model("gpt-5.5", %{}), source}])
+    assert {:ok, result} = selected([{model("gpt-6-sol", %{}), source}])
 
     assert [projected] = result.body["models"]
     assert projected["supports_responses"]

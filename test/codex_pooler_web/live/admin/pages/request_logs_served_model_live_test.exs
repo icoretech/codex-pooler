@@ -23,7 +23,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsServedModelLiveTest do
       request_log_fixture(pool, %{
         correlation_id: "req-served-substituted",
         upstream_model_id: "gpt-6-astra",
-        served_model: "gpt-5.6-luna"
+        served_model: "gpt-6-luna"
       })
 
     %{request: echoed} =
@@ -45,12 +45,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsServedModelLiveTest do
     assert has_element?(
              view,
              "#request-log-#{substituted.id}-served-model[data-role='served-model']",
-             "served gpt-5.6-luna"
+             "served gpt-6-luna"
            )
 
     assert has_element?(
              view,
-             "#request-log-#{substituted.id}-model-details[title*='gpt-6-astra served gpt-5.6-luna']"
+             "#request-log-#{substituted.id}-model-details[title*='gpt-6-astra served gpt-6-luna']"
            )
 
     refute has_element?(view, "#request-log-#{echoed.id}-served-model")
@@ -65,7 +65,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsServedModelLiveTest do
       request_log_fixture(pool, %{
         correlation_id: "req-drawer-served-substituted",
         upstream_model_id: "gpt-6-astra",
-        served_model: "gpt-5.6-luna"
+        served_model: "gpt-6-luna"
       })
 
     %{request: undeclared} =
@@ -80,7 +80,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsServedModelLiveTest do
     assert has_element?(view, "#request-log-detail-upstream-model", "Sent upstream")
     assert has_element?(view, "#request-log-detail-upstream-model", "gpt-6-astra")
     assert has_element?(view, "#request-log-detail-served-model", "Upstream served")
-    assert has_element?(view, "#request-log-detail-served-model", "gpt-5.6-luna")
+    assert has_element?(view, "#request-log-detail-served-model", "gpt-6-luna")
     refute render(view) =~ @sensitive_marker
 
     view = open_selected_request(conn, pool, undeclared)

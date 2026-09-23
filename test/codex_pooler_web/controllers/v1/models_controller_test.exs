@@ -370,7 +370,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
 
     setup =
       gateway_setup(upstream,
-        exposed_model_id: "gpt-5.6-sol",
+        exposed_model_id: "gpt-6-sol",
         model_metadata: %{
           "upstream_model" => %{
             "context_window" => 272_000,
@@ -422,7 +422,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert %{"models" => [backend_model]} = json_response(backend_conn, 200)
     assert %{"object" => "list", "data" => [public_model]} = json_response(public_conn, 200)
 
-    assert backend_model["slug"] == "gpt-5.6-sol"
+    assert backend_model["slug"] == "gpt-6-sol"
     assert backend_model["context_window"] == 872_000
     assert backend_model["effective_context_window_percent"] == 95
     assert public_model["context_length"] == 828_400

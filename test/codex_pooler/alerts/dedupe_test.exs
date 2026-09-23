@@ -133,7 +133,7 @@ defmodule CodexPooler.Alerts.DedupeTest do
         pool_id: pool_id,
         scope_type: "pool",
         rule_kind: rule_kind,
-        model: "gpt-5.5",
+        model: "gpt-6-sol",
         min_usable_assignments: if(rule_kind == "pool_low_usable_assignments", do: 2),
         target_state: nil
       }
@@ -158,7 +158,7 @@ defmodule CodexPooler.Alerts.DedupeTest do
       pool_id: pool_id,
       scope_type: "pool",
       rule_kind: "pool_all_assignments_in_state",
-      model: "gpt-5.5",
+      model: "gpt-6-sol",
       min_usable_assignments: nil,
       target_state: "exhausted"
     }
@@ -167,7 +167,7 @@ defmodule CodexPooler.Alerts.DedupeTest do
              Map.put(pool_all_rule, :route_class, "proxy_stream"),
              nil
            ) ==
-             "alerts:v1:pool_all_assignments_in_state:pool:#{pool_id}:model:gpt-5.5:min:none:state:exhausted"
+             "alerts:v1:pool_all_assignments_in_state:pool:#{pool_id}:model:gpt-6-sol:min:none:state:exhausted"
   end
 
   test "pool evidence records the selected route class scope" do

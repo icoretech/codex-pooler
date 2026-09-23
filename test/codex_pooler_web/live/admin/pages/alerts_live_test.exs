@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
         "severity" => "warning",
         "state" => AlertRule.active_state(),
         "cooldown_minutes" => "45",
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "route_class" => "proxy_stream",
         "min_usable_assignments" => "3"
       }
@@ -63,7 +63,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert rule.display_name == "Low assignment coverage"
     assert rule.rule_kind == "pool_low_usable_assignments"
     assert rule.min_usable_assignments == 3
-    assert rule.model == "gpt-5.5"
+    assert rule.model == "gpt-6-sol"
     assert Map.get(rule, :route_class) == "proxy_stream"
 
     assert has_element?(view, "#alert-rule-row-#{rule.id}", "Low assignment coverage")
@@ -243,7 +243,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
         "severity" => "critical",
         "state" => AlertRule.active_state(),
         "cooldown_minutes" => "60",
-        "model" => "gpt-5.5",
+        "model" => "gpt-6-sol",
         "route_class" => "proxy_compact"
       }
     })
@@ -251,7 +251,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     updated_rule = Repo.get!(AlertRule, rule.id)
     assert updated_rule.display_name == "Updated alert rule"
     assert updated_rule.cooldown_minutes == 60
-    assert updated_rule.model == "gpt-5.5"
+    assert updated_rule.model == "gpt-6-sol"
     assert Map.get(updated_rule, :route_class) == "proxy_compact"
     assert has_element?(view, "#alert-rule-row-#{rule.id}", "Updated alert rule")
     assert has_element?(view, "#alert-rule-row-#{rule.id}-route-class", "proxy_compact")

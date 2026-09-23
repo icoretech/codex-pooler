@@ -188,7 +188,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
 
     assert ValidationRejection.supported_values("Supported values are: 'auto'") == ["auto"]
 
-    assert ValidationRejection.supported_values("Supported values are: 'gpt-5.5', 'v1_beta', and 'a.b-c'.") == ~w(gpt-5.5 v1_beta a.b-c)
+    assert ValidationRejection.supported_values("Supported values are: 'gpt-6-sol', 'v1_beta', and 'a.b-c'.") == ~w(gpt-6-sol v1_beta a.b-c)
 
     twelve = Enum.map_join(1..12, ", ", &"'v#{&1}'")
 

@@ -1138,7 +1138,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       safe_model =
         model_fixture(pool, %{
-          exposed_model_id: "gpt-5.5",
+          exposed_model_id: "gpt-6-sol",
           display_name: "Model Usage Display Name #{sensitive_marker}"
         })
 
@@ -1223,7 +1223,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       model_series_names = Enum.drop(series_names, -1)
 
       assert series_names == [
-               "gpt-5.5",
+               "gpt-6-sol",
                escaped_unsafe_model_code,
                "gpt-ranked-3",
                "gpt-ranked-4",
@@ -1255,7 +1255,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
              ] = yaxis
 
       refute unsafe_model_code in series_names
-      assert chart_html =~ "gpt-5.5"
+      assert chart_html =~ "gpt-6-sol"
       assert chart_html =~ "&amp;lt;img src=x onerror=alert(1)&amp;gt;"
       refute chart_html =~ "<img src=x onerror=alert(1)>"
       refute chart_html =~ "Model Usage Display Name"

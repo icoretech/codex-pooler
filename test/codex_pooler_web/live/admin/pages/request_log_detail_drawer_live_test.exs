@@ -109,7 +109,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     %{request: legacy_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-drawer-legacy-effort",
-        requested_model: "gpt-5.5",
+        requested_model: "gpt-6-sol",
         reasoning_effort: "high"
       })
 

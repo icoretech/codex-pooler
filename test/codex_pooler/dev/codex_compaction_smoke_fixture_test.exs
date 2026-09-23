@@ -33,7 +33,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
   test "journal and one-time secret are private, disjoint, and reject links", context do
     paths = Journal.paths(context.root, context.run_id)
     journal = Journal.new(context.run_id, "pool-id", "identity-id", "assignment-id", "model-id")
-    secret = Journal.secret(context.run_id, "raw-key", "key-id", "pool-id", "gpt-5.5")
+    secret = Journal.secret(context.run_id, "raw-key", "key-id", "pool-id", "gpt-6-sol")
 
     assert :ok = Journal.write_journal(paths, journal)
     assert :ok = Journal.write_secret(paths, secret)
@@ -87,7 +87,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
     assert acquired.status == "ready"
     assert acquired.run_id == context.run_id
-    assert acquired.model == "gpt-5.5"
+    assert acquired.model == "gpt-6-sol"
     assert_safe_public_status(acquired, context)
 
     paths = Journal.paths(context.root, context.run_id)
@@ -323,10 +323,10 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     paths = Journal.paths(context.root, context.run_id)
 
     assert {:ok, full} = CodexCompactionSmokeFixture.serving_override(Keyword.put(options, :mode, "full"))
-    assert %{status: "ready", run_id: run_id, model: "gpt-5.5", serving_mode: "full", serving_override_id: override_id} = full
+    assert %{status: "ready", run_id: run_id, model: "gpt-6-sol", serving_mode: "full", serving_override_id: override_id} = full
     assert run_id == context.run_id
 
-    assert %ModelServingOverride{pool_id: pool_id, exposed_model_id: "gpt-5.5", mode: "full"} =
+    assert %ModelServingOverride{pool_id: pool_id, exposed_model_id: "gpt-6-sol", mode: "full"} =
              Repo.get(ModelServingOverride, override_id)
 
     assert pool_id == acquired.pool_id
@@ -362,7 +362,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     now = DateTime.utc_now()
 
     Repo.insert_all(ModelServingOverride, [
-      %{pool_id: acquired.pool_id, exposed_model_id: "gpt-5.5", mode: "full", created_at: now, updated_at: now}
+      %{pool_id: acquired.pool_id, exposed_model_id: "gpt-6-sol", mode: "full", created_at: now, updated_at: now}
     ])
 
     assert {:error, "fixture cleanup incomplete; metadata journal retained"} = CodexCompactionSmokeFixture.release(options)

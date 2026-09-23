@@ -58,7 +58,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   @identity_id "00000000-0000-0000-0000-000000000002"
-  @effective_model "gpt-5.4"
+  @effective_model "gpt-6-sol"
   @reset_probe_route_class "proxy_http"
 
   setup do
@@ -1290,7 +1290,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
         {@assignment_id, 123, @effective_model, @reset_probe_route_class},
         {@assignment_id, @identity_id, nil, @reset_probe_route_class},
         {@assignment_id, @identity_id, " ", @reset_probe_route_class},
-        {@assignment_id, @identity_id, " gpt-5.4", @reset_probe_route_class},
+        {@assignment_id, @identity_id, " gpt-6-sol", @reset_probe_route_class},
         {@assignment_id, @identity_id, 123, @reset_probe_route_class},
         {@assignment_id, @identity_id, @effective_model, nil},
         {@assignment_id, @identity_id, @effective_model, " "},

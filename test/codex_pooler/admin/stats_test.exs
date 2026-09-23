@@ -841,14 +841,14 @@ defmodule CodexPooler.Admin.StatsTest do
 
     m55 =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-5.5",
-        display_name: "Display name must not label gpt-5.5"
+        exposed_model_id: "gpt-6-sol",
+        display_name: "Display name must not label gpt-6-sol"
       })
 
     m54 =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-5.4",
-        display_name: "Display name must not label gpt-5.4"
+        exposed_model_id: "gpt-6-luna",
+        display_name: "Display name must not label gpt-6-luna"
       })
 
     m53 = model_fixture(pool, %{exposed_model_id: "gpt-5.3"})
@@ -988,19 +988,19 @@ defmodule CodexPooler.Admin.StatsTest do
 
     assert model_usage_series_order(model_usage) == [
              "gpt-5.3",
-             "gpt-5.5",
-             "gpt-5.4",
+             "gpt-6-sol",
+             "gpt-6-luna",
              "gpt-5.0",
              "gpt-5.1",
              "Other"
            ]
 
-    assert model_usage_total(model_usage, "gpt-5.5") == 9
+    assert model_usage_total(model_usage, "gpt-6-sol") == 9
     assert model_usage_total(model_usage, "Other") == 1
     assert model_usage_bucket_labels(model_usage) == hourly_bucket_labels(as_of, 6)
     assert length(model_usage) <= 6 * 6
 
-    assert_model_usage_point!(model_usage, "gpt-5.5", hourly_bucket(current_bucket), %{
+    assert_model_usage_point!(model_usage, "gpt-6-sol", hourly_bucket(current_bucket), %{
       request_count: 1,
       input_tokens: 9,
       cached_input_tokens: 0,

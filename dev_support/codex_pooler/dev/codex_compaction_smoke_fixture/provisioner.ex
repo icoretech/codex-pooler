@@ -15,7 +15,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
 
-  @model "gpt-5.5"
+  @model "gpt-6-sol"
 
   # The served catalog entry is this source map verbatim, so it carries every
   # field Codex's `ModelInfo` (codex-rs/protocol/src/openai_models.rs at

@@ -2413,7 +2413,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
     test "OMP 16.3.14 GPT-5.6 clean first turn preserves supported Responses fields" do
       payload = %{
-        "model" => "gpt-5.6-terra",
+        "model" => "gpt-6-sol",
         "input" => [
           %{
             "role" => "user",

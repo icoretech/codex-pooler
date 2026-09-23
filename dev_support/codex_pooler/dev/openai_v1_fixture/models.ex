@@ -27,7 +27,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
         upsert!(
           pool,
           assignment,
-          model_attributes("gpt-5.6-terra", "GPT 5.6 Terra", true, true, true, true, assignment, [
+          model_attributes("gpt-6-luna", "GPT 6 Luna", true, true, true, true, assignment, [
             "text",
             "image"
           ])
@@ -76,8 +76,8 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
 
   defp text_attributes(assignment) do
     model_attributes(
-      "gpt-5.5",
-      "GPT 5.5",
+      "gpt-6-sol",
+      "GPT 6 Sol",
       true,
       true,
       true,

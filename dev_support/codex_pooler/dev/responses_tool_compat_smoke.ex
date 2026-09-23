@@ -658,7 +658,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   end
 
   defp candidate_probe_models(models, opts) do
-    models = Enum.reject(models, &(&1.exposed_model_id == "gpt-5.6-luna"))
+    models = Enum.reject(models, &(&1.exposed_model_id == "gpt-6-luna"))
 
     case Keyword.fetch(opts, :candidate_model_id) do
       {:ok, model_id} -> Enum.filter(models, &(&1.exposed_model_id == model_id))

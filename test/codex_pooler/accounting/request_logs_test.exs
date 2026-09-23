@@ -2776,7 +2776,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     attempt_fixture(request, assignment, %{
       attempt_number: 2,
       upstream_model_id: "gpt-6-astra",
-      served_model: "gpt-5.6-luna"
+      served_model: "gpt-6-luna"
     })
 
     assert %{items: [log], total: 1} =
@@ -2784,7 +2784,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     assert log.requested_model == "gpt-6-astra"
     assert log.upstream_model == "gpt-6-astra"
-    assert log.served_model == "gpt-5.6-luna"
+    assert log.served_model == "gpt-6-luna"
 
     blank =
       request_fixture(%{pool: pool, api_key: api_key}, %{
@@ -2819,8 +2819,8 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     setup = accounting_setup()
 
     for {declared, persisted} <- [
-          {"gpt-5.6-luna", "gpt-5.6-luna"},
-          {"  gpt-5.6-luna  ", "gpt-5.6-luna"},
+          {"gpt-6-luna", "gpt-6-luna"},
+          {"  gpt-6-luna  ", "gpt-6-luna"},
           {nil, nil},
           {"", nil},
           {%{"id" => "gpt"}, nil}

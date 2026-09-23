@@ -19,7 +19,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
 
   @websocket_frame_timeout 1_000
 
-  test "websocket terminal usage settles priced gpt-5.5 request logs" do
+  test "websocket terminal usage settles priced gpt-6-sol request logs" do
     terminal_usage = %{
       "input_tokens" => 123,
       "input_tokens_details" => %{"cached_tokens" => 17},
@@ -42,14 +42,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
     model =
       setup.model
       |> Ecto.Changeset.change(%{
-        exposed_model_id: "gpt-5.5",
-        upstream_model_id: "gpt-5.5",
-        pricing_ref: "gpt-5.5",
+        exposed_model_id: "gpt-6-sol",
+        upstream_model_id: "gpt-6-sol",
+        pricing_ref: "gpt-6-sol",
         metadata:
           put_in(
             setup.model.metadata,
             ["source_assignment_models", setup.assignment.id, "slug"],
-            "gpt-5.5"
+            "gpt-6-sol"
           )
       })
       |> Repo.update!()
@@ -89,7 +89,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
     assert request.transport == "websocket"
     assert request.status == "succeeded"
     assert request.usage_status == "usage_known"
-    assert request.requested_model == "gpt-5.5"
+    assert request.requested_model == "gpt-6-sol"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.transport == "websocket"

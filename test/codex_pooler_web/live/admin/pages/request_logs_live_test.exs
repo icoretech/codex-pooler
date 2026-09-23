@@ -205,7 +205,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{request: model_default_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-live-model-default",
-        requested_model: "gpt-5.4",
+        requested_model: "gpt-6-sol",
         requested_service_tier: "default",
         actual_service_tier: "default",
         status: "succeeded"
@@ -401,7 +401,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "priority requested"
            )
 
-    assert has_element?(view, "#request-log-row-#{model_default_request.id}", "gpt-5.4")
+    assert has_element?(view, "#request-log-row-#{model_default_request.id}", "gpt-6-sol")
     assert has_element?(view, "#request-log-row-#{model_default_request.id}", "default")
 
     refute has_element?(
@@ -1291,7 +1291,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{request: in_progress_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-model-in-progress",
-        requested_model: "gpt-5.5",
+        requested_model: "gpt-6-sol",
         reasoning_effort: "high",
         status: "in_progress"
       })
@@ -1364,7 +1364,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{in_progress_request.id}-model-details",
-             "gpt-5.5 high / tier default"
+             "gpt-6-sol high / tier default"
            )
   end
 
@@ -1385,7 +1385,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{request: explicit_effort_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-model-explicit-effort",
-        requested_model: "gpt-5.5",
+        requested_model: "gpt-6-sol",
         endpoint: "/backend-api/codex/responses",
         reasoning_effort: "xhigh",
         service_tier: "default",
@@ -2989,7 +2989,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{request: request} =
       request_log_fixture(pool, %{
         correlation_id: "req-quota-exhausted",
-        requested_model: "gpt-5.5",
+        requested_model: "gpt-6-sol",
         status: "rejected",
         usage_status: "not_applicable",
         last_error_code: "quota_exhausted",

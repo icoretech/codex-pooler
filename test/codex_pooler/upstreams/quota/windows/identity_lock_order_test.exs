@@ -165,7 +165,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
         fixture = committed_pending_redemption_fixture!()
 
       {:ok, probe} =
-        ResetProbe.bind(ResetProbe.new(), assignment.id, identity.id, "gpt-5.4", "proxy_http")
+        ResetProbe.bind(ResetProbe.new(), assignment.id, identity.id, "gpt-6-sol", "proxy_http")
 
       Map.put(fixture, :probe, probe)
     end

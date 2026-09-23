@@ -1064,7 +1064,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
   defp request_options_with_session(%CodexSession{} = session) do
     %{}
     |> RequestOptions.build(@endpoint, %{
-      "model" => "gpt-5.5",
+      "model" => "gpt-6-sol",
       "input" => native_text_input("hello")
     })
     |> RequestOptions.put_continuity(codex_session: session)
@@ -1073,7 +1073,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
   defp streaming_request_options_with_session(%CodexSession{} = session) do
     %{}
     |> RequestOptions.build(@endpoint, %{
-      "model" => "gpt-5.5",
+      "model" => "gpt-6-sol",
       "input" => native_text_input("hello"),
       "stream" => true
     })
@@ -1347,7 +1347,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
   end
 
   defp model_for_assignments(pool, assignment_ids) do
-    exposed_model_id = "gpt-5.5-#{System.unique_integer([:positive])}"
+    exposed_model_id = "gpt-6-sol-#{System.unique_integer([:positive])}"
 
     model_fixture(pool, %{
       exposed_model_id: exposed_model_id,

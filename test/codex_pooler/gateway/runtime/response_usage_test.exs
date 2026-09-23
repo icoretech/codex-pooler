@@ -356,11 +356,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     test "JSON responses record the model the provider declared" do
       body =
         CodexPooler.JSON.encode!(%{
-          "model" => "gpt-5.6-luna",
+          "model" => "gpt-6-luna",
           "usage" => %{"input_tokens" => 10, "output_tokens" => 7, "total_tokens" => 17}
         })
 
-      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} = ResponseUsage.from_json(body)
+      assert %{status: "usage_known", served_model: "gpt-6-luna"} = ResponseUsage.from_json(body)
     end
 
     test "JSON responses without a model record none" do
@@ -377,12 +377,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
         "type" => "response.completed",
         "model" => "root-model",
         "response" => %{
-          "model" => "gpt-5.6-luna",
+          "model" => "gpt-6-luna",
           "usage" => %{"input_tokens" => 10, "output_tokens" => 7, "total_tokens" => 17}
         }
       }
 
-      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} =
+      assert %{status: "usage_known", served_model: "gpt-6-luna"} =
                ResponseUsage.from_stream_event(event)
 
       assert %{status: "usage_known", served_model: "root-model"} =
@@ -390,23 +390,23 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     end
 
     test "a lifecycle event without usage still records the declared model" do
-      assert %{status: "usage_unknown", source: "usage_missing", served_model: "gpt-5.6-luna"} =
+      assert %{status: "usage_unknown", source: "usage_missing", served_model: "gpt-6-luna"} =
                ResponseUsage.from_stream_event(%{
                  "type" => "response.created",
-                 "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna"}
+                 "response" => %{"id" => "resp_1", "model" => "gpt-6-luna"}
                })
 
-      assert %{status: "usage_unknown", source: "invalid_usage_tokens", served_model: "gpt-5.6-luna"} =
+      assert %{status: "usage_unknown", source: "invalid_usage_tokens", served_model: "gpt-6-luna"} =
                ResponseUsage.from_stream_event(%{
                  "type" => "response.completed",
-                 "response" => %{"model" => "gpt-5.6-luna", "usage" => %{"input_tokens" => "x"}}
+                 "response" => %{"model" => "gpt-6-luna", "usage" => %{"input_tokens" => "x"}}
                })
     end
 
     test "SSE and websocket bodies keep the first declared model of the stream" do
       created = %{
         "type" => "response.created",
-        "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna", "status" => "in_progress"}
+        "response" => %{"id" => "resp_1", "model" => "gpt-6-luna", "status" => "in_progress"}
       }
 
       completed = %{
@@ -420,22 +420,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
 
       sse = sse_event("response.created", created) <> sse_event("response.completed", completed)
 
-      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} = ResponseUsage.from_sse(sse)
+      assert %{status: "usage_known", served_model: "gpt-6-luna"} = ResponseUsage.from_sse(sse)
 
       websocket =
         CodexPooler.JSON.encode!(created) <> "\n\n" <> CodexPooler.JSON.encode!(completed)
 
-      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} =
+      assert %{status: "usage_known", served_model: "gpt-6-luna"} =
                ResponseUsage.from_websocket_body(websocket)
 
       interrupted = sse_event("response.created", created)
 
-      assert %{status: "usage_unknown", source: "sse_usage_missing", served_model: "gpt-5.6-luna"} =
+      assert %{status: "usage_unknown", source: "sse_usage_missing", served_model: "gpt-6-luna"} =
                ResponseUsage.from_sse(interrupted)
     end
 
     test "the declared model is bounded, never erased" do
-      assert ResponseUsage.bounded_served_model("  gpt-5.6-luna  ") == "gpt-5.6-luna"
+      assert ResponseUsage.bounded_served_model("  gpt-6-luna  ") == "gpt-6-luna"
       assert ResponseUsage.bounded_served_model("ft:gpt-4o:org/proj_1") == "ft:gpt-4o:org/proj_1"
       assert ResponseUsage.bounded_served_model("") == nil
       assert ResponseUsage.bounded_served_model("   ") == nil

@@ -28,7 +28,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     pool = Repo.get!(Pool, setup["pool_id"])
     key = Repo.get!(APIKey, setup["created"]["api_key_id"])
     assignment = Repo.get!(PoolUpstreamAssignment, setup["created"]["assignment_id"])
-    model = Repo.get_by!(Model, pool_id: pool.id, exposed_model_id: "gpt-5.5")
+    model = Repo.get_by!(Model, pool_id: pool.id, exposed_model_id: "gpt-6-sol")
     request = request_fixture(%{pool: pool, api_key: key}, %{model_id: model.id})
     attempt = attempt_fixture(request, assignment)
 
@@ -98,7 +98,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert Repo.aggregate(from(model in Model, where: model.pool_id == ^pool_id), :count) == 5
 
     assert %Model{supports_responses: true, supports_streaming: true} =
-             Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-5.6-terra")
+             Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-6-luna")
 
     assert %Model{
              supports_responses: true,
@@ -107,7 +107,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
              supports_reasoning: true,
              metadata: text_metadata
            } =
-             Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-5.5")
+             Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-6-sol")
 
     assert %{"source_assignment_models" => source_models} = text_metadata
 
@@ -131,7 +131,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert %{"visibility" => "hide", "priority" => 0} = ModelMetadata.metadata(decoy)
 
     assert %{"visibility" => "list", "priority" => 20} =
-             ModelMetadata.metadata(Repo.get_by!(Model, pool_id: pool_id, exposed_model_id: "gpt-5.5"))
+             ModelMetadata.metadata(Repo.get_by!(Model, pool_id: pool_id, exposed_model_id: "gpt-6-sol"))
 
     assert %Model{
              supports_responses: true,
@@ -180,7 +180,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
 
     assert %Pool{} = pool = Repo.get_by(Pool, slug: @pool_slug)
 
-    model = Repo.get_by(Model, pool_id: pool.id, exposed_model_id: "gpt-5.5")
+    model = Repo.get_by(Model, pool_id: pool.id, exposed_model_id: "gpt-6-sol")
     assert %Model{} = model
 
     assignment = Repo.get(PoolUpstreamAssignment, setup["created"]["assignment_id"])

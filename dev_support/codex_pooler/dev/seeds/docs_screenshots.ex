@@ -182,7 +182,7 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     timestamp = DateTime.utc_now()
 
     [
-      {"gpt-5.4", "full"},
+      {"gpt-6-sol", "full"},
       {"gpt-5.5-pro", "lite"}
     ]
     |> Enum.map(fn {exposed_model_id, mode} ->

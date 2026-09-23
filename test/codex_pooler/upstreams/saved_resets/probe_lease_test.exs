@@ -46,7 +46,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
              |> ResetProbe.bind(
                assignment.id,
                identity.id,
-               "gpt-5.4",
+               "gpt-6-sol",
                "proxy_http"
              )
 

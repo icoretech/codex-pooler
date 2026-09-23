@@ -476,7 +476,7 @@ defmodule CodexPooler.CatalogTest do
                 ],
                 "capabilities" => %{"tools" => true, "reasoning" => true}
               },
-              %{"id" => "gpt-5.5"}
+              %{"id" => "gpt-6-sol"}
             ]
           })
         )
@@ -499,7 +499,7 @@ defmodule CodexPooler.CatalogTest do
       assert length(models) == 3
 
       shared = Catalog.get_model_by_exposed_id(pool, "gpt-shared")
-      pro_only = Catalog.get_model_by_exposed_id(pool, "gpt-5.5")
+      pro_only = Catalog.get_model_by_exposed_id(pool, "gpt-6-sol")
       masterkain_only = Catalog.get_model_by_exposed_id(pool, "gpt-masterkain-only")
 
       assert shared.source_assignment_count == 2

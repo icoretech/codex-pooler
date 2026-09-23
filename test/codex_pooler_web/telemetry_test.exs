@@ -728,7 +728,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
                scope: :selected_pool,
                pool_id: "pool-123",
                request_id: "request-123",
-               model: "gpt-5.5",
+               model: "gpt-6-sol",
                user_id: "user-123",
                path: "/admin/request-logs?status=failed",
                query: "SELECT * FROM requests",

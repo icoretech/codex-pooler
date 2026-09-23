@@ -644,11 +644,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
       stream =
         sse_event("response.created", %{
           "type" => "response.created",
-          "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna", "status" => "in_progress"}
+          "response" => %{"id" => "resp_1", "model" => "gpt-6-luna", "status" => "in_progress"}
         }) <>
           sse_event("response.in_progress", %{
             "type" => "response.in_progress",
-            "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna"}
+            "response" => %{"id" => "resp_1", "model" => "gpt-6-luna"}
           }) <>
           sse_event("response.completed", %{
             "type" => "response.completed",
@@ -661,9 +661,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
           })
 
       expected = StreamUsageObserver.observe(StreamUsageObserver.new(), stream)
-      assert StreamUsageObserver.served_model(expected) == "gpt-5.6-luna"
-      assert StreamUsageObserver.usage(expected) == Map.put(@known_usage, :served_model, "gpt-5.6-luna")
-      assert StreamUsageObserver.result(expected).served_model == "gpt-5.6-luna"
+      assert StreamUsageObserver.served_model(expected) == "gpt-6-luna"
+      assert StreamUsageObserver.usage(expected) == Map.put(@known_usage, :served_model, "gpt-6-luna")
+      assert StreamUsageObserver.result(expected).served_model == "gpt-6-luna"
 
       for split_at <- 0..byte_size(stream) do
         <<first::binary-size(^split_at), second::binary>> = stream
@@ -681,12 +681,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
       stream =
         sse_event("response.created", %{
           "type" => "response.created",
-          "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna"}
+          "response" => %{"id" => "resp_1", "model" => "gpt-6-luna"}
         })
 
       state = StreamUsageObserver.observe(StreamUsageObserver.new(), stream)
 
-      assert %{status: "usage_unknown", source: "sse_usage_missing", served_model: "gpt-5.6-luna"} =
+      assert %{status: "usage_unknown", source: "sse_usage_missing", served_model: "gpt-6-luna"} =
                StreamUsageObserver.result(state)
     end
 
@@ -705,23 +705,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
     test "a root model stands in only when no response object declares one" do
       chat_shape =
         sse_event("chunk", %{
-          "model" => "gpt-5.6-luna",
+          "model" => "gpt-6-luna",
           "usage" => usage(16, 5, 21),
           "service_tier" => "priority"
         })
 
       state = StreamUsageObserver.observe(StreamUsageObserver.new(), chat_shape)
-      assert StreamUsageObserver.served_model(state) == "gpt-5.6-luna"
+      assert StreamUsageObserver.served_model(state) == "gpt-6-luna"
 
       both =
         sse_event("response.created", %{
           "type" => "response.created",
           "model" => "root-model",
-          "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna"}
+          "response" => %{"id" => "resp_1", "model" => "gpt-6-luna"}
         })
 
       state = StreamUsageObserver.observe(StreamUsageObserver.new(), both)
-      assert StreamUsageObserver.served_model(state) == "gpt-5.6-luna"
+      assert StreamUsageObserver.served_model(state) == "gpt-6-luna"
     end
 
     test "model keys nested in output items are not declarations" do
