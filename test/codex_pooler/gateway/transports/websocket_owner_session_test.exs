@@ -906,6 +906,59 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:fenced_owner_upstream_send, "reconnect-request"}
   end
 
+  # The early owner call carries no lease token check: the owner acts on it
+  # only for the exact downstream (pid, epoch, correlation) it has attached. A
+  # closed socket's late call, arriving after the same client's new socket
+  # attached and before that socket sends its resend, must leave the new
+  # downstream attached and unfenced.
+  test "a closed socket's late early-detach call does not fence the downstream that replaced it", context do
+    parent = self()
+
+    upstream = %{
+      start: fn ->
+        {:ok, spawn(fn -> receive(do: (:stop -> :ok)) end)}
+      end,
+      send: fn _upstream_pid, request, _writer ->
+        send(parent, {:replaced_owner_upstream_send, request.payload})
+        {:ok, %{status: 200, headers: [], terminal: "response.completed", body: "completed"}}
+      end,
+      close: fn pid ->
+        send(pid, :stop)
+        :ok
+      end
+    }
+
+    closed_socket = spawn(fn -> receive(do: (:stop -> :ok)) end)
+    new_socket = spawn(fn -> receive(do: (:stop -> :ok)) end)
+
+    on_exit(fn ->
+      send(closed_socket, :stop)
+      send(new_socket, :stop)
+    end)
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert {:ok, closed} = WebsocketOwnerSession.attach_downstream(owner, %{pid: closed_socket, correlation_id: "replaced-closed"})
+    assert {:ok, replacement} = WebsocketOwnerSession.attach_downstream(owner, %{pid: new_socket, correlation_id: "replaced-new"})
+    assert replacement.epoch == closed.epoch + 1
+
+    assert :not_previsible = WebsocketOwnerSession.detach_previsible_downstream(owner, closed)
+    assert %{downstream: %{pid: ^new_socket, epoch: epoch}, closed_downstream: nil} = :sys.get_state(owner)
+    assert epoch == replacement.epoch
+
+    request = %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "replacement-request",
+      timeouts: %{},
+      writer: nil,
+      websocket_delivery_mode: :collect_compaction,
+      effective_serving_mode: "full"
+    }
+
+    assert {:ok, %{terminal: "response.completed"}} = WebsocketOwnerSession.submit_request(owner, replacement, request, false)
+    assert_receive {:replaced_owner_upstream_send, "replacement-request"}
+  end
+
   test "a closing downstream whose turn the owner already accepted is not fenced", context do
     release_ref = make_ref()
     parent = self()
