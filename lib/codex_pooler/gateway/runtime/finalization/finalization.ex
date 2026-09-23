@@ -161,7 +161,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         finalize_assignment_model_unavailable(response, context, body)
 
       true ->
-        finalize_upstream_status_failure(response, context, body, before_finalize: fn -> maybe_record_unauthorized_route_failure(status, context) end)
+        finalize_upstream_status_failure(response, context, body, before_finalize: fn -> record_client_error_route_health(status, context) end)
     end
   end
 
@@ -481,11 +481,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     end
   end
 
-  defp maybe_record_unauthorized_route_failure(401, %SelectedCandidateContext{} = context) do
+  defp record_client_error_route_health(401, %SelectedCandidateContext{} = context) do
     record_dispatch_route_failure("upstream_unauthorized", context)
   end
 
-  defp maybe_record_unauthorized_route_failure(_status, %SelectedCandidateContext{}), do: :ok
+  # Any other non-429 4xx is the client's error and says nothing against the
+  # route: no demotion, no circuit failure. It still proves the upstream
+  # answered, so a half-open probe it answered is resolved neutrally, as the
+  # websocket does for the same refusal; otherwise the probe stayed counted in
+  # flight and blocked every other turn on the assignment until its lease ran
+  # out (findings#254 row 254-32). Outside a probe the neutral completion
+  # writes nothing.
+  defp record_client_error_route_health(_status, %SelectedCandidateContext{} = context),
+    do: DispatchLifecycle.neutral_completion(context)
 
   defp finalize_upstream_status_failure(
          response,
