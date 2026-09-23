@@ -55,6 +55,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   # always a 400.
   @provider_error_type "invalid_request_error"
   @rejection_status 400
+  @relayed_code_by_type %{"invalid_request_error" => "invalid_request"}
+  @invalid_request_code "invalid_request"
   @body_max_bytes 65_536
   @message_max_bytes 2_048
   @supported_values_max 12
@@ -181,6 +183,37 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
       "param" => param,
       "message" => message(code, param, Map.get(rejection, :supported_values))
     }
+  end
+
+  @doc """
+  The client-visible code of a sanitized provider rejection (`Metadata.rejection_error/1`):
+  the provider code when one survived sanitization, otherwise a code derived
+  from the type (the observed `tools.defer_loading` rejection carried a type
+  and a param but no code). `invalid_request_error` becomes `invalid_request`, the code
+  Codex Pooler emits for its own pre-dispatch rejections of that type, and any
+  other type is reused verbatim rather than inventing a code the provider
+  never used. A rejection without either is the client's `invalid_request`,
+  because only a refused 4xx reaches this projection.
+  """
+  @spec relayed_code(map()) :: String.t()
+  def relayed_code(%{code: code}) when is_binary(code), do: code
+  def relayed_code(%{type: type}) when is_binary(type), do: Map.get(@relayed_code_by_type, type, type)
+  def relayed_code(_rejection_error), do: @invalid_request_code
+
+  @doc """
+  The Codex Pooler-authored error for a provider 400 refusal that is not a
+  relayable parameter-validation rejection, built only from its sanitized
+  tokens (`Metadata.rejection_error/1`): the relayed code, the bounded param
+  with any `input[N]` index dropped (the caller holds no per-turn index map),
+  and the message this module authors. Provider message text never travels.
+  The native websocket sends it for a refusal the released client would
+  otherwise retry (findings#254 row 254-52).
+  """
+  @spec refusal_error(map()) :: relayed_error()
+  def refusal_error(rejection_error) when is_map(rejection_error) do
+    %{code: relayed_code(rejection_error), param: Map.get(rejection_error, :param), supported_values: nil, supported_values_state: nil}
+    |> for_client(:unknown)
+    |> error()
   end
 
   @doc """

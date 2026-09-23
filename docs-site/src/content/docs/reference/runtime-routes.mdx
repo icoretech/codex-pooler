@@ -630,7 +630,23 @@ same error object in its `error` event. Both websocket events leave an
 `input[N]` index out, because the socket does not know how the turn's input was
 rewritten.
 
-Every other upstream failure keeps its existing behavior: other statuses
+Any other `400` refusal of a native websocket turn, including the usual one
+that carries no code, also reaches the client as one wrapped error event, so the
+Codex client stops instead of resending the turn and then retrying it over
+HTTPS. Codex Pooler writes its error object from the refusal's sanitized type,
+code and param only: `code` is the upstream code, or `invalid_request` when
+upstream sent none, `param` follows the websocket rule above, and the message
+reads `upstream rejected the request (<code>)` or names the param. The provider
+message is not forwarded. A refusal naming a code the Codex client classifies
+itself keeps its `response.failed` event, so the client still compacts on
+`context_length_exceeded`, stops on the quota codes (`insufficient_quota`,
+`credit_balance_exhausted`, `organization_spend_limit_exceeded`,
+`project_spend_limit_exceeded`) and `usage_not_included`, and reports
+`invalid_prompt`, `cyber_policy`, `bio_policy` and
+`misalignment_policy_violation` as it would from the provider; overload and
+rate-limit codes stay retryable.
+
+Over HTTP, every other upstream failure keeps its existing behavior: other statuses
 (including `401`, `403`, `404`, `422`, `429`, and `5xx`), other error types or
 codes, `{"detail": ...}` bodies, and compact routes. The request remains a non-retried failure
 recorded as `upstream_status`, and the rejection does not demote the upstream

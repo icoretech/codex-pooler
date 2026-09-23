@@ -255,6 +255,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
 
   def codex_compaction_terminal_retryable?(_event_type, _code), do: false
 
+  # Every `response.failed` code the latest released Codex client classifies
+  # into its own error (rust-v0.156.0 `process_responses_event`): the final
+  # ones above plus the two rate-limit codes it retries as a rate limit. Any
+  # other code on a `response.failed` is a generic retryable stream error to
+  # that client, while the wrapped `{"type":"error","status":400}` frame of the
+  # same refusal is a final invalid request; a wrapped 400 naming one of these
+  # codes would lose the classification (a wrapped `context_length_exceeded` is
+  # an invalid request, never the context-window error that compacts), so the
+  # native projection keeps them on `response.failed` (findings#254 row 254-52).
+  @codex_response_failed_classified_codes @codex_response_failed_non_retryable_codes ++ [@rate_limit_exceeded_code, "slow_down"]
+
+  @spec codex_response_failed_classified_code?(String.t() | nil) :: boolean()
+  def codex_response_failed_classified_code?(code) when code in @codex_response_failed_classified_codes,
+    do: true
+
+  def codex_response_failed_classified_code?(_code), do: false
+
   @spec websocket_auth_refresh_event_code?(String.t() | nil) :: boolean()
   def websocket_auth_refresh_event_code?(code) when code in @websocket_auth_refresh_event_codes,
     do: true

@@ -40,7 +40,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       "type" => "server_error"
     }
   }
-  @relayed_rejection_code_by_type %{"invalid_request_error" => "invalid_request"}
 
   @type callbacks :: %{
           required(:register_continuity) => (term(), term(), term() -> term()),
@@ -774,7 +773,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   # bodies do and what an OpenAI SDK expects to read.
   defp full_rejection(rejection_error, validation_rejection) do
     %{
-      code: relayed_rejection_code(rejection_error),
+      code: ValidationRejection.relayed_code(rejection_error),
       param: Map.get(rejection_error, :param),
       supported_values: relayed_supported_values(validation_rejection),
       supported_values_state: nil
@@ -830,20 +829,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     |> ValidationRejection.error()
     |> Map.fetch!("message")
   end
-
-  defp relayed_rejection_code(%{code: code}) when is_binary(code), do: code
-
-  # The observed `tools.defer_loading` rejection carried a type and a param but
-  # no code, so the client-visible `code` needs a defined fallback rather than
-  # the assumption that a provider always supplies one. `invalid_request_error`
-  # maps to `invalid_request`, which is the code Pooler already emits for its
-  # own pre-dispatch rejections of the same type (`OpenAICompatibility.Error`
-  # and `GatewayControllerHelpers.send_error/2`), so one client branch on
-  # `code` sees the same terminal value whoever rejected the request. Any other
-  # type reuses the type itself: it names the same already-sanitized fact
-  # instead of inventing a code the provider never used.
-  defp relayed_rejection_code(%{type: type}),
-    do: Map.get(@relayed_rejection_code_by_type, type, type)
 
   defp canonical_failure_body(%RequestOptions{
          payload_context: %{native_image_request?: true},

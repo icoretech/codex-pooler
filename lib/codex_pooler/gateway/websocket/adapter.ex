@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
+  alias CodexPooler.Gateway.Runtime.Finalization.{Metadata, ValidationRejection}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -116,37 +116,95 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
         {canonical, canonical_decoded} = StreamProtocol.canonicalize_native_codex_responses_json_message(data, decoded)
-        native_validation_rejection_frame(canonical, canonical_decoded)
+        native_refusal_frame(canonical, canonical_decoded)
 
       _other ->
         StreamProtocol.canonicalize_native_codex_responses_json_message(data)
     end
   end
 
-  # A provider parameter-validation refusal arrives as the wrapped
+  # A provider 400 refusal arrives as the wrapped
   # `{"type":"error","status":400,...}` frame and is canonicalized to the
   # `response.failed` the response task, the owner and the socket settle and
   # account on (attempt rejection fields included). Only the frame the native
-  # client receives is projected here: the wrapped `error` event with the
-  # Pooler-authored error the native HTTP answer relays for the same refusal
-  # (`ValidationRejection`: type, code, bounded param, supported values, never
-  # the provider message, which can quote Pooler-rewritten request fields). The
-  # released client's parser reads a wrapped 400 as a non-retryable invalid
-  # request, as it reads the HTTP 400, and a `response.failed` naming one of
-  # these codes as a retryable stream error (findings#254 row 254-31). The
-  # socket holds no per-turn input index map, so an `input[N]` param loses its
-  # index rather than name a position a Lite rewrite moved (row 254-61). Every
-  # other frame passes unchanged.
-  defp native_validation_rejection_frame(canonical, %{"type" => "response.failed", "status" => 400 = status, "error" => %{} = error}) do
-    response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
-
-    case ValidationRejection.fetch_ordinary_route(response) do
-      %{} = rejection -> CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => ValidationRejection.error(ValidationRejection.for_client(rejection, :unknown))})
-      nil -> canonical
+  # client receives is projected here. The released client's parser reads a
+  # wrapped 400 as a final invalid request, as it reads the HTTP 400 of the
+  # same refusal, and a `response.failed` as a retryable stream error unless it
+  # names a code the client classifies itself, so a refusal that can never
+  # succeed was resent up to the stream retry budget and then over HTTPS.
+  #
+  #   * A relayable parameter-validation rejection becomes the wrapped event
+  #     with the Pooler-authored error the native HTTP answer relays
+  #     (`ValidationRejection`: type, code, bounded param, supported values;
+  #     findings#254 row 254-31).
+  #   * A code the client classifies from `response.failed`
+  #     (`context_length_exceeded`, the quota codes, `usage_not_included`,
+  #     `invalid_prompt`, the policy codes, overload and rate limits), and a
+  #     code the Pooler itself treats as retryable, keeps the canonical frame.
+  #   * Every other refusal, the provider's usual codeless one included,
+  #     becomes the wrapped event with the Pooler-authored error built from
+  #     its sanitized tokens only (`ValidationRejection.refusal_error/1`,
+  #     row 254-52).
+  #
+  # Provider message text never travels: it can quote Pooler-rewritten request
+  # fields. The socket holds no per-turn input index map, so an `input[N]`
+  # param loses its index rather than name a position a Lite rewrite moved
+  # (row 254-61). Every other frame, and a refusal of any other status, passes
+  # unchanged.
+  defp native_refusal_frame(canonical, %{"type" => "response.failed", "error" => %{} = error} = canonical_decoded) do
+    case wrapped_status(canonical_decoded) do
+      400 = status -> native_400_refusal_frame(canonical, status, error)
+      _other -> canonical
     end
   end
 
-  defp native_validation_rejection_frame(canonical, _canonical_decoded), do: canonical
+  defp native_refusal_frame(canonical, _canonical_decoded), do: canonical
+
+  defp native_400_refusal_frame(canonical, status, error) do
+    response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
+
+    case ValidationRejection.fetch_ordinary_route(response) do
+      %{} = rejection ->
+        wrapped_refusal(status, ValidationRejection.error(ValidationRejection.for_client(rejection, :unknown)))
+
+      nil ->
+        if classified_or_retryable_code?(Map.get(error, "code")),
+          do: canonical,
+          else: wrapped_refusal(status, ValidationRejection.refusal_error(provider_rejection_error(status, error)))
+    end
+  end
+
+  # Only the wrapped provider frame keeps an integer `status` through the
+  # canonicalization; a provider `response.failed` carries none.
+  defp wrapped_status(canonical_decoded) do
+    case Map.get(canonical_decoded, "status", Map.get(canonical_decoded, "status_code")) do
+      status when is_integer(status) -> status
+      _other -> nil
+    end
+  end
+
+  defp classified_or_retryable_code?(code) do
+    ErrorCodes.codex_response_failed_classified_code?(code) or ErrorCodes.retryable_first_event_code?(code) or
+      ErrorCodes.previous_response_miss_code?(code) or ErrorCodes.websocket_auth_refresh_event_code?(code)
+  end
+
+  # The canonicalization writes a code into an error the provider sent without
+  # one (its type, or the `upstream_terminal_failure` fallback). That code is
+  # the Pooler's derivation, so it is dropped before the relayed code is
+  # chosen, as `Finalization.Websocket` drops it from the attempt's rejection
+  # fields (findings#254 row 254-60).
+  defp provider_rejection_error(status, error) do
+    error =
+      case error do
+        %{"code" => code, "type" => code} -> Map.delete(error, "code")
+        %{"code" => "upstream_terminal_failure"} -> Map.delete(error, "code")
+        error -> error
+      end
+
+    Metadata.rejection_error(%Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})})
+  end
+
+  defp wrapped_refusal(status, error), do: CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => error})
 
   @spec downstream_response_chunk(
           binary(),

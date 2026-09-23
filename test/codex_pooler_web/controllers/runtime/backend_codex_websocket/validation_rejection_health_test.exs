@@ -159,7 +159,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
 
         assert {:ok, turn_state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
         {turn_state, frames} = collect_native_turn_frames!(turn_state)
-        assert_single_native_turn_terminal!(frames, "response.failed")
+        # The released client retries a `response.failed` whose code it does
+        # not classify and then falls back to HTTPS; the wrapped 400 is a final
+        # invalid request, as the HTTP 400 of the same refusal is. The error is
+        # Pooler-authored from the sanitized type alone (findings#254 row
+        # 254-52).
+        terminal = assert_single_native_turn_terminal!(frames, "error")
+
+        assert terminal == %{
+                 "type" => "error",
+                 "status" => 400,
+                 "error" => %{"type" => "invalid_request_error", "code" => "invalid_request", "param" => nil, "message" => "upstream rejected the request (invalid_request)"}
+               }
+
+        refute CodexPooler.JSON.encode!(frames) =~ @provider_sentinel
 
         assert :ok = FakeUpstream.verify!(upstream)
         {request, attempt} = sole_rows!(setup)
@@ -175,6 +188,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
       after
         CodexResponsesSocket.terminate(:closed, state)
       end
+    end
+  end
+
+  # A provider refusal whose code the released client does not classify from
+  # `response.failed` reaches it as the wrapped 400 with a Pooler-authored
+  # error: code and param come from the sanitized tokens, the `input[N]` index
+  # is dropped (the socket holds no per-turn index map), the provider message
+  # never travels (findings#254 row 254-52).
+  for topology <- [:direct, :local_owner] do
+    @tag topology: topology
+    test "native websocket #{topology} unrelayable-code provider 400 reaches the client as the wrapped error", %{topology: topology} do
+      if topology == :local_owner, do: enable_owner_forwarding!()
+
+      provider_error = %{"type" => "invalid_request_error", "code" => "invalid_encrypted_content", "message" => "Encrypted content '#{@provider_sentinel}' could not be verified.", "param" => "input[2].encrypted_content"}
+      frames = native_refusal_frames!("ws-unrelayable-refusal-#{topology}", %{"type" => "error", "status" => 400, "error" => provider_error})
+
+      assert assert_single_native_turn_terminal!(frames, "error") == %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_encrypted_content",
+                 "param" => "input[].encrypted_content",
+                 "message" => "upstream rejected parameter input[].encrypted_content (invalid_encrypted_content)"
+               }
+             }
+
+      refute CodexPooler.JSON.encode!(frames) =~ @provider_sentinel
+    end
+  end
+
+  # The codes the released client classifies from `response.failed` keep that
+  # frame: a wrapped 400 would turn `context_length_exceeded` (which starts a
+  # compaction) or a quota/policy code into a plain invalid request.
+  for code <- ~w(context_length_exceeded insufficient_quota usage_not_included invalid_prompt cyber_policy bio_policy) do
+    @tag classified_code: code
+    test "native websocket provider 400 #{code} keeps the response.failed the client classifies", %{classified_code: code} do
+      provider_error = %{"type" => "invalid_request_error", "code" => code, "message" => "synthetic #{code}", "param" => nil}
+      frames = native_refusal_frames!("ws-classified-refusal-#{code}", %{"type" => "error", "status" => 400, "error" => provider_error})
+
+      terminal = assert_single_native_turn_terminal!(frames, "response.failed")
+      assert %{"status" => 400, "response" => %{"status" => "failed", "error" => %{"code" => ^code}}} = terminal
+    end
+  end
+
+  defp native_refusal_frames!(request_id, frame) do
+    upstream = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(frame)]))]))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = CodexResponsesSocket.init(%{auth: auth, opts: %{request_id: request_id, accepted_turn_state: Ecto.UUID.generate(), client_ip: "127.0.0.1"}})
+
+    try do
+      payload =
+        CodexPooler.JSON.encode!(%{"type" => "response.create", "model" => setup.model.exposed_model_id, "input" => native_text_input(@prompt_sentinel), "stream" => true, "generate" => true})
+
+      assert {:ok, turn_state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+      {turn_state, frames} = collect_native_turn_frames!(turn_state)
+      assert :ok = FakeUpstream.verify!(upstream)
+      assert {_request, _attempt} = sole_rows!(setup)
+      assert :ok = CodexResponsesSocket.terminate(:closed, turn_state)
+      frames
+    after
+      CodexResponsesSocket.terminate(:closed, state)
     end
   end
 
