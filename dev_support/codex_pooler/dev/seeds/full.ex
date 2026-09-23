@@ -34,7 +34,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
   @spec run(%{
           required(:owner) => User.t(),
           required(:operators) => [User.t()],
-          required(:password) => String.t()
+          required(:password) => String.t(),
+          optional(:upstream_base_url) => String.t()
         }) :: map()
   def run(%{owner: owner, operators: operators, password: password} = context) do
     # Every synthetic identity points at a fake that exists (the local perf
