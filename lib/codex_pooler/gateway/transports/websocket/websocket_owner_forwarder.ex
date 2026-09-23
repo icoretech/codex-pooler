@@ -1429,6 +1429,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
        ),
        do: {:error, :owner_unavailable}
 
+  # Only a query answer of `:provisional` or `:consume_reserved` sends the
+  # cancel, so an answer the caller stopped waiting for is a cancel never sent,
+  # and the owner-node submission, which outlives its caller, can still commit
+  # the replay. Once a reservation exists the owner answers both controls from
+  # a database read of the replay binding, queued behind whatever the owner is
+  # doing, so the caller waits the owner's own call budget for them: with the
+  # one-second downstream send budget a slower answer was dropped and the dead
+  # or timed-out submitter's unconsumed reservation was never cancelled
+  # (findings#206 row 206-241). Both callers are the submitting response task
+  # or a watcher nobody waits on, never the socket process.
   defp reconcile_remote_v4_timeout(node, codex_session_id, owner_request, opts) do
     with owner_lease_token when is_binary(owner_lease_token) <-
            Keyword.get(opts, :replay_owner_lease_token),
@@ -1474,7 +1484,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   defp replay_reconcile_opts(opts) do
-    Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+    Keyword.put(opts, :timeout, WebsocketOwnerContract.default_owner_call_timeout_ms())
   end
 
   defp start_remote_replay_cancellation_watcher(

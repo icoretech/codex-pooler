@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
@@ -177,6 +178,58 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
     defp notify(message) do
       if pid = Process.whereis(:replay_caller_death_test), do: send(pid, message)
+    end
+  end
+
+  defmodule ReplayCallerDeathSlowOwnerNodeClient do
+    @moduledoc false
+    # The watcher's controls go through the production erpc client against the
+    # local node, so the caller's timeout is enforced as it is between two
+    # nodes; the owner answers the query only after `@owner_query_ms`, the
+    # binding read a loaded owner node can take.
+    alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.ERPCNodeClient
+
+    @owner_query_ms 1_200
+
+    def connected_app_nodes, do: [:"codex_pooler@replay-caller-death-slow.example"]
+    def app_node?(_node), do: true
+
+    # A caller that set `:submit_times_out` reads the submission's own
+    # `owner_forward_timeout`; any other caller blocks until it is killed.
+    def call_owner(_node, _module, :remote_submit_request_v4, [_session_id, _downstream, request], _timeout) do
+      notify({:slow_owner_submit, self()})
+
+      if Process.get({__MODULE__, :submit_times_out}) do
+        {:error, :owner_forward_timeout}
+      else
+        receive do
+          :never_release_replay_submit -> {:ok, request.native_replay_binding.owner_process_generation}
+        end
+      end
+    end
+
+    def call_owner(_node, _module, :remote_reconnect_control_v2, [control], timeout) do
+      notify({:slow_owner_control_sent, control.action, timeout})
+      ERPCNodeClient.call_owner(node(), __MODULE__, :owner_control, [control], timeout)
+    end
+
+    def call_owner(_node, _module, function, _args, _timeout) do
+      notify({:unexpected_slow_owner_call, function})
+      {:error, :owner_unavailable}
+    end
+
+    def owner_control(%{action: :provisional_query}) do
+      Process.sleep(@owner_query_ms)
+      {:ok, :consume_reserved}
+    end
+
+    def owner_control(%{action: :provisional_cancel, provisional_token: token}) do
+      notify({:slow_owner_cancelled, token})
+      {:ok, :cancelled}
+    end
+
+    defp notify(message) do
+      if pid = Process.whereis(:replay_caller_death_slow_owner_test), do: send(pid, message)
     end
   end
 
@@ -355,6 +408,88 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:replay_caller_death_control, :provisional_query, <<2::256>>}
     assert_receive {:replay_caller_death_control, :provisional_cancel, <<2::256>>}
     refute_received {:unexpected_replay_caller_death_call, _function}
+  end
+
+  # findings#206 row 206-241: the watcher of a dead V4 submitter used the one
+  # second downstream budget, so an owner that answered the query after a
+  # slower binding read had its answer dropped and the unconsumed reservation
+  # was never cancelled.
+  @tag :replay_topology
+  @tag :replay_cleanup
+  test "remote V4 caller death waits the owner call budget for the query before cancelling", %{auth: auth} do
+    Process.register(self(), :replay_caller_death_slow_owner_test)
+
+    on_exit(fn ->
+      if Process.whereis(:replay_caller_death_slow_owner_test),
+        do: Process.unregister(:replay_caller_death_slow_owner_test)
+    end)
+
+    remote = :"codex_pooler@replay-caller-death-slow.example"
+
+    %{session: session, token: token} =
+      owner_session_fixture(auth, Atom.to_string(remote), "replay-caller-death-slow-owner")
+
+    request = owner_request_v4(replay_binding(57), <<3::256>>)
+
+    caller =
+      spawn(fn ->
+        WebsocketOwnerForwarder.submit_request(
+          session,
+          token,
+          downstream("replay-caller-death-slow-owner"),
+          request,
+          node_client: ReplayCallerDeathSlowOwnerNodeClient
+        )
+      end)
+
+    assert_receive {:slow_owner_submit, ^caller}
+    caller_monitor = Process.monitor(caller)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^caller_monitor, :process, ^caller, :killed}
+
+    owner_budget = WebsocketOwnerContract.default_owner_call_timeout_ms()
+    assert_receive {:slow_owner_control_sent, :provisional_query, query_timeout}
+    # The owner reported the reservation unconsumed after the slow read, so the
+    # dead submitter's reservation is cancelled.
+    assert_receive {:slow_owner_cancelled, <<3::256>>}, owner_budget
+    assert query_timeout == owner_budget
+    assert_received {:slow_owner_control_sent, :provisional_cancel, ^owner_budget}
+    refute_received {:unexpected_slow_owner_call, _function}
+  end
+
+  @tag :replay_topology
+  @tag :replay_cleanup
+  test "remote V4 timeout waits the owner call budget for the query before cancelling", %{auth: auth} do
+    Process.register(self(), :replay_caller_death_slow_owner_test)
+    Process.put({ReplayCallerDeathSlowOwnerNodeClient, :submit_times_out}, true)
+
+    on_exit(fn ->
+      if Process.whereis(:replay_caller_death_slow_owner_test),
+        do: Process.unregister(:replay_caller_death_slow_owner_test)
+    end)
+
+    remote = :"codex_pooler@replay-caller-death-slow.example"
+
+    %{session: session, token: token} =
+      owner_session_fixture(auth, Atom.to_string(remote), "replay-timeout-slow-owner")
+
+    request = owner_request_v4(replay_binding(59), <<4::256>>)
+
+    assert {:error, :owner_forward_timeout} =
+             WebsocketOwnerForwarder.submit_request(
+               session,
+               token,
+               downstream("replay-timeout-slow-owner"),
+               request,
+               node_client: ReplayCallerDeathSlowOwnerNodeClient
+             )
+
+    owner_budget = WebsocketOwnerContract.default_owner_call_timeout_ms()
+    assert_received {:slow_owner_control_sent, :provisional_query, query_timeout}
+    assert_received {:slow_owner_cancelled, <<4::256>>}
+    assert query_timeout == owner_budget
+    assert_received {:slow_owner_control_sent, :provisional_cancel, ^owner_budget}
+    refute_received {:unexpected_slow_owner_call, _function}
   end
 
   defp v2_control(auth, session, token) do
