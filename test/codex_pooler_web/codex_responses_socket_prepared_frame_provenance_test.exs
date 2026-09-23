@@ -148,12 +148,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
 
       # Draining the active turn dequeues it: the deferral is unwound, the frame
       # is re-sealed with the runtime options, and the owner is asked again.
-      assert {:ok, dequeued_state} =
-               CodexResponsesSocket.handle_info(
-                 {:codex_response_done, active_turn, :ok},
-                 queued_state
-               )
+      {dequeued_state, log} =
+        with_info_log(fn ->
+          assert {:ok, dequeued_state} =
+                   CodexResponsesSocket.handle_info(
+                     {:codex_response_done, active_turn, :ok},
+                     queued_state
+                   )
 
+          dequeued_state
+        end)
+
+      # An owner that could not be asked at all is refused at the deferral, not
+      # run as the ordinary turn: that run answers the same 503 with no row, so
+      # only the stage tells the two apart (findings#206 row 206-342).
+      assert log =~ "rejection_stage=native_compaction_deferral"
       assert :queue.is_empty(dequeued_state.queued_response_payloads)
       assert [retry_task] = MapSet.to_list(dequeued_state.tasks)
       refute retry_task == active_turn

@@ -3245,11 +3245,22 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:error, {:owner_unavailable, cause}} ->
         if unadmitted_final_runs_as_ordinary?(phase, cause, state),
           do: start_deferred_or_tracked_response(prepared, state),
-          else: start_owner_retarget_error_task(owner_error(:owner_unavailable), prepared, state)
+          else: refuse_deferred_native_compaction_at_dequeue(prepared, state)
 
       {:error, reason} ->
         start_owner_retarget_error_task(owner_error(reason), prepared, state)
     end
+  end
+
+  # The dequeue's refusal carries the stage the reconnect route's refusal logs
+  # (`reject_deferred_native_compaction/1`), so one query counts the same
+  # decision on both routes. Before, an unreachable owner at dequeue left only
+  # the generic failed-turn line, the same line the ordinary run of that turn
+  # writes, so nothing told the two apart (findings#206 row 206-342).
+  defp refuse_deferred_native_compaction_at_dequeue(prepared, state) do
+    refusal = owner_error(:owner_unavailable)
+    log_replay_rejection(state, :owner_unavailable, :native_compaction_deferral, refusal)
+    start_owner_retarget_error_task(refusal, prepared, state)
   end
 
   # The rule both deferral routes apply to a reservation that found no
