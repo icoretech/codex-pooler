@@ -41,9 +41,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisibleCompletedItemR
   # With owner forwarding off the closing socket used to leave a direct task
   # that had pushed a completed item running for its whole 5 s post-cleanup
   # grace after the 250 ms drain, so with the provider held its receipt could
-  # not exist before about 5.25 s; such a task is now stopped at the cleanup,
-  # like the owner cancels its active turn at the detach. The budget sits below
-  # that floor and far above the stop's own cost.
+  # not exist before about 5.25 s, and the original generation ran beside the
+  # served successor (findings#232 row 232-257); such a task is now stopped at
+  # the cleanup, like the owner cancels its active turn at the detach. The
+  # budget sits below that floor and far above the stop's own cost.
   @stopped_receipt_budget_ms 4_000
   # The frames up to and including the completed item, as the released client
   # received them before the cut (findings#232 row 232-232).
@@ -61,6 +62,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisibleCompletedItemR
       assert %CodexTurn{status: "interrupted", first_visible_output_at: %DateTime{}} = Repo.get_by!(CodexTurn, request_id: request_id)
       assert [%RequestClientRetryLink{predecessor_request_id: ^request_id, successor_request_id: ^successor_id}] = Repo.all(RequestClientRetryLink)
       assert_one_settlement_each!([request_id, successor_id])
+      # The cut generation was stopped (the owner's detach, or with forwarding off
+      # the closing socket's cleanup), so the provider released afterwards never
+      # completed it beside the served successor: no late answer corrected the
+      # original's settlement (findings#232 row 232-257).
+      assert Repo.all(from(l in LedgerEntry, where: l.request_id == ^request_id and l.amount_status == "voided")) == []
+      assert %Request{usage_status: "usage_unknown"} = Repo.get!(Request, request_id)
       # Lite rewrites what reaches the provider; the successor carries the original's items plus the completed item.
       assert [%{json: %{"input" => original_input}}, %{json: %{"input" => successor_input}}] = FakeUpstream.requests(upstream)
       assert successor_input == original_input ++ [client_recorded_item(@item_text)]
