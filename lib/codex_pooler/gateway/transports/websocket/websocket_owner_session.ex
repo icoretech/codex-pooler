@@ -380,6 +380,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     )
   end
 
+  @doc """
+  Stops the active turn that `downstream` (a per-call downstream naming its
+  turn) submitted, and keeps the downstream attached.
+
+  A remote submission whose forward budget expired sends this: the proxy told
+  the client the turn failed, but the owner-node process carrying the
+  submission outlives the abandoned erpc reply, so the owner may still take
+  the turn. The detach a closing socket sends was used before and also cleared
+  the still connected socket's downstream, so every later turn on it was
+  refused `stale_owner` (findings#206 row 206-299). Only a turn this exact
+  downstream and turn id own is stopped, its output is no longer delivered, and
+  anything else answers `stale_downstream` without a change. A socket that
+  really went away is still detached by its own cleanup and by the owner's
+  monitor on it.
+  """
+  @spec abandon_turn(GenServer.server(), per_call_downstream()) ::
+          :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def abandon_turn(owner, %{pid: pid, epoch: epoch, correlation_id: correlation_id, owner_turn_id: owner_turn_id})
+      when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) and is_pid(owner_turn_id) do
+    GenServer.call(owner, {:abandon_turn, pid, epoch, correlation_id, owner_turn_id}, owner_call_timeout())
+  end
+
   @type reconnect_preflight_result ::
           {:ok, :dispatch | :same_turn_replay}
           | {:ok, :replacement_handoff | :duplicate_replacement, reference()}
@@ -1707,6 +1729,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
       {:error, status_reason} ->
         {:reply, {:error, status_reason}, state}
+    end
+  end
+
+  # The turn's output goes nowhere from here on (its downstream is cleared on
+  # the turn only), its task is stopped and settles through the ordinary
+  # cancelled-turn path, and the owner's downstream and its monitor stay.
+  def handle_call({:abandon_turn, pid, epoch, correlation_id, owner_turn_id}, _from, state) do
+    downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id, owner_turn_id: owner_turn_id}
+
+    case DownstreamState.cancellation_status(state, downstream) do
+      :active ->
+        state =
+          state
+          |> DownstreamState.cancel_active_turn_downstream(downstream, :owner_forward_timeout)
+          |> clear_native_compaction_admission(:downstream_cancelled)
+          |> maybe_settle_cancelled_without_pending_handoff(:owner_forward_timeout)
+
+        reply_or_retire(state, :ok)
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 

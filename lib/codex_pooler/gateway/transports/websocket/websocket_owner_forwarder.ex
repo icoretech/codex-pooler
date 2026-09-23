@@ -985,6 +985,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   @doc false
+  @spec remote_abandon_turn_v1(binary(), WebsocketOwnerSession.per_call_downstream()) ::
+          :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def remote_abandon_turn_v1(codex_session_id, %{owner_turn_id: owner_turn_id} = downstream)
+      when is_binary(codex_session_id) and is_pid(owner_turn_id) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.abandon_turn(owner_pid, downstream)
+    end
+  end
+
+  @doc false
   @spec remote_detach_previsible_downstream_v1(binary(), WebsocketOwnerSession.downstream()) ::
           :suspended | :detached | :not_previsible | {:error, WebsocketOwnerContract.owner_error()}
   def remote_detach_previsible_downstream_v1(codex_session_id, downstream)
@@ -1308,7 +1318,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     stop_remote_cancellation_watcher(cancellation_watcher, submitter)
 
     if result == {:error, :owner_forward_timeout} do
-      best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      best_effort_abandon_turn(node, codex_session_id, downstream, opts)
     end
 
     result
@@ -1337,7 +1347,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     stop_remote_cancellation_watcher(cancellation_watcher, submitter)
 
     if result == {:error, :owner_forward_timeout} do
-      best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      best_effort_abandon_turn(node, codex_session_id, downstream, opts)
     end
 
     result
@@ -1366,7 +1376,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     stop_remote_cancellation_watcher(cancellation_watcher, submitter)
 
     if result == {:error, :owner_forward_timeout} do
-      best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      best_effort_abandon_turn(node, codex_session_id, downstream, opts)
     end
 
     result
@@ -1395,7 +1405,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     stop_remote_cancellation_watcher(cancellation_watcher, submitter)
 
     if result == {:error, :owner_forward_timeout} do
-      best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      best_effort_abandon_turn(node, codex_session_id, downstream, opts)
     end
 
     result
@@ -1430,7 +1440,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     stop_remote_cancellation_watcher(cancellation_watcher, submitter)
 
     if result == {:error, :owner_forward_timeout} do
-      best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      best_effort_abandon_turn(node, codex_session_id, downstream, opts)
     end
 
     result
@@ -1982,6 +1992,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     )
   end
 
+  # A turn submission whose forward budget expired (findings#206 row 206-299):
+  # the client is told the turn failed, and an erpc timeout abandons only the
+  # reply, so the owner may still take the queued turn. Its output must not
+  # reach that client, but the socket is still connected: the owner stops only
+  # the turn this per-call downstream submitted and keeps the downstream, where
+  # the detach a closing socket sends also cleared it and every later turn on
+  # the socket was refused `stale_owner`. Same one-second, ignored-answer
+  # budget as the detach it replaces. An owner node that predates the call, or
+  # a downstream that names no turn, gets that detach, as before.
+  defp best_effort_abandon_turn(node, codex_session_id, %{owner_turn_id: owner_turn_id} = downstream, opts)
+       when is_pid(owner_turn_id) do
+    budget_opts = Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+
+    case call_remote_abandon_turn(node, [codex_session_id, downstream], budget_opts) do
+      {:error, :remote_abandon_v1_unsupported} -> best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      _result -> :ok
+    end
+  end
+
+  defp best_effort_abandon_turn(node, codex_session_id, downstream, opts),
+    do: best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+
+  defp call_remote_abandon_turn(node, args, opts) do
+    opts
+    |> node_client()
+    |> safe_remote_call(node, __MODULE__, :remote_abandon_turn_v1, args, Keyword.fetch!(opts, :timeout))
+    |> case do
+      {:error, :remote_abandon_v1_unsupported} = unsupported -> unsupported
+      result -> normalize_forward_result(result)
+    end
+  end
+
   # Fire and forget under the one-second budget on purpose (findings#206 row
   # 206-242): an erpc timeout abandons only the reply, the owner-node process
   # still runs the detach or cancel under the owner's own call budget, and no
@@ -2230,8 +2272,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         log_protocol_incompatibility(:v3)
         {:error, :owner_unavailable}
 
-      missing_remote_cancel_v1?(reason, module, function, args) ->
-        {:error, :remote_cancel_v1_unsupported}
+      unsupported = unsupported_remote_cancel(reason, module, function, args) ->
+        {:error, unsupported}
 
       missing_remote_reconnect_control_v1?(reason, module, function, args) ->
         log_control_protocol_incompatibility()
@@ -2293,6 +2335,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           | :owner_unavailable
           | :owner_crashed
           | :remote_cancel_v1_unsupported
+          | :remote_abandon_v1_unsupported
   def normalize_remote_failure(kind, reason, module, function, args) do
     case normalize_protocol_failure(kind, reason, module, function, args) do
       nil -> normalize_remote_transport_failure(reason)
@@ -2322,8 +2365,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         log_protocol_incompatibility(:v5)
         :owner_unavailable
 
-      missing_remote_cancel_v1?(reason, module, function, args) ->
-        :remote_cancel_v1_unsupported
+      unsupported = unsupported_remote_cancel(reason, module, function, args) ->
+        unsupported
 
       missing_remote_reconnect_control_v1?(reason, module, function, args) ->
         log_control_protocol_incompatibility()
@@ -2460,6 +2503,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp missing_remote_submit_v5?(_reason, _module, _function, _args), do: false
 
+  # An owner node that predates a versioned cancel entrypoint answers `undef`;
+  # its caller then falls back to the legacy detach.
+  defp unsupported_remote_cancel(reason, module, function, args) do
+    cond do
+      missing_remote_cancel_v1?(reason, module, function, args) -> :remote_cancel_v1_unsupported
+      missing_remote_abandon_v1?(reason, module, function, args) -> :remote_abandon_v1_unsupported
+      true -> nil
+    end
+  end
+
   defp missing_remote_cancel_v1?(
          {:exception, :undef, [{module, :remote_cancel_downstream_v1, remote_args, _location} | _stack]},
          module,
@@ -2469,6 +2522,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
        do: remote_args == args and length(remote_args) == 3
 
   defp missing_remote_cancel_v1?(_reason, _module, _function, _args), do: false
+
+  defp missing_remote_abandon_v1?(
+         {:exception, :undef, [{module, :remote_abandon_turn_v1, remote_args, _location} | _stack]},
+         module,
+         :remote_abandon_turn_v1,
+         args
+       ),
+       do: remote_args == args and length(remote_args) == 2
+
+  defp missing_remote_abandon_v1?(_reason, _module, _function, _args), do: false
 
   defp missing_remote_reconnect_control_v1?(
          {:exception, :undef, [{module, :remote_reconnect_control_v1, remote_args, _location} | _stack]},
