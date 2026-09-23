@@ -9,8 +9,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsServiceTierLiveTest do
   setup :register_and_log_in_user
 
   # The ChatGPT Codex backend reports `default` on the terminal event of a
-  # `priority` request, and accounting prices the reported tier. These rows
-  # carry the persisted columns that settlement writes for that case.
+  # `priority` request. Settlements before findings#206 row 206-271 priced the
+  # reported tier; these rows carry the persisted columns such a settlement
+  # wrote, which the list and drawer keep showing as billed.
   @echo_mismatch %{
     requested_service_tier: "priority",
     actual_service_tier: "default",

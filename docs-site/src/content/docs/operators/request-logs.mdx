@@ -110,7 +110,7 @@ The table shows the latest matching rows, with a hard page size limit.
     </tr>
     <tr>
       <td>Transport</td>
-      <td>Request transport and protocol family, such as HTTP JSON or HTTP SSE. A bolt icon marks a request priced at the priority tier; a request that only asked for priority does not get it.</td>
+      <td>Request transport and protocol family, such as HTTP JSON or HTTP SSE. A bolt icon marks a request priced at the priority tier.</td>
     </tr>
     <tr>
       <td>Route</td>
@@ -279,7 +279,7 @@ The request drawer keeps three tier facts apart:
   </tbody>
 </table>
 
-The ChatGPT Codex backend reports <code>service_tier</code> as <code>auto</code> while a response is in progress and <code>default</code> when it completes, including for requests sent with <code>priority</code>. The public OpenAI API reports <code>priority</code> for the same request. Codex Pooler forwards the requested tier and prices the tier the upstream reported, so a <code>priority</code> request reported as <code>default</code> shows <code>tier default priority requested</code> in the list and <code>standard</code> under Billed as. When the upstream reports no tier, or reports <code>auto</code>, the request is priced at its requested tier.
+The ChatGPT Codex backend reports <code>service_tier</code> as <code>auto</code> while a response is in progress and <code>default</code> when it completes, including for requests sent with <code>priority</code>. The public OpenAI API reports <code>priority</code> for the same request. Codex Pooler forwards the requested tier and prices the tier the upstream reported, with one exception: a <code>priority</code> request reported as <code>default</code> is priced at <code>priority</code>, because the backend reports <code>default</code> for every priority request while it serves the request in Fast mode, which uses plan usage at a higher rate than standard. Such a request shows <code>tier default priority requested</code> in the list and <code>priority</code> under Priced as. When the upstream reports no tier, or reports <code>auto</code>, the request is priced at its requested tier. Requests settled by earlier releases keep the tier they were priced at.
 
 A <code>default</code> report on a <code>priority</code> request is not evidence that priority processing was skipped. To judge whether it was applied, compare latency across requests for the same account, model, and transport.
 

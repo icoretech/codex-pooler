@@ -1552,7 +1552,11 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert request.request_metadata["pricing"]["actual_service_tier"] == "priority"
     end
 
-    test "explicit priority settles at standard pricing when upstream returns default" do
+    # The ChatGPT Codex backend echoes `default` for every request that asked
+    # for `priority`, while it serves and meters it as Fast (the provider bills
+    # Fast at a multiple of the standard credit rate), so a `default` echo does
+    # not downgrade the priced tier (findings#206 row 206-271).
+    test "explicit priority keeps priority pricing when the Codex backend echoes default" do
       setup = accounting_setup()
 
       priority_pricing =
@@ -1586,11 +1590,11 @@ defmodule CodexPooler.Accounting.PricingTest do
                  %{response_status_code: 200, attempt_metadata: %{"service_tier" => "default"}}
                )
 
-      assert result.settlement.pricing_snapshot_id == setup.pricing.id
+      assert result.settlement.pricing_snapshot_id == priority_pricing.id
       assert result.settlement.details["requested_service_tier"] == "priority"
       assert result.settlement.details["actual_service_tier"] == "default"
-      assert result.settlement.details["service_tier"] == "standard"
-      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(40))
+      assert result.settlement.details["service_tier"] == "priority"
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(400))
 
       # The ChatGPT Codex backend reports `default` for priority requests. The
       # request row and the request log keep all three tiers apart, so the
@@ -1598,7 +1602,7 @@ defmodule CodexPooler.Accounting.PricingTest do
       request = Repo.get!(CodexPooler.Accounting.Request, reserved.request.id)
       assert request.requested_service_tier == "priority"
       assert request.actual_service_tier == "default"
-      assert request.service_tier == "standard"
+      assert request.service_tier == "priority"
 
       assert %{items: [log], total: 1} =
                Accounting.list_request_logs(setup.pool,
@@ -1607,7 +1611,7 @@ defmodule CodexPooler.Accounting.PricingTest do
 
       assert log.requested_service_tier == "priority"
       assert log.actual_service_tier == "default"
-      assert log.service_tier == "standard"
+      assert log.service_tier == "priority"
       assert log.cost.pricing_availability == "priced"
     end
 

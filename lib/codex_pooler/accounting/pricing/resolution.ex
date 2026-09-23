@@ -947,11 +947,22 @@ defmodule CodexPooler.Accounting.PricingResolution do
     cond do
       requested == "batch" and not batch_usage? -> {:unpriced, "unpriced_batch_tier"}
       requested == "batch" -> mapped_service_tier(requested, batch_usage?)
+      echo_hides_requested_tier?(requested, actual) -> mapped_service_tier(requested, batch_usage?)
       actual not in [nil, "auto"] -> mapped_service_tier(actual, batch_usage?)
       requested == "auto" and actual in [nil, "auto"] -> {:unpriced, "unpriced_auto_tier"}
       true -> mapped_service_tier(requested, batch_usage?)
     end
   end
+
+  # The ChatGPT Codex backend reports `default` on the terminal response of a
+  # request that asked for `priority` (Fast), with or without the Pooler in the
+  # path, while it serves and meters the request as Fast: the provider bills
+  # Fast at a multiple of the standard credit rate and it uses included limits
+  # faster (findings#127, findings#206 row 206-271). A `default` echo therefore
+  # says nothing about a requested priority tier, and pricing keeps the tier
+  # that was requested; any other reported tier still outranks the request.
+  defp echo_hides_requested_tier?("priority", "default"), do: true
+  defp echo_hides_requested_tier?(_requested, _actual), do: false
 
   defp mapped_service_tier("batch", false), do: {:unpriced, "unpriced_batch_tier"}
   defp mapped_service_tier("batch", true), do: {:ok, "batch"}
