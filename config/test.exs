@@ -76,6 +76,16 @@ config :codex_pooler, CodexPooler.Repo,
   database: test_database,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: test_repo_pool_size,
+  # A non-async test shares its sandbox owner's single connection with every process it starts,
+  # and DBConnection's ownership proxy drops each queued checkout that has waited more than twice
+  # `queue_target` (100 ms by default) at its once-a-second sweep. A response task settles after
+  # its terminal frame reached the client, holding that connection for 100 ms to 1.1 s under load
+  # (measured under a 12-loop CPU hog; more than 3 s during a database restore), so the test's
+  # next read, upgrade or cleanup failed with "dropped from queue" instead of waiting its turn.
+  # In production each of those processes checks out its own pooled connection. 5 s drops only a
+  # waiter stalled for 10 s, well past every measured hold and inside the 15 s query timeout that
+  # bounds the holder's statements (findings#206, findings#232 row 232-222).
+  queue_target: 5_000,
   parameters: [application_name: "codex_pooler_test"]
 
 config :codex_pooler, Oban,
