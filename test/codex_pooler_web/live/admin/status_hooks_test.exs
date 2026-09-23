@@ -79,7 +79,6 @@ defmodule CodexPoolerWeb.Admin.StatusHooksTest do
 
     for {revision, timestamp} <- [
           {6, DateTime.add(now, 1, :second)},
-          {8, DateTime.add(now, 1, :second)},
           {7, now},
           {7, DateTime.add(now, -1, :second)}
         ] do
@@ -113,5 +112,45 @@ defmodule CodexPoolerWeb.Admin.StatusHooksTest do
 
     assert :sys.get_state(view.pid).socket.assigns.openai_status_aggregate ==
              before.openai_status_aggregate
+  end
+
+  # The updated event for revision 8 is never delivered, as when its PostgreSQL
+  # notification is lost; the freshness event of the next sync names revision 8.
+  test "a freshness event naming a newer revision reloads a view that missed the update", %{conn: conn} do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             OpenAIStatus.upsert_feed_state(%{
+               aggregate_revision: 7,
+               last_success_at: now,
+               updated_at: now
+             })
+
+    {:ok, view, _} = live(conn, "/admin/incidents")
+    assert :sys.get_state(view.pid).socket.assigns.openai_status_aggregate.aggregate_revision == 7
+
+    later = DateTime.add(now, 1, :second)
+
+    assert {:ok, _} =
+             OpenAIStatus.upsert_feed_state(%{
+               aggregate_revision: 8,
+               last_success_at: later,
+               updated_at: later
+             })
+
+    send(
+      view.pid,
+      {:openai_status_freshness,
+       %{
+         event_version: 1,
+         event_type: :freshness,
+         aggregate_revision: 8,
+         last_success_at: later
+       }}
+    )
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.openai_status_aggregate.aggregate_revision == 8
+    assert assigns.openai_status_aggregate.last_success_at == later
   end
 end

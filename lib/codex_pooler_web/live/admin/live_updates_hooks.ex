@@ -260,10 +260,26 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
     end
   end
 
+  # Every successful status sync sends either an updated event or this
+  # freshness event, both relayed by PostgreSQL NOTIFY, which can be lost. A
+  # freshness event already naming a newer revision than this view shows means
+  # the updated event for that revision never arrived, so it reloads as the
+  # updated event would have; the next sync bounds how long a view stays stale.
   defp handle_openai_status({:openai_status_freshness, payload}, socket) do
     with {:ok, event} <- StatusEvents.decode_freshness(payload),
-         current when is_map(current) <- socket.assigns[:openai_status_aggregate],
-         true <- event.aggregate_revision == current.aggregate_revision,
+         current when is_map(current) <- socket.assigns[:openai_status_aggregate] do
+      if event.aggregate_revision > current.aggregate_revision,
+        do: {:halt, refresh_openai_status(socket)},
+        else: apply_openai_status_freshness(socket, current, event)
+    else
+      _ -> {:halt, socket}
+    end
+  end
+
+  defp handle_openai_status(_message, socket), do: {:cont, socket}
+
+  defp apply_openai_status_freshness(socket, current, event) do
+    with true <- event.aggregate_revision == current.aggregate_revision,
          true <-
            is_nil(current.last_success_at) or
              DateTime.compare(event.last_success_at, current.last_success_at) == :gt do
@@ -290,8 +306,6 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
       _ -> {:halt, socket}
     end
   end
-
-  defp handle_openai_status(_message, socket), do: {:cont, socket}
 
   defp refresh_openai_status(socket) do
     socket = assign_openai_status(socket)
