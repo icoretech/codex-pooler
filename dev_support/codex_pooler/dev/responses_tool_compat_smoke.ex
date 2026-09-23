@@ -819,7 +819,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     with {:ok, candidates} <- certification_models(base_url, fixture) do
       selected =
         Enum.min_by(candidates, fn model ->
-          {if(model.exposed_model_id == "gpt-5.6", do: 0, else: 1), model.exposed_model_id}
+          {if(model.exposed_model_id == "gpt-6-sol", do: 0, else: 1), model.exposed_model_id}
         end)
 
       {:ok, selected}
@@ -840,7 +840,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       {:ok, Enum.sort_by(candidates, & &1.exposed_model_id)}
     else
       [] ->
-        {:error, "Pool does not advertise a suitable exact GPT-5.6 model"}
+        {:error, "Pool does not advertise a suitable exact GPT-6 model"}
 
       {:ok, %Req.Response{status: status}} ->
         {:error, "model discovery failed with HTTP #{status}"}
@@ -863,7 +863,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       model.supports_responses and model.supports_streaming and model.supports_tools
   end
 
-  defp certification_family?(id), do: id == "gpt-5.6" or String.starts_with?(id, "gpt-5.6-")
+  defp certification_family?(id), do: id == "gpt-6" or String.starts_with?(id, "gpt-6-")
 
   defp optional_model_id?(:error, _id), do: true
   defp optional_model_id?({:ok, value}, id), do: is_binary(value) and value == id

@@ -3114,7 +3114,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["include"] == ["reasoning.encrypted_content"]
   end
 
-  test "POST /v1/responses normalizes an OMP 16.3.14 GPT-5.6 first turn for Responses Lite",
+  test "POST /v1/responses normalizes an OMP GPT-6 first turn for Responses Lite",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -3123,7 +3123,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            %{
              "type" => "response.completed",
              "response" => %{
-               "id" => "resp_v1_omp_gpt56_first_turn",
+               "id" => "resp_v1_omp_gpt6_first_turn",
                "object" => "response",
                "status" => "completed",
                "output" => [],
@@ -3182,7 +3182,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert content_type =~ "text/event-stream"
     assert conn.status == 200
     assert conn.resp_body =~ "event: response.completed\n"
-    assert conn.resp_body =~ "resp_v1_omp_gpt56_first_turn"
+    assert conn.resp_body =~ "resp_v1_omp_gpt6_first_turn"
 
     assert [captured] = FakeUpstream.requests(upstream)
     captured_headers = Map.new(captured.headers)

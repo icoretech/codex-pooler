@@ -10,14 +10,14 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
   # caller outside tests and was removed. The cases that still describe served
   # behaviour run through `build_selected_sources/5`.
 
-  test "projects GPT-5.6 long-context metadata into the raw native Codex catalog" do
-    source = Map.put(gpt56_context_metadata(), "slug", "gpt-5.6-context")
+  test "projects GPT-6 long-context metadata into the raw native Codex catalog" do
+    source = Map.put(gpt6_context_metadata(), "slug", "gpt-6-sol-context")
 
     assert {:ok, result} =
              CodexCatalog.build_selected_sources(
-               [{model("gpt-5.6-context", %{}), source}],
+               [{model("gpt-6-sol-context", %{}), source}],
                unrestricted_policy(),
-               %{"gpt-5.6-context" => ["long_context"]},
+               %{"gpt-6-sol-context" => ["long_context"]},
                %{},
                %{}
              )
@@ -1089,7 +1089,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     result
   end
 
-  defp gpt56_context_metadata do
+  defp gpt6_context_metadata do
     %{
       "context_window" => 272_000,
       "max_context_window" => 872_000,

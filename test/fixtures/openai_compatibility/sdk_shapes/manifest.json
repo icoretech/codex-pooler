@@ -81,7 +81,7 @@
     "openai-node-chat-custom-tool.json",
     "openai-python-audio-transcription.json",
     "opencode-responses-replay-continuation.json",
-    "omp-responses-gpt56-clean-first-turn.json",
+    "omp-responses-gpt6-clean-first-turn.json",
     "hermes-responses-completed-assistant-replay.json",
     "openclaw-responses-assistant-thinking-replay.json",
     "vercel-ai-responses-url-citation-replay.json",
