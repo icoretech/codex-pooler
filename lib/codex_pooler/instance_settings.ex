@@ -184,6 +184,7 @@ defmodule CodexPooler.InstanceSettings do
         updated = Settings.mark_loaded(updated, :database)
         _cache_result = Cache.put(updated)
         _ = Cache.broadcast_update(updated)
+        _ = Cache.notify_update(updated)
         record_update_audit(scope, before, updated)
         {:ok, updated}
 

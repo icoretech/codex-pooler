@@ -12,6 +12,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPooler.PeerRegistry
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
+  alias Ecto.Adapters.SQL.Sandbox
 
   defmodule FailingRepo do
     def insert(_struct, _opts),
@@ -267,6 +268,79 @@ defmodule CodexPooler.InstanceSettingsTest do
     _ = :sys.get_state(Cache)
 
     refute_received {ScriptedRepo, _operation}
+  end
+
+  test "a settings update notifies every role through postgres with its lock version" do
+    settings = InstanceSettings.ensure_singleton!()
+    test_pid = self()
+    telemetry_ref = make_ref()
+    telemetry_id = "instance-settings-postgres-notify-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        telemetry_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {telemetry_ref, metadata.query, metadata.params})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(telemetry_id) end)
+
+    assert {:ok, updated} = InstanceSettings.update_system_settings(settings, %{"files" => %{"upload_ttl_seconds" => 86_401}})
+
+    channel = Cache.postgres_channel()
+    expected_payload = Integer.to_string(updated.lock_version)
+    assert_received {^telemetry_ref, "SELECT pg_notify($1, $2)", [^channel, ^expected_payload]}
+  end
+
+  # A committed NOTIFY is the only path that reaches an unclustered worker or
+  # scheduler VM; this drives it through the real Postgres LISTEN connection with no
+  # PubSub message, and the scripted repo proves the cache reloaded from it.
+  test "a committed postgres notification reloads the cache without a PubSub broadcast" do
+    settings = InstanceSettings.current()
+    newer = %{settings | lock_version: settings.lock_version + 7}
+    assert %{postgres_listen: %{ref: listen_ref}} = :sys.get_state(Cache)
+    assert is_reference(listen_ref)
+
+    Application.put_env(:codex_pooler, InstanceSettings, repo: ScriptedRepo)
+    configure_scripted_repo(newer, :none)
+    :ok = Cache.subscribe_applied()
+    flush_scripted_repo_calls()
+    flush_applied_events()
+
+    Sandbox.unboxed_run(Repo, fn -> assert :ok = Cache.notify_update(newer) end)
+
+    expected_lock_version = newer.lock_version
+    assert_receive {Cache, {:applied, ^expected_lock_version}}, 5_000
+    assert_received {ScriptedRepo, :get}
+    assert InstanceSettings.current().lock_version == expected_lock_version
+  end
+
+  test "the cache listens again on the next reconciliation after its notification listener goes down" do
+    assert %{postgres_listen: %{ref: first_ref, monitor_ref: monitor_ref}} = :sys.get_state(Cache)
+    notifications = Process.whereis(CodexPooler.Events.PostgresNotifications)
+
+    send(Process.whereis(Cache), {:DOWN, monitor_ref, :process, notifications, :simulated})
+    assert %{postgres_listen: nil, reconciliation_timer: %{generation: generation}} = :sys.get_state(Cache)
+
+    send(Process.whereis(Cache), {Cache, {:reconcile, generation}})
+    assert %{postgres_listen: %{ref: second_ref}} = :sys.get_state(Cache)
+    assert is_reference(second_ref)
+    refute second_ref == first_ref
+
+    settings = InstanceSettings.current()
+    newer = %{settings | lock_version: settings.lock_version + 11}
+    Application.put_env(:codex_pooler, InstanceSettings, repo: ScriptedRepo)
+    configure_scripted_repo(newer, :none)
+    :ok = Cache.subscribe_applied()
+    flush_applied_events()
+
+    Sandbox.unboxed_run(Repo, fn -> assert :ok = Cache.notify_update(newer) end)
+
+    expected_lock_version = newer.lock_version
+    assert_receive {Cache, {:applied, ^expected_lock_version}}, 5_000
   end
 
   test "duplicate singleton rows are rejected by the database and ensure_singleton!/0 is idempotent" do
