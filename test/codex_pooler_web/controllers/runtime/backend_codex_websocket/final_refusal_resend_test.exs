@@ -14,7 +14,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalResendTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [gateway_setup: 1, public_websocket_connect!: 3, public_websocket_receive_text!: 3, public_websocket_send_text!: 4, start_public_endpoint!: 0, start_upstream: 1]
 
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, strict_native_request: 2]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, stop_registered_websocket_owner_sessions: 0, strict_native_request: 2]
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
@@ -56,6 +56,66 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalResendTest do
     assert Repo.all(from(l in LedgerEntry, where: l.request_id == ^request_id, select: l.entry_kind)) |> Enum.frequencies() == %{"reservation" => 1, "settlement" => 1, "release" => 1}
     assert FakeUpstream.count(upstream) == 1
     assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  # The same turn resent over HTTPS, the released client's fallback after its
+  # websocket retries fail (findings#254 row 254-130): the opening request
+  # carries the websocket request's witness (row 232-231), so it finds the
+  # refused websocket turn and gets its refusal as the HTTP error, never a
+  # dispatch.
+  for forwarding <- [true, false] do
+    @tag forwarding: forwarding
+    @tag slow: "a real websocket turn refused and settled through the owner or the direct task, then its HTTPS resend"
+    test "owner forwarding #{forwarding}: the HTTPS resend of a finally refused websocket turn gets the same refusal, never a dispatch", %{forwarding: forwarding} do
+      CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, false)
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, forwarding)
+      if forwarding, do: on_exit(&stop_registered_websocket_owner_sessions/0)
+
+      refusal = CodexPooler.JSON.encode!(%{"type" => "error", "status" => 404, "error" => %{"type" => "invalid_request_error", "message" => "Refused 'private-refusal-sentinel'."}})
+
+      upstream =
+        start_upstream(
+          # provenance: observed findings#254 row 254-100 (codeless provider 404 refusing a native websocket turn); the HTTPS resend is row 254-130
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(method: "WEBSOCKET", path: "/backend-api/codex/responses", json: [valid: true, equals: %{"type" => "response.create"}], respond: FakeUpstream.websocket_text_frames([refusal]))
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      _revision = set_model_serving_mode!(model_serving_scope(), setup, "lite")
+      turn_state = Ecto.UUID.generate()
+      raw_payload = CodexPooler.JSON.encode!(native_turn_payload(Ecto.UUID.generate(), setup.model.exposed_model_id))
+      port = start_public_endpoint!()
+
+      original = send_and_receive_terminal!(port, setup, turn_state, raw_payload)
+      assert %{"type" => "error", "status" => 400, "error" => %{"code" => code, "message" => message}} = original
+      assert [%Request{id: request_id}] = pool_requests(setup.pool.id)
+      await_settled!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
+
+      body =
+        raw_payload
+        |> CodexPooler.JSON.decode!()
+        |> Map.delete("type")
+        |> Map.update!("client_metadata", &Map.delete(&1, "x-codex-ws-stream-request-start-ms"))
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", setup.authorization)
+        |> put_req_header("x-codex-turn-state", turn_state)
+        |> put_req_header("content-type", "application/json")
+        |> post("/backend-api/codex/responses", CodexPooler.JSON.encode!(body))
+
+      assert conn.status == 400
+      assert %{"error" => %{"code" => ^code, "message" => ^message}} = CodexPooler.JSON.decode!(conn.resp_body)
+      refute conn.resp_body =~ "private-refusal-sentinel"
+      # The HTTP route records its refusal as a denied request row, with no
+      # attempt and no reservation; the refused original is untouched.
+      assert [%Request{id: ^request_id, status: "failed"}, %Request{id: denied_id, status: "rejected", response_status_code: 400}] = pool_requests(setup.pool.id)
+      assert Repo.all(from(a in Attempt, where: a.request_id == ^denied_id)) == []
+      assert Repo.all(from(l in LedgerEntry, where: l.request_id == ^denied_id)) == []
+      assert Repo.all(from(l in LedgerEntry, where: l.request_id == ^request_id, select: l.entry_kind)) |> Enum.frequencies() == %{"reservation" => 1, "settlement" => 1, "release" => 1}
+      assert FakeUpstream.count(upstream) == 1
+    end
   end
 
   defp send_and_receive_terminal!(port, setup, turn_state, raw_payload) do

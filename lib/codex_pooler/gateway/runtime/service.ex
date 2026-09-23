@@ -1970,9 +1970,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
 
       _ordinary ->
-        auth
-        |> Accounting.reserve(model, payload, attrs)
-        |> normalize_native_http_turn_duplicate(endpoint, request_options)
+        with :none <- native_http_final_refusal(request_options, payload) do
+          auth
+          |> Accounting.reserve(model, payload, attrs)
+          |> normalize_native_http_turn_duplicate(endpoint, request_options)
+        end
     end
   end
 
@@ -1999,6 +2001,38 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp normalize_native_http_turn_duplicate(result, _endpoint, %RequestOptions{}), do: result
+
+  # The HTTPS resend of a native websocket turn whose provider refusal went out
+  # as the final wrapped 400 is answered with that refusal, like its websocket
+  # resend (findings#254 rows 254-100 and 254-130), before anything is
+  # reserved. The native HTTP turn claim steps over a zero-output predecessor
+  # (findings#212 row 212-50), so this resend used to be dispatched again and
+  # refused again by the provider; the opening request's witness is the
+  # websocket request's (findings#232 row 232-231), so the refused turn is found
+  # the way its websocket resend finds it. An HTTP predecessor records no
+  # provider status of its own and keeps that step-over.
+  defp native_http_final_refusal(%RequestOptions{transport: %{transport: transport}, continuity: %{codex_session: %CodexSession{} = session}} = request_options, payload)
+       when transport in ["http_sse", "http_json"] do
+    with true <- NativeHttpTurnIdentity.fenced?(request_options),
+         {:ok, %{arm: :opening, semantic_turn_key: semantic_turn_digest, native_client_retry_witness: %{digest: digest, auth_epoch: auth_epoch} = witness}} <-
+           NativeHttpTurnIdentity.request_claim(request_options, payload),
+         {:ok, metadata} <-
+           Accounting.final_refusal_predecessor(session, %{
+             semantic_turn_digest: semantic_turn_digest,
+             replay_claim_digest: digest,
+             replay_claim_alternates: witness_alternates(witness),
+             runtime_revocation_epoch: auth_epoch
+           }),
+         {:ok, %{"code" => code, "message" => message} = refusal} <- Adapter.recorded_final_refusal_error(metadata) do
+      public_error = error(400, code, message, Map.get(refusal, "param"))
+      log_pre_classification_refusal(request_options, session, :final_refusal_predecessor, public_error)
+      {:error, public_error}
+    else
+      _no_recorded_refusal -> :none
+    end
+  end
+
+  defp native_http_final_refusal(_request_options, _payload), do: :none
 
   defp reserve_client_retry(auth, model, payload, endpoint, request_options, attrs) do
     if native_full_history_compaction?(endpoint, request_options) do
