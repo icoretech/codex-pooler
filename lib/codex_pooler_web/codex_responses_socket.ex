@@ -3150,6 +3150,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp put_response_task_model(state, _pid, _prepared), do: state
 
+  defp forget_response_task_model(%{response_task_models: models} = state, pid),
+    do: %{state | response_task_models: Map.delete(models, pid)}
+
+  defp forget_response_task_model(state, _pid), do: state
+
   defp put_prepared_public_context(%PreparedWebsocketFrame{} = prepared, state) do
     if prepared.variant == :public_response_create do
       stream_id = Map.get(state, :public_response_stream_id)
@@ -4417,7 +4422,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state
     |> Map.update(:tasks, MapSet.new(), &MapSet.delete(&1, pid))
-    |> Map.update(:response_task_models, %{}, &Map.delete(&1, pid))
+    |> forget_response_task_model(pid)
     |> clear_direct_cleanup(pid)
     |> DownstreamSession.clear_cleanup_witness(pid)
   end
