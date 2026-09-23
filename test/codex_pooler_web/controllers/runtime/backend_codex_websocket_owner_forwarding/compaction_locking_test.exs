@@ -302,14 +302,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
       decoded = CodexPooler.JSON.decode!(frame)
       assert decoded["type"] == "error"
 
+      # A database connection lost during the reservation is a transient
+      # failure before dispatch: the client gets the retryable 503.
       assert decoded["error"]["code"] ==
                if(scenario == :rollback,
-                 do: "websocket_response_task_failed",
+                 do: "service_unavailable",
                  else: "upstream_request_failed"
                )
 
       assert logs =~
-               if(scenario == :rollback, do: "postgres_code=admin_shutdown", else: "native")
+               if(scenario == :rollback, do: "reason_class=postgres_admin_shutdown", else: "native")
 
       state
     end
