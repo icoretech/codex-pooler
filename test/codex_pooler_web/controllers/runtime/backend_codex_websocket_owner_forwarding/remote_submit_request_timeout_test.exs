@@ -45,9 +45,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
 
     @turn_budget_ms 200
 
-    # Application env, not `:persistent_term`: erasing a persistent term waits
-    # for a global literal collection, which holds the calling response task
-    # while the owner is suspended.
+    # The switch lives in the application env and is read by the response
+    # task that sends the submission.
     def arm(owner_pid) when is_pid(owner_pid), do: put_config(:armed_owner, owner_pid)
     def disarm, do: put_config(:armed_owner, nil)
 
