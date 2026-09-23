@@ -170,9 +170,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp scope_for_predecessor(scope, nil), do: scope
 
-  # A turn claim does not bind payload bytes. Exact durable execution recovery
-  # or a verified quota rejection before output still requires the original
-  # sealed payload witness; payload-scoped continuation claims retain their policy.
+  # A turn claim does not bind payload bytes. Exact durable execution recovery,
+  # a verified quota rejection before output, or a websocket turn the client
+  # left before any output reached it still requires the original sealed
+  # payload witness; payload-scoped continuation claims retain their policy.
+  # The pre-visible disconnect is the released client's commonest resend: the
+  # opening request of every turn carries this claim, and with owner
+  # forwarding off it was refused on every retry (findings#232 row 232-170).
   defp validate_semantic_retry(request, %{semantic_claim?: true} = scope) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
@@ -190,7 +194,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          true <- not is_nil(turn) and turn.codex_session_id == Map.get(scope, :codex_session_id),
          true <-
            ClientRetry.verified_dead_execution?(turn, request, attempt) or
-             ClientRetry.verified_quota_rejection?(turn, request, attempt) do
+             ClientRetry.verified_quota_rejection?(turn, request, attempt) or
+             previsible_websocket_disconnect?(request) do
       :ok
     else
       _invalid -> {:error, :terminal_predecessor}

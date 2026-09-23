@@ -31,7 +31,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PrevisibleRetryDirectTest
 
   for {shape, input} <- [
         tool_continuation: [%{"type" => "function_call_output", "call_id" => "call_direct_previsible_retry", "output" => "synthetic direct retry output"}],
-        compact_final: [%{"type" => "compaction", "encrypted_content" => "synthetic-direct-previsible-retry-compaction"}]
+        compact_final: [%{"type" => "compaction", "encrypted_content" => "synthetic-direct-previsible-retry-compaction"}],
+        opening_turn: [%{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic direct retry opening turn"}]}]
       ] do
     @tag :replay_matrix
     @tag slow: "waits out the released client's real 200 ms and 400 ms stream-retry backoff around the closing socket's 250 ms response-task drain"
