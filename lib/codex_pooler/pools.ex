@@ -413,7 +413,9 @@ defmodule CodexPooler.Pools do
   def change_membership_role(%Scope{} = scope, membership_or_id, role) when is_binary(role) do
     with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)),
          {:ok, role} <- normalize_membership_role(role) do
-      change_membership_role_transaction(scope, membership_or_id, role)
+      scope
+      |> change_membership_role_transaction(membership_or_id, role)
+      |> invalidate_notifications_after_membership_change()
     end
   end
 
@@ -423,7 +425,9 @@ defmodule CodexPooler.Pools do
   @spec revoke_membership(Scope.t(), Membership.t() | Ecto.UUID.t()) :: membership_result()
   def revoke_membership(%Scope{} = scope, membership_or_id) do
     with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)) do
-      revoke_membership_transaction(scope, membership_or_id)
+      scope
+      |> revoke_membership_transaction(membership_or_id)
+      |> invalidate_notifications_after_membership_change()
     end
   end
 
@@ -466,7 +470,7 @@ defmodule CodexPooler.Pools do
                role: membership.role,
                status: membership.status
              }) do
-        membership
+        {membership, previous_role != membership.role}
       else
         error -> rollback_transaction_error(error)
       end
@@ -490,13 +494,23 @@ defmodule CodexPooler.Pools do
                status: membership.status,
                role: membership.role
              }) do
-        membership
+        {membership, previous_status != membership.status}
       else
         error -> rollback_transaction_error(error)
       end
     end)
     |> normalize_transaction_error()
   end
+
+  # A membership's role decides which Pools its operator sees, so a committed
+  # role change or revocation invalidates the operator's notification centers
+  # (findings#206 row 206-319).
+  defp invalidate_notifications_after_membership_change({:ok, {%Membership{} = membership, changed?}}) do
+    if changed?, do: _ = Alerts.invalidate_notifications_after_operator_visibility_change(membership.user_id)
+    {:ok, membership}
+  end
+
+  defp invalidate_notifications_after_membership_change({:error, _reason} = error), do: error
 
   defp lock_membership(%Membership{id: id}), do: lock_membership(id)
 

@@ -119,6 +119,15 @@ defmodule CodexPooler.Alerts do
   @spec invalidate_notifications_after_pool_status_change(Ecto.UUID.t()) :: :ok | {:error, term()}
   defdelegate invalidate_notifications_after_pool_status_change(pool_id), to: NotificationEvents, as: :invalidate_pool_visibility
 
+  @doc """
+  Invalidates one operator's notification centers after a committed change of
+  the Pools that operator can see: a Pool assignment granted or revoked, or a
+  role changed or revoked (findings#206 row 206-319). The operator's pages
+  re-read their visible Pools and resync their Pool subscriptions.
+  """
+  @spec invalidate_notifications_after_operator_visibility_change(Ecto.UUID.t()) :: :ok | {:error, term()}
+  defdelegate invalidate_notifications_after_operator_visibility_change(operator_id), to: NotificationEvents, as: :broadcast_operator_invalidation
+
   @spec clear_incident_condition(IncidentLifecycle.clear_attrs() | map() | String.t()) ::
           IncidentLifecycle.clear_result()
   defdelegate clear_incident_condition(attrs), to: IncidentLifecycle

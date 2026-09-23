@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.Membership
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.AlertNotificationsReadModel
 
@@ -352,6 +353,131 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     assert %{badge_count: 0, rows: []} = await_notification_center!(pool_view, &(&1.badge_count == 0))
   end
 
+  # Assigning a Pool to an admin changes which Pools the admin sees, and the
+  # assignment sent nothing: the admin's open page never heard the Pool's
+  # incidents until it navigated (findings#206 row 206-319). The admin's own
+  # topic carries one invalidation after the commit; the page reloads once,
+  # shows the Pool's incident and listens to the Pool from then on. The owner
+  # and an unrelated admin hear nothing.
+  test "assigning a Pool to an admin reloads that admin's notification centers once and they hear its incidents", %{conn: owner_conn, scope: owner_scope} do
+    [assigned_pool, new_pool] = for label <- ["kept", "granted"], do: pool!(owner_scope, label)
+    first_id = record_bell_incident!(new_pool).id
+    %{user: admin, conn: admin_conn} = assigned_admin!(owner_scope, [assigned_pool])
+    [owner_view, admin_view, unrelated_view] = views = open_pages!([owner_conn, admin_conn, assigned_admin_conn(owner_scope, assigned_pool)])
+
+    assert %{badge_count: 0} = notification_center(admin_view)
+
+    assert {:ok, _admin} = Accounts.update_operator(owner_scope, admin, %{"pool_ids" => [assigned_pool.id, new_pool.id]})
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 1, 0]
+    assert %{badge_count: 1, rows: [%{id: ^first_id}]} = notification_center(admin_view)
+    assert %{badge_count: 0} = notification_center(unrelated_view)
+
+    _second = record_bell_incident!(new_pool)
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 1, 0]
+    assert %{badge_count: 2} = notification_center(admin_view)
+    assert %{badge_count: 2} = notification_center(owner_view)
+    assert %{badge_count: 0} = notification_center(unrelated_view)
+  end
+
+  # Revoking the assignment is the other direction: the page reloads once,
+  # drops the Pool's incident and stops listening to the Pool, so a later
+  # incident on it never reaches the admin's page.
+  test "revoking an admin's Pool assignment reloads that admin's notification centers once and stops listening to the Pool", %{conn: owner_conn, scope: owner_scope} do
+    [kept_pool, revoked_pool] = for label <- ["kept", "revoked"], do: pool!(owner_scope, label)
+    _first = record_bell_incident!(revoked_pool)
+    %{user: admin, conn: admin_conn} = assigned_admin!(owner_scope, [kept_pool, revoked_pool])
+    [_owner_view, admin_view] = views = open_pages!([owner_conn, admin_conn])
+
+    assert %{badge_count: 1} = notification_center(admin_view)
+
+    assert {:ok, _admin} = Accounts.update_operator(owner_scope, admin, %{"pool_ids" => [kept_pool.id]})
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 1]
+    assert %{badge_count: 0, rows: []} = notification_center(admin_view)
+
+    _hidden = record_bell_incident!(revoked_pool)
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 0]
+    assert %{badge_count: 0, rows: []} = notification_center(admin_view)
+  end
+
+  # A role change changes every Pool the operator sees: an admin promoted to
+  # owner sees them all, an owner demoted to admin only the assigned ones, and
+  # a revoked membership none. Each change reloads the operator's pages once,
+  # through the operator editor and through the Pools membership functions.
+  test "changing or revoking an operator's role reloads that operator's notification centers once and follows the Pools they see", %{conn: owner_conn, scope: owner_scope} do
+    [assigned_pool, other_pool] = for label <- ["assigned", "other"], do: pool!(owner_scope, label)
+    other_id = record_bell_incident!(other_pool).id
+    %{user: admin, conn: admin_conn} = assigned_admin!(owner_scope, [assigned_pool])
+    [_owner_view, admin_view] = views = open_pages!([owner_conn, admin_conn])
+
+    assert %{badge_count: 0} = notification_center(admin_view)
+
+    assert {:ok, _owner} = Accounts.update_operator(owner_scope, admin, %{"role" => "instance_owner"})
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 1]
+    assert %{badge_count: 1, rows: [%{id: ^other_id}]} = notification_center(admin_view)
+
+    assert {:ok, _admin} = Accounts.update_operator(owner_scope, admin, %{"role" => "instance_admin", "pool_ids" => [assigned_pool.id]})
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 1]
+    assert %{badge_count: 0, rows: []} = notification_center(admin_view)
+
+    _hidden = record_bell_incident!(other_pool)
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 0]
+
+    membership = Repo.get_by!(Membership, user_id: admin.id, status: "active")
+    assert {:ok, _promoted} = Pools.change_membership_role(owner_scope, membership, "instance_owner")
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 1]
+    assert %{badge_count: 2} = notification_center(admin_view)
+
+    assert {:ok, _revoked} = Pools.revoke_membership(owner_scope, membership)
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 1]
+    assert %{badge_count: 0, rows: []} = notification_center(admin_view)
+
+    _unheard = record_bell_incident!(assigned_pool)
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 0]
+  end
+
+  # An operator edit that keeps the role and the assignments changes no Pool
+  # the operator sees, so no page reloads.
+  test "an operator edit that keeps the role and the Pool assignments reloads no notification center", %{conn: owner_conn, scope: owner_scope} do
+    pool = pool!(owner_scope, "unchanged")
+    %{user: admin, conn: admin_conn} = assigned_admin!(owner_scope, [pool])
+    views = open_pages!([owner_conn, admin_conn])
+
+    assert {:ok, _admin} = Accounts.update_operator(owner_scope, admin, %{"display_name" => "Renamed #{unique_suffix()}"})
+    assert {:ok, _admin} = Accounts.update_operator(owner_scope, admin, %{"role" => "instance_admin", "pool_ids" => [pool.id]})
+
+    assert Enum.map(views, &notification_reloads/1) == [0, 0]
+  end
+
+  # The same through the Operators page an owner uses: its form submit is the
+  # producer, so the admin's page is awaited on its notification center.
+  test "assigning a Pool on the Operators page shows its incidents on the admin's open notification center", %{conn: owner_conn, scope: owner_scope} do
+    [assigned_pool, new_pool] = for label <- ["page-kept", "page-granted"], do: pool!(owner_scope, label)
+    incident_id = record_bell_incident!(new_pool).id
+    %{user: admin, conn: admin_conn} = assigned_admin!(owner_scope, [assigned_pool])
+    {:ok, admin_view, _html} = live(admin_conn, ~p"/admin/jobs")
+    assert %{badge_count: 0} = notification_center(admin_view)
+    {:ok, operators_view, _html} = live(owner_conn, ~p"/admin/operators")
+
+    operators_view |> element("#edit-operator-#{admin.id}") |> render_click()
+
+    operators_view
+    |> element("#operator-edit-form")
+    |> render_submit(%{"operator_edit" => %{"id" => admin.id, "email" => admin.email, "display_name" => "", "role" => "instance_admin", "pool_ids" => [assigned_pool.id, new_pool.id]}})
+
+    assert Accounts.operator_lifecycle(admin).assigned_pool_ids |> Enum.sort() == Enum.sort([assigned_pool.id, new_pool.id])
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = await_notification_center!(admin_view, &(&1.badge_count == 1))
+  end
+
   # A newer release may send a notification message of a shape this one does
   # not know during a rolling update. These pages have no catch-all
   # `handle_info/2`, so a message the hook passed on would crash them; the hook
@@ -577,6 +703,14 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     end
   end
 
+  defp open_pages!(conns) do
+    for conn <- conns do
+      {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+      trace_notification_reloads!(view)
+      view
+    end
+  end
+
   defp await_notification_center!(view, predicate) do
     deadline = System.monotonic_time(:millisecond) + @relay_detection_timeout_ms
     await_notification_center(view, predicate, deadline)
@@ -665,6 +799,11 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   end
 
   defp assigned_admin_conn(owner_scope, assigned_pool) do
+    %{conn: conn} = assigned_admin!(owner_scope, [assigned_pool])
+    conn
+  end
+
+  defp assigned_admin!(owner_scope, assigned_pools) do
     %{user: admin} =
       operator_fixture(owner_scope, %{
         "email" => unique_user_email(),
@@ -672,12 +811,12 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
         "password_change_required" => "false"
       })
 
-    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner_scope.user.id)
+    Enum.each(assigned_pools, &operator_pool_assignment_fixture(admin, &1, created_by_user_id: owner_scope.user.id))
 
     assert {:ok, %{token: token}} =
              Accounts.login_user(%{"email" => admin.email, "password" => valid_user_password()})
 
-    build_conn() |> log_in_user(admin, token)
+    %{user: admin, conn: build_conn() |> log_in_user(admin, token)}
   end
 
   defp unique_slug(prefix), do: "notification-hooks-#{prefix}-#{unique_suffix()}"
