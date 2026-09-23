@@ -9,6 +9,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Catalog.Sync.PreservedSources
+  alias CodexPooler.Dev.LocalTarget
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.InstanceSettings
   alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
@@ -35,7 +36,12 @@ defmodule CodexPooler.Dev.Seeds.Full do
           required(:operators) => [User.t()],
           required(:password) => String.t()
         }) :: map()
-  def run(%{owner: owner, operators: operators, password: password}) do
+  def run(%{owner: owner, operators: operators, password: password} = context) do
+    # Every synthetic identity points at a fake that exists (the local perf
+    # fake by default, a replica's in-cluster fake when given), never at the
+    # real provider with a fake token.
+    upstream_base_url = Map.get(context, :upstream_base_url, LocalTarget.default_fake_upstream_base_url())
+
     {:ok, _settings} =
       InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
         "development" => %{"account_reconciliation_paused" => true}
@@ -56,7 +62,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
 
     api_keys = seed_api_keys!(owner, pool_active)
     seed_operator_pool_assignments!(owner, operators, pool_active)
-    identities = seed_identities!(owner)
+    identities = seed_identities!(owner, upstream_base_url)
     expiry_fixtures = Enum.take(identities, -4)
     seed_expiry_fixture_secrets!(expiry_fixtures)
     assignments = seed_assignments!(owner, pool_active, identities)
@@ -196,7 +202,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
     |> Repo.update!()
   end
 
-  defp seed_identities!(owner) do
+  defp seed_identities!(owner, upstream_base_url) do
     [
       identity_attrs(owner, "dev-acct-active", "Dev Active Pro", "active", "pro", "Pro"),
       identity_attrs(owner, "dev-acct-ready-quota", "Dev Ready Quota", "active", "pro", "Pro"),
@@ -285,6 +291,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
       )
     ]
     |> Enum.map(fn attrs ->
+      attrs = Map.update!(attrs, :metadata, &Map.put(&1, "base_url", upstream_base_url))
       %UpstreamIdentity{} |> UpstreamIdentity.changeset(attrs) |> Repo.insert!()
     end)
   end

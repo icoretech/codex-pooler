@@ -12,7 +12,8 @@ defmodule CodexPooler.Dev.Seeds do
   import Ecto.Query
 
   alias CodexPooler.Accounts.{PlatformBootstrapState, User}
-  alias CodexPooler.Dev.Seeds.{DocsScreenshots, Full, Perf}
+  alias CodexPooler.Dev.LocalTarget
+  alias CodexPooler.Dev.Seeds.{DocsScreenshots, Full, Perf, RealTraffic}
   alias CodexPooler.Pools.Membership
   alias CodexPooler.Repo
 
@@ -52,10 +53,18 @@ defmodule CodexPooler.Dev.Seeds do
     %{owner: owner, operators: operators, password: @password}
   end
 
-  @doc "Seeds a rich local fake dataset for exercising admin UI states."
-  @spec full() :: map()
-  def full do
+  @doc """
+  Seeds a rich local fake dataset for exercising admin UI states.
+
+  `upstream_base_url:` points every synthetic identity at a fake that exists:
+  the local perf fake by default, a replica's in-cluster fake when given.
+  """
+  @spec full(keyword()) :: map()
+  def full(opts \\ []) do
+    upstream_base_url = upstream_base_url!(opts)
+
     compact()
+    |> Map.put(:upstream_base_url, upstream_base_url)
     |> Full.run()
   end
 
@@ -66,12 +75,39 @@ defmodule CodexPooler.Dev.Seeds do
     |> DocsScreenshots.run()
   end
 
-  @doc "Seeds an isolated local fake dataset for gateway performance checks."
-  @spec perf() :: map()
-  def perf do
+  @doc """
+  Seeds an isolated local fake dataset for gateway performance checks.
+
+  `upstream_base_url:` replaces the local perf fake origin, for example with a
+  replica's in-cluster fake service.
+  """
+  @spec perf(keyword()) :: map()
+  def perf(opts \\ []) do
     require_dev_seeds_enabled!()
+    upstream_base_url = upstream_base_url!(opts)
     owner = ensure_perf_owner!()
-    Perf.run(%{owner: owner})
+    Perf.run(%{owner: owner, upstream_base_url: upstream_base_url})
+  end
+
+  @doc """
+  Seeds the dedicated Pool that real identities are imported into.
+
+  A real copy never shares a Pool with synthetic sources (the bundle import
+  task refuses such a Pool), so real traffic always reaches the real account
+  and synthetic traffic always reaches a fake. The Pool has no identities or
+  models of its own; `mix dev.upstreams.import --sync-catalog` fills both.
+  """
+  @spec real_traffic() :: map()
+  def real_traffic do
+    %{owner: owner} = compact()
+    RealTraffic.run(%{owner: owner})
+  end
+
+  defp upstream_base_url!(opts) do
+    case LocalTarget.upstream_base_url(Keyword.get(opts, :upstream_base_url), LocalTarget.default_fake_upstream_base_url()) do
+      {:ok, url} -> url
+      {:error, message} -> raise ArgumentError, message
+    end
   end
 
   defp ensure_perf_owner! do
