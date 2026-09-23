@@ -4082,6 +4082,127 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
              WebsocketOwnerSession.reconnect_control_v2(owner, fresh_control)
   end
 
+  # findings#206 row 206-348: an owner holding only an armed pre-visible replay
+  # answers a different turn from the session's next socket by retiring the
+  # replay (settled once through `replay_retirer`) and dispatching the turn;
+  # every other shape keeps the `owner_busy` it answered before.
+  describe "a different turn from the next socket at an armed pre-visible replay" do
+    @describetag :replay_protocol_v2
+    @describetag :superseded_replay
+
+    test "retires the replay once, attaches the socket and dispatches the turn", context do
+      armed = armed_previsible_replay!(context, "superseded-retire")
+      next = %{pid: self(), epoch: 2, correlation_id: "superseded-retire-next"}
+
+      log =
+        capture_info_log(fn ->
+          assert {:ok, :fresh_dispatch, ^next} =
+                   WebsocketOwnerSession.reconnect_control_v2(armed.owner, superseding_control(armed, next, <<5::256>>, <<6::256>>))
+        end)
+
+      lifecycle = armed.lifecycle
+      assert_received {:superseded_replay_retired, ^lifecycle}
+      refute_received {:superseded_replay_retired, _lifecycle}
+      expected_downstream = Map.put(next, :active_turn_reconnect?, true)
+
+      assert %{active_turn: nil, suspended_replay: nil, downstream: ^expected_downstream, downstream_epoch: 2, downstream_monitor: monitor} = :sys.get_state(armed.owner)
+      assert is_reference(monitor)
+      assert log =~ "websocket owner replay superseded"
+      assert log =~ "request_id=#{lifecycle.request_id}"
+      assert log =~ "predecessor_epoch=1 downstream_epoch=2 disposition=closed"
+
+      # The attached socket is the owner's current downstream: its next turn
+      # is an ordinary fresh dispatch with nothing left to retire.
+      assert {:ok, :fresh_dispatch, ^next} =
+               WebsocketOwnerSession.reconnect_control_v2(armed.owner, superseding_control(armed, next, <<7::256>>, <<8::256>>))
+
+      refute_received {:superseded_replay_retired, _lifecycle}
+    end
+
+    test "never retires it for the replay's own turn", context do
+      armed = armed_previsible_replay!(context, "superseded-same-turn")
+      next = %{pid: self(), epoch: 2, correlation_id: "superseded-same-turn-next"}
+
+      # Same semantic turn with another claim (a continuation of that turn),
+      # and another turn presenting the armed claim: neither is a new turn.
+      for {semantic, claim} <- [{armed.semantic_turn_digest, <<6::256>>}, {<<5::256>>, armed.replay_claim_digest}] do
+        assert {:error, :owner_busy} =
+                 WebsocketOwnerSession.reconnect_control_v2(armed.owner, superseding_control(armed, next, semantic, claim))
+      end
+
+      assert_replay_kept!(armed)
+    end
+
+    test "only the socket at the next epoch supersedes it", context do
+      armed = armed_previsible_replay!(context, "superseded-epoch")
+
+      for epoch <- [1, 3] do
+        stale = %{pid: self(), epoch: epoch, correlation_id: "superseded-epoch-#{epoch}"}
+
+        assert {:error, :owner_busy} =
+                 WebsocketOwnerSession.reconnect_control_v2(armed.owner, superseding_control(armed, stale, <<5::256>>, <<6::256>>))
+      end
+
+      assert_replay_kept!(armed)
+    end
+
+    test "a resend already redeeming the replay keeps it", context do
+      armed = armed_previsible_replay!(context, "superseded-provisional")
+      :sys.replace_state(armed.owner, fn state -> put_in(state.suspended_replay.provisional_status, :provisional) end)
+      next = %{pid: self(), epoch: 2, correlation_id: "superseded-provisional-next"}
+
+      assert {:error, :owner_busy} =
+               WebsocketOwnerSession.reconnect_control_v2(armed.owner, superseding_control(armed, next, <<5::256>>, <<6::256>>))
+
+      refute_received {:superseded_replay_retired, _lifecycle}
+      assert %{suspended_replay: %{provisional_status: :provisional}, downstream: nil} = :sys.get_state(armed.owner)
+    end
+
+    test "a retirement the database refused keeps the replay and the refusal", context do
+      armed = armed_previsible_replay!(context, "superseded-refused", retire_result: {:error, :database_unavailable})
+      next = %{pid: self(), epoch: 2, correlation_id: "superseded-refused-next"}
+
+      assert {:error, :owner_busy} =
+               WebsocketOwnerSession.reconnect_control_v2(armed.owner, superseding_control(armed, next, <<5::256>>, <<6::256>>))
+
+      lifecycle = armed.lifecycle
+      assert_received {:superseded_replay_retired, ^lifecycle}
+      assert %{suspended_replay: %{provisional_status: :armed}, downstream: nil, downstream_epoch: 1} = :sys.get_state(armed.owner)
+    end
+
+    # A turn the owner still runs for a gone socket may still be billed by the
+    # provider: one whose output the client saw, and one lost before output
+    # with its request in flight. Neither is ever superseded.
+    for {label, visible?, status} <- [{"visible output", true, :attached}, {"a request in flight", false, :lost}] do
+      @tag visible?: visible?, status: status
+      test "an owner still running a detached turn with #{label} keeps refusing", %{visible?: visible?, status: status} = context do
+        armed = armed_previsible_replay!(context, "superseded-active-#{visible?}")
+        task = spawn(fn -> receive do: (:stop -> :ok) end)
+        on_exit(fn -> send(task, :stop) end)
+
+        active_turn = %{
+          task_pid: task,
+          downstream: nil,
+          visible_output?: visible?,
+          terminal_forwarded?: false,
+          pending_result: nil,
+          descriptor: %{semantic_turn_digest: armed.semantic_turn_digest, replay_claim_digest: armed.replay_claim_digest, downstream_status: status, visible_output?: visible?}
+        }
+
+        :sys.replace_state(armed.owner, fn state -> %{state | suspended_replay: nil, active_turn: active_turn} end)
+        next = %{pid: self(), epoch: 2, correlation_id: "superseded-active-next"}
+
+        assert {:error, :owner_busy} =
+                 WebsocketOwnerSession.reconnect_control_v2(armed.owner, superseding_control(armed, next, <<5::256>>, <<6::256>>))
+
+        refute_received {:superseded_replay_retired, _lifecycle}
+        assert %{active_turn: %{task_pid: ^task}, downstream: nil, downstream_epoch: 1} = :sys.get_state(armed.owner)
+        assert Process.alive?(task)
+        :sys.replace_state(armed.owner, fn state -> %{state | active_turn: nil} end)
+      end
+    end
+  end
+
   @tag :replay_provisional_state
   @tag :replay_race
   test "suspended V2 provisional reserve query cancel is idempotent and bounded", context do
@@ -6792,6 +6913,96 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       send: fn _upstream_pid, _request, _writer -> {:error, %{reason: reason}} end,
       close: fn upstream_pid -> Agent.stop(upstream_pid, :normal) end
     }
+  end
+
+  # An owner holding only the armed entitlement of a turn cut before any output,
+  # as `arm_suspended_replay/2` leaves it: task stopped, socket at epoch 1 gone.
+  defp armed_previsible_replay!(context, label, opts \\ []) do
+    context = replay_owner_context(context, label)
+    parent = self()
+    retire_result = Keyword.get(opts, :retire_result, {:ok, :closed})
+
+    retirer = fn lifecycle ->
+      send(parent, {:superseded_replay_retired, lifecycle})
+      retire_result
+    end
+
+    {:ok, owner} =
+      start_owner(context,
+        upstream: WebsocketOwnerNodeHarness.fake_upstream_boundary(self()),
+        persistence: replay_persistence(),
+        replay_retirer: retirer
+      )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert {:ok, %{epoch: 1}} = WebsocketOwnerSession.attach_downstream(owner, downstream_target(label))
+    authorization = authorization_binding(context.codex_session_id)
+    lifecycle = replay_lifecycle_fixture()
+
+    :sys.replace_state(owner, fn state ->
+      state = DownstreamState.demonitor_downstream(state)
+
+      suspended = %{
+        semantic_turn_digest: <<1::256>>,
+        replay_claim_digest: <<2::256>>,
+        authorization_snapshot: authorization,
+        replay_generation: 1,
+        downstream: nil,
+        predecessor_epoch: 1,
+        owner_process_generation: state.process_generation,
+        provisional_token: nil,
+        provisional_status: :armed,
+        deadline_ms: nil,
+        consume_binding: nil,
+        reserve_timeout_ms: nil,
+        reserve_receipt: nil,
+        reserve_receipt_digest: nil,
+        reserve_receipt_used?: false,
+        consume_fence: nil,
+        consume_pid: nil,
+        consume_monitor: nil,
+        reconciliation_timer_ref: nil,
+        reconciliation_token: nil,
+        lifecycle: lifecycle
+      }
+
+      %{state | suspended_replay: suspended, downstream: nil}
+    end)
+
+    %{
+      owner: owner,
+      context: context,
+      authorization: authorization,
+      lifecycle: lifecycle,
+      semantic_turn_digest: <<1::256>>,
+      replay_claim_digest: <<2::256>>
+    }
+  end
+
+  defp superseding_control(armed, downstream, semantic_turn_digest, replay_claim_digest) do
+    {:ok, control} =
+      RemoteReconnectControlV2.new(%{
+        version: 2,
+        action: :preflight,
+        intent: :fresh,
+        codex_session_id: armed.context.codex_session_id,
+        downstream: downstream,
+        semantic_turn_digest: semantic_turn_digest,
+        replay_claim_digest: replay_claim_digest,
+        provisional_token: nil,
+        replay_generation: nil,
+        owner_lease_token: armed.context.owner_lease_token,
+        control_ref: make_ref(),
+        authorization_binding: armed.authorization,
+        consume_binding: nil
+      })
+
+    control
+  end
+
+  defp assert_replay_kept!(armed) do
+    refute_received {:superseded_replay_retired, _lifecycle}
+    assert %{suspended_replay: %{provisional_status: :armed}, active_turn: nil, downstream: nil, downstream_epoch: 1} = :sys.get_state(armed.owner)
   end
 
   defp replay_lifecycle_fixture do

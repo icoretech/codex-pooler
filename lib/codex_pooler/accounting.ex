@@ -142,6 +142,9 @@ defmodule CodexPooler.Accounting do
           {:ok, :closed | :noop} | {:error, term()}
   defdelegate close_request_replay(request_id, reason), to: RequestReplay, as: :close
 
+  @spec supersede_request_replay(map()) :: {:ok, :closed | :noop} | {:error, term()}
+  defdelegate supersede_request_replay(lifecycle), to: RequestReplay, as: :supersede
+
   @spec record_metadata_request(auth(), map()) :: request_result()
   defdelegate record_metadata_request(auth, attrs \\ %{}), to: Metadata
 

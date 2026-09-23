@@ -150,6 +150,23 @@ defmodule CodexPooler.Accounting.RequestReplay do
     Repo.transaction(fn -> close_locked(request_id, reason, witness_now) end)
   end
 
+  # The owner retires the armed entitlement of a pre-visible cut when a
+  # different turn arrives from a newer socket of the session: the client has
+  # moved on and will not resend it. The interrupted request settles once like
+  # an expired entitlement, `failed 499` with unknown usage (its reservation is
+  # released, nothing is charged), under its own error code. It runs inside
+  # the owner's GenServer call like `arm/1`, so a connection that cannot be
+  # checked out answers an error, which the owner turns into the refusal it
+  # gave before, instead of raising (findings#206 row 206-348).
+  @spec supersede(map()) :: {:ok, :closed | :noop} | {:error, term()}
+  def supersede(%{request_id: request_id}) when is_binary(request_id) do
+    Repo.transaction(fn -> close_locked(request_id, :superseded) end)
+  rescue
+    DBConnection.ConnectionError -> {:error, :database_unavailable}
+  end
+
+  def supersede(_lifecycle), do: {:error, :invalid_input}
+
   @spec touch_liveness(provisional_reference()) ::
           {:ok, RequestReplayEntitlement.t()} | {:error, :binding_mismatch}
   def touch_liveness(reference) when is_map(reference) do
@@ -760,6 +777,9 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
   defp close_kind(_session, %RequestReplayEntitlement{status: "armed"}, _api_key, :deleted, _now),
     do: {:armed, "revoked", "websocket_replay_revoked"}
+
+  defp close_kind(_session, %RequestReplayEntitlement{status: "armed"}, _api_key, :superseded, _now),
+    do: {:armed, "revoked", "websocket_replay_superseded"}
 
   defp close_kind(
          _session,

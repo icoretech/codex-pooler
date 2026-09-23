@@ -256,10 +256,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
   # the turn arrives is a race: `task_reported` is the undeferred control,
   # `task_held` leaves the prewarm's result unprocessed so the reservation is
   # deferred. Both must get the answer the ordinary route gives a new turn at
-  # an owner that still holds its predecessor, suspended for a resend
-  # (interrupted before output) or cancelled (after output): `409 owner_busy`
-  # from the owner's own preflight. The deferred frame used to be refused
-  # `503 owner_unavailable` at the deferral instead.
+  # an owner that still holds its predecessor: `409 owner_busy` from the
+  # owner's own preflight when the predecessor was cancelled after output,
+  # and, since row 206-348, the dispatch that retires the predecessor's armed
+  # replay when it was interrupted before output. The deferred frame used to
+  # be refused `503 owner_unavailable` at the deferral instead.
   for mode <- ["full", "lite"], interrupt <- [:before_output, :after_output], prewarm <- [:task_reported, :task_held] do
     @tag serving_mode: mode
     @tag interrupt: interrupt
@@ -274,26 +275,65 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
       {result, log} =
         with_info_log(fn -> CodexResponsesSocket.handle_in({final_turn_frame(model, "provenance-live-turn-b"), [opcode: :text]}, state) end)
 
-      assert {:push, {:text, frame}, refused_state} = result
-      assert %{"status" => 409, "error" => %{"code" => "owner_busy"}} = CodexPooler.JSON.decode!(frame)
-      assert log =~ "rejection_stage=replay_preflight"
-      assert log =~ "public_code=owner_busy"
-      refute log =~ "rejection_stage=native_compaction_deferral"
+      if interrupt == :before_output do
+        dispatched_state = assert_superseded_replay_dispatch!(result, log, owner_pid, setup, prewarm)
+        release_interrupted_turn!(predecessor)
+        CodexResponsesSocket.terminate(:closed, first_state)
+        CodexResponsesSocket.terminate(:closed, dispatched_state)
+      else
+        assert {:push, {:text, frame}, refused_state} = result
+        assert %{"status" => 409, "error" => %{"code" => "owner_busy"}} = CodexPooler.JSON.decode!(frame)
+        assert log =~ "rejection_stage=replay_preflight"
+        assert log =~ "public_code=owner_busy"
+        refute log =~ "rejection_stage=native_compaction_deferral"
 
-      # The owner's turn and handoff state are untouched, nothing was recorded
-      # for the refused turn, and nothing reached the provider.
-      owner_after = :sys.get_state(owner_pid)
-      assert Map.take(owner_after, [:active_turn, :suspended_replay, :pending_handoff]) == Map.take(owner_before, [:active_turn, :suspended_replay, :pending_handoff])
-      assert owner_after.pending_handoff == nil
-      assert [%{} = _interrupted] = request_logs(setup.pool.id)
-      assert FakeUpstream.count(upstream) == 0
-      refute_received {:provenance_unexpected_send, _worker}
+        # The owner's turn and handoff state are untouched, nothing was recorded
+        # for the refused turn, and nothing reached the provider.
+        owner_after = :sys.get_state(owner_pid)
+        assert Map.take(owner_after, [:active_turn, :suspended_replay, :pending_handoff]) == Map.take(owner_before, [:active_turn, :suspended_replay, :pending_handoff])
+        assert owner_after.pending_handoff == nil
+        assert [%{} = _interrupted] = request_logs(setup.pool.id)
+        assert FakeUpstream.count(upstream) == 0
+        refute_received {:provenance_unexpected_send, _worker}
 
-      refused_state = if prewarm == :task_held, do: settle_held_prewarm!(refused_state), else: refused_state
-      release_interrupted_turn!(predecessor)
-      CodexResponsesSocket.terminate(:closed, first_state)
-      CodexResponsesSocket.terminate(:closed, refused_state)
+        refused_state = if prewarm == :task_held, do: settle_held_prewarm!(refused_state), else: refused_state
+        release_interrupted_turn!(predecessor)
+        CodexResponsesSocket.terminate(:closed, first_state)
+        CodexResponsesSocket.terminate(:closed, refused_state)
+      end
     end
+  end
+
+  # Row 206-348: interrupted before output, the owner holds nothing but the
+  # turn's armed replay, and a different turn from the next socket means the
+  # client moved on. The owner retires the replay (the interrupted request
+  # settles once `499 websocket_replay_superseded`), and the turn is
+  # dispatched on its first send, whether or not its reservation was deferred
+  # behind the prewarm; the deferral's own refusal is never reached. A turn
+  # admitted while the prewarm's result is still unprocessed waits in the
+  # socket's queue behind that task, exactly as it would on a socket that never
+  # reconnected, and starts once the result is processed.
+  defp assert_superseded_replay_dispatch!(result, log, owner_pid, setup, prewarm) do
+    assert {:ok, dispatched_state} = result
+    assert log =~ "websocket owner replay superseded"
+    refute log =~ "websocket replay rejection"
+
+    dispatched_state =
+      if prewarm == :task_held do
+        assert [_queued] = :queue.to_list(dispatched_state.queued_response_payloads)
+        refute_received {:provenance_unexpected_send, _worker}
+        [prewarm_task] = MapSet.to_list(dispatched_state.tasks)
+        settle_task!(dispatched_state, prewarm_task)
+      else
+        dispatched_state
+      end
+
+    assert_receive {:provenance_unexpected_send, _worker}, @detection_timeout_ms
+    assert %{suspended_replay: nil, pending_handoff: nil} = :sys.get_state(owner_pid)
+    assert [%{} = interrupted | _dispatched] = request_logs(setup.pool.id)
+    interrupted = Repo.reload!(interrupted)
+    assert {interrupted.status, interrupted.response_status_code, interrupted.last_error_code} == {"failed", 499, "websocket_replay_superseded"}
+    dispatched_state
   end
 
   # The phase half of the rule on the same route: an incremental compaction
@@ -477,8 +517,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
             :provenance_never -> :ok
           end
         else
+          # Only the turn that retires an armed replay reaches here (row
+          # 206-348); it completes at once. Every other scenario refutes it.
           send(test_pid, {:provenance_unexpected_send, self()})
-          :ok
+          completed = CodexPooler.JSON.encode!(%{"type" => "response.completed", "response" => %{"id" => "resp_provenance_live_owner_b", "status" => "completed"}})
+          _result = writer.(completed, TerminalDiscriminator.classify(completed))
+          {:ok, %{body: completed, terminal: "response.completed", status: 200, headers: [], websocket_frame_headers: %{}}}
         end
       end,
       invalidate: fn _upstream_pid -> :ok end,

@@ -12,7 +12,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Callbac
     :downstream_sender,
     :monotonic_now_ms,
     :replay_suspender,
-    :replay_status_reader
+    :replay_status_reader,
+    :replay_retirer
   ]
   defstruct @enforce_keys
 
@@ -24,6 +25,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Callbac
           downstream_sender: (pid(), tuple() -> :ok | {:error, atom()}),
           monotonic_now_ms: (-> integer()),
           replay_suspender: (RequestReplay.arm_input() -> {:ok, map()} | {:error, term()}),
-          replay_status_reader: (map() -> term())
+          replay_status_reader: (map() -> term()),
+          replay_retirer: (map() -> {:ok, :closed | :noop} | {:error, term()})
         }
 end

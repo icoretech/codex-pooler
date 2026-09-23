@@ -1205,7 +1205,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
                opts,
                :replay_status_reader,
                &CodexPooler.Accounting.replay_provisional_token_status/1
-             )
+             ),
+           replay_retirer: Keyword.get(opts, :replay_retirer, &CodexPooler.Accounting.supersede_request_replay/1)
          },
          persistence: persistence,
          request_id: request_id,
@@ -3977,6 +3978,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
+  # An owner that holds nothing but the armed entitlement of a turn cut before
+  # any output (its task already stopped, nothing in flight upstream, no resend
+  # started) meets a different turn from the next socket of the session: the
+  # client has moved on (a resumed process, or a new message after an
+  # interrupt), and the released client never resends a turn after it started
+  # another. The owner retires the entitlement, which settles the interrupted
+  # request once (`failed 499`, unknown usage, reservation released), attaches
+  # the new socket and lets the turn dispatch. Refusing it `owner_busy` for the
+  # whole 30 s claim spent the released CLI's six websocket attempts in about
+  # 6.5 s and moved it to HTTPS for the rest of the process (findings#206 row
+  # 206-348, measured with Codex 0.156.1 in the P72 rig). The replay's own
+  # resend (same semantic turn), a resend in progress, a control from any
+  # other epoch and an owner with an active turn keep `owner_busy`; so does a
+  # retirement the database refused. An owner node without this clause keeps
+  # answering `owner_busy`, which every proxy already handles.
+  defp apply_valid_reconnect_control_v2(
+         %{active_turn: nil, suspended_replay: %{provisional_status: :armed} = armed} = state,
+         %RemoteReconnectControlV2{action: :preflight, intent: :fresh} = control
+       ) do
+    if superseding_turn?(state, armed, control),
+      do: retire_superseded_replay(state, armed, control),
+      else: {:error, :owner_busy}
+  end
+
   # A fresh intent means the runtime preflight matched the frame to no recorded
   # turn, and an owner still running or holding a turn cannot take it. That is
   # backpressure from a live owner, so it answers `owner_busy`, the code the
@@ -4028,6 +4053,51 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp active_turn_same_request?(_active_turn, _control), do: false
+
+  # The socket that sends the superseding turn is the replacement the owner
+  # handed a candidate at the next epoch without attaching it (the armed replay
+  # keeps the attach open for the resend), so only that epoch, from the same
+  # key and Pool, with a different semantic turn and replay claim, qualifies.
+  defp superseding_turn?(state, armed, %RemoteReconnectControlV2{downstream: downstream} = control) do
+    is_nil(state.downstream) and is_nil(state.pending_handoff) and not state.draining? and
+      downstream.epoch == state.downstream_epoch + 1 and downstream.epoch > armed.predecessor_epoch and
+      same_replay_principal?(armed.authorization_snapshot, control.authorization_binding) and
+      not secure_digest_match?(armed.semantic_turn_digest, control.semantic_turn_digest) and
+      not secure_digest_match?(armed.replay_claim_digest, control.replay_claim_digest)
+  end
+
+  defp same_replay_principal?(%{api_key_id: api_key_id, pool_id: pool_id}, %{api_key_id: api_key_id, pool_id: pool_id})
+       when is_binary(api_key_id) and is_binary(pool_id),
+       do: true
+
+  defp same_replay_principal?(_armed, _presented), do: false
+
+  defp retire_superseded_replay(state, armed, %RemoteReconnectControlV2{downstream: downstream}) do
+    case state.callbacks.replay_retirer.(armed.lifecycle) do
+      {:ok, disposition} when disposition in [:closed, :noop] ->
+        Logger.replay_superseded(state, armed, downstream.epoch, disposition)
+        {:ok, {:fresh_dispatch, downstream}, state |> clear_replay_state() |> attach_superseding_downstream(downstream)}
+
+      _refused ->
+        {:error, :owner_busy}
+    end
+  end
+
+  # The socket keeps the candidate the attach handed it while the replay was
+  # armed, flagged as a reconnect, and every submission compares that whole
+  # stable downstream, so the owner stores it exactly as the provisional
+  # replay path does (`attach_provisional_downstream/2`).
+  defp attach_superseding_downstream(state, downstream) do
+    downstream = downstream |> Map.take(@restore_downstream_keys) |> Map.put(:active_turn_reconnect?, true)
+
+    state =
+      state
+      |> DownstreamState.demonitor_downstream()
+      |> DownstreamState.cancel_idle_shutdown()
+      |> clear_replaced_downstream_admission(downstream)
+
+    %{state | downstream: downstream, downstream_monitor: Process.monitor(downstream.pid), downstream_epoch: downstream.epoch}
+  end
 
   defp cancel_uncommitted_provisional(state, reconciled) do
     if Map.get(reconciled, :reserve_receipt_used?, false) do

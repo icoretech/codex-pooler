@@ -2733,7 +2733,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  new_turn_refused_by_occupied_owner: "owner_error_payload_not_duplicate_turn",
                  live_owner_refusal_code: "owner_busy",
                  running_request_lost_race: "duplicate_turn_counted_as_owner_replay_preflight",
-                 resend_of_recorded_turn: "duplicate_turn_counted_as_owner_replay_preflight"
+                 resend_of_recorded_turn: "duplicate_turn_counted_as_owner_replay_preflight",
+                 newer_socket_turn_at_armed_previsible_replay: "retires_replay_settles_predecessor_once_then_dispatches"
                },
                runtime_replay_pre_classification: %{
                  session_not_reconnectable: "owner_unavailable",

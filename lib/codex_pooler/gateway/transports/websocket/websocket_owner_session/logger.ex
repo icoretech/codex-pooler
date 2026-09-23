@@ -92,6 +92,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Logger 
     )
   end
 
+  # A different turn from the session's next socket retired the armed
+  # pre-visible replay (findings#206 row 206-348); `disposition` is `closed`
+  # when this call settled the interrupted request and `noop` when it was
+  # already settled (the entitlement expired first).
+  @spec replay_superseded(map(), map(), pos_integer(), :closed | :noop) :: :ok
+  def replay_superseded(state, armed, downstream_epoch, disposition) do
+    owner_event(:info, "websocket owner replay superseded",
+      codex_session_id: state.codex_session_id,
+      owner_instance_id: state.owner_instance_id,
+      owner_pid: self(),
+      request_id: Map.get(armed.lifecycle, :request_id),
+      predecessor_epoch: armed.predecessor_epoch,
+      downstream_epoch: downstream_epoch,
+      disposition: disposition
+    )
+  end
+
   @spec owner_exit_persistence_failure(atom(), map(), atom(), term()) :: :ok
   # A later turn of the session (an HTTP fallback the owner never held) was
   # already running when the owner exited, so the owner-scoped interrupt stood

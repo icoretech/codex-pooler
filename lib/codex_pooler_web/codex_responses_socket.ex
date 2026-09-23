@@ -1421,13 +1421,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  # The finalized delivery is resolved while the reconnect turn is still the
+  # active one; the flag is cleared after it, and with it the reconnect turn's
+  # pid stops naming the socket's active owner turn.
   defp handle_non_public_owner_payload(:complete, state) do
     state =
       state
-      |> Map.put(:websocket_owner_active_turn_reconnect?, false)
       |> Map.put(:native_owner_terminal_delivered?, true)
       |> reset_owner_turn_output()
       |> maybe_schedule_finalized_owner_task_delivery()
+      |> Map.put(:websocket_owner_active_turn_reconnect?, false)
 
     {:ok, state}
   end
@@ -3672,7 +3675,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       do: reconnect_or_tracked_owner_turn_pid(state)
   end
 
-  defp reconnect_or_tracked_owner_turn_pid(%{websocket_owner_reconnect_turn_pid: pid})
+  # The reconnect turn's pid names the active owner turn only while the socket
+  # is still in that reconnect turn. Once its `:complete` cleared the flag, a
+  # later turn on the socket is its own tracked task: resolving to the finished
+  # reconnect turn attributed the later turn's frames and terminal to it, so
+  # that task's delivery was never scheduled, it stayed tracked, and the next
+  # frame queued behind it forever (findings#206 row 206-348, reproduced at
+  # `80ee3cac4` after a redeemed pre-visible replay: the second turn after it
+  # never answered).
+  defp reconnect_or_tracked_owner_turn_pid(%{websocket_owner_active_turn_reconnect?: true, websocket_owner_reconnect_turn_pid: pid})
        when is_pid(pid),
        do: pid
 
