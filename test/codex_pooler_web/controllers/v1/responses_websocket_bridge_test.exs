@@ -462,7 +462,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     upstream =
       start_upstream(
-        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (handshake routing hint; replies invented)
+        # provenance: observed released Codex client source core/src/client.rs build_websocket_headers (handshake routing hint; replies invented)
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -596,7 +596,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     upstream =
       start_upstream(
-        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs websocket_connection and build_websocket_headers (socket and first handshake hint kept across turns; replies invented)
+        # provenance: observed released Codex client source core/src/client.rs websocket_connection and build_websocket_headers (socket and first handshake hint kept across turns; replies invented)
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",

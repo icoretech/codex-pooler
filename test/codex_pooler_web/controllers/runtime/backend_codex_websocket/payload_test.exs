@@ -474,7 +474,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
     port = start_public_endpoint!()
     turn_state = "ws-session-headers-#{System.unique_integer([:positive])}"
 
-    # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (handshake session headers; values invented, thread-id made overlong)
+    # provenance: observed released Codex client source core/src/client.rs build_websocket_headers (handshake session headers; values invented, thread-id made overlong)
     {conn, websocket, ref, _response_headers} =
       public_websocket_connect_with_request_headers!(
         port,

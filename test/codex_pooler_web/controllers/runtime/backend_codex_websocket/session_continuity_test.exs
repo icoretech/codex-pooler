@@ -1421,7 +1421,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
              Repo.all(from lease in BridgeOwnerLease, where: lease.codex_session_id == ^replacement.id)
   end
 
-  # The released Codex client (0.155.1, observed on the wire) never sends
+  # The released Codex client (observed on the wire) never sends
   # `x-codex-turn-state` on a websocket upgrade: that token is server-issued,
   # and every connection of one thread carries the same `session-id`,
   # `thread-id` and `x-codex-window-id`. The Pooler still issues a turn state

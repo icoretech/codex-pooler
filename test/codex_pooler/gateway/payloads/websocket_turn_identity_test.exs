@@ -447,7 +447,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
   end
 
   describe "replay_tail_digest/2 and replay_claim_alternates/2" do
-    # Released Codex 0.156.0 sends every turn after the first on a socket as an
+    # The released Codex client sends every turn after the first on a socket as an
     # anchored delta (`previous_response_id` plus the items it adds). After a
     # reconnect it resends the same turn as full history without the anchor:
     # the history the anchor stood for followed by exactly the anchored

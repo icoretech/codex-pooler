@@ -1430,7 +1430,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     refute log =~ "websocket client resend admitted"
   end
 
-  # Released Codex 0.156.0 sends a turn after the first as an anchored delta;
+  # The released Codex client sends a turn after the first as an anchored delta;
   # when the provider cuts that stream before any output, the client resends
   # the turn as full history without the anchor (measured with the released
   # client: every resend used to meet `409 duplicate_turn`, including its HTTPS

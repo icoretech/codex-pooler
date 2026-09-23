@@ -1,5 +1,5 @@
 defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnMetadataSizeTest do
-  # findings#258 row 258-91. The released Codex 0.156.0 carries its tool inventory in the canonical
+  # findings#258 row 258-91. The released Codex client carries its tool inventory in the canonical
   # turn metadata when `[features.tool_registry] turn_metadata_includes_tool_info` is on for a
   # Responses Lite model: 22,504 bytes with 120 MCP tools on a loopback capture server, where the
   # socket used to refuse every such `response.create` as `malformed_canonical` above 4,096 bytes.
@@ -30,7 +30,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTurnMetadataSizeTest do
 
       upstream =
         start_upstream(
-          # provenance: rust-v0.156.0 turn metadata key set observed on a capture server; tool inventory shape from responses_metadata.rs; reply frames synthetic
+          # provenance: released Codex client turn metadata key set observed on a capture server; tool inventory shape from responses_metadata.rs; reply frames synthetic
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(
               method: "WEBSOCKET",

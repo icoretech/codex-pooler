@@ -1236,7 +1236,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     {:ok, upstream} =
       FakeUpstream.start_link(
-        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (session-id, thread-id and x-client-request-id on the handshake; replies invented)
+        # provenance: observed released Codex client source core/src/client.rs build_websocket_headers (session-id, thread-id and x-client-request-id on the handshake; replies invented)
         FakeUpstream.strict_sequence([
           strict_websocket_turn(websocket_success("session-headers-valid"),
             headers: [

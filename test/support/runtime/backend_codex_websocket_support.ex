@@ -537,8 +537,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
   @released_client_terminal_types ["response.completed", "response.failed", "response.incomplete", "error"]
 
   @doc """
-  Opens a public websocket the way the released Codex client (0.155.1,
-  observed on the wire for findings#255) opens one: `session-id`, `thread-id`
+  Opens a public websocket the way the released Codex client (observed
+  on the wire for findings#255) opens one: `session-id`, `thread-id`
   and `x-client-request-id` carry the thread, `x-codex-window-id` carries
   `<thread>:<window number>`, and no `x-codex-turn-state` is ever sent on the
   upgrade. The connection is owned by the calling process; open one at a time

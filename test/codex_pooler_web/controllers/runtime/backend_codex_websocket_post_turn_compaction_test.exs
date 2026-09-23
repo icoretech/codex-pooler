@@ -14,7 +14,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
-  # Codex rust-v0.156.0 (openai/codex#46541) runs an opt-in compaction right
+  # The released Codex client (openai/codex#46541) runs an opt-in compaction right
   # after the final answer when `model_post_turn_compact_threshold_percent` is
   # reached: on the same socket and under the same turn id as the turn it
   # follows, a `response.create` anchored on that turn's response with
@@ -46,7 +46,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
           # Strict finite scenario: the ordinary turn and its post-turn compact
           # are the only sends, both on the first physical connection; the
           # compact keeps the turn's response as its anchor.
-          # provenance: observed rust-v0.156.0 released-binary frame shape; reply frames synthetic
+          # provenance: observed released-binary frame shape; reply frames synthetic
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
@@ -141,7 +141,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
   # resumed turn must be admitted on a new upstream connection with the
   # compaction item and without the old anchor (findings#258 row 258-26; the
   # released-client run on one node with owner forwarding was the only
-  # evidence). The resumed frames keep the key sets the released 0.156.0
+  # evidence). The resumed frames keep the key sets the released client
   # binary sent; through the Pooler its upstream frame carried no
   # previous_response_id, as here.
   for topology <- [:direct, :owner_forwarded] do
@@ -152,7 +152,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
 
       upstream =
         start_upstream(
-          # provenance: observed rust-v0.156.0 released-binary exec + resume frame shapes; reply frames synthetic
+          # provenance: observed released-binary exec + resume frame shapes; reply frames synthetic
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create"}], respond: completed_frames(@anchor_response_id)),
             FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create", "input.0.type" => "compaction_trigger"}], respond: compaction_frames(compact_item)),
@@ -214,7 +214,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPostTurnCompactionTest do
   # admission in `pending_final` for the next turn. The released client then
   # exits, and the detach clears that admission; its lifecycle observation must
   # name the detach, not `request_rejected` (findings#258 row 258-23, seen in
-  # every real-client arm of the 0.156.0 post-turn run).
+  # every real-client arm of the post-turn run).
   test "owner_forwarded socket close after a post-turn compaction clears the admission as a downstream detach" do
     put_owner_forwarding!(true)
     compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-post-turn-detach"}

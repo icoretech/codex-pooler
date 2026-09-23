@@ -1,6 +1,6 @@
 defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
   # A provider refusal of a native websocket turn with a final 4xx other than
-  # 400 (404, 409, 413, 422, ...) reached the released Codex 0.156.0 client as
+  # 400 (404, 409, 413, 422, ...) reached the released Codex client as
   # the canonical `response.failed`, which it retries: four websocket resends
   # the Pooler refused `409 duplicate_turn`, then the HTTPS fallback and five
   # more HTTP retries, six provider requests for a refusal that cannot succeed

@@ -244,7 +244,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
              )
   end
 
-  # findings#258 row 258-91, measured on the released Codex 0.156.0 against a capture server:
+  # findings#258 row 258-91, measured on the released Codex client against a capture server:
   # 742 bytes by default, 22,504 bytes with `turn_metadata_includes_tool_info` on a Responses
   # Lite model and 120 MCP tools, 3,910 bytes with 16 maximal `responses_api_metadata` entries.
   test "accepts the released client's tool inventory and maximal extra metadata" do
@@ -335,7 +335,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadataTest do
     |> CodexPooler.JSON.encode!()
   end
 
-  # The `TurnToolNamespacesInfo` shape of rust-v0.156.0 (`responses_metadata.rs`): one entry per
+  # The `TurnToolNamespacesInfo` shape of the released Codex client (`responses_metadata.rs`): one entry per
   # namespace, one per function, with the MCP server as the function's source.
   defp tool_namespaces_info(servers, tools) do
     Map.new(1..servers, fn server ->

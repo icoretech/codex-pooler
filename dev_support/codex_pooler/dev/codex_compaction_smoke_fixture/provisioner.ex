@@ -18,8 +18,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
   @model "gpt-6-sol"
 
   # The served catalog entry is this source map verbatim, so it carries every
-  # field Codex's `ModelInfo` (codex-rs/protocol/src/openai_models.rs at
-  # rust-v0.156.0) decodes without a serde default, reasoning levels as
+  # field the released Codex client's `ModelInfo`
+  # (codex-rs/protocol/src/openai_models.rs) decodes without a serde default, reasoning levels as
   # `{effort, description}` presets, and the instructions the catalog decoder
   # requires (`base_instructions` or `model_messages.instructions_template`).
   # One undecodable entry makes Codex discard the whole catalog and keep its

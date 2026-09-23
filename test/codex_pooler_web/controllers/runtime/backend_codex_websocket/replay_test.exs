@@ -82,7 +82,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
   @tag :duplicate_turn
   @tag :replay_matrix
   @tag :strict_fake_upstream
-  test "released 0.151.0 same-socket native tool continuation without previous response gets a request claim" do
+  test "released Codex client same-socket native tool continuation without previous response gets a request claim" do
     previous_response_id = "resp_native_tool_continuation_anchor"
     logical_turn_id = "native-tool-continuation-turn"
     released_thread_id = Ecto.UUID.generate()
@@ -103,7 +103,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
 
     upstream =
       start_upstream(
-        # provenance: synthetic_adversarial (metadata field set mirrors the released 0.151.0 client; frames invented)
+        # provenance: synthetic_adversarial (metadata field set mirrors the released Codex client; frames invented)
         FakeUpstream.strict_sequence([
           strict_native_response(previous_response_id, 1, 4, 3),
           strict_native_response("resp_native_tool_continuation_complete", 1, 5, 2)

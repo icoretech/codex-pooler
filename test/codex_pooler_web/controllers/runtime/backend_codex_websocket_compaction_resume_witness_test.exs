@@ -50,7 +50,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
       start_upstream(
         # Strict finite scenario: the anchor turn, the mid-turn compact and the
         # resume of the same turn are the only sends.
-        # provenance: synthetic, shaped after the rust-v0.155.1 remote compaction v2 request
+        # provenance: synthetic, shaped after the released Codex client's remote compaction v2 request
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "WEBSOCKET",

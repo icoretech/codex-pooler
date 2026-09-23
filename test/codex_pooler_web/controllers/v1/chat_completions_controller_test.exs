@@ -266,7 +266,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
     upstream =
       start_upstream(
-        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_routing_hint_header (header format; replies invented)
+        # provenance: observed released Codex client source core/src/client.rs build_routing_hint_header (header format; replies invented)
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "POST",

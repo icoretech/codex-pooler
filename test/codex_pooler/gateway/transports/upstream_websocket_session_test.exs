@@ -1624,7 +1624,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       start_upstream(
         # Tier and model hint changes ride the first physical connection, whose
         # handshake keeps the first hint; an account header change reconnects.
-        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs websocket_connection (reconnect only on endpoint change or close; replies invented)
+        # provenance: observed released Codex client source core/src/client.rs websocket_connection (reconnect only on endpoint change or close; replies invented)
         FakeUpstream.strict_sequence([
           strict_websocket_success("resp_ws_hint_priority",
             websocket_connection_ordinal: 1,
@@ -1716,7 +1716,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       start_upstream(
         # The same client session values ride one connection; other values or
         # none open another, so a handshake never carries a different session.
-        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers and websocket_connection (session headers fixed per client connection; replies invented)
+        # provenance: observed released Codex client source core/src/client.rs build_websocket_headers and websocket_connection (session headers fixed per client connection; replies invented)
         FakeUpstream.strict_sequence([
           strict_websocket_success("resp_ws_session_a_first",
             websocket_connection_ordinal: 1,

@@ -493,7 +493,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     Repo.one!(from job in Oban.Job, where: job.args["pool_id"] == ^acquired.pool_id)
   end
 
-  # What Codex's catalog decoder needs from each entry at rust-v0.156.0
+  # What the released Codex client's catalog decoder needs from each entry
   # (codex-rs/protocol/src/openai_models.rs): every `ModelInfo` field without a
   # serde default, in its declared type, plus `base_instructions` or
   # `model_messages.instructions_template`. A single entry that fails makes the

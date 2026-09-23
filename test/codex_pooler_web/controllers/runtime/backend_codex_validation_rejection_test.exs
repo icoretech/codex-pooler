@@ -115,7 +115,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
 
   # A 400 outside the relayable validation set used to reach a streaming native
   # client as the 400 with an empty body (the drain leaves no public body), so
-  # the released Codex 0.156.0 client showed `error: ` with no text, and a
+  # the released Codex client showed `error: ` with no text, and a
   # non-streaming one as the provider body verbatim. Both now answer the
   # Pooler-authored error the native websocket sends for the same refusal,
   # built from the sanitized tokens only; the provider message never travels
@@ -146,7 +146,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
   end
 
   # A native refusal with another final 4xx used to keep its status (with an
-  # empty streaming body): the released Codex 0.156.0 client retries every
+  # empty streaming body): the released Codex client retries every
   # HTTP status but 400 as an unexpected status, and each retry was admitted
   # and reached the provider again, six provider requests per turn. It now
   # answers the Pooler-authored refusal error as a 400 naming the provider

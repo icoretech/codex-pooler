@@ -292,7 +292,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
   test "catalogs preserve the native client schema across Full and Lite serving modes", %{
     conn: conn
   } do
-    # Codex 0.153.3 and 0.153.4 share this ModelsResponse/ModelInfo wire schema.
+    # The released Codex client uses this ModelsResponse/ModelInfo wire schema.
     source = %{
       "slug" => "gpt-test-model",
       "display_name" => "Sample model",

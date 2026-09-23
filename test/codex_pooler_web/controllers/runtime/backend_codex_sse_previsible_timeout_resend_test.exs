@@ -6,7 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexSsePrevisibleTimeoutResendTest do
   # the released Codex client resends it and, before this was fixed, met
   # `409 duplicate_turn` on every attempt and the turn failed, where the same
   # client against the provider directly recovered with one resend
-  # (findings#225 row 225-191, measured with Codex 0.156.0).
+  # (findings#225 row 225-191, measured with the released Codex client).
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query

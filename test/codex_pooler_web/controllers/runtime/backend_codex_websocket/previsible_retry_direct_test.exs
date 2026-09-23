@@ -90,7 +90,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PrevisibleRetryDirectTest
     _result = Mint.HTTP.close(conn)
 
     # The released client's first two websocket stream retries: backoff 200
-    # then 400 ms (rust-v0.156.0 `async-utils/src/backoff.rs`, jitter
+    # then 400 ms (the released client's `async-utils/src/backoff.rs`, jitter
     # omitted), each on a new socket; it retries five times before its HTTPS
     # fallback, and before this fix all five were refused. The provider keeps
     # the first request open (the barrier is released only at the end), as a

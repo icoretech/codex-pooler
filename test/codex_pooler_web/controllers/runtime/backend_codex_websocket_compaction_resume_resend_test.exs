@@ -74,7 +74,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeResendTest
 
     upstream =
       start_upstream(
-        # provenance: synthetic, shaped after the rust-v0.155.1 remote compaction v2 request.
+        # provenance: synthetic, shaped after the released Codex client's remote compaction v2 request.
         # A fourth expectation receives the resend if it is (wrongly) admitted.
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(method: "WEBSOCKET", json: [valid: true, forbidden: ["previous_response_id"]], respond: completed_frames("resp_resend_anchor")),
