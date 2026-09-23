@@ -6,12 +6,14 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.{PlatformBootstrapState, Scope, User}
+  alias CodexPooler.Jobs
   alias CodexPooler.Pools.{Membership, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
+  alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.PreparedAccount
-  alias CodexPooler.Upstreams.Schemas.EncryptedSecret
+  alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPooler.Upstreams.TokenLinking
   alias __MODULE__.{CLI, PrivateFile}
@@ -88,7 +90,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
              pool,
              scope,
              password,
-             [dry_run: command.dry_run?, refresh_tokens: command.refresh_tokens]
+             command.import_options
            ]) do
         {:ok, receipt} ->
           {:ok,
@@ -136,6 +138,17 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   # and revokes any refresh token the target identity still holds; the copy
   # then needs reauth when the access token stops working. `:import` is the
   # explicit move that carries the refresh token.
+  #
+  # `sync_catalog: true` enqueues the product catalog sync for the Pool after a
+  # committed import (never for a dry run or an empty bundle): the import does
+  # not add the new assignments to the models' sources, and routing ignores
+  # them until a sync has read the provider's model list. That is the only job
+  # an import may enqueue, and only on this explicit opt-in.
+  #
+  # `synthetic_sources: :refuse` (the Mix task's setting) refuses a target Pool
+  # that already serves from a synthetic upstream (an assignment or identity
+  # with an explicit base URL): real traffic would otherwise be routed to a
+  # fake, or a fake's traffic to the real account.
   @spec import_bundle(binary(), Pool.t(), Scope.t(), binary(), keyword()) ::
           {:ok, map()} | {:error, lifecycle_error()}
   def import_bundle(bundle, pool, scope, password, opts \\ [])
@@ -152,14 +165,46 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
            {:ok, accounts} <- open_accounts(bundle, password),
            :ok <- validate_import_accounts(accounts, refresh_tokens),
            accounts = omit_refresh_tokens(accounts, refresh_tokens),
-           {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope, refresh_tokens) do
-        import_prepared_accounts(prepared_accounts, pool, scope, dry_run?, refresh_tokens)
+           {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope, refresh_tokens),
+           :ok <- guard_synthetic_sources(prepared_accounts, pool, Keyword.get(opts, :synthetic_sources, :allow)),
+           {:ok, receipt} <- import_prepared_accounts(prepared_accounts, pool, scope, dry_run?, refresh_tokens) do
+        {:ok, maybe_sync_catalog(receipt, pool, Keyword.get(opts, :sync_catalog, false))}
       end
     end
   end
 
   def import_bundle(_bundle, _pool, _scope, _password, _opts),
     do: {:error, lifecycle_error(:bundle_invalid_request)}
+
+  defp guard_synthetic_sources([], _pool, _mode), do: :ok
+  defp guard_synthetic_sources(_prepared_accounts, _pool, :allow), do: :ok
+
+  defp guard_synthetic_sources(_prepared_accounts, %Pool{id: pool_id}, :refuse) do
+    sources =
+      Repo.all(
+        from assignment in PoolUpstreamAssignment,
+          join: identity in UpstreamIdentity,
+          on: identity.id == assignment.upstream_identity_id,
+          where: assignment.pool_id == ^pool_id and assignment.status == "active" and identity.status != "deleted",
+          select: {identity, assignment}
+      )
+
+    if Enum.any?(sources, fn {identity, assignment} -> EndpointMetadata.base_url(identity, assignment, nil) end),
+      do: {:error, %{code: :target_pool_has_synthetic_sources, message: "target Pool serves from synthetic upstreams; import real identities into a Pool without them (mix dev.seed real_traffic)"}},
+      else: :ok
+  end
+
+  defp maybe_sync_catalog(receipt, _pool, false), do: receipt
+  defp maybe_sync_catalog(%{dry_run: true} = receipt, _pool, true), do: Map.put(receipt, :catalog_sync, "skipped_dry_run")
+  defp maybe_sync_catalog(%{imported: 0} = receipt, _pool, true), do: Map.put(receipt, :catalog_sync, "skipped_empty")
+
+  defp maybe_sync_catalog(receipt, pool, true) do
+    case Jobs.enqueue_catalog_sync(pool, trigger_kind: "manual") do
+      {:ok, %Oban.Job{conflict?: true}} -> Map.put(receipt, :catalog_sync, "already_enqueued")
+      {:ok, %Oban.Job{}} -> Map.put(receipt, :catalog_sync, "enqueued")
+      {:error, _reason} -> Map.put(receipt, :catalog_sync, "enqueue_failed")
+    end
+  end
 
   defp password_from_environment do
     case System.get_env(@password_env) do

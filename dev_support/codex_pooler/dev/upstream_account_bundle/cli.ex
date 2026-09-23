@@ -23,7 +23,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle.CLI do
   def parse_import_args(args) when is_list(args) do
     {options, positional, invalid} =
       OptionParser.parse(args,
-        strict: [pool: :string, owner_email: :string, dry_run: :boolean, with_refresh_token: :boolean]
+        strict: [pool: :string, owner_email: :string, dry_run: :boolean, with_refresh_token: :boolean, sync_catalog: :boolean]
       )
 
     with :ok <- reject_parser_remainders([], invalid),
@@ -32,19 +32,28 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle.CLI do
              pool: :string,
              owner_email: :string,
              dry_run: :boolean,
-             with_refresh_token: :boolean
+             with_refresh_token: :boolean,
+             sync_catalog: :boolean
            ),
          {:ok, path} <- required_positional(positional),
          {:ok, pool_slug} <- required_option(options, :pool, "--pool is required") do
+      dry_run? = Keyword.get(options, :dry_run, false)
+      # Opt-in only: enqueue the Pool's catalog sync after the import commits.
+      sync_catalog? = Keyword.get(options, :sync_catalog, false)
+      # An import is a copy of an account that stays live where it came from;
+      # only an explicit move may carry the refresh token.
+      refresh_tokens = if(Keyword.get(options, :with_refresh_token, false), do: :import, else: :omit)
+
       {:ok,
        %{
          path: path,
          pool_slug: pool_slug,
          owner_email: Keyword.get(options, :owner_email),
-         dry_run?: Keyword.get(options, :dry_run, false),
-         # An import is a copy of an account that stays live where it came
-         # from; only an explicit move may carry the refresh token.
-         refresh_tokens: if(Keyword.get(options, :with_refresh_token, false), do: :import, else: :omit)
+         dry_run?: dry_run?,
+         sync_catalog?: sync_catalog?,
+         refresh_tokens: refresh_tokens,
+         # The task never mixes a real copy with synthetic upstreams in one Pool.
+         import_options: [dry_run: dry_run?, refresh_tokens: refresh_tokens, sync_catalog: sync_catalog?, synthetic_sources: :refuse]
        }}
     end
   end
