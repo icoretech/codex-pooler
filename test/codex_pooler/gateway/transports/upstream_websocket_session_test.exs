@@ -1853,7 +1853,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
-    request = generation_request(FakeUpstream.url(upstream))
+    request = generation_request(FakeUpstream.url(upstream), @held_timeouts)
 
     assert {:ok, %{terminal: "response.completed"}} =
              UpstreamWebsocketSession.request(session, request)
@@ -1861,7 +1861,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid, ^terminal_ref},
-                   @detection_timeout_ms
+                   @message_detection_timeout_ms
 
     assert FakeUpstream.websocket_connection_alive?(upstream, 1)
 
@@ -1873,13 +1873,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         UpstreamWebsocketSession.request(session, request)
       end)
 
-    assert_receive :findings116_next_request_task_started, @detection_timeout_ms
+    assert_receive :findings116_next_request_task_started, @message_detection_timeout_ms
     send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
 
     assert {:error, %{reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}}} =
-             Task.await(terminal_task, @detection_timeout_ms)
+             Task.await(terminal_task, @message_detection_timeout_ms)
 
-    assert {:ok, %{terminal: "response.completed"}} = Task.await(next_task, @detection_timeout_ms)
+    assert {:ok, %{terminal: "response.completed"}} = Task.await(next_task, @message_detection_timeout_ms)
 
     assert %{1 => 2, 2 => 1} = generation_request_counts(upstream)
     refute FakeUpstream.websocket_connection_alive?(upstream, 1)
@@ -1929,7 +1929,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
       {:ok, session} = UpstreamWebsocketSession.start_link([])
       on_exit(fn -> UpstreamWebsocketSession.close(session) end)
-      request = generation_request(FakeUpstream.url(upstream))
+      request = generation_request(FakeUpstream.url(upstream), @held_timeouts)
 
       assert {:ok, %{terminal: "response.completed"}} =
                UpstreamWebsocketSession.request(session, request)
@@ -1939,7 +1939,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
       assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid, ^terminal_ref},
-                     @detection_timeout_ms
+                     @message_detection_timeout_ms
 
       assert FakeUpstream.websocket_connection_alive?(upstream, 1)
       peer_monitor = Process.monitor(websocket_pid)
@@ -1951,7 +1951,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       {failure_result, retirement_log} =
         with_log([level: :info], fn ->
           send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
-          Task.await(terminal_task, @detection_timeout_ms)
+          Task.await(terminal_task, @message_detection_timeout_ms)
         end)
 
       assert {:error,
@@ -1968,7 +1968,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       assert_disconnected_lifecycle(session, generation_one)
 
       assert_receive {:DOWN, ^peer_monitor, :process, ^websocket_pid, _reason},
-                     @detection_timeout_ms
+                     @message_detection_timeout_ms
 
       refute FakeUpstream.websocket_connection_alive?(upstream, 1)
 
@@ -5379,9 +5379,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     })
   end
 
-  defp generation_request(base_url) do
+  defp generation_request(base_url, timeouts \\ @timeouts) do
     %{
-      websocket_request(base_url)
+      websocket_request(base_url, timeouts)
       | payload: CodexPooler.JSON.encode!(%{"type" => "response.create"})
     }
   end
@@ -6739,7 +6739,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end)
   end
 
-  defp assert_stack_eventually_in(pid, module, function, arity, deadline_ms \\ 2_000) do
+  defp assert_stack_eventually_in(pid, module, function, arity, deadline_ms \\ @message_detection_timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + deadline_ms
 
     unless poll_stack_until(pid, module, function, arity, deadline) do

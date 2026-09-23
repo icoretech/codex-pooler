@@ -7,6 +7,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
+  # How long a fixture barrier waits for the test's release before it raises.
+  # The test releases each barrier itself, so this is a fixture timer, not a
+  # detection budget: it stays beyond the tests' 15 s detection budgets, or a
+  # test stalled between its barrier notification and its release sees the
+  # fixture raise first (findings#206 row 206-320, the two-sender harness under
+  # stacked holds).
+  @release_timeout_ms 60_000
+
   @controlled_stages [
     :nonterminal_frames,
     :terminal_frames,
@@ -66,7 +74,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
         receive do
           {:websocket_owner_harness_release_terminal_delivery, ^release_ref} -> :ok
         after
-          5_000 -> raise "timed out waiting for websocket owner terminal delivery release"
+          @release_timeout_ms -> raise "timed out waiting for websocket owner terminal delivery release"
         end
 
         send(downstream_pid, message)
@@ -320,7 +328,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     receive do
       {:websocket_owner_harness_release_controlled, ^release_ref} -> :ok
     after
-      5_000 -> raise "timed out waiting for websocket owner controlled release"
+      @release_timeout_ms -> raise "timed out waiting for websocket owner controlled release"
     end
   end
 
@@ -336,7 +344,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     receive do
       {:websocket_owner_harness_release, ^block_ref} -> :ok
     after
-      5_000 -> raise "timed out waiting for websocket owner harness release"
+      @release_timeout_ms -> raise "timed out waiting for websocket owner harness release"
     end
 
     Enum.each(after_barrier, &emit_frame(writer, &1))
@@ -589,7 +597,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     receive do
       {:websocket_owner_harness_release_call, ^release_ref} -> :ok
     after
-      5_000 -> raise "timed out waiting for websocket owner RPC harness release"
+      @release_timeout_ms -> raise "timed out waiting for websocket owner RPC harness release"
     end
   end
 
