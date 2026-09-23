@@ -192,6 +192,73 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
   end
 
   @tag :model_serving_modes
+  # The released Codex client builds a Lite-shaped request (its own
+  # `additional_tools` manifest and base-instructions message first, empty
+  # instructions, no top-level tools, the Lite client-metadata marker) for a
+  # model its catalog marks Lite, and it can do so for a model the Pool serves
+  # Full, for example when it reads its bundled catalog instead of the Pool's.
+  # Full forwards the request as sent without the Lite marker; the provider
+  # accepts that body and calls a tool from the manifest (findings#232 row
+  # 232-272), so Full neither rewrites nor refuses it.
+  test "a Full-served turn forwards a client-built Lite-shaped request as sent without the Lite marker" do
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, equals: %{"type" => "response.create", "input.0.type" => "additional_tools"}, forbidden: ["tools"]],
+            respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(%{"id" => "resp_ws_lite_shaped_full", "object" => "response", "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}})])
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, "full")
+    port = start_public_endpoint!()
+    {conn, websocket, ref, _response_headers} = public_websocket_connect_with_headers!(port, setup, "", "/backend-api/codex/responses")
+
+    manifest = %{"type" => "additional_tools", "role" => "developer", "tools" => [%{"type" => "function", "name" => "sample_lookup", "parameters" => %{"type" => "object", "properties" => %{}}}]}
+    base_instructions = %{"type" => "message", "role" => "developer", "content" => [%{"type" => "input_text", "text" => "synthetic base instructions"}]}
+    input = [manifest, base_instructions | native_text_input("synthetic Lite-shaped turn")]
+
+    frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "instructions" => "",
+        "input" => input,
+        "tool_choice" => "auto",
+        "parallel_tool_calls" => false,
+        "reasoning" => %{"effort" => "low", "context" => "all_turns"},
+        "stream" => true,
+        "generate" => true,
+        "client_metadata" => %{@responses_lite_client_metadata_key => "true"}
+      })
+
+    try do
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
+      {_conn, _websocket, response_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert websocket_response_id(response_frame) == "resp_ws_lite_shaped_full"
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == input
+      assert captured.json["instructions"] == ""
+      refute Map.has_key?(captured.json, "tools")
+      refute get_in(captured.json, ["client_metadata", @responses_lite_client_metadata_key])
+      assert captured.json["parallel_tool_calls"] == false
+      assert get_in(captured.json, ["reasoning", "context"]) == "all_turns"
+      refute List.keymember?(captured.headers, "x-openai-internal-codex-responses-lite", 0)
+
+      assert [request] = await_succeeded_pool_requests!(setup.pool.id, 1)
+      assert_model_serving_accounting!(request, "full")
+      assert :ok = FakeUpstream.verify!(upstream)
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "backend websocket rejects a Lite typed tool choice before upstream dispatch" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
     setup = gateway_setup(upstream)
