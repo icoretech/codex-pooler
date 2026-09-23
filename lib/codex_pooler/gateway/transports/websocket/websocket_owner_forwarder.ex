@@ -1046,7 +1046,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   @spec cancel_remote_downstream(
           node(),
           binary(),
-          WebsocketOwnerSession.downstream(),
+          WebsocketOwnerSession.downstream() | WebsocketOwnerSession.per_call_downstream(),
           :client_disconnected | :owner_drained,
           submit_opts()
         ) :: WebsocketOwnerContract.detach_result()
