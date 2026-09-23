@@ -102,6 +102,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def handle_in(_frame, %{socket_stopped?: true} = state), do: {:ok, state}
 
   def handle_in(frame, state) do
+    :ok = record_written_error_frame_receipts(state)
     :ok = confirm_written_delivery_evidence(state)
 
     case WebsocketControlPath.run(:serve, fn -> handle_socket_frame(frame, state) end) do
@@ -148,6 +149,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def handle_info(_message, %{socket_stopped?: true} = state), do: {:ok, state}
 
   def handle_info(message, state) do
+    :ok = record_written_error_frame_receipts(state)
     :ok = confirm_written_delivery_evidence(state)
 
     case WebsocketControlPath.run(:serve, fn -> handle_socket_info(message, state) end) do
@@ -497,6 +499,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp terminate_socket(reason, state) do
+    :ok = record_written_error_frame_receipts(state)
+
     _trace =
       NativeCompactionTrace.emit(:cleanup_finished, %{pid_role: :socket, outcome: :finished})
 
@@ -3939,10 +3943,42 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           do: %{evidence | terminal_class: "error", pushed_at: DateTime.utc_now()},
           else: evidence
 
-      evidence = written_delivery_evidence(pid, evidence)
+      if pushed_error_frame?,
+        do: :ok = defer_error_frame_receipt(pid, cleanup, evidence),
+        else: :ok = record_downstream_delivery_receipt(cleanup, written_delivery_evidence(pid, evidence), state, :completed)
 
-      :ok = record_downstream_delivery_receipt(cleanup, evidence, state, :completed)
       clear_downstream_delivery_evidence(state, pid)
+    end
+  end
+
+  # Bandit writes the socket's own error frame after the callback that pushes
+  # it returned, so a receipt recorded in that callback could not see a failure
+  # of that very write and said `delivered` for an error the client never got
+  # (findings#232 row 232-263). The receipt waits for the next callback, or for
+  # termination, both of which run after that write: a failure of it is known
+  # there, and the evidence last confirmed (at the entry of the callback that
+  # pushed the frame) is what was written before it. A message to the socket
+  # itself makes sure a next callback comes. Kept in the process dictionary,
+  # like the write watch, never in the socket state map.
+  @error_frame_receipts_key {__MODULE__, :error_frame_receipts}
+
+  defp defer_error_frame_receipt(pid, cleanup, evidence) do
+    _previous = Process.put(@error_frame_receipts_key, Map.put(pending_error_frame_receipts(), pid, {cleanup, evidence}))
+    send(self(), {__MODULE__, :error_frame_written})
+    :ok
+  end
+
+  defp pending_error_frame_receipts, do: Process.get(@error_frame_receipts_key, %{})
+
+  defp record_written_error_frame_receipts(state) do
+    case Process.delete(@error_frame_receipts_key) do
+      pending when is_map(pending) ->
+        Enum.each(pending, fn {pid, {cleanup, evidence}} ->
+          :ok = record_downstream_delivery_receipt(cleanup, written_delivery_evidence(pid, evidence), state, :completed)
+        end)
+
+      nil ->
+        :ok
     end
   end
 
