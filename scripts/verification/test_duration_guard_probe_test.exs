@@ -15,7 +15,8 @@ scenario = hd(System.argv())
 
 limits =
   case scenario do
-    "hard" -> [normal_ms: 1, hard_ms: 2]
+    hard when hard in ["hard", "hard_assertion"] -> [normal_ms: 1, hard_ms: 2]
+    "many" -> [normal_ms: 2, hard_ms: 1_000]
     "invalid" -> [normal_ms: 1_000, hard_ms: 2_000]
     "fast" -> [normal_ms: 1_000, hard_ms: 2_000]
     _scenario -> [normal_ms: 1, hard_ms: 1_000]
@@ -41,7 +42,7 @@ defmodule CodexPooler.TestDurationGuardProbe do
 
   slow_reason =
     case @scenario do
-      reason when reason in ["allowed", "hard"] -> "synthetic duration boundary"
+      reason when reason in ["allowed", "hard", "hard_assertion"] -> "synthetic duration boundary"
       "invalid" -> true
       _scenario -> false
     end
@@ -62,14 +63,28 @@ defmodule CodexPooler.TestDurationGuardProbe do
     :ok
   end
 
-  test "duration scenario" do
-    if @scenario in ["ordinary", "allowed", "hard", "slow_assertion"] do
-      receive do
-      after
-        20 -> :ok
+  unless @scenario == "many" do
+    test "duration scenario" do
+      if @scenario in ["ordinary", "allowed", "hard", "hard_assertion", "slow_assertion"] do
+        receive do
+        after
+          20 -> :ok
+        end
+      end
+
+      refute @scenario in ["assertion", "hard_assertion", "slow_assertion"], "synthetic assertion failure"
+    end
+  end
+
+  # One more outlier than the report shows, in an order that is not sorted.
+  if @scenario == "many" do
+    for index <- 1..21 do
+      test "outlier #{index}" do
+        receive do
+        after
+          3 + rem(unquote(index) * 7, 11) -> :ok
+        end
       end
     end
-
-    refute @scenario in ["assertion", "slow_assertion"], "synthetic assertion failure"
   end
 end

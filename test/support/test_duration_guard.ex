@@ -1,8 +1,15 @@
 defmodule CodexPooler.TestDurationGuard do
   @moduledoc """
-  Fails the invocation when an ordinary test exceeds one second or any test
-  exceeds six seconds. A test may opt into the intermediate range with
+  Reports tests over one second and fails the invocation only on the hard
+  limit. A test may opt into the range above one second with
   `@tag slow: "specific reason this boundary needs more than one second"`.
+
+  An ordinary test (no slow reason) over one second is an outlier to look at,
+  not a verdict: after the suite the guard prints one stderr list,
+  `test duration report: N tests over 1000.0ms without @tag slow (not a
+  failure)`, longest first and capped at 20 lines plus a count. It never
+  changes the exit status and is never written as a candidate. Only the
+  six-second hard limit fails the invocation, slow reason or not.
 
   Only a `unix_integration` test, whose property is a child VM or Mix project
   it boots, may replace the six-second hard limit with its own measured one:
@@ -15,13 +22,14 @@ defmodule CodexPooler.TestDurationGuard do
   CI skips registration entirely: runner-dependent timings are neither checked
   nor reported, while ExUnit still enforces assertion failures normally.
 
-  With `CODEX_POOLER_TEST_DURATION_CANDIDATES` naming a file, a limit exceeded
-  during the run is a candidate rather than a verdict: it is written there as
-  `path:line<TAB>diagnostic`, one per line, and does not fail the invocation.
-  `make test-fast` sets it for its partitions, because four partitions share
-  the host and a test's time there includes the other three; it then re-runs
-  exactly those locations on their own and fails on what still exceeds the same
-  limits. A malformed tag and a missing formatter still fail the run itself.
+  With `CODEX_POOLER_TEST_DURATION_CANDIDATES` naming a file, a hard limit
+  exceeded during the run is a candidate rather than a verdict: it is written
+  there as `path:line<TAB>diagnostic`, one per line, and does not fail the
+  invocation. `make test-fast` sets it for its partitions, because four
+  partitions share the host and a test's time there includes the other three;
+  it then re-runs exactly those locations on their own and fails on what still
+  exceeds the same limits. A malformed tag and a missing formatter still fail
+  the run itself.
   """
 
   use GenServer
@@ -29,8 +37,9 @@ defmodule CodexPooler.TestDurationGuard do
   @config_key :codex_pooler_test_duration_guard
   @candidates_env "CODEX_POOLER_TEST_DURATION_CANDIDATES"
   @declared_limit_ceiling_ms 60_000
+  @report_lines 20
   @type limits :: %{normal_us: pos_integer(), hard_us: pos_integer()}
-  @type finding :: {:timing | :tag, String.t() | nil, String.t()}
+  @type finding :: {:report | :timing | :tag, String.t() | nil, String.t()}
 
   @spec start!(keyword()) :: :ok
   def start!(opts \\ []) do
@@ -62,7 +71,7 @@ defmodule CodexPooler.TestDurationGuard do
 
     # ExUnit drains/stops formatter servers before after_suite callbacks. The
     # receipt therefore outlives its server without leaving a process behind.
-    ExUnit.after_suite(fn _stats -> finish(key, candidates_path) end)
+    ExUnit.after_suite(fn _stats -> finish(key, limits, candidates_path) end)
     :ok
   end
 
@@ -77,19 +86,20 @@ defmodule CodexPooler.TestDurationGuard do
   def init(opts) do
     config = Keyword.fetch!(opts, @config_key)
     :persistent_term.put(config.key, :running)
-    {:ok, Map.put(config, :findings, [])}
+    {:ok, Map.merge(config, %{findings: [], reports: []})}
   end
 
   @impl true
   def handle_cast({:test_finished, test}, state) do
     case finding(test, state.limits) do
       nil -> {:noreply, state}
+      {:report, location, _text} -> {:noreply, %{state | reports: [{test.time, location, "#{inspect(test.module)} #{test.name}"} | state.reports]}}
       finding -> {:noreply, %{state | findings: [finding | state.findings]}}
     end
   end
 
   def handle_cast({:suite_finished, _times}, state) do
-    :persistent_term.put(state.key, {:finished, Enum.reverse(state.findings)})
+    :persistent_term.put(state.key, {:finished, Enum.reverse(state.findings), state.reports})
     {:noreply, state}
   end
 
@@ -132,7 +142,8 @@ defmodule CodexPooler.TestDurationGuard do
     end
   end
 
-  # Tags are valid here: a declared limit replaces the hard limit, nothing else.
+  # Tags are valid here: a declared limit replaces the hard limit, nothing
+  # else. Only the hard limit is a :timing finding; the normal one is :report.
   defp timing_problem(time, tags, limits) do
     declared = Map.get(tags, :duration_limit_ms)
     hard_us = if declared, do: declared * 1_000, else: limits.hard_us
@@ -140,7 +151,7 @@ defmodule CodexPooler.TestDurationGuard do
     cond do
       time > hard_us and declared != nil -> {:timing, "exceeds its declared #{milliseconds(hard_us)}ms limit"}
       time > hard_us -> {:timing, "exceeds the #{milliseconds(hard_us)}ms hard limit; slow tags cannot waive it"}
-      time > limits.normal_us and not valid_reason?(Map.get(tags, :slow)) -> {:timing, "exceeds #{milliseconds(limits.normal_us)}ms; shorten the test or justify @tag slow: \"specific reason\""}
+      time > limits.normal_us and not valid_reason?(Map.get(tags, :slow)) -> {:report, "exceeds #{milliseconds(limits.normal_us)}ms without @tag slow (reported, not a failure)"}
       true -> nil
     end
   end
@@ -160,15 +171,17 @@ defmodule CodexPooler.TestDurationGuard do
   defp valid_reason?(_reason), do: false
   defp milliseconds(microseconds), do: :erlang.float_to_binary(microseconds / 1_000, decimals: 1)
 
-  defp finish(key, candidates_path) do
+  defp finish(key, limits, candidates_path) do
     receipt = :persistent_term.get(key, :missing)
     :persistent_term.erase(key)
 
-    findings =
+    {findings, reports} =
       case receipt do
-        {:finished, findings} -> findings
-        _missing_or_incomplete -> [{:tag, nil, "formatter missing or incomplete; duration enforcement did not run"}]
+        {:finished, findings, reports} -> {findings, reports}
+        _missing_or_incomplete -> {[{:tag, nil, "formatter missing or incomplete; duration enforcement did not run"}], []}
       end
+
+    report(reports, limits)
 
     {deferred, failures} = Enum.split_with(findings, &(elem(&1, 0) == :timing and is_binary(candidates_path)))
 
@@ -191,6 +204,19 @@ defmodule CodexPooler.TestDurationGuard do
     end
 
     :ok
+  end
+
+  # One list for attention, longest first; `make test-fast` merges the
+  # partitions' lists by the leading milliseconds, so keep that column first.
+  defp report([], _limits), do: :ok
+
+  defp report(reports, limits) do
+    count = length(reports)
+    shown = reports |> Enum.sort_by(&elem(&1, 0), :desc) |> Enum.take(@report_lines)
+    lines = Enum.map(shown, fn {time, location, label} -> "  #{milliseconds(time)}ms #{location} #{label}" end)
+    more = if count > @report_lines, do: ["  ... and #{count - @report_lines} more"], else: []
+
+    IO.puts(:stderr, Enum.join(["test duration report: #{count} tests over #{milliseconds(limits.normal_us)}ms without @tag slow (not a failure)" | lines ++ more], "\n"))
   end
 
   defp failure_status(status) when is_integer(status) and status > 1, do: status
