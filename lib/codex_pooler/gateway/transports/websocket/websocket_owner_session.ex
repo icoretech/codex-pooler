@@ -149,17 +149,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    codex_session_id = Keyword.fetch!(opts, :codex_session_id)
-
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {@registry, codex_session_id, @registry_starting}})
+    GenServer.start_link(__MODULE__, opts, name: registered_name(opts))
   end
 
   @spec start(keyword()) :: GenServer.on_start()
   def start(opts) do
-    codex_session_id = Keyword.fetch!(opts, :codex_session_id)
-
-    GenServer.start(__MODULE__, opts, name: {:via, Registry, {@registry, codex_session_id, @registry_starting}})
+    GenServer.start(__MODULE__, opts, name: registered_name(opts))
   end
+
+  # `:registry` is a test seam, like `RolloutDrain`'s `:owner_registry`: a test
+  # that drains real owners registers them in a registry of its own, so the drain
+  # counts only that test's owners (findings#206 row 206-386). Every lookup,
+  # `starting?/1` included, reads the application registry, so an owner
+  # registered elsewhere is invisible to the runtime; production never passes it.
+  defp registered_name(opts) do
+    codex_session_id = Keyword.fetch!(opts, :codex_session_id)
+    {:via, Registry, {owner_registry(opts), codex_session_id, @registry_starting}}
+  end
+
+  defp owner_registry(opts), do: Keyword.get(opts, :registry, @registry)
 
   @spec start_owner(keyword()) :: start_result()
   def start_owner(opts), do: start_owner(opts, 100)
@@ -1184,7 +1192,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     persistence = persistence_boundary(opts)
 
     with {:ok, upstream_pid} <- upstream.start.() do
-      _marked = Registry.update_value(@registry, codex_session_id, fn _starting -> @registry_ready end)
+      _marked = Registry.update_value(owner_registry(opts), codex_session_id, fn _starting -> @registry_ready end)
 
       {:ok,
        %__MODULE__{

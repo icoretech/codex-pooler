@@ -67,26 +67,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     {:ok, activity_registry: activity_registry, drain_name: drain_name, stream_registry: stream_registry}
   end
 
-  # Real `WebsocketOwnerSession`s register only in the application registry, so this drain reads it.
+  # The real `WebsocketOwnerSession`s start in this test's own owner registry (`registry:`), which
+  # the drain reads, so an owner another test left in the application registry cannot change its
+  # counts (findings#206 row 206-386).
   test "flips the app drain flag and drains local owner sessions with a compact summary" do
     drain_name = :"rollout-drain-application-owners-#{System.unique_integer([:positive])}"
-    start_isolated_rollout_drain!(drain_name, owner_registry: WebsocketOwnerSession.Registry)
+    start_isolated_rollout_drain!(drain_name, [])
     first_context = owner_context()
     second_context = owner_context()
-
-    on_exit(fn ->
-      cleanup_owner_session(first_context.codex_session_id)
-      cleanup_owner_session(second_context.codex_session_id)
-    end)
 
     first_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     second_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
 
     assert RolloutDrain.draining?(name: drain_name) == false
-    assert {:ok, first_owner} = start_owner(first_context, upstream: first_upstream)
+    assert {:ok, first_owner} = start_owner(first_context, upstream: first_upstream, registry: own_owner_registry())
+    on_exit(fn -> stop_owner_pid(first_owner) end)
     assert_receive {:websocket_owner_harness_upstream_started, first_upstream_pid}
-    assert {:ok, second_owner} = start_owner(second_context, upstream: second_upstream)
+    assert {:ok, second_owner} = start_owner(second_context, upstream: second_upstream, registry: own_owner_registry())
+    on_exit(fn -> stop_owner_pid(second_owner) end)
     assert_receive {:websocket_owner_harness_upstream_started, second_upstream_pid}
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(first_context.codex_session_id)
 
     first_ref = Process.monitor(first_owner)
     second_ref = Process.monitor(second_owner)
@@ -1062,6 +1062,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
        Keyword.put_new(opts, :owner_registry, own_owner_registry())}
     |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
     |> start_supervised!()
+  end
+
+  # The owner registry is test-supervised and already stopped when `on_exit` runs; an owner that
+  # registered there survives it, so it is stopped by pid.
+  defp stop_owner_pid(owner) do
+    owner_ref = Process.monitor(owner)
+
+    try do
+      GenServer.stop(owner, :normal, @detection_timeout_ms)
+    catch
+      :exit, _reason -> :ok
+    end
+
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, _reason}, @detection_timeout_ms
   end
 
   defp start_probe_owner!({module, opts}) do
