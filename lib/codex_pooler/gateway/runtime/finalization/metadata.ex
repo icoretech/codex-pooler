@@ -23,8 +23,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   @unsupported_parameter_code "unsupported_parameter"
   @invalid_request_error_type "invalid_request_error"
   @previous_response_not_found_code "previous_response_not_found"
-  @invalid_previous_response_id_message ErrorCodes.invalid_previous_response_id_message()
-  @rejection_message_classes %{@invalid_previous_response_id_message => "invalid_previous_response_id"}
   @rejection_param_max_bytes 160
   @rejection_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
   @upstream_websocket_connection_atom_keys [
@@ -173,10 +171,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   defp previous_response_miss_error?(%{"code" => @previous_response_not_found_code}), do: true
 
-  defp previous_response_miss_error?(%{"message" => @invalid_previous_response_id_message} = error),
-    do: is_nil(Map.get(error, "code"))
+  defp previous_response_miss_error?(%{"message" => message} = error) when is_binary(message),
+    do: message == ErrorCodes.invalid_previous_response_id_message() and is_nil(Map.get(error, "code"))
 
   defp previous_response_miss_error?(_error), do: false
+
+  defp rejection_message_class(message) when is_binary(message) do
+    if message == ErrorCodes.invalid_previous_response_id_message(), do: "invalid_previous_response_id"
+  end
+
+  defp rejection_message_class(_message), do: nil
 
   @spec rejection_error(Req.Response.t()) :: map()
   def rejection_error(%Req.Response{} = response) do
@@ -245,7 +249,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
           valid_rejection_param(error["param"])
         )
         |> put_rejection_message_metadata(error["message"])
-        |> maybe_put_rejection_value("rejection_message_class", Map.get(@rejection_message_classes, error["message"]))
+        |> maybe_put_rejection_value("rejection_message_class", rejection_message_class(error["message"]))
 
       {:ok, %{"detail" => detail}} ->
         detail_rejection_metadata(detail)
