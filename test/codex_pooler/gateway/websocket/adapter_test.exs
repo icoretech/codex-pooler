@@ -193,4 +193,47 @@ defmodule CodexPooler.Gateway.Websocket.AdapterTest do
       end
     end
   end
+
+  describe "recorded_final_refusal_error/1 (findings#254 row 254-100)" do
+    test "a recorded final refusal rebuilds the wrapped 400 error the turn received" do
+      assert Adapter.recorded_final_refusal_error(%{"rejection_upstream_status" => 404, "rejection_error_type" => "invalid_request_error"}) ==
+               {:ok,
+                %{
+                  "type" => "invalid_request_error",
+                  "code" => "invalid_request",
+                  "param" => nil,
+                  "message" => "upstream rejected the request (invalid_request); upstream status 404"
+                }}
+
+      assert Adapter.recorded_final_refusal_error(%{
+               "rejection_upstream_status" => 400,
+               "rejection_error_type" => "invalid_request_error",
+               "rejection_error_code" => "unsupported_value",
+               "rejection_error_param" => "input[2].content",
+               "rejection_supported_values_state" => "present",
+               "rejection_supported_values" => ["low", "high"]
+             }) ==
+               {:ok,
+                %{
+                  "type" => "invalid_request_error",
+                  "code" => "unsupported_value",
+                  "param" => "input[].content",
+                  "message" => "upstream rejected parameter input[].content (unsupported_value); supported values: low, high"
+                }}
+    end
+
+    test "a refusal the client retries, or one recorded without its status, is not replayed" do
+      for metadata <- [
+            %{"rejection_upstream_status" => 429, "rejection_error_type" => "invalid_request_error"},
+            %{"rejection_upstream_status" => 408, "rejection_error_type" => "invalid_request_error"},
+            %{"rejection_upstream_status" => 401, "rejection_error_type" => "invalid_request_error"},
+            %{"rejection_upstream_status" => 404, "rejection_error_code" => "invalid_prompt", "rejection_error_type" => "invalid_request_error"},
+            %{"rejection_upstream_status" => 400, "rejection_error_code" => "context_length_exceeded", "rejection_error_type" => "invalid_request_error"},
+            %{"rejection_error_type" => "invalid_request_error"},
+            %{}
+          ] do
+        assert Adapter.recorded_final_refusal_error(metadata) == :none, inspect(metadata)
+      end
+    end
+  end
 end

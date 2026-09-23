@@ -210,6 +210,58 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     end
   end
 
+  @doc """
+  The error of the final wrapped 400 a native websocket turn received for a
+  provider refusal, rebuilt from its attempt's recorded rejection metadata
+  (the provider status and the sanitized tokens), or `:none` when that refusal
+  kept a retryable frame, was never recorded with its status, or is not a
+  refusal at all. A resend of that turn is answered with this error instead of
+  `409 duplicate_turn`: the released client's in-band compaction resends a
+  refused compaction frame up to five times and then showed the duplicate
+  refusal instead of the provider's (findings#254 row 254-100). A demoting 403
+  is read as retryable here, as it is on a Pool with another assignment.
+  """
+  @spec recorded_final_refusal_error(map() | term()) :: {:ok, map()} | :none
+  def recorded_final_refusal_error(%{"rejection_upstream_status" => status} = metadata) when is_integer(status) do
+    error =
+      %{"code" => metadata["rejection_error_code"], "type" => metadata["rejection_error_type"], "param" => metadata["rejection_error_param"]}
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    case recorded_refusal_projection(status, error, metadata) do
+      %{"code" => _code, "message" => _message} = refusal -> {:ok, refusal}
+      :none -> :none
+    end
+  end
+
+  def recorded_final_refusal_error(_metadata), do: :none
+
+  defp recorded_refusal_projection(400 = status, error, metadata) do
+    cond do
+      error["type"] == "invalid_request_error" and error["code"] in ValidationRejection.relayable_codes() ->
+        %{
+          code: error["code"],
+          param: error["param"],
+          supported_values: metadata["rejection_supported_values"],
+          supported_values_state: metadata["rejection_supported_values_state"]
+        }
+        |> ValidationRejection.for_client(:unknown)
+        |> ValidationRejection.error()
+
+      classified_or_retryable_code?(error["code"]) ->
+        :none
+
+      true ->
+        ValidationRejection.refusal_error(provider_rejection_error(status, error))
+    end
+  end
+
+  defp recorded_refusal_projection(status, error, _metadata) do
+    case final_refusal_projection(status, error["code"], fn -> false end) do
+      :final -> ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status)
+      _retryable -> :none
+    end
+  end
+
   defp final_refusal_projection(401, code, _sole_account?) do
     if ErrorCodes.codex_response_failed_classified_code?(code), do: :canonical, else: :account
   end

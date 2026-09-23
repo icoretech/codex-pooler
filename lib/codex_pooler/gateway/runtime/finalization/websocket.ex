@@ -796,10 +796,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       error = if type == "response.failed", do: drop_derived_code(error), else: error
       response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
 
-      Map.merge(
-        Metadata.rejection_metadata(response),
-        ValidationRejection.attempt_metadata(ValidationRejection.fetch(response, request_options))
-      )
+      response
+      |> Metadata.rejection_metadata()
+      |> Map.merge(ValidationRejection.attempt_metadata(ValidationRejection.fetch(response, request_options)))
+      |> put_native_refusal_status(status, request_options)
     else
       _other -> %{}
     end
@@ -821,6 +821,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         nil
     end
   end
+
+  # A native turn's refusal keeps the provider status next to the sanitized
+  # tokens, so a resend of a finally refused turn is answered with the refusal
+  # it got (findings#254 row 254-100); a websocket row keeps no provider status
+  # of its own. The public `/v1` websocket keeps exactly the fields its HTTP
+  # path records (findings#254 row 254-15).
+  defp put_native_refusal_status(metadata, status, %RequestOptions{openai_compatibility: %{public_openai_responses_stream: false}}),
+    do: Map.put(metadata, "rejection_upstream_status", status)
+
+  defp put_native_refusal_status(metadata, _status, _request_options), do: metadata
 
   defp drop_derived_code(%{"code" => code, "type" => code} = error), do: Map.delete(error, "code")
   defp drop_derived_code(%{"code" => "upstream_terminal_failure"} = error), do: Map.delete(error, "code")

@@ -1668,6 +1668,70 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     _websocket = retry_websocket
   end
 
+  # A turn whose provider refusal went out as the final wrapped 400 is never
+  # served again; its resend used to be refused `409 duplicate_turn`, and the
+  # released client's in-band compaction, which resends a refused compaction
+  # frame five more times, ended showing that duplicate refusal instead of the
+  # provider's (findings#254 row 254-100, Codex 0.156.1). The resend now gets
+  # the same refusal back, without a dispatch, a reservation or a request row.
+  for {label, provider_status, provider_error} <- [
+        {"codeless 404", 404, %{"type" => "invalid_request_error", "message" => "Refused 'private-refusal-sentinel'."}},
+        {"validation 400", 400,
+         %{
+           "type" => "invalid_request_error",
+           "code" => "unsupported_value",
+           "param" => "reasoning.effort",
+           "message" => "Unsupported value: 'private-refusal-sentinel'. Supported values are: 'low', 'medium' and 'high'."
+         }}
+      ] do
+    @tag :replay_matrix
+    @tag provider_status: provider_status, provider_error: provider_error
+    test "the resend of a turn that ended in a final #{label} provider refusal gets that refusal again, never a dispatch", %{
+      provider_status: provider_status,
+      provider_error: provider_error
+    } do
+      refusal = CodexPooler.JSON.encode!(%{"type" => "error", "status" => provider_status, "error" => provider_error})
+
+      upstream =
+        start_upstream(
+          # provenance: observed findings#254 row 254-100 (released Codex 0.156.1 in-band compaction refused by the provider, resent five times)
+          FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([refusal]))])
+        )
+
+      setup = gateway_setup(upstream)
+      _revision = set_model_serving_mode!(model_serving_scope(), setup, "lite")
+      turn_state = Ecto.UUID.generate()
+      raw_payload = CodexPooler.JSON.encode!(native_turn_payload(Ecto.UUID.generate(), setup.model.exposed_model_id, "refused-turn", 100, [synthetic_user_item("refused turn")]))
+      port = start_public_endpoint!()
+
+      {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, raw_payload)
+      {conn, _websocket, original} = receive_until_terminal!(conn, websocket, ref)
+      _result = Mint.HTTP.close(conn)
+
+      assert %{"type" => "error", "status" => 400, "error" => %{"code" => _code, "message" => _message}} = original
+      refute CodexPooler.JSON.encode!(original) =~ "private-refusal-sentinel"
+      assert [%Request{id: request_id}] = request_logs(setup.pool.id)
+      assert_request_settled!(request_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
+
+      resends =
+        for _resend <- 1..2 do
+          {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+          {retry_conn, retry_websocket} = public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, raw_payload)
+          {retry_conn, _retry_websocket, resend} = receive_until_terminal!(retry_conn, retry_websocket, retry_ref)
+          _result = Mint.HTTP.close(retry_conn)
+          resend
+        end
+
+      assert resends == [original, original]
+      assert [%Request{id: ^request_id, status: "failed"}] = request_logs(setup.pool.id)
+      assert [%Attempt{status: "failed"}] = pool_attempts(setup.pool.id)
+      assert pool_ledger_entries(setup.pool.id) |> Enum.map(& &1.entry_kind) |> Enum.frequencies() == %{"reservation" => 1, "settlement" => 1, "release" => 1}
+      assert FakeUpstream.count(upstream) == 1
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+  end
+
   # In production a pre-visible cut during a database connection-checkout stall
   # settled `client_disconnected` post-visible and every resend was refused: the
   # closing socket read the owner lease from the database before it asked the

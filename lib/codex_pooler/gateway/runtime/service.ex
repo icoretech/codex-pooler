@@ -50,6 +50,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingMode, ModelServingOverride, Pool}
@@ -1071,7 +1072,25 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     case Accounting.client_retry_preflight_snapshot(session, api_key, model, input) do
       :none -> replay_intent_result(:fresh, authorization_binding, nil)
       {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
+      {:error, :terminal_predecessor} -> reject_terminal_predecessor(context, session, input)
       {:error, reason} -> reject_replay_intent(context, session, reason)
+    end
+  end
+
+  # A turn whose provider refusal went out as the final wrapped 400 is never
+  # served again, and its resend is answered with that same refusal rather than
+  # `409 duplicate_turn`: the released client's in-band compaction resends a
+  # refused compaction frame five more times and then showed the duplicate
+  # refusal instead of the provider's (findings#254 row 254-100, Codex 0.156.1).
+  # Nothing is dispatched or reserved for the resend, as for any refused one.
+  defp reject_terminal_predecessor(context, session, input) do
+    with {:ok, metadata} <- Accounting.final_refusal_predecessor(session, input),
+         {:ok, %{"code" => code, "message" => message} = refusal} <- Adapter.recorded_final_refusal_error(metadata) do
+      public_error = error(400, code, message, Map.get(refusal, "param"))
+      log_pre_classification_refusal(context.request_options, session, :final_refusal_predecessor, public_error)
+      Repo.rollback(public_error)
+    else
+      :none -> reject_replay_intent(context, session, :terminal_predecessor)
     end
   end
 
