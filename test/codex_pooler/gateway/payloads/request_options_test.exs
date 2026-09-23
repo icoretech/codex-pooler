@@ -1327,8 +1327,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       changed_scopes = [
         {:scope_mismatch, "00000000-0000-0000-0000-000000000003", @identity_id, @effective_model, @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, "00000000-0000-0000-0000-000000000004", @effective_model, @reset_probe_route_class},
-        {:scope_mismatch, @assignment_id, @identity_id, "gpt-5.4-mini", @reset_probe_route_class},
-        {:scope_mismatch, @assignment_id, @identity_id, "GPT-5.4", @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, @identity_id, "gpt-6-luna", @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, @identity_id, "GPT-6-SOL", @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, @identity_id, @effective_model, "proxy_stream"},
         {:invalid_scope, "", @identity_id, @effective_model, @reset_probe_route_class},
         {:invalid_scope, @assignment_id, " ", @effective_model, @reset_probe_route_class},

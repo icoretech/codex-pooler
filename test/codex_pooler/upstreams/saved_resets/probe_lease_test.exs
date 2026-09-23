@@ -165,7 +165,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
     mismatches = [
       %{probe | pool_upstream_assignment_id: Ecto.UUID.generate()},
       %{probe | upstream_identity_id: Ecto.UUID.generate()},
-      %{probe | effective_model: "gpt-5.4-mini"},
+      %{probe | effective_model: "gpt-6-luna"},
       %{probe | route_class: "proxy_stream"}
     ]
 
@@ -412,7 +412,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
        end},
       {:effective_model,
        fn generation, attempt, probe ->
-         {generation, attempt, %{probe | effective_model: "gpt-5.4-mini"}}
+         {generation, attempt, %{probe | effective_model: "gpt-6-luna"}}
        end},
       {:route_class,
        fn generation, attempt, probe ->

@@ -172,9 +172,9 @@ defmodule CodexPooler.Dev.SeedsTest do
            end)
 
     assert Enum.map(result.models, & &1.exposed_model_id) == [
-             "gpt-5.4-mini",
+             "gpt-6-luna",
              "gpt-6-sol",
-             "gpt-6-luna"
+             "gpt-6-astra"
            ]
 
     assert Enum.all?(result.models, fn model ->
@@ -191,7 +191,7 @@ defmodule CodexPooler.Dev.SeedsTest do
              from(state in RoutingCircuitState,
                where:
                  state.status == "closed" and is_nil(state.api_key_id) and
-                   state.model_identifier == "gpt-6-luna"
+                   state.model_identifier == "gpt-6-astra"
              ),
              :count
            ) == 12
@@ -594,8 +594,8 @@ defmodule CodexPooler.Dev.SeedsTest do
              }
            end) == [
              {"gpt-6-sol", "full", "full", true},
-             {"gpt-6-luna", "auto", "full", true},
-             {"gpt-5.4-mini", "auto", "lite", true},
+             {"gpt-6-luna", "auto", "lite", true},
+             {"gpt-6-astra", "auto", "full", true},
              {"gpt-5.5-pro", "lite", "lite", false}
            ]
 
@@ -732,12 +732,12 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     served_models =
       Map.new(fixtures, fn {_label, %{assignment: assignment}} ->
-        {assignment.id, ["gpt-5.4-mini"]}
+        {assignment.id, ["gpt-6-luna"]}
       end)
 
     mini_model =
       Enum.find(result.models, fn model ->
-        model.exposed_model_id == "gpt-5.4-mini" and model.source_assignment_count == 4
+        model.exposed_model_id == "gpt-6-luna" and model.source_assignment_count == 4
       end)
 
     assert mini_model

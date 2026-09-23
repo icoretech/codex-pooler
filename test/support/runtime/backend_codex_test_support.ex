@@ -546,7 +546,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     exposed_model_id = Keyword.get(opts, :exposed_model_id, "gpt-test-model")
     upstream_model_id = Keyword.get(opts, :upstream_model_id, "provider-gpt-test-model")
-    display_name = Keyword.get(opts, :display_name, "GPT 5.4 Mini")
+    display_name = Keyword.get(opts, :display_name, "GPT 6 Luna")
 
     requested_metadata = Keyword.get(opts, :model_metadata, %{})
 

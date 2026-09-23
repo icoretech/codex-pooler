@@ -1375,7 +1375,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{request: default_effort_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-model-default-effort",
-        requested_model: "gpt-5.4-mini",
+        requested_model: "gpt-6-luna",
         endpoint: "/backend-api/codex/responses",
         service_tier: "default",
         status: "succeeded",
@@ -1404,7 +1404,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{request: rejected_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-model-rejected-no-effort",
-        requested_model: "gpt-5.4-mini",
+        requested_model: "gpt-6-luna",
         endpoint: "/backend-api/codex/responses",
         status: "rejected"
       })
@@ -1412,7 +1412,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{request: failed_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-model-failed-no-effort",
-        requested_model: "gpt-5.4-mini",
+        requested_model: "gpt-6-luna",
         endpoint: "/backend-api/codex/responses",
         status: "failed",
         attempt_status: "failed",
@@ -1439,7 +1439,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#{default_cell}[title='gpt-5.4-mini model default / tier default']"
+             "#{default_cell}[title='gpt-6-luna model default / tier default']"
            )
 
     explicit_cell = "#request-log-#{explicit_effort_request.id}-model-details"

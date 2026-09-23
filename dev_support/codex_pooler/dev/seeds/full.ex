@@ -144,7 +144,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
     revoked = create_api_key!(scope, pool, "Dev revoked key", %{labels: ["dev", "revoked"]})
 
     update_api_key!(limited, %{
-      allowed_model_identifiers: ["gpt-5.4-mini", "gpt-6-sol"],
+      allowed_model_identifiers: ["gpt-6-luna", "gpt-6-sol"],
       enforced_reasoning_effort: "medium",
       enforced_service_tier: "priority"
     })
@@ -454,7 +454,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
     absent_id = absent_assignment.id
 
     [
-      model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active",
+      model_attrs(pool, "gpt-6-luna", "GPT 6 Luna", "active",
         source_assignment_models: %{
           active_id => observed_source_metadata(),
           ready_id => observed_source_metadata(),
@@ -469,7 +469,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
         },
         missing_sync_assignment_ids: [active_id]
       ),
-      model_attrs(pool, "gpt-6-luna", "GPT 6 Luna", "active", source_assignment_models: %{active_id => observed_source_metadata()}),
+      model_attrs(pool, "gpt-6-astra", "GPT 6 Astra", "active", source_assignment_models: %{active_id => observed_source_metadata()}),
       model_attrs(pool, "gpt-5.5-pro", "GPT 5.5 Pro", "stale", stale_at: minutes_ago(45)),
       model_attrs(pool, "codex-image", "Codex Image", "suppressed", suppressed_at: minutes_ago(15))
     ]
@@ -478,7 +478,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
 
   defp seed_secondary_models!(pool, secondary_assignment) do
     [
-      model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active", source_assignment_models: %{secondary_assignment.id => observed_source_metadata()})
+      model_attrs(pool, "gpt-6-luna", "GPT 6 Luna", "active", source_assignment_models: %{secondary_assignment.id => observed_source_metadata()})
     ]
     |> Enum.map(fn attrs -> %Model{} |> Model.changeset(attrs) |> Repo.insert!() end)
   end
@@ -524,7 +524,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
          ]
        ) do
     [
-      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.4-mini", "proxy_stream",
+      circuit_attrs(pool, active_assignment, active_identity, "gpt-6-luna", "proxy_stream",
         status: "open",
         reason_code: "upstream_model_unavailable",
         failure_count: 4,
@@ -532,7 +532,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
         opened_at: minutes_ago(6),
         next_probe_at: nil
       ),
-      circuit_attrs(pool, ready_assignment, ready_identity, "gpt-5.4-mini", "proxy_stream",
+      circuit_attrs(pool, ready_assignment, ready_identity, "gpt-6-luna", "proxy_stream",
         status: "open",
         reason_code: "upstream_model_unavailable",
         failure_count: 3,
@@ -540,7 +540,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
         opened_at: minutes_ago(4),
         next_probe_at: minutes_ago(1)
       ),
-      circuit_attrs(pool, clear_assignment, clear_identity, "gpt-5.4-mini", "proxy_stream",
+      circuit_attrs(pool, clear_assignment, clear_identity, "gpt-6-luna", "proxy_stream",
         status: "closed",
         failure_count: 0,
         success_count: 12,

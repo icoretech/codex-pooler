@@ -622,7 +622,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       model =
         model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
 
-      succeeded_codex_turn_fixture(setup, session, api_key.api_key, "gpt-5.4-mini")
+      succeeded_codex_turn_fixture(setup, session, api_key.api_key, "gpt-6-luna")
 
       assert {:ok, [other_candidate]} =
                SessionContinuity.filter_codex_session_assignment(

@@ -890,7 +890,7 @@ defmodule CodexPooler.AccessTest do
       assert {:ok, policy} = Access.normalize_api_key_policy(%{allowed_model_identifiers: []})
 
       assert {:error, :model_not_allowed} =
-               Access.authorize_api_key_policy(policy, %{model_identifier: "gpt-5.4-mini"})
+               Access.authorize_api_key_policy(policy, %{model_identifier: "gpt-6-luna"})
     end
 
     @tag :api_key_policy_contract
@@ -913,7 +913,7 @@ defmodule CodexPooler.AccessTest do
                Access.create_api_key(scope, pool, %{
                  display_name: "Restricted key",
                  policy: %{
-                   allowed_model_identifiers: [" GPT-5.4-Mini ", "gpt-5.4-mini"],
+                   allowed_model_identifiers: [" GPT-6-Luna ", "gpt-6-luna"],
                    metadata: %{
                      "labels" => [" production ", "production", ""],
                      "operator_notes" => "Created for a focused tenant rollout"
@@ -924,13 +924,13 @@ defmodule CodexPooler.AccessTest do
       persisted = Repo.get!(APIKey, api_key.id)
 
       assert {:ok, policy} = Access.normalize_api_key_policy(persisted)
-      assert policy.allowed_model_identifiers == ["gpt-5.4-mini"]
+      assert policy.allowed_model_identifiers == ["gpt-6-luna"]
       assert policy.metadata["labels"] == ["production"]
       assert policy.metadata["operator_notes"] == "Created for a focused tenant rollout"
 
       assert {:ok, ^policy} =
                Access.authorize_api_key_policy(policy, %{
-                 model: "GPT-5.4-MINI"
+                 model: "GPT-6-LUNA"
                })
     end
   end

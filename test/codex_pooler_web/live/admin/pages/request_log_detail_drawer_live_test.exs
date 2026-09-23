@@ -102,7 +102,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     %{request: default_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-drawer-model-default",
-        requested_model: "gpt-5.4-mini",
+        requested_model: "gpt-6-luna",
         attempt_response_metadata: %{"reasoning" => %{"policy_mode" => "unrestricted"}}
       })
 
@@ -116,7 +116,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     %{request: failed_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-drawer-failed-no-effort",
-        requested_model: "gpt-5.4-mini",
+        requested_model: "gpt-6-luna",
         status: "failed",
         attempt_status: "failed",
         last_error_code: "upstream_network_error"

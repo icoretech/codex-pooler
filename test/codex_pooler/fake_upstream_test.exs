@@ -594,7 +594,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       response =
         Req.post!(FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
-          json: %{"model" => "gpt-5.4-mini", "input" => "say hello"},
+          json: %{"model" => "gpt-6-luna", "input" => "say hello"},
           headers: [{"authorization", "Bearer upstream-token"}]
         )
 
@@ -604,7 +604,7 @@ defmodule CodexPooler.FakeUpstreamTest do
       assert [request] = FakeUpstream.requests(upstream)
       assert request.method == "POST"
       assert request.path == "/backend-api/codex/responses"
-      assert request.json["model"] == "gpt-5.4-mini"
+      assert request.json["model"] == "gpt-6-luna"
       assert {"authorization", "Bearer upstream-token"} in request.headers
     end
 

@@ -268,8 +268,8 @@ defmodule CodexPooler.CatalogTest do
           FakeUpstream.json_response(%{
             "data" => [
               %{
-                "id" => "gpt-5.4-mini",
-                "display_name" => "GPT 5.4 Mini",
+                "id" => "gpt-6-luna",
+                "display_name" => "GPT 6 Luna",
                 "owned_by" => "upstream",
                 "capabilities" => %{"responses" => true, "streaming" => true}
               }
@@ -287,7 +287,7 @@ defmodule CodexPooler.CatalogTest do
       # SyncRun no longer maps `retired_count`, but older releases still read
       # the retained column (findings#261), so the row keeps the value 0.
       assert %{rows: [[0]]} = Repo.query!("SELECT retired_count FROM sync_runs WHERE id = $1", [Ecto.UUID.dump!(sync_run.id)])
-      assert model.exposed_model_id == "gpt-5.4-mini"
+      assert model.exposed_model_id == "gpt-6-luna"
       assert model.supports_responses
       assert model.supports_streaming
       assert model.metadata["source_assignment_ids"] == [assignment.id]
@@ -331,7 +331,7 @@ defmodule CodexPooler.CatalogTest do
 
     test "sync is idempotent and marks missing active models stale" do
       upstream =
-        start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-5.4-mini"}]}))
+        start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-6-luna"}]}))
 
       {pool, _assignment} = active_assignment_fixture(%{"base_url" => FakeUpstream.url(upstream)})
       stale_candidate = model_fixture(pool, %{exposed_model_id: "stale-model", status: "active"})
@@ -344,12 +344,12 @@ defmodule CodexPooler.CatalogTest do
       assert Repo.get!(Model, stale_candidate.id).status == "stale"
 
       assert [visible_model] = Catalog.list_visible_models(pool)
-      assert visible_model.exposed_model_id == "gpt-5.4-mini"
+      assert visible_model.exposed_model_id == "gpt-6-luna"
     end
 
     test "sync preserves smoke-provisioned manual models" do
       upstream =
-        start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-5.4-mini"}]}))
+        start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-6-luna"}]}))
 
       {pool, assignment} = active_assignment_fixture(%{"base_url" => FakeUpstream.url(upstream)})
 

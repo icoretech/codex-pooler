@@ -316,14 +316,14 @@ defmodule CodexPooler.PoolerFixtures do
 
   def model_fixture(pool \\ pool_fixture(), attrs \\ %{}) do
     now = now()
-    exposed_model_id = Map.get(attrs, :exposed_model_id, "gpt-5.4-mini")
+    exposed_model_id = Map.get(attrs, :exposed_model_id, "gpt-6-luna")
 
     %Model{
       pool_id: pool.id,
       upstream_model_id: Map.get(attrs, :upstream_model_id, "upstream-#{exposed_model_id}"),
       exposed_model_id: exposed_model_id,
       pricing_ref: Map.get(attrs, :pricing_ref),
-      display_name: Map.get(attrs, :display_name, "GPT 5.4 Mini"),
+      display_name: Map.get(attrs, :display_name, "GPT 6 Luna"),
       status: Map.get(attrs, :status, "active"),
       supports_responses: Map.get(attrs, :supports_responses, true),
       supports_streaming: Map.get(attrs, :supports_streaming, true),
@@ -454,7 +454,7 @@ defmodule CodexPooler.PoolerFixtures do
         pool_id: pool.id,
         api_key_id: api_key.id,
         model_id: Map.get(attrs, :model_id),
-        requested_model: Map.get(attrs, :requested_model, "gpt-5.4-mini"),
+        requested_model: Map.get(attrs, :requested_model, "gpt-6-luna"),
         endpoint: Map.get(attrs, :endpoint, "/backend-api/codex/responses"),
         transport: Map.get(attrs, :transport, "http_json"),
         status: Map.get(attrs, :status, "succeeded"),
@@ -516,7 +516,7 @@ defmodule CodexPooler.PoolerFixtures do
         attempt_number: Map.get(attrs, :attempt_number, 1),
         pool_upstream_assignment_id: assignment.id,
         upstream_identity_id: assignment.upstream_identity_id,
-        upstream_model_id: Map.get(attrs, :upstream_model_id, "upstream-gpt-5.4-mini"),
+        upstream_model_id: Map.get(attrs, :upstream_model_id, "upstream-gpt-6-luna"),
         served_model: Map.get(attrs, :served_model),
         transport: Map.get(attrs, :transport, request.transport),
         status: Map.get(attrs, :status, "succeeded"),

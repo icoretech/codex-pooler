@@ -283,11 +283,11 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
       assert {:ok, %{policy_bindings: [_default_policy, model_policy]}} =
                Access.create_api_key(scope, pool, %{
                  display_name: "Model key",
-                 model_policies: [%{model_identifier: "gpt-5.4-mini", max_tokens_per_day: 1000}]
+                 model_policies: [%{model_identifier: "gpt-6-luna", max_tokens_per_day: 1000}]
                })
 
       assert model_policy.binding_scope == "model"
-      assert model_policy.model_identifier == "gpt-5.4-mini"
+      assert model_policy.model_identifier == "gpt-6-luna"
       assert model_policy.max_tokens_per_day == 1000
     end
 
@@ -485,7 +485,7 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
           key_prefix: "sk_typed_policy_valid",
           key_hash: <<"typed-policy-valid">>,
           status: "active",
-          enforced_model_identifier: "gpt-5.4-mini",
+          enforced_model_identifier: "gpt-6-luna",
           enforced_reasoning_effort: "ultra",
           enforced_service_tier: "scale"
         })

@@ -138,7 +138,7 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     primary_pool = pool_by_name!(pools, "Example Production")
 
     Enum.map(models, fn model ->
-      if model.pool_id == primary_pool.id and model.exposed_model_id == "gpt-5.4-mini",
+      if model.pool_id == primary_pool.id and model.exposed_model_id == "gpt-6-luna",
         do: mark_sources_lite!(model),
         else: model
     end)
