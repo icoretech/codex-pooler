@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   alias CodexPooler.Events.Event
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.AlertNotificationsReadModel
 
   # Named detection budget for a NOTIFY committed on another connection to come
   # back through the application's notifications process, bridge and PubSub;
@@ -110,6 +111,54 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     assert %{badge_count: 0, rows: [], empty?: true} = notification_center(assigned_view)
   end
 
+  # An incident on an upstream identity shared by several Pools has a target in
+  # each of them, and a page subscribes to every Pool it can see, so the one
+  # invalidation reaches the page once per shared Pool; each copy used to
+  # reload the notification center (findings#206 row 206-270).
+  test "an incident over several shared Pools reloads an open notification center once", %{conn: conn, scope: scope} do
+    pools = for index <- 1..3, do: pool!(scope, "shared-#{index}")
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+    trace_notification_reloads!(view)
+
+    incident = record_shared_incident!(pools)
+    incident_id = incident.id
+
+    assert notification_reloads(view) == 1
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(view)
+  end
+
+  # Coalescing must not merge two invalidations, and a page that sees one Pool
+  # of a shared incident still reloads while a page that sees none does not.
+  test "each invalidation of a visible Pool reloads once and hidden Pools never reload", %{
+    conn: owner_conn,
+    scope: owner_scope
+  } do
+    [hidden_pool, shared_pool] = for label <- ["hidden", "visible"], do: pool!(owner_scope, label)
+    other_hidden_pool = pool!(owner_scope, "other-hidden")
+    {:ok, owner_view, _html} = live(owner_conn, ~p"/admin/jobs")
+    {:ok, assigned_view, _html} = live(assigned_admin_conn(owner_scope, shared_pool), ~p"/admin/jobs")
+    trace_notification_reloads!(owner_view)
+    trace_notification_reloads!(assigned_view)
+
+    incident = record_shared_incident!([hidden_pool, shared_pool])
+    incident_id = incident.id
+
+    assert notification_reloads(owner_view) == 1
+    assert notification_reloads(assigned_view) == 1
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(assigned_view)
+
+    assert {:ok, %{state: "resolved"}} = Alerts.clear_incident_condition(incident.dedupe_key)
+
+    assert notification_reloads(owner_view) == 1
+    assert notification_reloads(assigned_view) == 1
+    assert %{badge_count: 0, rows: []} = notification_center(assigned_view)
+
+    _hidden = record_shared_incident!([hidden_pool, other_hidden_pool])
+
+    assert notification_reloads(owner_view) == 1
+    assert notification_reloads(assigned_view) == 0
+  end
+
   # The alert evaluation jobs run on the worker role, which is not in the app
   # pods' PubSub cluster: an incident it records reaches the app pods' pages only
   # as a PostgreSQL notification. A separate connection commits the worker's
@@ -142,12 +191,49 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     # arrives a second copy of the invalidation would already be here.
     marker_event = marker.event
     assert_receive {Events, ^marker_event}, @relay_detection_timeout_ms
-    assert_received {NotificationEvents, :invalidated}
-    refute_received {NotificationEvents, :invalidated}
+    assert_received {NotificationEvents, :invalidated, _invalidation_id}
+    refute_received {NotificationEvents, :invalidated, _invalidation_id}
   end
 
-  test "an incident invalidation is also sent as a postgres notification naming its Pool", %{scope: scope} do
-    {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug("notify"), name: "Notify"})
+  # Unclustered nodes get the invalidation of a shared incident as one
+  # notification per Pool; they carry one invalidation id, so a page on an app
+  # pod reloads once. A notification from a node that predates the id is its
+  # own invalidation and still reloads.
+  test "a shared incident another node recorded reloads the notification center once through postgres", %{
+    conn: conn,
+    scope: scope
+  } do
+    pools = for index <- 1..3, do: pool!(scope, "worker-shared-#{index}")
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+    trace_notification_reloads!(view)
+
+    rule_pools = Enum.map(pools, &{alert_rule_fixture(&1, %{display_name: "Worker shared #{unique_suffix()}"}), &1})
+    incident = alert_incident_fixture(pool: hd(pools))
+    Enum.each(rule_pools, fn {rule, pool} -> alert_incident_target_fixture(incident, rule, pool) end)
+    incident_id = incident.id
+
+    sender = start_supervised!(%{id: :worker_connection, start: {Postgrex, :start_link, [connection_config()]}})
+    invalidation_id = Ecto.UUID.generate()
+    Enum.each(pools, &notify!(sender, NotificationEvents.postgres_channel(), worker_alert_payload(&1.id, invalidation_id)))
+
+    marker = await_relayed_marker!(sender, hd(pools))
+    assert notification_reloads(view) == 1
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = notification_center(view)
+
+    legacy_payload =
+      hd(pools).id
+      |> worker_alert_payload(Ecto.UUID.generate())
+      |> CodexPooler.JSON.decode!()
+      |> Map.delete("invalidation_id")
+      |> CodexPooler.JSON.encode!()
+
+    notify!(sender, NotificationEvents.postgres_channel(), legacy_payload)
+    _marker = await_relayed_marker!(sender, hd(pools), marker)
+    assert notification_reloads(view) == 1
+  end
+
+  test "an incident invalidation is also sent as one postgres notification per Pool naming one invalidation", %{scope: scope} do
+    pools = for index <- 1..2, do: pool!(scope, "notify-#{index}")
     test_pid = self()
     telemetry_ref = make_ref()
     telemetry_id = "alert-notification-postgres-notify-#{unique_suffix()}"
@@ -164,19 +250,94 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
 
     on_exit(fn -> :telemetry.detach(telemetry_id) end)
 
-    incident = record_bell_incident!(pool)
+    _incident = record_shared_incident!(pools)
     channel = NotificationEvents.postgres_channel()
-
-    assert_received {^telemetry_ref, "SELECT pg_notify($1, $2)", [^channel, payload]}
-    pool_id = pool.id
     origin_node = Atom.to_string(node())
     origin_id = Events.origin_id()
 
-    assert %{"version" => 1, "scope" => "pool", "target_id" => ^pool_id, "origin_id" => ^origin_id, "origin_node" => ^origin_node, "id" => id} =
-             CodexPooler.JSON.decode!(payload)
+    notifications =
+      for _pool <- pools do
+        assert_received {^telemetry_ref, "SELECT pg_notify($1, $2)", [^channel, payload]}
 
-    assert is_binary(id)
-    assert incident.pool_id == pool_id
+        assert %{"version" => 1, "scope" => "pool", "origin_id" => ^origin_id, "origin_node" => ^origin_node} =
+                 notification = CodexPooler.JSON.decode!(payload)
+
+        notification
+      end
+
+    refute_received {^telemetry_ref, "SELECT pg_notify($1, $2)", [^channel, _payload]}
+    assert notifications |> Enum.map(& &1["target_id"]) |> Enum.sort() == pools |> Enum.map(& &1.id) |> Enum.sort()
+    assert [invalidation_id] = notifications |> Enum.map(& &1["invalidation_id"]) |> Enum.uniq()
+    assert {:ok, ^invalidation_id} = Ecto.UUID.cast(invalidation_id)
+    assert notifications |> Enum.map(& &1["id"]) |> Enum.uniq() |> length() == 2
+  end
+
+  # Counts the notification center reloads of one page: every reload is one
+  # `AlertNotificationsReadModel.load/1` call in the page process. The trace
+  # session is private to this test, so other tracers and pages are unaffected.
+  defp trace_notification_reloads!(view) do
+    session = :trace.session_create(:"#{__MODULE__}.#{unique_suffix()}", self(), [])
+    on_exit(fn -> :trace.session_destroy(session) end)
+    _ = :trace.function(session, {AlertNotificationsReadModel, :load, 1}, true, [:global])
+    1 = :trace.process(session, view.pid, true, [:call])
+    Process.put({__MODULE__, :reload_trace, view.pid}, session)
+    :ok
+  end
+
+  # The reloads since the last count. Every invalidation reaches the page before
+  # this call returns: the in-process broadcasts were sent by this process, which
+  # `:sys.get_state/1` orders after them, and the relayed ones are awaited
+  # through a marker first.
+  defp notification_reloads(view) do
+    session = Process.get({__MODULE__, :reload_trace, view.pid})
+    _state = :sys.get_state(view.pid)
+    delivered = :trace.delivered(session, view.pid)
+    assert_receive {:trace_delivered, _tracee, ^delivered}, @relay_detection_timeout_ms
+    count_reloads(view.pid, 0)
+  end
+
+  defp count_reloads(pid, count) do
+    receive do
+      {:trace, ^pid, :call, {AlertNotificationsReadModel, :load, [_scope]}} -> count_reloads(pid, count + 1)
+    after
+      0 -> count
+    end
+  end
+
+  # A pool event sent after the alert notifications on the same connection
+  # travels the same notifications process and bridge, so once it is relayed
+  # every earlier invalidation has reached the page's mailbox. A page reads
+  # this process's `:sys.get_state/1` only after that.
+  defp await_relayed_marker!(sender, pool, previous \\ nil) do
+    if previous == nil, do: assert(:ok = Events.subscribe_pool(pool.id))
+    marker = remote_pool_event(pool.id)
+    notify!(sender, Events.postgres_channel(), marker.payload)
+    marker_event = marker.event
+    assert_receive {Events, ^marker_event}, @relay_detection_timeout_ms
+    marker
+  end
+
+  defp pool!(scope, label) do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug(label), name: "Notification #{label}"})
+    pool
+  end
+
+  defp record_shared_incident!(pools) do
+    %{identity: identity} = upstream_assignment_fixture(hd(pools))
+    targets = Enum.map(pools, &%{rule_id: alert_rule_fixture(&1, %{display_name: "Shared #{unique_suffix()}"}).id, pool_id: &1.id})
+
+    assert {:ok, incident} =
+             Alerts.record_incident_match(%{
+               dedupe_key: unique_dedupe("shared"),
+               scope_type: "upstream_identity",
+               rule_kind: "upstream_auth_state",
+               severity: "critical",
+               upstream_identity_id: identity.id,
+               matched_at: now(),
+               targets: targets
+             })
+
+    incident
   end
 
   defp await_notification_center!(view, predicate) do
@@ -202,8 +363,8 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     end
   end
 
-  defp worker_alert_payload(pool_id) do
-    assert {:ok, payload} = NotificationEvents.postgres_payload("pool", pool_id)
+  defp worker_alert_payload(pool_id, invalidation_id \\ Ecto.UUID.generate()) do
+    assert {:ok, payload} = NotificationEvents.postgres_payload("pool", pool_id, invalidation_id)
 
     payload
     |> CodexPooler.JSON.decode!()

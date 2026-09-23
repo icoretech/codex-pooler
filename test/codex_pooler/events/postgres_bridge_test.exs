@@ -190,8 +190,8 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     assert_receive {:openai_status_updated, %{aggregate_revision: ^revision}}, @relay_detection_timeout_ms
     refute_received {:openai_status_updated, %{aggregate_revision: ^revision}}
 
-    assert_received {NotificationEvents, :invalidated}
-    refute_received {NotificationEvents, :invalidated}
+    assert_received {NotificationEvents, :invalidated, _invalidation_id}
+    refute_received {NotificationEvents, :invalidated, _invalidation_id}
 
     :ok = control_unlisten!(notifications, control)
   end
@@ -307,7 +307,7 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
   # The notification an unclustered node (the worker) sends for an incident on
   # this Pool.
   defp remote_alert_payload(pool_id) do
-    assert {:ok, local_payload} = NotificationEvents.postgres_payload("pool", pool_id)
+    assert {:ok, local_payload} = NotificationEvents.postgres_payload("pool", pool_id, Ecto.UUID.generate())
 
     local_payload
     |> CodexPooler.JSON.decode!()

@@ -22,11 +22,18 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
           required(:empty?) => boolean()
         }
 
+  # The invalidations this page already reloaded for. The copies of one
+  # invalidation arrive together, one per subscribed topic it names, so a short
+  # memory is enough; one that fell out of it reloads again, never less.
+  @recent_invalidations_key :alert_notification_recent_invalidations
+  @recent_invalidation_limit 32
+
   @spec on_mount(:default, map(), map(), Socket.t()) :: {:cont, Socket.t()}
   def on_mount(:default, _params, _session, %Socket{} = socket) do
     socket =
       socket
       |> assign_notification_center()
+      |> Phoenix.LiveView.put_private(@recent_invalidations_key, [])
       |> subscribe_to_scoped_topics()
       |> Phoenix.LiveView.attach_hook(
         :alert_notification_center,
@@ -51,8 +58,22 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
     )
   end
 
-  defp handle_notification_event({NotificationEvents, :invalidated}, socket) do
-    {:halt, assign_notification_center(socket)}
+  # One incident invalidates every Pool it targets, and this page subscribes to
+  # each Pool it can see, so it gets one copy per shared Pool; it reloads for
+  # the first (findings#206 row 206-270).
+  defp handle_notification_event({NotificationEvents, :invalidated, invalidation_id}, socket) do
+    recent = Map.get(socket.private, @recent_invalidations_key, [])
+
+    if invalidation_id in recent do
+      {:halt, socket}
+    else
+      recent = Enum.take([invalidation_id | recent], @recent_invalidation_limit)
+
+      {:halt,
+       socket
+       |> Phoenix.LiveView.put_private(@recent_invalidations_key, recent)
+       |> assign_notification_center()}
+    end
   end
 
   defp handle_notification_event(_message, socket), do: {:cont, socket}
