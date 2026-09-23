@@ -3,7 +3,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   import Plug.Conn
 
-  alias CodexPooler.Access
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.OperationalSettings
@@ -355,13 +354,9 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     do: {:ok, conn}
 
   defp authenticate_runtime_api_request(conn) do
-    conn
-    |> get_req_header("authorization")
-    |> List.first()
-    |> Access.authenticate_authorization_header()
-    |> case do
+    case GatewayControllerHelpers.authenticate(conn) do
       {:ok, auth} -> {:ok, put_private(conn, :runtime_api_auth, auth)}
-      {:error, reason} -> {:error, Map.put(reason, :status, 401), conn}
+      {:error, reason} -> {:error, reason, conn}
     end
   end
 

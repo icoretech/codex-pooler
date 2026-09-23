@@ -52,6 +52,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     pruned_runtime_helper_firewall
     decompression
     bulkheads
+    database_unavailable
     degraded_routing
     strict_schema_validation
     public_strict_schema_object_roots

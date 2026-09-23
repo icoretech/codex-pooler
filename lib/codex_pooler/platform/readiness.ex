@@ -30,6 +30,7 @@ defmodule CodexPooler.Platform.Readiness do
 
   use GenServer
 
+  alias CodexPooler.Platform.TransientDatabaseError
   alias CodexPooler.Repo
 
   # Long enough to ride out a PostgreSQL failover or a connection-pool stall
@@ -40,20 +41,7 @@ defmodule CodexPooler.Platform.Readiness do
 
   @migrations_table "schema_migrations"
 
-  @transient_postgres_codes [
-    :admin_shutdown,
-    :cannot_connect_now,
-    :connection_does_not_exist,
-    :connection_exception,
-    :connection_failure,
-    :crash_shutdown,
-    :database_dropped,
-    :query_canceled,
-    :sqlclient_unable_to_establish_sqlconnection,
-    :sqlserver_rejected_establishment_of_sqlconnection,
-    :too_many_connections,
-    :transaction_resolution_unknown
-  ]
+  @transient_postgres_codes TransientDatabaseError.postgres_codes()
 
   @ignored_migration_entries [".formatter.exs"]
 

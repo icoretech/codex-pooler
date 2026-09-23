@@ -97,6 +97,17 @@ defmodule CodexPooler.Gateway.Contracts do
           | websocket_stream_result()
           | websocket_messages_result()
 
+  @doc """
+  The answer to work that met a transient database failure before anything was
+  reserved or sent (`CodexPooler.Platform.TransientDatabaseError`): a
+  retryable `503` that names no database detail. It used to render as a `500`,
+  which the Codex client shows as "high demand" (findings#206 row 206-358).
+  """
+  @spec database_unavailable_error() :: gateway_error()
+  def database_unavailable_error do
+    %{status: 503, code: "service_unavailable", message: "Codex Pooler is temporarily unavailable; retry the request"}
+  end
+
   @spec pinned_continuation_reauth_required_error() :: gateway_error()
   def pinned_continuation_reauth_required_error do
     %{

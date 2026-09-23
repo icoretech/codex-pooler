@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Platform.ExecutionIdentity
+  alias CodexPooler.Platform.TransientDatabaseError
   alias CodexPooler.Pools.Routing, as: PoolRouting
 
   @type conn :: Plug.Conn.t()
@@ -41,13 +42,8 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   def authenticate(%Plug.Conn{private: %{runtime_api_auth: auth}}), do: {:ok, auth}
 
   def authenticate(conn) do
-    case Access.authenticate_authorization_header(
-           get_req_header(conn, "authorization")
-           |> List.first()
-         ) do
-      {:ok, auth} -> {:ok, auth}
-      {:error, reason} -> {:error, Map.put(reason, :status, 401)}
-    end
+    header = conn |> get_req_header("authorization") |> List.first()
+    authenticate_with(fn -> Access.authenticate_authorization_header(header) end)
   end
 
   @spec authenticate_v1(conn()) ::
@@ -62,13 +58,28 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     do: {:ok, auth}
 
   defp authenticate_v1_auth_context(conn) do
-    case Access.authenticate_v1_authorization_header(
-           get_req_header(conn, "authorization")
-           |> List.first()
-         ) do
+    header = conn |> get_req_header("authorization") |> List.first()
+    authenticate_with(fn -> Access.authenticate_v1_authorization_header(header) end)
+  end
+
+  # Authentication is the first database read of every runtime request. A
+  # database that cannot be reached, is restarting or cancelled the lookup says
+  # nothing about the credential, and nothing has been admitted, reserved or
+  # sent yet: answer a retryable 503 instead of letting the exception render a
+  # 500 (findings#206 row 206-358).
+  defp authenticate_with(fun) do
+    case fun.() do
       {:ok, auth} -> {:ok, auth}
       {:error, reason} -> {:error, Map.put(reason, :status, 401)}
     end
+  rescue
+    error in [DBConnection.ConnectionError, Postgrex.Error] ->
+      if TransientDatabaseError.transient?(error) do
+        Logger.warning("runtime request refused before admission stage=authentication reason_class=#{TransientDatabaseError.reason_class(error)}")
+        {:error, Contracts.database_unavailable_error()}
+      else
+        reraise error, __STACKTRACE__
+      end
   end
 
   defp authorize_v1_compatibility(%{pool: pool} = auth) do

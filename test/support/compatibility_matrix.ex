@@ -662,6 +662,21 @@ defmodule CodexPooler.CompatibilityMatrix do
       contract: "bulkheads isolate HTTP proxy, websocket, compact, media, file, and operator lanes"
     },
     %{
+      slug: :database_unavailable,
+      status: :supported,
+      current: :retryable_503_before_dispatch,
+      categories: [:error, :degraded],
+      routes: [
+        %{method: :get, path: "/backend-api/codex/models"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: :websocket},
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :post, path: "/v1/responses"}
+      ],
+      future_routes: [],
+      fixture: :database_unavailable,
+      contract: "a transient database failure (unreachable or stalled pool, PostgreSQL connection, shutdown, start-up, resource or cancellation condition) during runtime authentication or inside the reservation transaction answers a retryable 503 service_unavailable with a server_error type and no database detail, records no denied request, reserves nothing and sends nothing upstream"
+    },
+    %{
       slug: :degraded_routing,
       status: :supported,
       current: :bridge_ring_fallback,
@@ -2568,6 +2583,15 @@ defmodule CodexPooler.CompatibilityMatrix do
     },
     compressed_request: %{encoding: "gzip", bytes: "synthetic compressed bytes"},
     bulkhead_overload: %{lane: "proxy_http", decision: "synthetic shed"},
+    database_unavailable: %{
+      status: 503,
+      error_code: "service_unavailable",
+      error_type: "server_error",
+      stages: [:authentication, :reservation],
+      upstream_dispatch: false,
+      reservation: false,
+      denied_request_record: false
+    },
     degraded_routing: %{
       json: %{"model" => "gpt-fixture-text", "input" => "synthetic fallback"},
       windowless_provider_availability: %{

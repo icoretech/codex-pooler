@@ -52,6 +52,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.Gateway.Websocket.DirectCleanup
+  alias CodexPooler.Platform.TransientDatabaseError
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingMode, ModelServingOverride, Pool}
   alias CodexPooler.Pools.Routing, as: PoolRouting
@@ -640,7 +641,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           turn_claim
         )
 
-      {:error, %{code: "duplicate_turn"} = reason} ->
+      # A database failure is not recorded as a denied request: the record
+      # needs the database that just failed (findings#206 row 206-358).
+      {:error, %{code: code} = reason} when code in ["duplicate_turn", "service_unavailable"] ->
         clear_native_compaction_admission(request_options)
         {:error, reason}
 
@@ -2271,6 +2274,22 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         :reraise ->
           clear_native_compaction_admission(request_options)
           reraise(error, __STACKTRACE__)
+      end
+
+    # The reservation transaction rolled back and nothing was sent upstream, so a
+    # database that stopped answering, restarted or cancelled the statement is a
+    # retryable 503, not the 500 an escaping exception renders (findings#206 row
+    # 206-358). A statement that outlived its timeout during COMMIT may still have
+    # committed on the server; that orphan was left behind by the 500 as well.
+    error in [DBConnection.ConnectionError, Postgrex.Error] ->
+      clear_native_compaction_admission(request_options)
+      cancel_compaction_retry_hold(request_options)
+
+      if TransientDatabaseError.transient?(error) do
+        Logger.warning("runtime request refused before dispatch stage=reservation reason_class=#{TransientDatabaseError.reason_class(error)}")
+        {:error, Contracts.database_unavailable_error()}
+      else
+        reraise(error, __STACKTRACE__)
       end
 
     error ->
