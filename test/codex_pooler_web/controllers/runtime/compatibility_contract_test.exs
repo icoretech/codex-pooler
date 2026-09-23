@@ -2607,6 +2607,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  reason_class: "previous_response_generation_mismatch",
                  termination_source: "continuation_generation_guard",
                  raw_payloads_or_response_values: false
+               },
+               serving_mode_guard: %{
+                 connection_use: "reused",
+                 condition: "last_completed_response_on_the_connection_served_in_the_other_full_lite_mode",
+                 unknown_mode: "reuse_rule_only",
+                 reason: "previous_response_serving_mode_mismatch"
                }
              }
 

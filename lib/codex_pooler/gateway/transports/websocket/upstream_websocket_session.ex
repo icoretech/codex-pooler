@@ -871,11 +871,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ok, state} ->
         connection_use = connection_use(connection_usage)
 
-        if Map.get(request, :connection_bound_continuation?, false) and
-             connection_use != :reused do
-          guard_connection_bound_continuation(state, receive_state, connection_usage)
-        else
-          send_request_payload(state, request, receive_state, connection_usage)
+        cond do
+          not Map.get(request, :connection_bound_continuation?, false) ->
+            send_request_payload(state, request, receive_state, connection_usage)
+
+          connection_use != :reused ->
+            guard_connection_bound_continuation(state, receive_state, connection_usage)
+
+          serving_mode_changed?(state, request) ->
+            guard_connection_bound_continuation(state, receive_state, connection_usage, :previous_response_serving_mode_mismatch)
+
+          true ->
+            send_request_payload(state, request, receive_state, connection_usage)
         end
 
       {:error, :client_disconnected, state} ->
@@ -919,7 +926,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp request_caller(%ReceiveState{}), do: nil
 
-  defp guard_connection_bound_continuation(state, receive_state, connection_usage) do
+  # A connection-bound anchor is refused before anything is sent when the
+  # context it continues cannot be the one the request expects: the connection
+  # is not the one that produced the anchor, or the provider context was built
+  # under the other Full/Lite dialect. Lite sends its tool manifest and
+  # instructions message only on a request that opens a context (findings#232
+  # row 232-184), so an anchored Lite delta on a context opened under Full would
+  # reach the provider with no tools and no base instructions (row 232-210).
+  # The client answers `previous_response_not_found` with a full request
+  # without the anchor, which opens a context in the current dialect.
+  defp guard_connection_bound_continuation(state, receive_state, connection_usage, reason \\ :previous_response_generation_mismatch) do
     terminal =
       StreamProtocol.canonicalize_native_codex_responses_json_message(~s({"type":"error","error":{"code":"previous_response_not_found"}}))
 
@@ -937,13 +953,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       |> Map.put(
         :transport_failure,
         TransportFailureReason.transport_failure_metadata(
-          :previous_response_generation_mismatch,
+          reason,
           %{connection_use: connection_use(connection_usage)}
         )
       )
 
     {:ok, put_result_connection_metadata({:ok, result}, state, connection_usage), state}
   end
+
+  # The dialect is known only for a context whose last response on this
+  # connection completed (`maybe_record_successful_serving_mode/3`); a request
+  # or a connection without one keeps the plain reuse rule.
+  defp serving_mode_changed?(state, %Request{effective_serving_mode: mode}) when mode in ["full", "lite"] do
+    case Map.get(state, :last_successful_effective_serving_mode) do
+      last_mode when last_mode in ["full", "lite"] -> last_mode != mode
+      _unknown -> false
+    end
+  end
+
+  defp serving_mode_changed?(_state, %Request{}), do: false
 
   defp send_request_payload(state, %Request{} = request, receive_state, connection_usage) do
     state = state |> Map.delete(:first_compact_result) |> Map.delete(:ordinary_success_result)

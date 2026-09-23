@@ -104,11 +104,9 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   defdelegate safe_exception(reason), to: SharedTransportFailureReason
 
   @spec transport_failure_metadata(term(), map()) :: transport_failure_metadata()
-  def transport_failure_metadata(:previous_response_generation_mismatch, attrs)
-      when is_map(attrs) do
-    attrs
-    |> metadata_attr("connection_use", :connection_use)
-    |> continuation_generation_guard_metadata()
+  def transport_failure_metadata(reason, attrs)
+      when reason in [:previous_response_generation_mismatch, :previous_response_serving_mode_mismatch] and is_map(attrs) do
+    continuation_generation_guard_metadata(reason, metadata_attr(attrs, "connection_use", :connection_use))
   end
 
   def transport_failure_metadata(reason, attrs) when is_map(attrs) do
@@ -162,14 +160,31 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   def sanitize_transport_failure_metadata(_metadata), do: %{}
 
   @spec continuation_generation_guard_metadata(term()) :: transport_failure_metadata()
-  def continuation_generation_guard_metadata(connection_use)
-      when connection_use in [:fresh, :reconnected, "fresh", "reconnected"] do
+  def continuation_generation_guard_metadata(connection_use),
+    do: continuation_generation_guard_metadata(:previous_response_generation_mismatch, connection_use)
+
+  # The guard refuses a connection-bound anchor before sending: on a fresh or
+  # reconnected connection because the anchor belongs to another one, and on a
+  # reused connection only because its provider context was built under the
+  # other Full/Lite serving mode (findings#232 row 232-210).
+  @spec continuation_generation_guard_metadata(term(), term()) :: transport_failure_metadata()
+  def continuation_generation_guard_metadata(:previous_response_generation_mismatch = reason, connection_use)
+      when connection_use in [:fresh, :reconnected, "fresh", "reconnected"],
+      do: continuation_generation_guard_diagnostic(reason, connection_use)
+
+  def continuation_generation_guard_metadata(:previous_response_serving_mode_mismatch = reason, connection_use)
+      when connection_use in [:reused, "reused"],
+      do: continuation_generation_guard_diagnostic(reason, connection_use)
+
+  def continuation_generation_guard_metadata(_reason, _connection_use), do: %{}
+
+  defp continuation_generation_guard_diagnostic(reason, connection_use) do
     %{
       "connection_use" => to_string(connection_use),
       "phase" => "send_payload",
       "pre_visible_output" => true,
-      "reason" => "previous_response_generation_mismatch",
-      "reason_class" => "previous_response_generation_mismatch",
+      "reason" => Atom.to_string(reason),
+      "reason_class" => Atom.to_string(reason),
       "termination_source" => "continuation_generation_guard",
       "terminal_seen" => false,
       "text_frame_count" => 0,
@@ -177,15 +192,14 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     }
   end
 
-  def continuation_generation_guard_metadata(_connection_use), do: %{}
-
   @spec sanitize_continuation_generation_guard_metadata(term()) ::
           transport_failure_metadata()
   def sanitize_continuation_generation_guard_metadata(metadata) when is_map(metadata) do
     expected =
-      metadata
-      |> metadata_attr("connection_use", :connection_use)
-      |> continuation_generation_guard_metadata()
+      continuation_generation_guard_metadata(
+        continuation_guard_reason(metadata_attr(metadata, "reason", :reason)),
+        metadata_attr(metadata, "connection_use", :connection_use)
+      )
 
     if guard_metadata_matches_expected?(metadata, expected) do
       expected
@@ -468,10 +482,18 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   end
 
   defp continuation_generation_guard_candidate?(metadata) do
-    metadata_attr(metadata, "reason", :reason) == "previous_response_generation_mismatch" or
+    continuation_guard_reason(metadata_attr(metadata, "reason", :reason)) != nil or
       metadata_attr(metadata, "termination_source", :termination_source) ==
         "continuation_generation_guard"
   end
+
+  defp continuation_guard_reason(reason) when reason in [:previous_response_generation_mismatch, "previous_response_generation_mismatch"],
+    do: :previous_response_generation_mismatch
+
+  defp continuation_guard_reason(reason) when reason in [:previous_response_serving_mode_mismatch, "previous_response_serving_mode_mismatch"],
+    do: :previous_response_serving_mode_mismatch
+
+  defp continuation_guard_reason(_reason), do: nil
 
   defp guard_metadata_matches_expected?(metadata, expected) when map_size(expected) > 0 do
     Enum.all?(expected, fn {key, value} ->

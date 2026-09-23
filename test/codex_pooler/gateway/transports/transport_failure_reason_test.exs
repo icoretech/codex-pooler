@@ -162,6 +162,35 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
     end
   end
 
+  test "builds the serving-mode guard diagnostic only for a reused connection" do
+    expected = %{
+      "connection_use" => "reused",
+      "phase" => "send_payload",
+      "pre_visible_output" => true,
+      "reason" => "previous_response_serving_mode_mismatch",
+      "reason_class" => "previous_response_serving_mode_mismatch",
+      "termination_source" => "continuation_generation_guard",
+      "terminal_seen" => false,
+      "text_frame_count" => 0,
+      "upstream_committed" => false
+    }
+
+    for connection_use <- [:reused, "reused"] do
+      assert TransportFailureReason.continuation_generation_guard_metadata(:previous_response_serving_mode_mismatch, connection_use) == expected
+
+      assert TransportFailureReason.transport_failure_metadata(:previous_response_serving_mode_mismatch, %{connection_use: connection_use, previous_response_id: "raw-response-id-sentinel"}) == expected
+    end
+
+    assert TransportFailureReason.sanitize_transport_failure_metadata(Map.put(expected, "previous_response_id", "raw-response-id-sentinel")) == expected
+
+    for connection_use <- [:fresh, :reconnected, "future", nil] do
+      assert TransportFailureReason.continuation_generation_guard_metadata(:previous_response_serving_mode_mismatch, connection_use) == %{}
+      assert TransportFailureReason.sanitize_transport_failure_metadata(%{expected | "connection_use" => connection_use}) == %{}
+    end
+
+    assert TransportFailureReason.sanitize_transport_failure_metadata(%{expected | "reason_class" => "previous_response_generation_mismatch"}) == %{}
+  end
+
   test "rejects malformed continuation generation guard diagnostics" do
     sentinel = "raw-response-id-and-message-sentinel"
 
