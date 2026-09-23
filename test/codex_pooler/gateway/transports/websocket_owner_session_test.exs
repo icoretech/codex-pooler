@@ -1015,6 +1015,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert Process.alive?(owner)
   end
 
+  # Codex closes its socket right after a final refusal's error frame. When the
+  # upstream task's result came back late (a connection-checkout stall), the
+  # socket's detach cancelled the task and the refusal the client had received
+  # was settled `499 client_disconnected` without its rejection fields
+  # (findings#254 row 254-110, production, Full). A turn whose terminal already
+  # went to that downstream keeps its task: its own result settles it.
+  test "a detach after the turn's terminal reached the downstream keeps the task so its result settles the turn", context do
+    block_ref = make_ref()
+    refusal = CodexPooler.JSON.encode!(%{"type" => "error", "status" => 400, "error" => %{"type" => "invalid_request_error", "message" => "synthetic refusal"}})
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self(), block_ref: block_ref, messages: [refusal])
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert {:ok, downstream} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("refusal-then-close"))
+
+    submit_task = Task.async(fn -> WebsocketOwnerSession.submit_frame(owner, downstream, "refused-turn") end)
+
+    assert_receive {:websocket_owner_frame, "refusal-then-close", 1, {:data, ^refusal}}
+    assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, downstream)
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+
+    assert Task.await(submit_task, 1_000) == :ok
+    assert Process.alive?(owner)
+  end
+
   @tag :rollout_drain_t3
   test "T3 a draining existing owner refuses reuse without stopping its active turn", context do
     block_ref = make_ref()

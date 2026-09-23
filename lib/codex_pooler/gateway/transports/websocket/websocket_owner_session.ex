@@ -1609,28 +1609,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       :active ->
         requested_downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
 
-        if replay_active?(state, requested_downstream) do
-          detach_replay_downstream(state, requested_downstream, from)
-        else
-          state =
-            state
-            |> clear_compaction_retry_submit_hold()
-            |> cancel_pending_handoff(requested_downstream, :socket_closed)
-            |> DownstreamState.demonitor_downstream()
-            |> DownstreamState.schedule_idle_shutdown()
-            |> DownstreamState.cancel_active_turn_downstream(requested_downstream)
-            |> Map.put(:downstream, nil)
-            |> reconcile_disconnected_provisional()
+        cond do
+          replay_active?(state, requested_downstream) ->
+            detach_replay_downstream(state, requested_downstream, from)
 
-          # The client left: after a post-turn compaction the admission is
-          # still `pending_final`, and its clear is a detach, not a rejected
-          # request (findings#258 row 258-23).
-          state =
-            state
-            |> clear_native_compaction_admission(:downstream_detached)
-            |> maybe_settle_cancelled_without_pending_handoff(:client_disconnected)
+          terminal_forwarded_to?(state, requested_downstream) ->
+            detach_after_forwarded_terminal(state)
 
-          reply_or_retire(state, :ok)
+          true ->
+            detach_active_downstream(state, requested_downstream)
         end
 
       {:error, reason} ->
@@ -4288,6 +4275,56 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     DownstreamState.downstream_status(state.downstream, requested_downstream) == :active and
       is_nil(state.active_turn) and is_nil(state.suspended_replay) and is_nil(state.pending_handoff) and
       is_nil(state.compaction_retry_submit_hold) and not state.draining?
+  end
+
+  defp detach_active_downstream(state, requested_downstream) do
+    state =
+      state
+      |> clear_compaction_retry_submit_hold()
+      |> cancel_pending_handoff(requested_downstream, :socket_closed)
+      |> DownstreamState.demonitor_downstream()
+      |> DownstreamState.schedule_idle_shutdown()
+      |> DownstreamState.cancel_active_turn_downstream(requested_downstream)
+      |> Map.put(:downstream, nil)
+      |> reconcile_disconnected_provisional()
+
+    # The client left: after a post-turn compaction the admission is
+    # still `pending_final`, and its clear is a detach, not a rejected
+    # request (findings#258 row 258-23).
+    state =
+      state
+      |> clear_native_compaction_admission(:downstream_detached)
+      |> maybe_settle_cancelled_without_pending_handoff(:client_disconnected)
+
+    reply_or_retire(state, :ok)
+  end
+
+  # The turn's terminal already went to this downstream: the client has it (a
+  # final provider refusal Codex displayed, or a completed answer), and the
+  # upstream task only has its result left to return. Cancelling the task here
+  # replaced that result with `client_disconnected`, so a refusal the client
+  # received was recorded `499` without its rejection fields when the result
+  # was slow (findings#254 row 254-110, production, during a connection-checkout
+  # stall). The downstream is detached and the task's own result settles the
+  # turn; nothing more is sent upstream for it. The caller already matched
+  # `requested` against the owner's current downstream; the active turn must
+  # still be bound to that same downstream.
+  defp terminal_forwarded_to?(%{active_turn: %{terminal_forwarded?: true, downstream: %{pid: pid, epoch: epoch}}}, %{pid: pid, epoch: epoch}),
+    do: true
+
+  defp terminal_forwarded_to?(_state, _requested), do: false
+
+  defp detach_after_forwarded_terminal(state) do
+    state =
+      state
+      |> clear_compaction_retry_submit_hold()
+      |> DownstreamState.demonitor_downstream()
+      |> DownstreamState.schedule_idle_shutdown()
+      |> put_in([Access.key(:active_turn), Access.key(:downstream)], nil)
+      |> Map.put(:downstream, nil)
+      |> clear_native_compaction_admission(:downstream_detached)
+
+    reply_or_retire(state, :ok)
   end
 
   # Detaches it now, as the ordinary detach would after the drain, and fences
