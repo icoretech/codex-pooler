@@ -54,7 +54,7 @@ defmodule CodexPooler.JobsTest do
                {"* * * * *", AccountReconciliationEnqueueWorker},
                {"*/5 * * * *", AlertEvaluationEnqueueWorker},
                {"*/15 * * * *", TokenRefreshEnqueueWorker},
-               {"17 0 * * *", DailyRollupRebuildEnqueueWorker},
+               {"17 * * * *", DailyRollupRebuildEnqueueWorker},
                {"*/15 * * * *", RuntimeStateCleanupWorker},
                {"* * * * *", RequestReplayCleanupWorker},
                {"*/5 * * * *", OpenAIStatusSyncWorker},

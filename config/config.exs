@@ -104,7 +104,7 @@ jobs_schedule = [
       CodexPooler.Jobs.DailyRollupRebuildEnqueueWorker
     ],
     scheduled_worker: CodexPooler.Jobs.DailyRollupRebuildEnqueueWorker,
-    cadence: %{label: "Daily at 00:17 UTC", cron: "17 0 * * *"}
+    cadence: %{label: "Hourly at :17", cron: "17 * * * *"}
   },
   %{
     key: :runtime_cleanup,

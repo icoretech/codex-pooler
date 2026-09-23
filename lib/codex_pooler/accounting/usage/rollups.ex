@@ -20,6 +20,11 @@ defmodule CodexPooler.Accounting.Rollups do
   @amount_recorded "recorded"
   @usage_known "usage_known"
   @unknown_model_code "Unknown model"
+  # The widest daily-rollup reader is the 28-day API key usage summary. One repair pass enqueues
+  # at most half of the jobs queue's default concurrency of eight, so rebuilds never crowd out the
+  # other scheduled work; the newest days go first because they are the ones readers use.
+  @coverage_repair_lookback_days 28
+  @coverage_repair_batch_limit 4
   @daily_rollup_conflict_targets %{
     "pool" => {:unsafe_fragment, "(rollup_date, pool_id) WHERE dimension_kind = 'pool'"},
     "api_key" => {:unsafe_fragment, "(rollup_date, pool_id, api_key_id) WHERE dimension_kind = 'api_key'"},
@@ -611,6 +616,55 @@ defmodule CodexPooler.Accounting.Rollups do
   end
 
   def rebuild_for_date(_date, _opts), do: {:error, :invalid_rollup_date}
+
+  @doc """
+  Returns the completed UTC days whose daily rollups need a rebuild, newest first.
+
+  A day qualifies when it has no coverage row (its rebuild never ran or never committed), when
+  its coverage is incomplete (a request, recorded settlement or Pool rollup dated on it changed
+  after its rebuild), when its coverage has another contract version, or when its coverage was
+  published before the day ended (a rebuild that ran while the day was still current cannot
+  include what followed, and later writes to a current day do not mark it).
+
+  The candidates are the `:lookback_days` days before the database's current UTC day, the same
+  clock the coverage triggers use. The default reaches back over the widest reader of daily
+  rollups, the 28-day API key usage summary, so no reader keeps a day that is never rebuilt;
+  older days are read by nothing and are left as they are. `:limit` bounds how many days one
+  pass returns, so a mutation that marks many days (such as a Pool deletion) is repaired over
+  several passes instead of occupying the jobs queue at once.
+  """
+  @spec dates_needing_rebuild(keyword()) :: [Date.t()]
+  def dates_needing_rebuild(opts \\ []) do
+    lookback_days = Keyword.get(opts, :lookback_days, @coverage_repair_lookback_days)
+    limit = Keyword.get(opts, :limit, @coverage_repair_batch_limit)
+
+    %{rows: rows} =
+      Repo.query!(
+        """
+        WITH today AS (
+          SELECT (clock_timestamp() AT TIME ZONE 'UTC')::date AS utc_date
+        ),
+        candidates AS (
+          SELECT (today.utc_date - offset_days) AS rollup_date
+          FROM today
+          CROSS JOIN generate_series(1, $1::integer) AS offset_days
+        )
+        SELECT candidates.rollup_date
+        FROM candidates
+        LEFT JOIN public.daily_rollup_coverages AS coverage
+          ON coverage.rollup_date = candidates.rollup_date
+        WHERE coverage.rollup_date IS NULL
+           OR coverage.completed_at IS NULL
+           OR coverage.contract_version <> $2
+           OR coverage.completed_at < (candidates.rollup_date + 1)::timestamp
+        ORDER BY candidates.rollup_date DESC
+        LIMIT $3
+        """,
+        [lookback_days, DailyRollupCoverage.contract_version(), limit]
+      )
+
+    Enum.map(rows, fn [date] -> date end)
+  end
 
   @spec rebuild_hourly_model_usage_rollups_for_hour(DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}

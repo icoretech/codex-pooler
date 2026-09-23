@@ -451,6 +451,9 @@ defmodule CodexPooler.Accounting do
   @spec rebuild_daily_rollups_for_date(Date.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   defdelegate rebuild_daily_rollups_for_date(date), to: Rollups, as: :rebuild_for_date
 
+  @spec daily_rollup_dates_needing_rebuild(keyword()) :: [Date.t()]
+  defdelegate daily_rollup_dates_needing_rebuild(opts \\ []), to: Rollups, as: :dates_needing_rebuild
+
   @spec sanitize_metadata(term()) :: term()
   defdelegate sanitize_metadata(value), to: Metadata
 

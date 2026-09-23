@@ -88,8 +88,8 @@ The current worker groups are:
     </tr>
     <tr>
       <td>Daily rollup rebuild</td>
-      <td>Rebuilds usage rollups for a specific rollup date.</td>
-      <td>Daily at 00:17 UTC, plus manual enqueue for the previous UTC day.</td>
+      <td>Rebuilds usage rollups for a specific rollup date. Each scheduled pass rebuilds the completed UTC days of the last 28 whose rollup coverage is missing or incomplete, newest first and at most four per pass: the previous day once it ends, a day whose rebuild did not run or did not finish, and a day that changed after its rebuild (a request that crossed midnight, a deleted Pool). A day already queued is not queued twice, and a pass with nothing to repair enqueues nothing. While any completed day of the seven-day window is not rebuilt, the seven-day Pool usage view computes the whole window from raw request and ledger rows: the numbers are the same, the page is slower.</td>
+      <td>Hourly at minute 17 UTC, plus manual enqueue for the previous UTC day.</td>
     </tr>
     <tr>
       <td>Runtime cleanup</td>
