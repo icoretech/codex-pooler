@@ -220,8 +220,22 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   refused compaction frame up to five times and then showed the duplicate
   refusal instead of the provider's (findings#254 row 254-100). A demoting 403
   is read as retryable here, as it is on a Pool with another assignment.
+
+  A refusal an HTTP predecessor received (`rejection_predecessor_transport`,
+  set by `ClientRetry.final_refusal_predecessor/2`) is answered only when it is
+  a relayable validation rejection, which the provider repeats for the same
+  body (findings#254 row 254-141). Every other relayed 4xx of an HTTP turn keeps
+  the native HTTP claim's step-over and is served again (findings#212 row
+  212-50, "a resend after a relayed 4xx is served, not refused").
   """
   @spec recorded_final_refusal_error(map() | term()) :: {:ok, map()} | :none
+  def recorded_final_refusal_error(%{"rejection_predecessor_transport" => "http"} = metadata) do
+    if metadata["rejection_upstream_status"] == 400 and metadata["rejection_error_type"] == "invalid_request_error" and
+         metadata["rejection_error_code"] in ValidationRejection.relayable_codes(),
+       do: metadata |> Map.delete("rejection_predecessor_transport") |> recorded_final_refusal_error(),
+       else: :none
+  end
+
   def recorded_final_refusal_error(%{"rejection_upstream_status" => status} = metadata) when is_integer(status) do
     error =
       %{"code" => metadata["rejection_error_code"], "type" => metadata["rejection_error_type"], "param" => metadata["rejection_error_param"]}

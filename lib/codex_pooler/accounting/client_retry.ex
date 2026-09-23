@@ -506,6 +506,16 @@ defmodule CodexPooler.Accounting.ClientRetry do
   a refusal (`rejection_upstream_status`); `:none` otherwise. The caller decides
   whether that refusal was final and answers the resend with it instead of
   `409 duplicate_turn` (findings#254 row 254-100). Read-only.
+
+  A native HTTP turn stores no semantic digest of its own; it is found by its
+  request's claim, the turn claim the resend derives (`codex-turn:`), and its
+  attempt records the provider's response status as `status_code` beside the
+  rejection fields instead (the HTTP metadata `/v1` shares, which must not
+  change). A refused one is read with that status as its
+  `rejection_upstream_status` and marked `rejection_predecessor_transport`
+  `http`, for the caller to answer the HTTP resend of a finally refused HTTP
+  turn instead of dispatching it again where that refusal must repeat
+  (findings#254 row 254-141).
   """
   @spec final_refusal_predecessor(CodexSession.t(), map()) :: {:ok, map()} | :none
   def final_refusal_predecessor(%CodexSession{id: session_id}, input) when is_map(input) do
@@ -513,26 +523,37 @@ defmodule CodexPooler.Accounting.ClientRetry do
     successor_pattern = @successor_prefix <> "%"
 
     with true <- is_binary(digest) and byte_size(digest) == @digest_bytes,
+         turn_claim = "codex-turn:" <> Base.url_encode64(digest, padding: false),
          {%Request{status: "failed"} = request, attempt_id} when is_binary(attempt_id) <-
            Repo.one(
              from turn in CodexTurn,
                join: request in Request,
                on: request.id == turn.request_id,
                where:
-                 turn.codex_session_id == ^session_id and turn.semantic_turn_digest == ^digest and
+                 turn.codex_session_id == ^session_id and
+                   (turn.semantic_turn_digest == ^digest or request.correlation_id == ^turn_claim) and
                    not like(request.correlation_id, ^successor_pattern),
                order_by: [desc: turn.turn_sequence],
                limit: 1,
                select: {request, turn.final_attempt_id}
            ),
          :ok <- validate_original_witness(request, input),
-         %Attempt{status: "failed", response_metadata: %{"rejection_upstream_status" => status} = metadata} when is_integer(status) <-
-           Repo.one(from(attempt in Attempt, where: attempt.id == ^attempt_id and attempt.request_id == ^request.id)) do
+         %Attempt{status: "failed"} = attempt <- Repo.one(from(attempt in Attempt, where: attempt.id == ^attempt_id and attempt.request_id == ^request.id)),
+         {:ok, metadata} <- recorded_refusal_metadata(attempt) do
       {:ok, metadata}
     else
       _no_recorded_refusal -> :none
     end
   end
+
+  defp recorded_refusal_metadata(%Attempt{response_metadata: %{"rejection_upstream_status" => status} = metadata}) when is_integer(status),
+    do: {:ok, metadata}
+
+  defp recorded_refusal_metadata(%Attempt{transport: transport, response_metadata: %{"status_code" => status, "rejection_error_type" => type} = metadata})
+       when transport in ["http_sse", "http_json"] and is_integer(status) and status in 400..499 and status != 429 and is_binary(type),
+       do: {:ok, Map.merge(metadata, %{"rejection_upstream_status" => status, "rejection_predecessor_transport" => "http"})}
+
+  defp recorded_refusal_metadata(_attempt), do: :none
 
   defp existing_turn_for_policy?(session, digest, input)
        when is_binary(digest) and byte_size(digest) == @digest_bytes do
