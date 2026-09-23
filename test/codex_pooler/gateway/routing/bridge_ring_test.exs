@@ -538,10 +538,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
 
     # A key the client sent never reads `prompt_cache_key_absent`: each refusal
-    # names its bound (findings#255 row 255-81).
+    # names its bound, and a keyed request retargeted to a route that takes no
+    # seed names the route (findings#255 rows 255-80 and 255-81).
     for {label, key, reason, opts} <- [
           {"blank", "  \t ", "prompt_cache_key_blank", []},
-          {"non-string", 42, "prompt_cache_key_invalid", []}
+          {"non-string", 42, "prompt_cache_key_invalid", []},
+          {"retargeted to compact", "retargeted-cache-key", "route_excluded", [retarget: "/backend-api/codex/responses/compact"]},
+          {"sent to a GET", "get-cache-key", "route_excluded", [request_method: "GET"]}
         ] do
       @tag prompt_cache_key: key, expected_reason: reason, plan_opts: opts
       test "a #{label} prompt-cache key reads #{reason}", %{prompt_cache_key: key, expected_reason: reason, plan_opts: opts} do
@@ -2497,6 +2500,12 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         Keyword.get(opts, :endpoint, "/backend-api/codex/responses"),
         payload
       )
+
+    request_options =
+      case Keyword.fetch(opts, :retarget) do
+        {:ok, endpoint} -> RequestOptions.retarget(request_options, endpoint, payload)
+        :error -> request_options
+      end
 
     BridgeRing.plan_route(%{
       auth: setup.auth,

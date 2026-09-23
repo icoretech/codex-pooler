@@ -43,9 +43,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
           required(String.t()) => String.t() | non_neg_integer() | boolean()
         }
   # Why the routing copy of `prompt_cache_key` holds what it holds: the digest
-  # of a usable key (`:present`), or nil because none was sent (`:absent`) or
-  # because a sent key was blank, longer than the bound, or not a string.
-  @type prompt_cache_key_state :: :present | :absent | :blank | :oversized | :invalid
+  # of a usable key (`:present`), or nil because none was sent (`:absent`),
+  # because a sent key was blank, longer than the bound, or not a string, or
+  # because the route never takes a key as a seed (`:route_excluded`).
+  @type prompt_cache_key_state :: :present | :absent | :blank | :oversized | :invalid | :route_excluded
   @type configured_model_serving_mode :: String.t()
   @type effective_model_serving_mode :: String.t()
   @type model_serving_mode_source :: String.t()

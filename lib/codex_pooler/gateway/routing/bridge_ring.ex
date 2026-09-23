@@ -53,7 +53,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   @unusable_prompt_cache_key_reasons %{
     blank: "prompt_cache_key_blank",
     oversized: "prompt_cache_key_oversized",
-    invalid: "prompt_cache_key_invalid"
+    invalid: "prompt_cache_key_invalid",
+    route_excluded: "route_excluded"
   }
   @affinity_conflict_target {:unsafe_fragment, "(pool_id, api_key_id, model_identifier, affinity_kind, affinity_key_hash) WHERE status = 'active'"}
   @demotion_conflict_target {:unsafe_fragment, "(pool_id, api_key_id, model_identifier, pool_upstream_assignment_id) WHERE status = 'active'"}
@@ -621,8 +622,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   end
 
   # A key the client sent but that cannot seed locality names the bound that
-  # refused it rather than reading as absent (findings#255 row 255-81).
-  # Diagnostic only; the routing copy is nil either way.
+  # refused it rather than reading as absent (findings#255 row 255-81), and a
+  # route that never takes a seed says so whatever the body carried (row
+  # 255-80). Diagnostic only; the routing copy is nil either way.
   defp prompt_cache_locality_status(%RequestOptions{routing: %{prompt_cache_key: nil, prompt_cache_key_state: state}}, _settings, _affinity, _prompt_cache_key, _candidate_count)
        when is_map_key(@unusable_prompt_cache_key_reasons, state) do
     %{status: "unavailable", applied?: false, unhonored_reason: Map.fetch!(@unusable_prompt_cache_key_reasons, state)}

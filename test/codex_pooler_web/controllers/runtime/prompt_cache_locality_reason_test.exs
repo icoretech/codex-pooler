@@ -2,15 +2,16 @@ defmodule CodexPoolerWeb.Runtime.PromptCacheLocalityReasonTest do
   # `routing_locality_unhonored_reason` states why prompt-cache locality did not
   # order the shortlist. A key the client sent must never read
   # `prompt_cache_key_absent`: a blank or oversized key is refused as a routing
-  # seed and says which bound refused it (findings#255 row 255-81).
-  # Diagnostic only: the routing copy stays nil, so the order is the same as
-  # before.
+  # seed and says which bound refused it (findings#255 row 255-81), and a key
+  # sent to a route that never takes one as a seed names the route exclusion
+  # (row 255-80). Diagnostic only: the routing copy stays nil, so the order is
+  # the same as before.
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [auth: 2, gateway_setup: 1, native_text_input: 1, start_upstream: 1]
+    only: [auth: 2, gateway_setup: 1, gateway_setup: 2, native_text_input: 1, start_upstream: 1]
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
@@ -38,6 +39,36 @@ defmodule CodexPoolerWeb.Runtime.PromptCacheLocalityReasonTest do
     end
   end
 
+  test "POST /backend-api/codex/responses/compact with a key records route_excluded", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(compaction_body()))
+    setup = gateway_setup(upstream, compact?: true)
+    key = "compact-locality-reason-key"
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{"model" => setup.model.exposed_model_id, "input" => native_text_input("compact"), "prompt_cache_key" => key})
+
+    assert json_response(response, 200)["object"] == "response.compaction"
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["prompt_cache_key"] == key
+    assert_locality_reason!(setup, "/backend-api/codex/responses/compact", "route_excluded", key)
+  end
+
+  test "POST /backend-api/codex/v1/responses/compact with a key records route_excluded", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(compaction_body()))
+    setup = gateway_setup(upstream, compact?: true)
+    key = "alias-compact-locality-reason-key"
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/v1/responses/compact", %{"model" => setup.model.exposed_model_id, "input" => native_text_input("compact"), "prompt_cache_key" => key})
+
+    assert json_response(response, 200)["object"] == "response.compaction"
+    assert_locality_reason!(setup, "/backend-api/codex/responses/compact", "route_excluded", key)
+  end
+
   defp assert_locality_reason!(setup, endpoint, reason, key) do
     assert [request] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
     assert request.endpoint == endpoint
@@ -56,5 +87,9 @@ defmodule CodexPoolerWeb.Runtime.PromptCacheLocalityReasonTest do
 
   defp response_body do
     %{"id" => "resp_locality_reason", "object" => "response", "usage" => %{"input_tokens" => 4, "output_tokens" => 1, "total_tokens" => 5}}
+  end
+
+  defp compaction_body do
+    %{"object" => "response.compaction", "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}}
   end
 end

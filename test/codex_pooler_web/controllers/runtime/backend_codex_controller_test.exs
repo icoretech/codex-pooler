@@ -11790,7 +11790,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     routing = request.request_metadata["routing"]
     assert routing["routing_locality_status"] == "unavailable"
     assert routing["routing_locality_applied"] == false
-    assert routing["routing_locality_unhonored_reason"] == "prompt_cache_key_absent"
+    assert routing["routing_locality_unhonored_reason"] == "route_excluded"
     refute Map.has_key?(routing, "routing_locality_seed_fingerprint")
     refute Map.has_key?(routing, "routing_locality_assignment_fingerprint")
 

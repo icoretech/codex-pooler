@@ -288,7 +288,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
           | portable_full_history?: portable_full_history?(payload)
         },
         transport: retargeted_transport(options.transport, endpoint, payload),
-        routing: Routing.update(options.routing, prompt_cache_key: nil, prompt_cache_key_state: :absent)
+        routing: Routing.update(options.routing, prompt_cache_key: nil, prompt_cache_key_state: :route_excluded)
     }
   end
 
@@ -1084,15 +1084,17 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   defp safe_client_request_id(_value), do: nil
 
   # The routing copy is the key's digest or nil; the state keeps why it is nil,
-  # so a key the client sent is never reported as absent (findings#255 row
-  # 255-81). Only the state crosses into metadata, never the key.
+  # so a key the client sent is never reported as absent (findings#255 rows
+  # 255-80 and 255-81): a route outside `@prompt_cache_key_routes` (compact,
+  # file, GET, websocket) and every retarget take no seed whatever the body
+  # carries. Only the state crosses into metadata, never the key.
   defp prompt_cache_key(opts, endpoint, payload) do
     if prompt_cache_key_route?(opts, endpoint, payload) do
       payload
       |> Map.get("prompt_cache_key")
       |> normalized_prompt_cache_key()
     else
-      {nil, :absent}
+      {nil, :route_excluded}
     end
   end
 
