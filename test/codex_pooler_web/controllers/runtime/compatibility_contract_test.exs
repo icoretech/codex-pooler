@@ -2610,7 +2610,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                },
                serving_mode_guard: %{
                  connection_use: "reused",
-                 condition: "last_completed_response_on_the_connection_served_in_the_other_full_lite_mode",
+                 condition: "lite_continuation_after_a_full_served_last_completed_response_on_the_connection",
+                 full_after_lite: "sent",
                  unknown_mode: "reuse_rule_only",
                  reason: "previous_response_serving_mode_mismatch"
                }

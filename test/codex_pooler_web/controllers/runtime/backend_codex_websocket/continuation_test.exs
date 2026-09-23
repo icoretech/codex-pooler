@@ -1586,6 +1586,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
     end
   end
 
+  # The reverse flip is sent: a Full anchored request carries its tools and
+  # instructions at top level, so nothing is missing whatever the Lite context
+  # holds (a replay kept in Lite may be followed by a Full turn on its
+  # connection, findings#232 row 232-273).
+  test "websocket anchored Full delta after a Lite-to-Full flip is sent on the same connection" do
+    CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+    tools = [%{"type" => "function", "name" => "sample_lookup", "parameters" => %{"type" => "object", "properties" => %{}, "required" => []}}]
+    tool_output = %{"type" => "function_call_output", "call_id" => "call_reverse_flip_sample", "output" => "sample output"}
+
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create", "input.0.type" => "additional_tools"}, forbidden: ["previous_response_id", "tools"]],
+            respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(%{"id" => "resp_ws_reverse_flip_anchor", "object" => "response", "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}})])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create", "previous_response_id" => "resp_ws_reverse_flip_anchor", "tools.0.name" => "sample_lookup", "input.0.type" => "function_call_output"}],
+            respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(%{"id" => "resp_ws_reverse_flip_delta", "object" => "response", "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}})])
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "lite")
+    assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, "ws-reverse-flip-#{System.unique_integer([:positive])}")
+    frame = fn input, extra -> CodexPooler.JSON.encode!(Map.merge(%{"type" => "response.create", "model" => setup.model.exposed_model_id, "instructions" => "synthetic base instructions", "tools" => tools, "input" => input, "stream" => true, "generate" => true}, extra)) end
+
+    try do
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame.(native_text_input("anchor"), %{}))
+      {conn, websocket, anchor_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"id" => "resp_ws_reverse_flip_anchor"} = CodexPooler.JSON.decode!(anchor_frame)
+      assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @settlement_detection_timeout_ms
+
+      _revision = set_model_serving_mode!(scope, setup, "full", revision)
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame.([tool_output], %{"previous_response_id" => "resp_ws_reverse_flip_anchor"}))
+      {conn, _websocket, delta_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"id" => "resp_ws_reverse_flip_delta"} = CodexPooler.JSON.decode!(delta_frame)
+      assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @settlement_detection_timeout_ms
+
+      assert [anchor_request, delta_request] = FakeUpstream.requests(upstream)
+      assert anchor_request.websocket_connection_id == delta_request.websocket_connection_id
+      assert delta_request.json["input"] == [tool_output]
+      assert Enum.map(Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id, order_by: [asc: request.admitted_at])), &{&1.status, &1.request_metadata["routing"]["model_serving_mode"]}) == [{"succeeded", "lite"}, {"succeeded", "full"}]
+      assert :ok = FakeUpstream.verify!(upstream)
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "websocket custom tool output continuations keep previous_response_id for upstream context" do
     upstream =
       start_upstream(

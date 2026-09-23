@@ -4599,6 +4599,42 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  # Only a Lite continuation on a context whose last completed response on the
+  # connection was served in Full is refused (findings#232 rows 232-210 and
+  # 232-273): an unknown mode, the same mode, or a Full continuation after Lite
+  # (a replay kept in Lite, then a Full turn) is sent.
+  for {previous_mode, continuation_mode, sent?} <- [{nil, "lite", true}, {"lite", "lite", true}, {"full", "full", true}, {"lite", "full", true}, {"full", "lite", false}] do
+    @tag :continuation_generation_boundary
+    test "marked continuation in #{continuation_mode} after a #{previous_mode || "mode-less"} response on a reused connection is #{if sent?, do: "sent", else: "refused"}" do
+      turns = if unquote(sent?), do: 2, else: 1
+
+      upstream =
+        start_upstream(
+          # provenance: synthetic_adversarial
+          FakeUpstream.strict_sequence(List.duplicate(strict_websocket_turn(websocket_success_without_id(), websocket_connection_ordinal: 1), turns))
+        )
+
+      {:ok, session} = UpstreamWebsocketSession.start_link([])
+      on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+      request = websocket_request(FakeUpstream.url(upstream))
+      assert {:ok, _first} = UpstreamWebsocketSession.request(session, %{request | effective_serving_mode: unquote(previous_mode)})
+      assert {:ok, result} = UpstreamWebsocketSession.request(session, %{request | connection_bound_continuation?: true, effective_serving_mode: unquote(continuation_mode)})
+
+      assert result.upstream_websocket_connection.reused
+      assert length(FakeUpstream.requests(upstream)) == turns
+
+      if unquote(sent?) do
+        refute Map.has_key?(result, :transport_failure)
+      else
+        assert result.transport_failure["reason"] == "previous_response_serving_mode_mismatch"
+        assert result.upstream_error_param == "previous_response_id"
+      end
+
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+  end
+
   @tag :collect_compaction
   test "full-history collection rejects an anchor on a fresh connection without send" do
     upstream = start_upstream(websocket_success_without_id())

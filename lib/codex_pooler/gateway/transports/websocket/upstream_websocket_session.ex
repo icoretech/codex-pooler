@@ -878,7 +878,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           connection_use != :reused ->
             guard_connection_bound_continuation(state, receive_state, connection_usage)
 
-          serving_mode_changed?(state, request) ->
+          lite_anchor_on_full_context?(state, request) ->
             guard_connection_bound_continuation(state, receive_state, connection_usage, :previous_response_serving_mode_mismatch)
 
           true ->
@@ -928,13 +928,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   # A connection-bound anchor is refused before anything is sent when the
   # context it continues cannot be the one the request expects: the connection
-  # is not the one that produced the anchor, or the provider context was built
-  # under the other Full/Lite dialect. Lite sends its tool manifest and
+  # is not the one that produced the anchor, or the anchor is Lite and the
+  # provider context was built under Full. Lite sends its tool manifest and
   # instructions message only on a request that opens a context (findings#232
   # row 232-184), so an anchored Lite delta on a context opened under Full would
   # reach the provider with no tools and no base instructions (row 232-210).
   # The client answers `previous_response_not_found` with a full request
-  # without the anchor, which opens a context in the current dialect.
+  # without the anchor, which opens a Lite context with the prefix.
   defp guard_connection_bound_continuation(state, receive_state, connection_usage, reason \\ :previous_response_generation_mismatch) do
     terminal =
       StreamProtocol.canonicalize_native_codex_responses_json_message(~s({"type":"error","error":{"code":"previous_response_not_found"}}))
@@ -961,17 +961,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {:ok, put_result_connection_metadata({:ok, result}, state, connection_usage), state}
   end
 
-  # The dialect is known only for a context whose last response on this
-  # connection completed (`maybe_record_successful_serving_mode/3`); a request
-  # or a connection without one keeps the plain reuse rule.
-  defp serving_mode_changed?(state, %Request{effective_serving_mode: mode}) when mode in ["full", "lite"] do
-    case Map.get(state, :last_successful_effective_serving_mode) do
-      last_mode when last_mode in ["full", "lite"] -> last_mode != mode
-      _unknown -> false
-    end
-  end
+  # Only a Lite anchor on a context opened under Full lacks anything: the Full
+  # context holds no tool manifest and no instructions message, and the Lite
+  # anchored request carries neither. The reverse flip is sent: a Full anchored
+  # request carries its tools and instructions at top level, so the provider
+  # gets them whatever the context holds, and a replay kept in the mode it
+  # started with may legitimately be followed by a Full turn on its connection.
+  # The mode is known only for a context whose last response on this connection
+  # completed (`maybe_record_successful_serving_mode/3`); without one the plain
+  # reuse rule applies.
+  defp lite_anchor_on_full_context?(state, %Request{effective_serving_mode: "lite"}),
+    do: Map.get(state, :last_successful_effective_serving_mode) == "full"
 
-  defp serving_mode_changed?(_state, %Request{}), do: false
+  defp lite_anchor_on_full_context?(_state, %Request{}), do: false
 
   defp send_request_payload(state, %Request{} = request, receive_state, connection_usage) do
     state = state |> Map.delete(:first_compact_result) |> Map.delete(:ordinary_success_result)
