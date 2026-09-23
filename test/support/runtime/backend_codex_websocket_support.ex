@@ -269,14 +269,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
     end)
   end
 
-  def stop_registered_websocket_owner_sessions do
-    capture_log(fn ->
-      WebsocketOwnerSession.Registry
-      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.each(&stop_websocket_owner_session/1)
-    end)
-  end
-
   def stop_websocket_owner_session(codex_session_id) do
     case WebsocketOwnerSession.lookup(codex_session_id) do
       {:ok, owner_pid} ->

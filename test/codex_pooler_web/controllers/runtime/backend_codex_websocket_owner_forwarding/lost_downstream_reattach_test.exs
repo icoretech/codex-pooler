@@ -19,7 +19,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LostDownst
     only: [gateway_setup: 1, public_websocket_connect!: 3, public_websocket_receive_text!: 3, public_websocket_send_text!: 4, start_public_endpoint!: 0, start_upstream: 1]
 
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, strict_native_request: 2]
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [cleanup_local_owner_sessions: 0]
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
@@ -32,7 +31,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LostDownst
   setup do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, false)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-    on_exit(&cleanup_local_owner_sessions/0)
     :ok
   end
 

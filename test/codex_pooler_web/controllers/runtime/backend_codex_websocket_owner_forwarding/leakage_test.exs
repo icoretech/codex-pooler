@@ -27,7 +27,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LeakageTes
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
       TurnBudgetNodeClient.reset()
       ReplayRemoteNodeClient.reset()
 
@@ -317,13 +316,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LeakageTes
       assert_no_leak!("remote call observation", call)
     end)
 
+    # A synthetic session belongs to no Pool, so no Pool cleanup stops this owner; left running it
+    # stayed in the application registry for the rest of the partition (findings#206 row 206-387).
+    owner_session_id = "synthetic-leak-owner-#{System.unique_integer([:positive])}"
+    on_exit(fn -> capture_log(fn -> await_owner_cleanup!(owner_session_id) end) end)
+
     owner_crash_logs =
       capture_log(fn ->
         upstream_boundary = crashing_owner_upstream_boundary(self())
 
         {:ok, owner_pid} =
           WebsocketOwnerSession.start_owner(
-            codex_session_id: "synthetic-leak-owner-#{System.unique_integer([:positive])}",
+            codex_session_id: owner_session_id,
             owner_lease_token: Ecto.UUID.generate(),
             owner_instance_id: Atom.to_string(node()),
             upstream: upstream_boundary

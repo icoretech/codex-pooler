@@ -15,23 +15,19 @@ defmodule CodexPoolerWeb.Runtime.V1BridgedAnchorSupport do
   """
 
   import ExUnit.Assertions
-  import ExUnit.Callbacks
-  import ExUnit.CaptureLog
   import Phoenix.ConnTest
   import Plug.Conn
 
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   @endpoint CodexPoolerWeb.Endpoint
   @opener_input "bridged anchor opener"
 
-  @doc "Turns websocket owner forwarding on for the test and stops the owner sessions it starts."
+  @doc "Turns websocket owner forwarding on for the test; `gateway_setup/2` stops the owners its Pool starts."
   @spec enable_bridge!() :: :ok
   def enable_bridge! do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-    on_exit(&stop_local_owner_sessions/0)
     :ok
   end
 
@@ -107,24 +103,5 @@ defmodule CodexPoolerWeb.Runtime.V1BridgedAnchorSupport do
       json: Keyword.put_new(json_expectations, :valid, true),
       respond: respond
     )
-  end
-
-  defp stop_local_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

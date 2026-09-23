@@ -9,14 +9,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeMultilineFrameTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
-  import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @visible "synthetic multi-line bridged output"
@@ -26,8 +24,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeMultilineFrameTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_local_owner_sessions()
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
@@ -110,24 +106,5 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeMultilineFrameTest do
         _other -> %{"type" => :undecodable}
       end
     end)
-  end
-
-  defp stop_local_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
-              GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

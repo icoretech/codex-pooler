@@ -21,7 +21,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.UndeliveredCompletionRese
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [gateway_setup: 1, public_websocket_connect!: 3, public_websocket_receive_text!: 3, public_websocket_send_text!: 4, start_public_endpoint!: 0, start_upstream: 1]
 
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, stop_registered_websocket_owner_sessions: 0, strict_native_request: 2]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, strict_native_request: 2]
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
@@ -63,7 +63,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.UndeliveredCompletionRese
   defp scenario!(forwarding, receipt) do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, false)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, forwarding)
-    if forwarding, do: on_exit(&stop_registered_websocket_owner_sessions/0)
 
     upstream =
       start_upstream(

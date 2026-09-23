@@ -19,7 +19,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTakeoverContinuityTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @remote_owner "unreachable-owner@nohost"
@@ -29,8 +28,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTakeoverContinuityTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_registered_owner_sessions()
-
       case previous do
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -138,24 +135,5 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTakeoverContinuityTest do
 
   defp latest_request(setup) do
     Repo.one!(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [desc: r.admitted_at], limit: 1))
-  end
-
-  defp stop_registered_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

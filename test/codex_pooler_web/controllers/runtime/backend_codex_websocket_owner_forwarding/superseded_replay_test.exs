@@ -36,7 +36,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Superseded
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
       ReplayRemoteNodeClient.reset()
 
       case previous do

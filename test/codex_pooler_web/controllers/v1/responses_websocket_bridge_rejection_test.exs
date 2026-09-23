@@ -11,14 +11,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeRejectionTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
-  import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @provider_sentinel "private-bridge-rejection-sentinel"
@@ -30,8 +28,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeRejectionTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_local_owner_sessions()
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
@@ -206,24 +202,5 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeRejectionTest do
 
   defp settlement_count(request_id) do
     Repo.aggregate(from(entry in LedgerEntry, where: entry.request_id == ^request_id and entry.entry_kind == "settlement"), :count)
-  end
-
-  defp stop_local_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

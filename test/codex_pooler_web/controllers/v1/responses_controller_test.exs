@@ -385,7 +385,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   }
 
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPoolerWeb.PublicGatewayResult
@@ -12217,25 +12216,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      capture_log(&stop_websocket_owners/0)
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
       end
     end)
-  end
-
-  defp stop_websocket_owners do
-    WebsocketOwnerSession.Registry
-    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.each(&stop_websocket_owner/1)
-  end
-
-  defp stop_websocket_owner(session_id) do
-    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
-      GenServer.stop(owner_pid, :shutdown, 1_000)
-    end
   end
 
   defp public_sse_event(block) do

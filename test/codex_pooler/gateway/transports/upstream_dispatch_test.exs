@@ -23,7 +23,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
@@ -32,6 +31,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   # Failure-detection budget for an expected message: a green run returns as
   # soon as the message arrives, so only a missing one spends it.
@@ -73,10 +73,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     reset_bootstrap_state_fixture!()
     auth = auth_fixture()
+    BackendCodexWebsocketOwnerForwardingSupport.stop_pool_owners_on_exit(auth.pool)
 
     on_exit(fn ->
       restore_operational_settings(previous_settings)
-      cleanup_local_owner_sessions()
       OwnerEnvelopeNodeClient.reset()
     end)
 
@@ -2819,24 +2819,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   defp restore_operational_settings(previous_settings) do
     Application.put_env(:codex_pooler, OperationalSettings, previous_settings)
-  end
-
-  defp cleanup_local_owner_sessions do
-    capture_log(fn ->
-      WebsocketOwnerSession.Registry
-      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.each(fn codex_session_id ->
-        try do
-          with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-            _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-          end
-        catch
-          :exit, _reason -> :ok
-        end
-      end)
-    end)
-
-    :ok
   end
 
   defp contains_function?(value) when is_function(value), do: true

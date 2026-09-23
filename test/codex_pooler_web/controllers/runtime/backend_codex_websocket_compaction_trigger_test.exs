@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   import Ecto.Query
   import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [stop_pool_owners!: 1]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
@@ -17,7 +18,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.NativeCompactionTraceTestExport
@@ -232,7 +232,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     after
       final_state = Process.delete(:queued_lite_socket_state)
       CodexResponsesSocket.terminate(:closed, final_state)
-      if topology == :forwarded, do: cleanup_trace_owner_sessions()
+      if topology == :forwarded, do: stop_pool_owners!(setup.pool)
     end
   end
 
@@ -664,7 +664,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       {:ok, _conn} = Mint.HTTP.close(conn)
       await_trace_event!("cleanup_finished")
-      cleanup_trace_owner_sessions()
+      stop_pool_owners!(setup.pool)
       assert :ok = NativeCompactionTrace.flush()
       status = NativeCompactionTrace.status()
       assert status["preset"] == "f3_happy"
@@ -747,7 +747,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       {:ok, _conn} = Mint.HTTP.close(conn)
       await_trace_event!("cleanup_finished")
-      cleanup_trace_owner_sessions()
+      stop_pool_owners!(setup.pool)
       assert :ok = NativeCompactionTrace.flush()
       assert :ok = NativeCompactionTrace.stop_scope()
 
@@ -2899,39 +2899,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      cleanup_trace_owner_sessions()
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
       end
-    end)
-
-    :ok
-  end
-
-  defp cleanup_trace_owner_sessions do
-    WebsocketOwnerSession.Registry
-    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.each(fn codex_session_id ->
-      case WebsocketOwnerSession.lookup(codex_session_id) do
-        {:ok, owner_pid} ->
-          monitor = Process.monitor(owner_pid)
-
-          try do
-            GenServer.stop(owner_pid, :shutdown, @detection_timeout_ms)
-          catch
-            :exit, {:noproc, _details} -> :ok
-          end
-
-          assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason},
-                         @detection_timeout_ms
-
-        {:error, :owner_unavailable} ->
-          :ok
-      end
-
-      assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
     end)
 
     :ok

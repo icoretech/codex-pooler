@@ -2,13 +2,11 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
-  import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   @terminal_shapes [
     {:done, ~s({"type":"response.done","response":{"id":"resp_terminal_done","custom":{"kept":true}}})},
@@ -96,8 +94,6 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
 
     on_exit(fn ->
-      cleanup_owner_sessions()
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
@@ -560,21 +556,6 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
           "response-sibling-sentinel"
         ] do
       refute wire =~ sentinel
-    end
-  end
-
-  defp cleanup_owner_sessions do
-    capture_log(fn ->
-      WebsocketOwnerSession.Registry
-      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.each(&stop_owner_session/1)
-    end)
-  end
-
-  defp stop_owner_session(session_id) do
-    case WebsocketOwnerSession.lookup(session_id) do
-      {:ok, owner_pid} -> GenServer.stop(owner_pid, :shutdown, 1_000)
-      {:error, _reason} -> :ok
     end
   end
 end

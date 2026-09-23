@@ -1245,8 +1245,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
   @tag :rollout_drain_t3
   test "T3 runtime rollout drain refuses fresh owner creation", context do
-    stop_all_registered_owners()
-    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    # The drain reads a registry of its own, so an owner another test left in the application
+    # registry cannot change `owners_seen` (findings#206 row 206-387).
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self(), owner_registry: WebsocketRolloutDrainSupport.start_owner_registry!())
     WebsocketRolloutDrainSupport.configure_rollout_drain_server(harness.name)
 
     assert %{result: :ok, owners_seen: 0} =
@@ -6296,7 +6297,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   end
 
   defp observe_owner_exit(context, :rollout_deadline_cut) do
-    stop_all_registered_owners()
+    # The owner and the drain use a registry of their own, so the drain sees exactly this owner
+    # and never one another test left in the application registry (findings#206 row 206-387).
+    owner_registry = WebsocketRolloutDrainSupport.start_owner_registry!()
     block_ref = make_ref()
 
     upstream =
@@ -6305,7 +6308,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         messages: ["rollout-cut-before-deadline", "unreachable-after-rollout-cut"]
       )
 
-    owner = start_supervised_owner(context, upstream: upstream)
+    owner = start_supervised_owner(context, upstream: upstream, registry: owner_registry)
     assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
 
     assert {:ok, downstream} =
@@ -6335,7 +6338,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
 
     owner_ref = Process.monitor(owner)
-    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self(), owner_registry: owner_registry)
     deadline = harness.deadline
 
     logs =
@@ -6383,7 +6386,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     refute_received {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1, {:data, "unreachable-after-rollout-cut"}}
 
-    await_owner_absent(context.codex_session_id)
+    refute Enum.any?(Registry.lookup(owner_registry, context.codex_session_id), fn {pid, _value} -> Process.alive?(pid) end)
     owner_exit_observation(logs, context.codex_session_id)
   end
 
@@ -6392,12 +6395,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       {:error, :owner_unavailable} -> :ok
       {:ok, _owner} -> flunk("websocket owner remained registered after terminal cleanup")
     end
-  end
-
-  defp stop_all_registered_owners do
-    WebsocketOwnerSession.Registry
-    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.each(&cleanup_owner_session/1)
   end
 
   defp owner_exit_observation(logs, codex_session_id) do

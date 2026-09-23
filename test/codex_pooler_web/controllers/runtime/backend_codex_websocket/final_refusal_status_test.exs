@@ -25,7 +25,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
     only: [gateway_setup: 1, native_text_input: 1, start_upstream: 1, stream_retry_setup: 2]
 
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport,
-    only: [assert_single_native_turn_terminal!: 2, collect_native_turn_frames!: 1, stop_registered_websocket_owner_sessions: 0, strict_native_request: 2]
+    only: [assert_single_native_turn_terminal!: 2, collect_native_turn_frames!: 1, strict_native_request: 2]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request}
@@ -210,7 +210,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
 
   defp enable_owner_forwarding! do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, false)
-    on_exit(&stop_registered_websocket_owner_sessions/0)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
   end
 end

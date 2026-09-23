@@ -14,7 +14,6 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
-  import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -33,7 +32,6 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @tools [%{"type" => "function", "name" => "sample_lookup", "parameters" => %{"type" => "object", "properties" => %{}, "required" => []}}]
@@ -44,7 +42,6 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
   test "a bridged HTTP SSE continuation anchored on a response served under Full carries the Lite prefix after a flip", %{conn: conn} do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-    on_exit(&stop_local_owner_sessions/0)
 
     upstream =
       start_upstream(
@@ -194,24 +191,4 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
   end
 
   defp completed_frames(response_id), do: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(completed_event(response_id))])
-
-  # Bridged turns start owner sessions that would otherwise outlive the test.
-  defp stop_local_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
-  end
 end

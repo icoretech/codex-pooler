@@ -14,7 +14,6 @@ defmodule CodexPoolerWeb.V1.ResponsesPreviousResponseConnectionTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
-  import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
@@ -23,7 +22,6 @@ defmodule CodexPoolerWeb.V1.ResponsesPreviousResponseConnectionTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OpenAICompatibility.Error, as: OpenAICompatibilityError
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @anchor "resp_v1_anchor_opener"
@@ -31,7 +29,6 @@ defmodule CodexPoolerWeb.V1.ResponsesPreviousResponseConnectionTest do
   setup do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-    on_exit(&stop_local_owner_sessions/0)
     :ok
   end
 
@@ -226,25 +223,5 @@ defmodule CodexPoolerWeb.V1.ResponsesPreviousResponseConnectionTest do
         "error" => %{"type" => "invalid_request_error", "message" => "Invalid `previous_response_id`."}
       })
     ])
-  end
-
-  # Bridged turns start owner sessions that would otherwise outlive the test.
-  defp stop_local_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

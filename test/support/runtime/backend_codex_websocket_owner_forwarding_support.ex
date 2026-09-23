@@ -1448,34 +1448,54 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     end
   end
 
-  def cleanup_local_owner_sessions do
-    logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          await_owner_cleanup!(codex_session_id)
-        end)
-      end)
-
-    assert_no_leak!("owner cleanup logs", logs)
-  end
-
   # An owner the test's sockets started can outlive the test: it stays in the
   # application-global `WebsocketOwnerSession.Registry`, where a later test that
   # counts owners or drains the registry sees it (findings#206 rows
   # 206-375/206-377), and at suite teardown it writes its exit persistence
   # without a sandbox owner (206-328). Call right after the Pool exists, before
   # any socket can start an owner: the `on_exit` then runs before the sandbox
-  # owner stops and stops only this Pool's owners.
+  # owner stops and stops only this Pool's owners. `gateway_setup/2` and
+  # `register_unboxed_pool_cleanup!/1` already call it for their Pools. Never stop
+  # every owner in the registry instead: that also stops the owner another test
+  # leaked, hides the leak and makes the result depend on test order (206-387).
   def stop_pool_owners_on_exit(pool) do
     on_exit(fn -> stop_pool_owners!(pool) end)
   end
 
+  # `gateway_setup/2` registers this for every test, sandboxed or not, so it reads the
+  # database only while some owner is registered at all: a test that commits its
+  # fixture with `Sandbox.unboxed_run/2` and starts no owner has no connection to read
+  # with here. It captures logs only while it stops an owner: closing a log capture
+  # that is the last one open snapshots the global Logger level asynchronously, which
+  # can undo a level restore that runs after it (findings#206 row 206-160).
   def stop_pool_owners!(pool) do
-    pool
-    |> pool_codex_session_ids()
-    |> Enum.each(&await_owner_cleanup!/1)
+    with [_ | _] = registered_ids <- registered_session_ids(),
+         [_ | _] = codex_session_ids <- pool_codex_session_ids(pool, registered_ids) do
+      logs = capture_log(fn -> Enum.each(codex_session_ids, &stop_registered_owner!/1) end)
+      assert_no_leak!("owner cleanup logs", logs)
+    else
+      [] -> :ok
+    end
+  end
+
+  # Reads the registry directly: `WebsocketOwnerSession.lookup/2` logs a miss for
+  # every session of the Pool that has no owner.
+  defp stop_registered_owner!(codex_session_id) do
+    for {owner_pid, _value} <- Registry.lookup(WebsocketOwnerSession.Registry, codex_session_id) do
+      monitor = Process.monitor(owner_pid)
+
+      try do
+        GenServer.stop(owner_pid, :shutdown, @handoff_detection_timeout_ms)
+      catch
+        :exit, {:noproc, _details} -> :ok
+        :exit, {:normal, _details} -> :ok
+      end
+
+      assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason}, @handoff_detection_timeout_ms
+    end
+
+    # The registry drops a dead owner's entry asynchronously; a live one here is a restarted owner.
+    refute Enum.any?(Registry.lookup(WebsocketOwnerSession.Registry, codex_session_id), fn {owner_pid, _value} -> Process.alive?(owner_pid) end)
   end
 
   # The owners registered for this Pool's sessions only, never another test's.
@@ -1488,6 +1508,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
   defp pool_codex_session_ids(pool) do
     Repo.all(from(session in CodexSession, where: session.pool_id == ^pool.id, select: session.id))
+  end
+
+  # Registry keys are arbitrary strings (synthetic owners use non-UUID ids); only the
+  # UUID-shaped ones can name a session row.
+  defp registered_session_ids do
+    WebsocketOwnerSession.Registry
+    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.filter(&match?({:ok, _uuid}, Ecto.UUID.cast(&1)))
+  end
+
+  defp pool_codex_session_ids(pool, registered_ids) do
+    Repo.all(from(session in CodexSession, where: session.pool_id == ^pool.id and session.id in ^registered_ids, select: session.id))
   end
 
   def await_owner_cleanup!(codex_session_id) do

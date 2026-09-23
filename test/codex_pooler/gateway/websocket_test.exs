@@ -23,6 +23,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   # Failure-detection budget for an expected message: a green run returns as
   # soon as the message arrives, so only a missing one spends it.
@@ -332,8 +333,6 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
       on_exit(fn ->
-        cleanup_local_owner_sessions()
-
         case previous do
           nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
           value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
@@ -341,6 +340,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       end)
 
       key = active_api_key_fixture()
+      BackendCodexWebsocketOwnerForwardingSupport.stop_pool_owners_on_exit(key.pool)
       {:ok, auth} = Access.authenticate_authorization_header(key.authorization)
 
       %{api_key: key.api_key, auth: auth}
@@ -566,7 +566,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       {:ok, runtime} = owner_runtime(auth, "owner-runtime-refusal")
       owner_pid = owner_pid!(runtime.codex_session.id)
       owner_state_before = :sys.get_state(owner_pid)
-      owner_session_ids = local_owner_session_ids()
+      owner_pids = local_owner_pids(auth)
       previous_response_id = previous_response_id("guessed-alias-sentinel")
       request_id = "guessed-alias-request"
 
@@ -590,7 +590,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       assert_runtime_unchanged!(runtime, returned_runtime)
       assert :sys.get_state(owner_pid) == owner_state_before
       assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(runtime.codex_session.id)
-      assert local_owner_session_ids() == owner_session_ids
+      assert local_owner_pids(auth) == owner_pids
     end
 
     test "treats expired aliases as cache misses without starting the expired target owner", %{
@@ -1072,7 +1072,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   end
 
   defp assert_alias_miss_keeps_runtime!(auth, runtime, previous_response_id, target_session_id) do
-    owner_session_ids = local_owner_session_ids()
+    owner_pids = local_owner_pids(auth)
 
     assert {:ok, returned_runtime} =
              Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
@@ -1081,7 +1081,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
              })
 
     assert_runtime_unchanged!(runtime, returned_runtime)
-    assert local_owner_session_ids() == owner_session_ids
+    assert local_owner_pids(auth) == owner_pids
     assert_owner_not_started!(target_session_id)
   end
 
@@ -1130,9 +1130,11 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
   end
 
-  defp local_owner_session_ids do
-    WebsocketOwnerSession.Registry
-    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+  # This test's Pool only: an owner another test left in the application registry must not decide
+  # whether this one started an owner (findings#206 row 206-387).
+  defp local_owner_pids(auth) do
+    auth.pool
+    |> BackendCodexWebsocketOwnerForwardingSupport.pool_owner_pids()
     |> Enum.sort()
   end
 
@@ -1165,24 +1167,6 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   defp owner_pid!(codex_session_id) do
     assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(codex_session_id)
     owner_pid
-  end
-
-  defp cleanup_local_owner_sessions do
-    capture_log(fn ->
-      WebsocketOwnerSession.Registry
-      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.each(fn codex_session_id ->
-        try do
-          with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-            _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-          end
-        catch
-          :exit, _reason -> :ok
-        end
-      end)
-    end)
-
-    :ok
   end
 
   defp execute_websocket_response(

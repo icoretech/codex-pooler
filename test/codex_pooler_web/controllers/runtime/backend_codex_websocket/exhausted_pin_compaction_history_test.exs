@@ -32,7 +32,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ExhaustedPinCompactionHis
       if forwarding == :owner_forwarding do
         CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, nil)
         Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-        on_exit(&stop_registered_websocket_owner_sessions/0)
       else
         CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, nil)
         Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)

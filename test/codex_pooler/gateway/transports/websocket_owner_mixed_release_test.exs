@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   @peer_timeout 10_000
   # Peer shutdown and the deregistrations that follow it are asynchronous, and this runs in
@@ -31,7 +32,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   setup do
     reset_bootstrap_state_fixture!()
     auth = auth_fixture()
-    on_exit(&cleanup_local_owners/0)
+    BackendCodexWebsocketOwnerForwardingSupport.stop_pool_owners_on_exit(auth.pool)
     {:ok, auth: auth}
   end
 
@@ -394,21 +395,4 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   end
 
   defp start_distribution!(_distributed), do: :ok
-
-  defp cleanup_local_owners do
-    WebsocketOwnerSession.Registry
-    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.each(fn session_id ->
-      try do
-        with {:ok, owner} <- WebsocketOwnerSession.lookup(session_id),
-             true <- Process.alive?(owner) do
-          GenServer.stop(owner, :shutdown, 1_000)
-        end
-      catch
-        :exit, _reason -> :ok
-      end
-    end)
-
-    :ok
-  end
 end

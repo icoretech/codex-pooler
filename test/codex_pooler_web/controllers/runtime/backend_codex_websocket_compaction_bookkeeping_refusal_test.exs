@@ -6,7 +6,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
   import Ecto.Query
   import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [cleanup_local_owner_sessions: 0]
 
   alias CodexPooler.Accounting.{LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
@@ -287,8 +286,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
-
       case previous do
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)

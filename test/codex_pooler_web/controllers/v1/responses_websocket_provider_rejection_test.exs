@@ -11,7 +11,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
-  import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -28,7 +27,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @frame_timeout_ms 15_000
@@ -274,31 +272,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_registered_owner_sessions()
-
       case previous do
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
       end
     end)
-  end
-
-  defp stop_registered_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

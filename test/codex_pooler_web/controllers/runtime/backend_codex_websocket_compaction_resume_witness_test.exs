@@ -19,11 +19,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
   alias CodexPooler.Dev.NativeCompactionAuthorizationObserver
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexTurn
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @moduletag capture_log: true
-  @detection_timeout_ms 15_000
 
   # The released client names its thread in the turn metadata; the duplicate
   # turn claim is scoped on it (findings#250), and the compaction admission must
@@ -235,33 +233,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeWitnessTes
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, enabled?)
 
     on_exit(fn ->
-      stop_owner_sessions()
-
       case previous do
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
-      end
-    end)
-  end
-
-  defp stop_owner_sessions do
-    WebsocketOwnerSession.Registry
-    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.each(fn codex_session_id ->
-      case WebsocketOwnerSession.lookup(codex_session_id) do
-        {:ok, owner_pid} ->
-          monitor = Process.monitor(owner_pid)
-
-          try do
-            GenServer.stop(owner_pid, :shutdown, @detection_timeout_ms)
-          catch
-            :exit, {:noproc, _details} -> :ok
-          end
-
-          assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason}, @detection_timeout_ms
-
-        {:error, :owner_unavailable} ->
-          :ok
       end
     end)
   end

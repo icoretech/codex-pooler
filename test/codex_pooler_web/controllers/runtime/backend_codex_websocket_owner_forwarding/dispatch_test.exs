@@ -40,7 +40,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DispatchTe
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
       TurnBudgetNodeClient.reset()
       ReplayRemoteNodeClient.reset()
 

@@ -32,6 +32,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.PeerRegistry
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   @frame "synthetic-frame"
   @peer_detection_timeout_ms 10_000
@@ -272,10 +273,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   setup do
     reset_bootstrap_state_fixture!()
     auth = auth_fixture()
+    BackendCodexWebsocketOwnerForwardingSupport.stop_pool_owners_on_exit(auth.pool)
     Process.put({__MODULE__, :upstream_identity}, active_upstream_identity_fixture())
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
       V2FailureKindNodeClient.reset()
       ReplayTimeoutNodeClient.reset()
     end)
@@ -2679,6 +2680,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   test "versioned remote cancellation falls back to the legacy /2 entrypoint" do
     remote_node = :"codex_pooler@legacy-cancel-owner-app.example"
     session_id = "legacy-cancel-session"
+    stop_synthetic_owner_on_exit(session_id)
 
     assert {:ok, _owner_pid} =
              WebsocketOwnerSession.start_owner(
@@ -3118,6 +3120,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       )
 
     session_id = "real-peer-current-owner"
+    stop_synthetic_owner_on_exit(session_id)
 
     assert {:ok, _owner_pid} =
              WebsocketOwnerSession.start_owner(
@@ -3610,6 +3613,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     WebsocketOwnerSession.start_owner(owner_opts)
   end
 
+  # A synthetic session id belongs to no Pool, so no Pool cleanup stops the owner started under
+  # it; left running it stayed in the application registry for the rest of the partition
+  # (findings#206 row 206-387). Registered before the owner starts.
+  defp stop_synthetic_owner_on_exit(codex_session_id) do
+    on_exit(fn -> capture_log(fn -> BackendCodexWebsocketOwnerForwardingSupport.await_owner_cleanup!(codex_session_id) end) end)
+  end
+
   defp attach_downstream(codex_session_id, correlation_id) do
     {:ok, owner} = WebsocketOwnerSession.lookup(codex_session_id)
     {:ok, downstream} = WebsocketOwnerSession.attach_downstream(owner, downstream(correlation_id))
@@ -3946,36 +3956,5 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     :ok
   catch
     :exit, _reason -> :ok
-  end
-
-  defp cleanup_local_owner_sessions do
-    capture_log(fn ->
-      WebsocketOwnerSession.Registry
-      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.each(&stop_local_owner_session/1)
-    end)
-
-    :ok
-  end
-
-  defp stop_local_owner_session(codex_session_id) do
-    case WebsocketOwnerSession.lookup(codex_session_id) do
-      {:ok, owner_pid} ->
-        monitor = Process.monitor(owner_pid)
-
-        try do
-          GenServer.stop(owner_pid, :shutdown, @peer_detection_timeout_ms)
-        catch
-          :exit, {:noproc, _details} -> :ok
-        end
-
-        assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason},
-                       @peer_detection_timeout_ms
-
-      {:error, :owner_unavailable} ->
-        :ok
-    end
-
-    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
   end
 end

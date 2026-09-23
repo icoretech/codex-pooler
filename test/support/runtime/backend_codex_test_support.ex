@@ -40,6 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -369,12 +370,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     )
   end
 
-  def register_unboxed_pool_cleanup!(%{pool: _, pricing: _} = fixture) do
+  def register_unboxed_pool_cleanup!(%{pool: pool, pricing: _} = fixture) do
     on_exit(fn ->
       unboxed_run(fn ->
         cleanup_unboxed_pool!(fixture)
       end)
     end)
+
+    # Registered after the deletion so it runs first: the Pool's owners stop while
+    # their committed sessions still exist, since the stop that `gateway_setup/2`
+    # registered runs after the rows are gone and would find no session.
+    BackendCodexWebsocketOwnerForwardingSupport.stop_pool_owners_on_exit(pool)
   end
 
   def unboxed_run(fun) when is_function(fun, 0) do
@@ -527,11 +533,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def gateway_setup(upstream, opts \\ []) do
+    key = active_api_key_fixture()
+    pool = key.pool
+    # Registered before the fence so it runs after it: the owners this Pool's
+    # sockets start are stopped once those sockets and their cleanup are done,
+    # and before the sandbox owner stops (findings#206 rows 206-377/206-387).
+    :ok = register_pool_owner_stop(pool)
     # Socket callback tests terminate sockets from the test process; their
     # deferred cleanup must finish before the sandbox owner stops.
     :ok = WebsocketCleanupFence.install!()
-    key = active_api_key_fixture()
-    pool = key.pool
     compact? = Keyword.get(opts, :compact?, false)
 
     upstream =
@@ -584,6 +594,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       model: model,
       pricing: pricing
     })
+  end
+
+  # A fixture built inside a helper task (not the test process) cannot register an
+  # `on_exit` callback; like `WebsocketCleanupFence.install!/1`, that call registers
+  # nothing and the test's own Pool cleanup, if any, covers it.
+  defp register_pool_owner_stop(pool) do
+    BackendCodexWebsocketOwnerForwardingSupport.stop_pool_owners_on_exit(pool)
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp default_codex_source(exposed_model_id, upstream_model_id, display_name) do

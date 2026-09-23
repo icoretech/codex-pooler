@@ -201,8 +201,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_registered_websocket_owner_sessions()
-
       case previous_owner_forwarding do
         nil ->
           Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)

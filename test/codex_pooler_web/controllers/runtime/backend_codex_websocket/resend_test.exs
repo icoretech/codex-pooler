@@ -152,7 +152,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_registered_websocket_owner_sessions()
       Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
     end)
 
@@ -663,7 +662,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     barrier = make_ref()
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
     CodexPooler.TestAppEnv.restore_on_exit(:settlement_pricing_test_fault)
-    on_exit(&stop_registered_websocket_owner_sessions/0)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     # Strict finite scenario: the first turn streams visible output and its
@@ -1080,7 +1078,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     @tag :successor_active_cap
     test "#{mode} visible-output retry successor preserves capacity denial and succeeds after release" do
       CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
-      on_exit(&stop_registered_websocket_owner_sessions/0)
       Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
       frames = [
@@ -1941,8 +1938,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_registered_websocket_owner_sessions()
-
       case previous_owner_forwarding do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
@@ -2353,8 +2348,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_registered_websocket_owner_sessions()
-
       case previous_owner_forwarding do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)

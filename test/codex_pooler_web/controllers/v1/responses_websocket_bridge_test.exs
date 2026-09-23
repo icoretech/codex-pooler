@@ -66,35 +66,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
       end
     end)
-
-    :ok
-  end
-
-  # Bridged turns start owner sessions that would otherwise outlive the test
-  # (idle shutdown is minutes away) and log stale lease renewals into later
-  # tests' output. Stop them the way the owner forwarding suite does.
-  defp cleanup_local_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
 
     :ok
   end

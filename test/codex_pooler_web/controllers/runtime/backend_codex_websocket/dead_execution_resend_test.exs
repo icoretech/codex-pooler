@@ -16,7 +16,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
 
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, Request}
@@ -40,7 +39,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
       # The mode is fixed before the predecessor exists: a direct predecessor
       # must strand as a direct socket execution, not as an owner-forwarded one.
       Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, forwarding)
-      on_exit(&stop_registered_websocket_owner_sessions/0)
       barrier = make_ref()
 
       upstream =

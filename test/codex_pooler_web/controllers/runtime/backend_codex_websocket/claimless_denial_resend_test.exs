@@ -130,7 +130,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimlessDenialResendTest
   defp opened_session!(forwarding, client) do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, nil)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, forwarding == :owner_forwarding)
-    if forwarding == :owner_forwarding, do: on_exit(&stop_registered_websocket_owner_sessions/0)
 
     sticky = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, completed_frames(@opening_response_id, 3, 1))]))
     # The fallback account must never be asked: the anchored request cannot move.

@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketPublicVocabularyTest do
   # local owner (findings#254 row 254-14).
   use CodexPoolerWeb.ConnCase, async: false
 
-  import ExUnit.CaptureLog
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [pool_owner_pids: 1]
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -23,7 +23,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketPublicVocabularyTest do
 
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   @frame_timeout_ms 15_000
   @response_id "resp_public_ws_vocabulary_fixture"
@@ -75,7 +74,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketPublicVocabularyTest do
 
       assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @frame_timeout_ms
 
-      if topology == :local_owner, do: assert([_owner_session_id | _rest] = registered_owner_session_ids())
+      if topology == :local_owner, do: assert([_owner_pid | _rest] = pool_owner_pids(setup.pool))
 
       conn
     after
@@ -177,38 +176,15 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketPublicVocabularyTest do
     {conn, websocket, ref}
   end
 
-  defp registered_owner_session_ids do
-    Registry.select(WebsocketOwnerSession.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
-  end
-
   defp enable_owner_forwarding! do
     previous = Application.fetch_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_registered_owner_sessions()
-
       case previous do
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
       end
     end)
-  end
-
-  defp stop_registered_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        Enum.each(registered_owner_session_ids(), fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

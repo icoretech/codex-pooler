@@ -15,7 +15,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeResendTest
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.Dev.NativeCompactionAuthorizationObserver
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
   @moduletag capture_log: true
@@ -33,33 +32,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeResendTest
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, enabled?)
 
     on_exit(fn ->
-      stop_owner_sessions()
-
       case previous do
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
-      end
-    end)
-  end
-
-  defp stop_owner_sessions do
-    WebsocketOwnerSession.Registry
-    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.each(fn codex_session_id ->
-      case WebsocketOwnerSession.lookup(codex_session_id) do
-        {:ok, owner_pid} ->
-          monitor = Process.monitor(owner_pid)
-
-          try do
-            GenServer.stop(owner_pid, :shutdown, 15_000)
-          catch
-            :exit, {:noproc, _details} -> :ok
-          end
-
-          assert_receive {:DOWN, ^monitor, :process, ^owner_pid, _reason}, 15_000
-
-        {:error, :owner_unavailable} ->
-          :ok
       end
     end)
   end

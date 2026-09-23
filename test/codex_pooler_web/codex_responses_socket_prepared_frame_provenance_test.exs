@@ -36,7 +36,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, with_info_log: 1]
 
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport,
-    only: [cleanup_local_owner_sessions: 0, owner_socket: 4, request_logs: 1]
+    only: [owner_socket: 4, request_logs: 1]
 
   alias CodexPooler.Access
   alias CodexPooler.FakeUpstream
@@ -56,8 +56,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
-
       case previous do
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)

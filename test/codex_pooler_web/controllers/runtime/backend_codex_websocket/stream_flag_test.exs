@@ -4,7 +4,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StreamFlagTest do
   import Ecto.Query
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request}
@@ -26,8 +25,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StreamFlagTest do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
 
     on_exit(fn ->
-      stop_registered_websocket_owner_sessions()
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)

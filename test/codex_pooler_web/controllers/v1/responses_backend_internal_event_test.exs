@@ -10,13 +10,10 @@ defmodule CodexPoolerWeb.V1.ResponsesBackendInternalEventTest do
   # public event types keep working.
   use CodexPoolerWeb.ConnCase, async: false
 
-  import ExUnit.CaptureLog
-
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   @response_id "resp_backend_internal_event_fixture"
   @marker "synthetic internal event marker"
@@ -124,33 +121,10 @@ defmodule CodexPoolerWeb.V1.ResponsesBackendInternalEventTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
-      stop_local_owner_sessions()
-
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
       end
     end)
-  end
-
-  # A bridged turn starts an owner session that would outlive the test; stop
-  # it the way the bridge suite does.
-  defp stop_local_owner_sessions do
-    _logs =
-      capture_log(fn ->
-        WebsocketOwnerSession.Registry
-        |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-        |> Enum.each(fn codex_session_id ->
-          try do
-            with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-              _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-            end
-          catch
-            :exit, _reason -> :ok
-          end
-        end)
-      end)
-
-    :ok
   end
 end

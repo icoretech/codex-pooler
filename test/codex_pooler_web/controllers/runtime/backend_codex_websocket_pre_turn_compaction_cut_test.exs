@@ -6,7 +6,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3]
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [cleanup_local_owner_sessions: 0]
 
   alias CodexPooler.Accounting.{LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
@@ -390,8 +389,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, enabled?)
 
     on_exit(fn ->
-      cleanup_local_owner_sessions()
-
       case previous do
         :error -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
         {:ok, value} -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)

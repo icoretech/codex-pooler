@@ -379,7 +379,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
       OwnerGoneNodeClient.reset()
       OwnerDiesUnderAbandonNodeClient.reset()
       LookupPause.disarm()
-      cleanup_local_owner_sessions()
       ReplayRemoteNodeClient.reset()
 
       case previous do

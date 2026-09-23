@@ -17,7 +17,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PrewarmDel
   setup do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-    on_exit(&cleanup_local_owner_sessions/0)
     :ok
   end
 
