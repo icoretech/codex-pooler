@@ -51,6 +51,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   @api_key_revocation_close {:close, 1008, "api key is no longer active"}
   @websocket_frame_timeout 5_000
+  # How long a test waits for the fake provider to report that the bridged
+  # request reached it: a detection budget, which a green run never spends.
+  # 1 s failed at load ~30 (findings#232 row 232-242).
+  @upstream_barrier_timeout 15_000
   @websocket_transport_barrier_payload "public-v1-api-key-barrier"
 
   setup do
@@ -106,6 +110,33 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       settings: settings,
       use_instance_settings?: false
     )
+  end
+
+  # Sends the bridge relay of the request running in `request_pid` the message
+  # its own preflight timer would send. The relay monitors the request process
+  # it serves and is found among that process's monitors by the loop it runs.
+  # The request process's receives are traced from here on, so the test sees
+  # the relay report the preflight expiry to it.
+  defp expire_bridge_preflight!(request_pid) do
+    on_exit(fn -> stop_receive_trace(request_pid) end)
+    _traced = :erlang.trace(request_pid, true, [:receive])
+    {:monitored_by, monitors} = Process.info(request_pid, :monitored_by)
+
+    relays =
+      Enum.filter(monitors, fn pid ->
+        is_pid(pid) and match?({:current_function, {WebsocketBridgeStream, _function, _arity}}, Process.info(pid, :current_function))
+      end)
+
+    assert [relay] = relays
+    send(relay, :preflight_timeout)
+    :ok
+  end
+
+  defp stop_receive_trace(pid) do
+    _traced = :erlang.trace(pid, false, [:receive])
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp set_bridge_preflight_timeout!(timeout_ms) do
@@ -2493,7 +2524,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   test "an accepted websocket request that stays silent past bridge preflight is never replayed over HTTP",
        %{conn: conn} do
-    set_bridge_preflight_timeout!(25)
+    # The preflight expires only once the provider has accepted the request:
+    # its own timer is out of reach, and the test fires it when the fake
+    # provider reports the request (a 25 ms timer used to expire before the
+    # submit reached the provider at load ~30, findings#232 row 232-242).
+    set_bridge_preflight_timeout!(60_000)
     set_upstream_receive_timeout!(1_000)
     release_ref = make_ref()
 
@@ -2516,10 +2551,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     setup = gateway_setup(upstream)
     session = "silent-preflight-session-#{System.unique_integer([:positive])}"
+    parent = self()
 
-    response = post_stream(conn, setup, session, stream_payload(setup, "silent preflight"))
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        post_stream(conn, setup, session, stream_payload(setup, "silent preflight"))
+      end)
 
-    assert_receive {:fake_upstream_timeout_barrier, :websocket_idle, _pid, ^release_ref}, 1_000
+    assert_receive {:fake_upstream_timeout_barrier, :websocket_idle, _pid, ^release_ref}, @upstream_barrier_timeout
+    :ok = expire_bridge_preflight!(request_task.pid)
+    task_pid = request_task.pid
+    assert_receive {:trace, ^task_pid, :receive, {_ref, {:bridge_error, :bridge_preflight_timeout}}}, @upstream_barrier_timeout
+    response = Task.await(request_task, @upstream_barrier_timeout)
+
     assert response.status == 200
     assert event_types(response.resp_body) == ["error"]
     refute response.resp_body =~ "resp_silent_http_replay"
@@ -3124,7 +3169,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       end)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
-                   1_000
+                   @upstream_barrier_timeout
 
     admitted_request = latest_request(setup.pool)
     admitted_turn = Repo.get_by!(CodexTurn, request_id: admitted_request.id)
