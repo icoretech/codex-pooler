@@ -61,6 +61,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
   @handoff_detection_timeout_ms 15_000
+  # Failure-detection budget for a drain task, a fake-upstream barrier and
+  # other signal-driven waits; green paths end on the signal (findings#206
+  # row 206-183: a fixed 1 s wait failed under load).
+  @detection_budget_ms 15_000
+  # A terminating socket drains an owner-forwarded response task for up to
+  # 15 s (`@post_cleanup_owner_response_task_drain_ms`) before it kills it. T5
+  # aborts the owner, so terminate returns on that signal; this budget stays
+  # below the drain fallback so a terminate that waits it out still fails here,
+  # and far above the 1.5 s a loaded host measured.
+  @terminate_detection_budget_ms 10_000
 
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -122,7 +132,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(harness.deadline, 10)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
     assert_response_task_stopped!(state)
-    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 1_000)
+    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, @detection_budget_ms)
 
     assert released_lease = released_owner_lease(state.codex_session.id, old_token)
     assert released_lease.metadata["release_reason"] == "owner_drained"
@@ -339,7 +349,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
       terminate_task =
         Task.async(fn -> CodexResponsesSocket.terminate({:shutdown, :rollout}, state) end)
 
-      assert :ok = Task.await(terminate_task, 1_000)
+      assert :ok = Task.await(terminate_task, @terminate_detection_budget_ms)
       assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
       assert_response_task_stopped!(state)
 
@@ -364,7 +374,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
                owners_failed: 1,
                turns_completed: 0,
                turns_aborted: 0
-             } = Task.await(drain_task, 1_000)
+             } = Task.await(drain_task, @detection_budget_ms)
 
       refute_received {:rollout_drain_deadline_wait, ^deadline, _wait_ms}
     after
@@ -402,7 +412,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
-                   1_000
+                   @detection_budget_ms
 
     harness = start_rollout_drain_harness()
     deadline = harness.deadline
@@ -450,10 +460,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
 
     assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, wait_ms)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
-    assert %{turns_completed: 1, turns_aborted: 0} = Task.await(drain_task, 1_000)
+    assert %{turns_completed: 1, turns_aborted: 0} = Task.await(drain_task, @detection_budget_ms)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
-                   1_000
+                   @detection_budget_ms
 
     send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
     assert_owner_success_preserved!(%{request: request, attempt: attempt, turn: turn})
@@ -875,7 +885,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_budget_ms
 
     assert_receive {:websocket_owner_cleanup_witness, _, _, _, _} = cleanup_message,
                    @handoff_detection_timeout_ms
