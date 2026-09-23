@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.UndeliveredCompletionRese
   # frames_after_visible=0`. The answer was billed, the client saw nothing and
   # resent the same request, and every resend (five on the websocket, six over
   # HTTPS) was refused `409 duplicate_turn`: the turn failed (findings#232 row
-  # 232-201, production 1 of 11 first-frame cuts, and locally with Codex 0.156.1
+  # 232-201, production 1 of 11 first-frame cuts, and locally with the released Codex client
   # whenever the provider answered before the closing socket reached its owner).
   # The resend is now admitted as one successor, a new dispatch as a direct
   # connection would make; each request keeps its single settlement.

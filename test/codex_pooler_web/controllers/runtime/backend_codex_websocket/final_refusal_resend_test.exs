@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalResendTest do
   # `409 duplicate_turn`, and the released Codex client's in-band compaction,
   # which resends a refused compaction frame five more times, ended showing that
   # duplicate refusal instead of the provider's (findings#254 row 254-100,
-  # Codex 0.156.1, measured with forwarding on and off). The resend gets the same
+  # released Codex client, measured with forwarding on and off). The resend gets the same
   # refusal back, without a dispatch, a reservation or a request row.
   use CodexPoolerWeb.ConnCase, async: false
 
@@ -31,7 +31,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalResendTest do
 
     upstream =
       start_upstream(
-        # provenance: observed findings#254 row 254-100 (released Codex 0.156.1 in-band compaction refused by the provider, resent five times, forwarding off)
+        # provenance: observed findings#254 row 254-100 (released Codex client in-band compaction refused by the provider, resent five times, forwarding off)
         FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([refusal]))])
       )
 
