@@ -58,6 +58,83 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptTest do
     refute inspect(unknown) =~ "prompt"
   end
 
+  # findings#232 row 232-203: the released Codex client resends the identical
+  # request after a cut that showed it only these frames, and a different one
+  # after a completed item; the receipt ranks what the socket pushed.
+  test "frame_class ranks each pushed frame by what the released client does with it" do
+    classes =
+      for type <- [
+            "response.created",
+            "response.in_progress",
+            "response.queued",
+            "response.metadata",
+            "codex.response.metadata",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.reasoning_summary_part.added",
+            "response.output_text.delta",
+            "response.function_call_arguments.delta",
+            "response.reasoning_summary_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.web_search_call.in_progress",
+            "response.output_item.done",
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+            "error"
+          ],
+          into: %{} do
+        {type, DeliveryReceipt.frame_class(CodexPooler.JSON.encode!(%{"type" => type}))}
+      end
+
+    assert classes == %{
+             "response.created" => "lifecycle",
+             "response.in_progress" => "lifecycle",
+             "response.queued" => "lifecycle",
+             "response.metadata" => "lifecycle",
+             "codex.response.metadata" => "lifecycle",
+             "response.output_item.added" => "item_added",
+             "response.content_part.added" => "part_added",
+             "response.reasoning_summary_part.added" => "part_added",
+             "response.output_text.delta" => "delta",
+             "response.function_call_arguments.delta" => "delta",
+             "response.reasoning_summary_text.delta" => "delta",
+             "response.output_text.done" => "other",
+             "response.content_part.done" => "other",
+             "response.web_search_call.in_progress" => "other",
+             "response.output_item.done" => "item_done",
+             "response.completed" => "terminal",
+             "response.failed" => "terminal",
+             "response.incomplete" => "terminal",
+             "error" => "terminal"
+           }
+
+    assert DeliveryReceipt.frame_class("{not json") == "other"
+    assert DeliveryReceipt.frame_class(CodexPooler.JSON.encode!(%{"delta" => "no type"})) == "other"
+    assert DeliveryReceipt.frame_class(:not_binary) == "other"
+
+    sse = "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\"}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\"}\n\n"
+    assert DeliveryReceipt.frame_class(sse) == "item_done"
+
+    assert DeliveryReceipt.resendable_frame_classes() == ~w(lifecycle item_added part_added delta)
+    assert Enum.all?(DeliveryReceipt.resendable_frame_classes(), &(&1 in DeliveryReceipt.frame_classes()))
+  end
+
+  test "higher_frame_class keeps the highest class pushed, and the receipt carries it only when classified" do
+    highest = Enum.reduce(~w(lifecycle delta item_added lifecycle), nil, &DeliveryReceipt.higher_frame_class(&2, &1))
+    assert highest == "delta"
+    assert DeliveryReceipt.higher_frame_class("delta", "other") == "other"
+    assert DeliveryReceipt.higher_frame_class("item_done", "delta") == "item_done"
+    assert DeliveryReceipt.higher_frame_class("terminal", "item_done") == "terminal"
+    assert DeliveryReceipt.higher_frame_class("prompt text", "delta") == "other"
+
+    assert DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: "delta"})["highest_frame_class"] == "delta"
+    assert DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: nil})["highest_frame_class"] == "none"
+    assert DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: "Bearer sk-secret"})["highest_frame_class"] == "other"
+    refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", transport: "http_sse"}), "highest_frame_class")
+  end
+
   test "terminal_class maps provider terminal outcomes onto the fixed vocabulary" do
     completed = ~s({"type":"response.completed","response":{"id":"resp_class_completed"}})
     legacy = ~s({"id":"resp_class_legacy","object":"response"})

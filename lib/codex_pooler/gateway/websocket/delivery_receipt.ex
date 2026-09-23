@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
 
   alias CodexPooler.Accounting.Attempt
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Repo
 
@@ -26,6 +27,21 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   @unknown "unknown"
   @none "none"
   @persist_timeout_ms 5_000
+  # The highest class of frame a socket pushed for a turn, ranked by what the
+  # released Codex client does with it (findings#232 row 232-203, measured with
+  # Codex 0.156.1; `codex-api/src/sse/responses.rs` and `core/src/session/turn.rs`
+  # at rust-v0.156.1): lifecycle frames, an output item or content/summary part
+  # being opened, and deltas only stream into the client's view and record
+  # nothing in its history, so after a cut it discards them and resends the
+  # identical request; `response.output_item.done` records an item and changes
+  # what it sends next; a terminal ends the turn. `other` is every frame this
+  # ranking does not know, and ranks above the resendable classes so it keeps
+  # the fence.
+  @frame_classes ~w(none lifecycle item_added part_added delta other item_done terminal)
+  @resendable_frame_classes ~w(lifecycle item_added part_added delta)
+  @lifecycle_frame_types ~w(response.created response.in_progress response.queued response.metadata)
+  @part_added_frame_types ~w(response.content_part.added response.reasoning_summary_part.added)
+  @terminal_frame_types ~w(response.completed response.done response.failed response.incomplete error)
 
   @type outcome :: String.t()
   @type terminal_class :: String.t() | nil
@@ -54,6 +70,43 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   @spec transports() :: [String.t()]
   def transports, do: @transports
 
+  @doc "Every value `build/1` can persist under `highest_frame_class`, lowest first."
+  @spec frame_classes() :: [String.t()]
+  def frame_classes, do: @frame_classes
+
+  @doc """
+  The frame classes after which the released Codex client resends the identical
+  request when its connection is cut: nothing it was pushed completed an item
+  or ended the turn.
+  """
+  @spec resendable_frame_classes() :: [String.t()]
+  def resendable_frame_classes, do: @resendable_frame_classes
+
+  @doc """
+  Classifies one downstream frame (a websocket JSON text, or complete SSE
+  blocks, whose highest class wins) onto `frame_classes/0`. Only the event type
+  is read; anything that does not decode is `other`.
+  """
+  @spec frame_class(binary() | term()) :: String.t()
+  def frame_class(data) when is_binary(data) do
+    case CodexPooler.JSON.decode(data) do
+      {:ok, %{} = decoded} -> type_frame_class(Map.get(decoded, "type"))
+      _not_json -> sse_frame_class(data)
+    end
+  end
+
+  def frame_class(_data), do: "other"
+
+  @doc "The higher of two frame classes; `nil` is no frame pushed yet."
+  @spec higher_frame_class(String.t() | nil, String.t()) :: String.t()
+  def higher_frame_class(nil, class) when class in @frame_classes, do: class
+
+  def higher_frame_class(current, class) when current in @frame_classes and class in @frame_classes do
+    if frame_class_rank(class) > frame_class_rank(current), do: class, else: current
+  end
+
+  def higher_frame_class(_current, _class), do: "other"
+
   @doc """
   Builds the persisted receipt from socket-side evidence.
 
@@ -69,7 +122,57 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
       "frames_after_visible" => frame_count(Map.get(fields, :frames_after_visible)),
       "transport" => vocabulary(Map.get(fields, :transport), @transports, @default_transport)
     }
+    |> maybe_put_highest_frame_class(fields)
   end
+
+  # Only a transport that classifies what it pushed writes the field (the
+  # native websocket); a receipt without it keeps meaning "not classified".
+  defp maybe_put_highest_frame_class(receipt, %{highest_frame_class: class}),
+    do: Map.put(receipt, "highest_frame_class", highest_frame_class_value(class))
+
+  defp maybe_put_highest_frame_class(receipt, _fields), do: receipt
+
+  defp highest_frame_class_value(nil), do: @none
+  defp highest_frame_class_value(class), do: vocabulary(class, @frame_classes, "other")
+
+  defp sse_frame_class(data) do
+    case SSEParser.complete_sse_blocks(data, bounded?: false) do
+      {[_block | _rest] = blocks, ""} ->
+        Enum.reduce(blocks, nil, fn block, highest ->
+          higher_frame_class(highest, sse_block_frame_class(block))
+        end)
+
+      _incomplete ->
+        "other"
+    end
+  end
+
+  defp sse_block_frame_class(block) do
+    decoded = block |> SSEParser.sse_field("data") |> SSEParser.decode_sse_data()
+
+    type =
+      case decoded do
+        %{"type" => type} when is_binary(type) -> type
+        _other -> SSEParser.sse_field(block, "event")
+      end
+
+    type_frame_class(type)
+  end
+
+  defp type_frame_class(type) when type in @lifecycle_frame_types, do: "lifecycle"
+  defp type_frame_class("codex." <> _rest), do: "lifecycle"
+  defp type_frame_class("response.output_item.added"), do: "item_added"
+  defp type_frame_class(type) when type in @part_added_frame_types, do: "part_added"
+  defp type_frame_class("response.output_item.done"), do: "item_done"
+  defp type_frame_class(type) when type in @terminal_frame_types, do: "terminal"
+
+  defp type_frame_class("response." <> _rest = type) do
+    if String.ends_with?(type, ".delta"), do: "delta", else: "other"
+  end
+
+  defp type_frame_class(_type), do: "other"
+
+  defp frame_class_rank(class), do: Enum.find_index(@frame_classes, &(&1 == class))
 
   @doc """
   Classifies a downstream frame as a terminal of the fixed vocabulary, or `nil`

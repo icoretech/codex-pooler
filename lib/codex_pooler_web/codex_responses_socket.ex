@@ -3700,14 +3700,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     match?(%{terminal_class: "error", skipped?: false}, downstream_delivery_evidence(state, pid))
   end
 
+  # Besides the count, the evidence keeps the highest class of frame pushed
+  # (`DeliveryReceipt.frame_class/1`): a turn cut after only lifecycle, item or
+  # part openings and deltas is resent identically by the released client, one
+  # that pushed a completed item or a terminal is not (findings#232 row 232-203).
   defp count_downstream_frame(state, pid, data) when is_pid(pid) and is_binary(data) do
     if response_task_delivery_candidate?(state, pid) and
          not StreamProtocol.internal_control_event?(data) do
-      update_downstream_delivery_evidence(
-        state,
-        pid,
-        &Map.update!(&1, :frames, fn n -> n + 1 end)
-      )
+      class = DeliveryReceipt.frame_class(data)
+
+      update_downstream_delivery_evidence(state, pid, fn evidence ->
+        evidence
+        |> Map.update!(:frames, &(&1 + 1))
+        |> Map.put(:highest_class, DeliveryReceipt.higher_frame_class(Map.get(evidence, :highest_class), class))
+      end)
     else
       state
     end
@@ -3799,12 +3805,24 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         outcome: downstream_delivery_outcome(ack, evidence),
         terminal_class: evidence.terminal_class,
         pushed_at: evidence.pushed_at,
-        frames_after_visible: evidence.frames
+        frames_after_visible: evidence.frames,
+        highest_frame_class: highest_pushed_frame_class(evidence)
       })
     )
   end
 
   defp record_downstream_delivery_receipt(_cleanup, _evidence, _state, _ack), do: :ok
+
+  # A terminal the socket pushed itself (its own error frame) is recorded only
+  # as `terminal_class`; it ranks as a terminal here too. A skipped terminal was
+  # never pushed.
+  defp highest_pushed_frame_class(%{terminal_class: class} = evidence) when is_binary(class) do
+    if Map.get(evidence, :skipped?) == true,
+      do: Map.get(evidence, :highest_class),
+      else: DeliveryReceipt.higher_frame_class(Map.get(evidence, :highest_class), "terminal")
+  end
+
+  defp highest_pushed_frame_class(evidence), do: Map.get(evidence, :highest_class)
 
   defp downstream_delivery_outcome(:aborted, _evidence), do: "aborted"
   defp downstream_delivery_outcome(_ack, %{skipped?: true}), do: "skipped"
@@ -4882,6 +4900,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       previsible_direct_task?(state, pid) ->
         stop_previsible_direct_task(state, pid, context)
 
+      resendable_postvisible_direct_task?(state, pid) ->
+        stop_previsible_direct_task(state, pid, context)
+
       true ->
         cancel_direct_response(state, pid, context)
     end
@@ -4900,6 +4921,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       not Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid) and
       Process.alive?(pid)
   end
+
+  # A direct task whose client was shown only frames the released client
+  # discards (lifecycle, an item or part opening, deltas; no completed item and
+  # no terminal) is stopped the same way: the client resends the identical
+  # request, which is admitted as the turn's successor
+  # (`ClientRetry.verified_undelivered_partial_output?/3`), and a task left
+  # running inside the post-cleanup grace would stream a second generation
+  # beside it, the way the owner path already avoids by cancelling its active
+  # turn at the detach (findings#232 row 232-203). A turn whose client saw a
+  # completed item keeps the grace and its late-answer correction (row 232-173).
+  defp resendable_postvisible_direct_task?(state, pid) do
+    client_visible_output?(state, pid) and
+      not Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid) and
+      resendable_delivery_evidence?(downstream_delivery_evidence(state, pid)) and
+      Process.alive?(pid)
+  end
+
+  defp resendable_delivery_evidence?(%{terminal_class: nil} = evidence),
+    do: Map.get(evidence, :highest_class) in DeliveryReceipt.resendable_frame_classes()
+
+  defp resendable_delivery_evidence?(_evidence), do: false
 
   # Stopped only while it waits on its upstream request (findings#206 row
   # 206-110: under load the stop landed inside a query, a commit or the task's

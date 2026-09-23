@@ -32,6 +32,9 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @stream_error_code "upstream_stream_error"
   @compaction_retry_window_seconds 330
   @authority_poison_reasons [:malformed_event, :unknown_completed_item, :unknown_response_event]
+  # `DeliveryReceipt.resendable_frame_classes/0`, kept literal: accounting does
+  # not reference the gateway receipt module at compile time.
+  @resendable_frame_classes ~w(lifecycle item_added part_added delta)
 
   defmodule SuccessorClaim do
     @moduledoc false
@@ -1274,7 +1277,8 @@ defmodule CodexPooler.Accounting.ClientRetry do
         &verified_latest_quota_rejection?/3,
         &verified_lifecycle_cut?/3,
         &verified_previsible_disconnect?/3,
-        &verified_undelivered_completion?/3
+        &verified_undelivered_completion?/3,
+        &verified_undelivered_partial_output?/3
       ],
       & &1.(turn, request, attempt)
     )
@@ -1546,6 +1550,57 @@ defmodule CodexPooler.Accounting.ClientRetry do
       do: true
 
   def verified_undelivered_completion?(_turn, _request, _attempt), do: false
+
+  @doc """
+  A native websocket turn whose socket pushed the client nothing beyond
+  lifecycle frames, the opening of an output item or of a content/summary part
+  and deltas before the client left (`downstream_delivery` outcome `aborted`,
+  terminal class `none`, `highest_frame_class` one of
+  `DeliveryReceipt.resendable_frame_classes/0`). The released Codex client
+  treats such a turn as not received: it discards the partial output and
+  resends the identical request, and nothing it was shown completed an item or
+  ran a tool (findings#232 row 232-203, measured with Codex 0.156.1; a direct
+  provider serves that resend). The turn either settled `client_disconnected`
+  after its output became visible (the owner, or the closing socket, stopped
+  its generation) or the provider completed it after the client left; either
+  way the resend is admitted as one successor, a new dispatch with its own
+  single settlement. A pushed `response.output_item.done`, a terminal, or a
+  frame the classification does not know keeps the fence, and so does a
+  receipt without the field (written before it existed). Only the ordinary
+  Responses route, generation zero.
+  """
+  @spec verified_undelivered_partial_output?(term(), term(), term()) :: boolean()
+  def verified_undelivered_partial_output?(
+        %CodexTurn{final_attempt_id: attempt_id, transport_kind: "websocket", completed_at: %DateTime{}} = turn,
+        %Request{transport: "websocket", endpoint: "/backend-api/codex/responses", completed_at: %DateTime{}} = request,
+        %Attempt{
+          id: attempt_id,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata: %{"downstream_delivery" => %{"outcome" => "aborted", "terminal_class" => "none", "highest_frame_class" => class}}
+        } = attempt
+      )
+      when is_binary(attempt_id) and class in @resendable_frame_classes,
+      do: undelivered_partial_output_settlement?(turn, request, attempt)
+
+  def verified_undelivered_partial_output?(_turn, _request, _attempt), do: false
+
+  defp undelivered_partial_output_settlement?(
+         %CodexTurn{status: "succeeded"},
+         %Request{status: "succeeded"},
+         %Attempt{status: "succeeded"}
+       ),
+       do: true
+
+  defp undelivered_partial_output_settlement?(
+         %CodexTurn{status: "interrupted", error_code: "client_disconnected"},
+         %Request{status: "failed", last_error_code: "client_disconnected"},
+         %Attempt{status: "failed", network_error_code: "client_disconnected"}
+       ),
+       do: true
+
+  defp undelivered_partial_output_settlement?(_turn, _request, _attempt), do: false
 
   defp latest_attempt?(%Attempt{} = attempt) do
     not Repo.exists?(

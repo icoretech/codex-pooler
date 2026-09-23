@@ -455,6 +455,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
              "terminal_class" => "none",
              "pushed_at" => nil,
              "frames_after_visible" => 1,
+             "highest_frame_class" => "lifecycle",
              "transport" => "websocket"
            }
 

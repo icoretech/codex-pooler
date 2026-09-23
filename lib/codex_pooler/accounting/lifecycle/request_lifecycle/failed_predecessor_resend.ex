@@ -78,6 +78,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           | :advanced_http_resume
           | :previsible_disconnect
           | :undelivered_completion
+          | :undelivered_partial_output
 
   @type resolution :: %{
           claim: String.t(),
@@ -201,7 +202,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          true <-
            ClientRetry.verified_dead_execution?(turn, request, attempt) or
              ClientRetry.verified_quota_rejection?(turn, request, attempt) or
-             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion] do
+             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion, :undelivered_partial_output] do
       :ok
     else
       _invalid -> {:error, :terminal_predecessor}
@@ -247,19 +248,30 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     end
   end
 
-  # A completed turn whose socket pushed nothing of it to the client (the
+  # A completed turn whose socket pushed nothing of it to the client, or only
+  # frames after which the released client resends the identical request (the
   # client resends it); `ClientRetry.verified_undelivered_completion?/3`
-  # (findings#232 row 232-201). The turn-claim branch still requires the witness.
+  # (findings#232 row 232-201) and `verified_undelivered_partial_output?/3`
+  # (row 232-203). The turn-claim branch still requires the witness.
   defp undelivered_completion(request, scope, now) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
+    shape = undelivered_completion_shape(turn, request, attempt)
 
     cond do
       Map.get(scope, :semantic_claim?) != true -> {:error, :terminal_predecessor}
-      not ClientRetry.verified_undelivered_completion?(turn, request, attempt) -> {:error, :terminal_predecessor}
+      is_nil(shape) -> {:error, :terminal_predecessor}
       live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
       entitlement?(request.id) -> {:error, :entitlement_present}
-      true -> with :ok <- validate_retry_window(request.completed_at, now), do: {:ok, :undelivered_completion}
+      true -> with :ok <- validate_retry_window(request.completed_at, now), do: {:ok, shape}
+    end
+  end
+
+  defp undelivered_completion_shape(turn, request, attempt) do
+    cond do
+      ClientRetry.verified_undelivered_completion?(turn, request, attempt) -> :undelivered_completion
+      ClientRetry.verified_undelivered_partial_output?(turn, request, attempt) -> :undelivered_partial_output
+      true -> nil
     end
   end
 
@@ -334,8 +346,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     cond do
       advanced_http_resume?(request, scope) -> {:ok, :advanced_http_resume}
       previsible_websocket_disconnect?(request) -> {:ok, :previsible_disconnect}
+      undelivered_partial_output?(request) -> {:ok, :undelivered_partial_output}
       true -> {:error, :terminal_predecessor}
     end
+  end
+
+  # A websocket turn whose client left after seeing only frames the released
+  # client discards (lifecycle, an item or part opening, deltas): the closing
+  # socket or the owner stopped its generation, and the client resends the
+  # identical request (findings#232 row 232-203,
+  # `ClientRetry.verified_undelivered_partial_output?/3`).
+  defp undelivered_partial_output?(%Request{} = request) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+    ClientRetry.verified_undelivered_partial_output?(turn, request, attempt)
   end
 
   defp lock_turn(request_id) do
