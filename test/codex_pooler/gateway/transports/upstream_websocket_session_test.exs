@@ -3494,7 +3494,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       end)
 
     # response.created is pushed; the queued call stays queued while the turn
-    # is still collecting frames.
+    # is still collecting frames. The frame's call has no bound of its own, so
+    # a stalled test cannot see it give up (findings#206 row 206-321).
     assert :ok = FakeUpstream.release_frame(upstream, first_release_ref)
     assert_receive {:fake_upstream_frame_barrier, 1, _handler, ^first_release_ref}, @message_detection_timeout_ms
     assert_receive {:upstream_websocket_frame, _created}, @message_detection_timeout_ms
@@ -3516,6 +3517,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert [turn_request, ack_request] = FakeUpstream.requests(upstream)
     assert turn_request.websocket_connection_id == ack_request.websocket_connection_id
     assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  # A request frame has no call bound of its own (findings#206 row 206-322), so
+  # a session that stops while the frame waits in its mailbox must still end the
+  # call at once instead of leaving the caller waiting.
+  test "a queued request frame answers unavailable at once when the session stops" do
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    Process.unlink(session)
+    session_monitor = Process.monitor(session)
+    :ok = :sys.suspend(session)
+
+    send_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.send_request_frame(
+          session,
+          CodexPooler.JSON.encode!(%{"type" => "response.processed", "response_id" => "resp_ws_stopped_session"})
+        )
+      end)
+
+    assert_stack_eventually_in(send_task.pid, UpstreamWebsocketSession, :send_request_frame, 2, @message_detection_timeout_ms)
+    assert_message_queue_eventually_nonempty(session)
+
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^session_monitor, :process, ^session, :killed}, @message_detection_timeout_ms
+    assert {:error, :upstream_websocket_session_unavailable} = Task.await(send_task, @message_detection_timeout_ms)
   end
 
   test "opens a new upstream websocket connection when bearer changes between turns" do
@@ -6496,6 +6522,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       }
     else
       %{alive_tasks: [], client_socket_count: 0}
+    end
+  end
+
+  # A suspended process still counts its mailbox; `Process.info(pid, :messages)`
+  # can read empty for it.
+  defp assert_message_queue_eventually_nonempty(pid) do
+    deadline = System.monotonic_time(:millisecond) + @message_detection_timeout_ms
+    assert_message_queue_eventually_nonempty(pid, deadline)
+  end
+
+  defp assert_message_queue_eventually_nonempty(pid, deadline) do
+    {:message_queue_len, queued} = Process.info(pid, :message_queue_len)
+
+    cond do
+      queued > 0 ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("expected a queued message in #{inspect(pid)}")
+
+      true ->
+        Process.sleep(10)
+        assert_message_queue_eventually_nonempty(pid, deadline)
     end
   end
 

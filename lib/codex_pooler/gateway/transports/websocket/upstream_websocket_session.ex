@@ -121,9 +121,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       request_error(:upstream_websocket_session_unavailable, %{})
   end
 
+  # A frame waits for the session like a request does. The session serves one
+  # call at a time and holds a request's call until its turn settles, so a frame
+  # sent while a turn is still collecting upstream frames is served right after
+  # it, on the same connection; the turn's own connect and receive timeouts end
+  # a stalled turn. A fixed call bound only abandoned the reply: the queued
+  # frame still went upstream once the turn ended, while the caller had already
+  # answered its client that the forward failed and recorded nothing
+  # (findings#206 row 206-322). A session that stops still ends the call at
+  # once, as `upstream_websocket_session_unavailable`.
   @spec send_request_frame(pid(), binary()) :: send_result()
   def send_request_frame(pid, payload) when is_pid(pid) and is_binary(payload) do
-    GenServer.call(pid, {:send_text, payload}, 1_000)
+    GenServer.call(pid, {:send_text, payload}, :infinity)
   catch
     :exit, _reason -> {:error, :upstream_websocket_session_unavailable}
   end

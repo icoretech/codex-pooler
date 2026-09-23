@@ -2145,6 +2145,118 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
     assert [%{"type" => "additional_tools"} | _input] = captured.json["input"]
   end
 
+  # The call bound `UpstreamWebsocketSession.send_request_frame/2` used to
+  # carry (findings#206 row 206-322).
+  @former_frame_call_bound_ms 1_000
+
+  # The session serves one call at a time and holds a turn's call until the turn
+  # settles. On a direct socket a response.processed whose call reaches the
+  # session behind a fresh turn's request waits for that turn; the test holds
+  # the session with :sys.suspend/1 to stand for that turn. The fixed one-second
+  # call bound answered the client 502 upstream_websocket_forward_failed and
+  # recorded nothing, while the queued frame still reached the provider once
+  # the session was free.
+  @tag :websocket_persistent_upstream_session
+  @tag slow: "the acknowledgement must outlive the former fixed one-second send_request_frame call bound, which has no injectable clock"
+  test "a response.processed queued behind a busy upstream session is forwarded once and acknowledged" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_busy_session",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-busy-session-processed",
+          accepted_turn_state: "stable-ws-busy-session-processed",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    try do
+      first_payload =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "message", "role" => "user", "content" => "first"}],
+          "stream" => true,
+          "generate" => true
+        })
+
+      assert {:ok, state} = CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, state)
+      assert {:push, {:text, first_frame}, state} = receive_socket_push(state)
+      assert %{"id" => "resp_ws_busy_session"} = CodexPooler.JSON.decode!(first_frame)
+      assert {:ok, state} = receive_socket_done(state)
+
+      session = state.upstream_websocket_session
+      assert is_pid(session)
+      ledger_entries_before = Repo.aggregate(LedgerEntry, :count)
+
+      processed_payload =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.processed",
+          "response_id" => "resp_ws_busy_session"
+        })
+
+      :ok = :sys.suspend(session)
+
+      state =
+        try do
+          tasks_before = Map.get(state, :tasks, MapSet.new())
+          assert {:ok, state} = CodexResponsesSocket.handle_in({processed_payload, [opcode: :text]}, state)
+          assert [task] = state |> Map.get(:tasks, MapSet.new()) |> MapSet.difference(tasks_before) |> MapSet.to_list()
+          await_frame_call_queued!(task, session)
+
+          refute_receive {:codex_response_done, ^task, _result}, @former_frame_call_bound_ms + 200
+          state
+        after
+          :ok = :sys.resume(session)
+        end
+
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert [turn_request, processed_request] = FakeUpstream.requests(upstream)
+      assert processed_request.websocket_connection_id == turn_request.websocket_connection_id
+      assert processed_request.json == %{"response_id" => "resp_ws_busy_session", "type" => "response.processed"}
+
+      assert [ack] = Repo.all(from(request in Request, where: fragment("?->>'response_processed' = 'true'", request.request_metadata)))
+      assert %Request{status: "succeeded", response_status_code: 200, last_error_code: nil} = ack
+      assert Repo.aggregate(LedgerEntry, :count) == ledger_entries_before
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  defp await_frame_call_queued!(task, session) do
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
+    await_frame_call_queued!(task, session, deadline)
+  end
+
+  defp await_frame_call_queued!(task, session, deadline) do
+    {:current_stacktrace, stack} = Process.info(task, :current_stacktrace)
+    {:message_queue_len, queued} = Process.info(session, :message_queue_len)
+
+    cond do
+      queued > 0 and Enum.any?(stack, &match?({UpstreamWebsocketSession, :send_request_frame, 2, _location}, &1)) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("the response.processed call never reached the suspended upstream session")
+
+      true ->
+        Process.sleep(10)
+        await_frame_call_queued!(task, session, deadline)
+    end
+  end
+
   defp anchor_payload(model_id) do
     CodexPooler.JSON.encode!(%{
       "type" => "response.create",
