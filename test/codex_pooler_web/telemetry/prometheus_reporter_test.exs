@@ -76,24 +76,40 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
   test "periodically folds unscripted distribution samples and serializes concurrent scrapes" do
     name = unique_name()
 
+    # A buffer label no other emitter uses, so the series below belong to this
+    # test alone in the application registry.
+    buffer = "prometheus-reporter-#{System.unique_integer([:positive])}"
+
     {:ok, pid} =
       start_supervised({PrometheusReporter, name: name, interval_ms: 10, fold_notify: self()})
 
     for _ <- 1..5 do
       :telemetry.execute(
-        [:codex_pooler, :gateway, :stream, :buffer, :oversized],
-        %{bytes: 65_536},
-        %{buffer: "test", endpoint: "test", route_class: "proxy_stream", transport: "http_sse"}
+        [:codex_pooler, :gateway, :stream_buffer, :oversized],
+        %{bytes: 65_536, count: 1},
+        %{buffer: buffer, endpoint: "test", route_class: "proxy_stream", transport: "http_sse"}
       )
     end
 
-    assert_receive {:prometheus_folded, ^pid}, 1_000
+    # A fold may already be running when the executes finish. After dropping
+    # the notices received so far, the second new notice comes from a fold that
+    # started after the first one ended, so it rendered every sample above.
+    flush_folds(pid)
+    assert_receive {:prometheus_folded, ^pid}, @detection_timeout_ms
+    assert_receive {:prometheus_folded, ^pid}, @detection_timeout_ms
+
     tasks = for _ <- 1..8, do: Task.async(fn -> PrometheusReporter.scrape(name) end)
     bodies = Enum.map(tasks, &Task.await(&1, @detection_timeout_ms))
-    assert Enum.uniq(bodies) |> length() == 1
-    assert is_binary(hd(bodies))
-    assert hd(bodies) == PrometheusReporter.scrape(name)
-    assert hd(bodies) =~ "codex_pooler_gateway_admission_queued"
+    assert Enum.all?(bodies, &(is_binary(&1) and &1 =~ "codex_pooler_gateway_admission_queued"))
+
+    # The reporter keeps folding the application registry every 10 ms, and the
+    # VM poller and other emitters move unrelated series between any two
+    # scrapes (findings#206 row 206-274), so only this test's series are
+    # compared.
+    assert [series] = bodies |> Enum.map(&owned_series(&1, buffer)) |> Enum.uniq()
+    assert Enum.any?(series, &(&1 =~ ~r/^codex_pooler_gateway_stream_buffer_oversized_count\{.*\} 5$/))
+    assert Enum.any?(series, &(&1 =~ ~r/^codex_pooler_gateway_stream_buffer_oversized_bytes_count\{.*\} 5$/))
+    assert owned_series(PrometheusReporter.scrape(name), buffer) == series
   end
 
   test "scrapes an isolated real Core registry and matches its direct output" do
@@ -231,11 +247,11 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     # the assertion below could pass on a metric nothing ever recorded.
     assert :ets.lookup(dist_table, metric.name) != []
 
-    assert_receive {:prometheus_folded, _pid}, 1_000
+    assert_receive {:prometheus_folded, _pid}, @detection_timeout_ms
 
     # A fold may land between two of the executes above, so wait for one that
     # started after the last of them before reading the drained table.
-    assert_receive {:prometheus_folded, _pid}, 1_000
+    assert_receive {:prometheus_folded, _pid}, @detection_timeout_ms
 
     assert :ets.lookup(dist_table, metric.name) == [],
            "an unscraped node kept raw distribution samples, so they grow without bound"
@@ -248,6 +264,20 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
 
     assert sum == Enum.sum(observations)
     assert buckets == [{"10", 2}, {"20", 4}, {"50", 6}, {"+Inf", 7}]
+  end
+
+  defp owned_series(body, buffer) do
+    body
+    |> String.split("\n")
+    |> Enum.filter(&String.contains?(&1, ~s(buffer="#{buffer}")))
+  end
+
+  defp flush_folds(pid) do
+    receive do
+      {:prometheus_folded, ^pid} -> flush_folds(pid)
+    after
+      0 -> :ok
+    end
   end
 
   defp unique_name, do: Module.concat(__MODULE__, "Reporter#{System.unique_integer([:positive])}")
