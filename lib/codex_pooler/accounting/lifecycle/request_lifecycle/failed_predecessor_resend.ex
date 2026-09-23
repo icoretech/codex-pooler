@@ -77,6 +77,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           | :partial_reasoning_cut
           | :advanced_http_resume
           | :previsible_disconnect
+          | :undelivered_completion
 
   @type resolution :: %{
           claim: String.t(),
@@ -200,7 +201,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          true <-
            ClientRetry.verified_dead_execution?(turn, request, attempt) or
              ClientRetry.verified_quota_rejection?(turn, request, attempt) or
-             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut] do
+             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion] do
       :ok
     else
       _invalid -> {:error, :terminal_predecessor}
@@ -229,6 +230,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       request.status in @live_request_statuses or is_nil(request.completed_at) ->
         {:error, :active_predecessor}
 
+      request.status == "succeeded" ->
+        undelivered_completion(request, scope, now)
+
       request.status != "failed" or is_nil(family) ->
         {:error, :terminal_predecessor}
 
@@ -240,6 +244,22 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
       true ->
         admit_predecessor(request, family, scope, now)
+    end
+  end
+
+  # A completed turn whose socket pushed nothing of it to the client (the
+  # client resends it); `ClientRetry.verified_undelivered_completion?/3`
+  # (findings#232 row 232-201). The turn-claim branch still requires the witness.
+  defp undelivered_completion(request, scope, now) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+
+    cond do
+      Map.get(scope, :semantic_claim?) != true -> {:error, :terminal_predecessor}
+      not ClientRetry.verified_undelivered_completion?(turn, request, attempt) -> {:error, :terminal_predecessor}
+      live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
+      entitlement?(request.id) -> {:error, :entitlement_present}
+      true -> with :ok <- validate_retry_window(request.completed_at, now), do: {:ok, :undelivered_completion}
     end
   end
 

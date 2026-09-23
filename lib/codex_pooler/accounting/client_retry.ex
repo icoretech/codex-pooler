@@ -1273,7 +1273,8 @@ defmodule CodexPooler.Accounting.ClientRetry do
         &verified_provider_terminal_failure?/3,
         &verified_latest_quota_rejection?/3,
         &verified_lifecycle_cut?/3,
-        &verified_previsible_disconnect?/3
+        &verified_previsible_disconnect?/3,
+        &verified_undelivered_completion?/3
       ],
       & &1.(turn, request, attempt)
     )
@@ -1503,6 +1504,48 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: true
 
   defp verified_previsible_disconnect?(_turn, _request, _attempt), do: false
+
+  @doc """
+  A native websocket turn the provider completed while its client was already
+  gone: the socket that carried it acknowledged it aborted and pushed nothing of
+  it, not even a lifecycle event (`downstream_delivery` outcome `aborted`,
+  terminal class `none`, zero frames). The answer was billed but the client saw
+  nothing and resends the same request; refusing that resend failed the turn on
+  every retry and then over HTTPS (findings#232 row 232-201, production and the
+  released Codex 0.156.1 locally). It is admitted as one successor, a new
+  dispatch as a direct connection would make, and each request keeps its own
+  single settlement. Only the ordinary Responses route; a push of any frame,
+  even one the client may not have received, keeps the fence (row 232-203).
+  """
+  @spec verified_undelivered_completion?(term(), term(), term()) :: boolean()
+  def verified_undelivered_completion?(
+        %CodexTurn{
+          status: "succeeded",
+          final_attempt_id: attempt_id,
+          transport_kind: "websocket",
+          completed_at: %DateTime{}
+        },
+        %Request{
+          status: "succeeded",
+          transport: "websocket",
+          endpoint: "/backend-api/codex/responses",
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          id: attempt_id,
+          status: "succeeded",
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata: %{
+            "downstream_delivery" => %{"outcome" => "aborted", "terminal_class" => "none", "frames_after_visible" => 0}
+          }
+        }
+      )
+      when is_binary(attempt_id),
+      do: true
+
+  def verified_undelivered_completion?(_turn, _request, _attempt), do: false
 
   defp latest_attempt?(%Attempt{} = attempt) do
     not Repo.exists?(
