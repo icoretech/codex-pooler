@@ -7648,7 +7648,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert %{"error" => error} = json_response(response, status)
       assert error["message"] == "upstream request failed"
-      assert error["type"] == "server_error"
+      # A refused 400 is typed as the client's error; the upstream 401/403
+      # (the upstream account's standing) keep `server_error` (findings#254
+      # row 254-51).
+      assert error["type"] == if(status == 400, do: "invalid_request_error", else: "server_error")
       assert error["code"] == code
       refute Map.has_key?(error, "param")
       refute response.resp_body =~ provider_message
@@ -10669,7 +10672,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert %{"error" => error} = json_response(conn, 400)
     assert error["message"] == "upstream request failed"
-    assert error["type"] == "server_error"
+    # Typed from the 400 it rides on, not as the retryable server class
+    # (findings#254 row 254-51).
+    assert error["type"] == "invalid_request_error"
     assert error["code"] == "upstream_status"
     refute Map.has_key?(error, "param")
     refute conn.resp_body =~ "synthetic startup rejection"

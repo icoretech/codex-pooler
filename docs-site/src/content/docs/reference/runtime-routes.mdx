@@ -654,6 +654,14 @@ codes, `{"detail": ...}` bodies, and compact routes. The request remains a non-r
 recorded as `upstream_status`, and the rejection does not demote the upstream
 or affect its circuit.
 
+On `/v1`, such a failure keeps the redacted error (`upstream request failed`,
+code `upstream_status` or the upstream code, no param) on HTTP and in the
+`GET /v1/responses` websocket `error` event. Its `type` follows the status it is
+answered with: `invalid_request_error` for a refused `4xx` such as `400` or
+`422`, and `server_error` for an upstream `401` or `403` (the upstream account's
+credentials or standing, not the request), a `429`, a `5xx`, and an upstream
+`404`, which `/v1` answers as `502`.
+
 ### Unsupported `/v1` Responses request shapes
 
 These `POST /v1/responses` request shapes return OpenAI-shaped `invalid_request` before gateway dispatch, not `unsupported_endpoint`:

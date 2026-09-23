@@ -208,11 +208,55 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
         })
 
       assert %{"error" => error} = json_response(response, expected_status), label
-      assert error["type"] == "server_error", label
+      # Redacted, but a refused 400 is typed as the client's error: the
+      # retryable `server_error` class contradicted it (findings#254 row
+      # 254-51). An upstream 403 is the upstream account's standing and keeps
+      # `server_error`.
+      assert error["type"] == if(expected_status == 400, do: "invalid_request_error", else: "server_error"), label
       assert error["message"] == "upstream request failed", label
       refute error["code"] == "unsupported_value", label
       refute Map.has_key?(error, "param"), label
       refute response.resp_body =~ "reasoning.effort", label
+      refute response.resp_body =~ @provider_sentinel, label
+      FakeUpstream.verify!(upstream)
+    end
+  end
+
+  # A refusal outside the relay window keeps the redacted body (fixed message,
+  # stream startup code `upstream_status`, no param), typed from the status it
+  # is answered with like every other Pooler-authored error: a refused 4xx
+  # is `invalid_request_error`; the gateway failure statuses (upstream 401,
+  # 403, 429), a 5xx and an upstream 404 (answered as 502) stay `server_error`
+  # (findings#254 row 254-51).
+  test "POST /v1 types a redacted upstream refusal from the status it answers", %{conn: conn} do
+    codeless = {:json_error, 400, %{"error" => %{"type" => "invalid_request_error", "message" => "Invalid 'input[1].id': '#{@provider_sentinel}'."}}}
+
+    cases = [
+      {"responses stream 400", "/v1/responses", true, codeless, 400, "invalid_request_error"},
+      {"responses json 400", "/v1/responses", false, codeless, 400, "invalid_request_error"},
+      {"chat stream 400", "/v1/chat/completions", true, codeless, 400, "invalid_request_error"},
+      {"chat json 400", "/v1/chat/completions", false, codeless, 400, "invalid_request_error"},
+      {"responses 403", "/v1/responses", true, validation_rejection(403, "synthetic_forbidden", nil), 403, "server_error"},
+      {"responses 422", "/v1/responses", true, validation_rejection(422, "synthetic_unprocessable", nil), 422, "invalid_request_error"},
+      {"responses 429", "/v1/responses", true, validation_rejection(429, "synthetic_throttle", nil), 429, "server_error"},
+      {"responses 500", "/v1/responses", true, validation_rejection(500, "synthetic_failure", nil, "server_error"), 500, "server_error"},
+      {"responses 404", "/v1/responses", true, validation_rejection(404, "synthetic_missing", nil), 502, "server_error"}
+    ]
+
+    for {label, path, stream?, mode, expected_status, expected_type} <- cases do
+      upstream = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: mode)]))
+      setup = gateway_setup(upstream)
+
+      body =
+        if path == "/v1/chat/completions",
+          do: %{"model" => setup.model.exposed_model_id, "messages" => [%{"role" => "user", "content" => @prompt_sentinel}], "stream" => stream?},
+          else: %{"model" => setup.model.exposed_model_id, "input" => @prompt_sentinel, "stream" => stream?}
+
+      response = conn |> recycle() |> auth(setup) |> post(path, body)
+
+      assert %{"error" => error} = json_response(response, expected_status), label
+      assert error["type"] == expected_type, label
+      assert error["message"] == "upstream request failed", label
       refute response.resp_body =~ @provider_sentinel, label
       FakeUpstream.verify!(upstream)
     end

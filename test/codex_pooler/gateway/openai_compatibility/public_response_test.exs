@@ -84,11 +84,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
         "sibling" => "private_sibling"
       }
 
-      for status <- [400, 401, 403, 429, 500] do
+      for status <- [401, 403, 404, 429, 500] do
         assert PublicResponse.normalize_error(generic_error, status: status) == %{
                  "code" => "provider_code",
                  "message" => "upstream request failed",
                  "type" => "server_error"
+               }
+      end
+
+      # A refused 4xx outside the gateway failure statuses is the client's
+      # error class, whatever type the provider wrote (findings#254 row
+      # 254-51).
+      for status <- [400, 409, 422] do
+        assert PublicResponse.normalize_error(generic_error, status: status) == %{
+                 "code" => "provider_code",
+                 "message" => "upstream request failed",
+                 "type" => "invalid_request_error"
                }
       end
 
@@ -98,7 +109,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
              ) == %{
                "code" => "provider_code",
                "message" => "upstream request failed",
-               "type" => "server_error"
+               "type" => "invalid_request_error"
              }
 
       assert PublicResponse.normalize_error(

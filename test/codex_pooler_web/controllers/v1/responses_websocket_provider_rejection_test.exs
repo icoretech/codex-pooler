@@ -96,6 +96,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
 
         assert %{"type" => "error", "status" => 400, "error" => error} = CodexPooler.JSON.decode!(text)
         assert error == http_error.body["error"]
+        # Redacted on both surfaces, and typed from the 400 it rides on rather
+        # than as the retryable `server_error` class (findings#254 row 254-51).
+        assert error == %{"message" => "upstream request failed", "type" => "invalid_request_error", "code" => "upstream_status"}
         assert rejection_fields(attempt) == rejection_fields(http_error.attempt)
         assert rejection_fields(attempt)["rejection_error_type"] == "invalid_request_error"
         refute text =~ @provider_sentinel

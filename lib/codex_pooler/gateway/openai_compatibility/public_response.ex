@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @moduledoc false
 
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
 
@@ -192,12 +193,29 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   end
 
   defp redacted_error(error, opts) do
+    code = safe_source_code(opts) || safe_error_code(error) || "upstream_error"
+
     %{
       "message" => "upstream request failed",
-      "type" => "server_error",
-      "code" => safe_source_code(opts) || safe_error_code(error) || "upstream_error"
+      "type" => redacted_error_type(code, error_status(error, opts)),
+      "code" => code
     }
   end
+
+  # The redacted envelope is Codex Pooler-authored, so a refusal the client
+  # caused is typed by the shared classifier from the status it is answered
+  # with: a refused 4xx is the client's `invalid_request_error`, never
+  # `server_error`, which names the retryable class and contradicted the 400 it
+  # rode on (findings#254 row 254-51). The gateway failure statuses keep
+  # `server_error`: an upstream 401/403 is the upstream account's credential or
+  # standing, not the caller's request, and a 429 is a throttle the SDKs
+  # retry on the status alone. `/v1` answers an upstream 404 as a 502, so it
+  # keeps `server_error` too, as does every 5xx and a status-less error.
+  defp redacted_error_type(code, status)
+       when is_integer(status) and status in 400..499 and status not in [401, 403, 404, 429],
+       do: ErrorClassification.error_type(code, status)
+
+  defp redacted_error_type(_code, _status), do: "server_error"
 
   defp overload_error do
     %{

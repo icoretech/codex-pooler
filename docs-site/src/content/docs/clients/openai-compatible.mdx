@@ -480,7 +480,9 @@ the value is at most 80 bytes and matches `^[A-Za-z0-9_.-]+$`. Other code values
 A surviving code may be a Codex-backend value that is not part of the OpenAI platform `ResponseError` enum.
 
 Upstream error messages are replaced with `upstream request failed`, and upstream error types are replaced with
-`server_error`. Clients must therefore treat `error.code` as an open string: handle the values they understand and
+`server_error`, except that an upstream refusal answered with a `4xx` status other than `401`, `403`, `404` and
+`429` (for example `400` or `422`) is typed `invalid_request_error`, the class its status names.
+Clients must therefore treat `error.code` as an open string: handle the values they understand and
 keep an unknown-code fallback rather than validating against the platform enum.
 
 Public relays construct each `response.failed` envelope from a named-field projection. Unknown event, response,
