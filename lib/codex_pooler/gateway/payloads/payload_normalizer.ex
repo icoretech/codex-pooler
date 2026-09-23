@@ -310,8 +310,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   # validation rejection names the item the client sent (findings#254 row
   # 254-61). Between the two lists the Pooler only drops items (unusable
   # encrypted reasoning) or, under Lite on a request that is not anchored on
-  # `previous_response_id`, puts the tool manifest and the instructions message
-  # in front (`normalize_backend_codex_responses_lite_input/2`); every other step
+  # `previous_response_id` (or is anchored on a response served under Full),
+  # puts the tool manifest and the instructions message in front
+  # (`normalize_backend_codex_responses_lite_input/2`); every other step
   # rewrites items in place. Equal lengths without that prefix are therefore
   # the identity, and a Lite list that grew by exactly the inserted
   # count is a shift. Anything else, including a Lite list that also lost an
@@ -320,13 +321,15 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp upstream_input_index_map(%{"input" => client} = payload, %{"input" => upstream} = upstream_payload, endpoint, %RequestOptions{} = request_options)
        when is_list(client) and is_list(upstream) do
     cond do
-      endpoint == "/backend-api/codex/responses/compact" or
-        request_options.transport.upstream_endpoint == "/backend-api/codex/responses/compact" or
-          request_options.payload_context.compaction_trigger_bridge? ->
+      compact_projection?(endpoint, request_options) ->
         :unknown
 
-      not RequestOptions.use_responses_lite?(request_options) or anchored_upstream_request?(upstream_payload) ->
+      not RequestOptions.use_responses_lite?(request_options) or
+          not responses_lite_prefix_sent?(upstream_payload, request_options) ->
         if length(client) == length(upstream), do: :identity, else: :unknown
+
+      anchored_upstream_request?(upstream_payload) ->
+        declared_prefix_index_map(payload, client, upstream)
 
       true ->
         responses_lite_index_map(payload, client, upstream)
@@ -334,6 +337,25 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp upstream_input_index_map(_payload, _upstream_payload, _endpoint, _request_options), do: :unknown
+
+  defp compact_projection?(endpoint, %RequestOptions{} = request_options) do
+    endpoint == "/backend-api/codex/responses/compact" or
+      request_options.transport.upstream_endpoint == "/backend-api/codex/responses/compact" or
+      request_options.payload_context.compaction_trigger_bridge?
+  end
+
+  # An anchor served under Full gets only the prefix the client declared at
+  # top level (`declared_responses_lite_prefix/3`), in front of its input.
+  defp declared_prefix_index_map(payload, client, upstream) do
+    {tools_present?, tools, _payload} = pop_responses_lite_tools(payload)
+    inserted = length(declared_responses_lite_prefix(tools_present?, tools, Map.get(payload, "instructions")))
+
+    cond do
+      length(upstream) != length(client) + inserted -> :unknown
+      inserted == 0 -> :identity
+      true -> {:shift, 0, inserted}
+    end
+  end
 
   defp responses_lite_index_map(payload, client, upstream) do
     {tools_present?, tools, _payload} = pop_responses_lite_tools(payload)
@@ -611,7 +633,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       {instructions, payload} = Map.pop(payload, "instructions")
       input = Map.get(payload, "input", [])
       input = if is_list(input), do: input, else: []
-      {prefix, input} = responses_lite_prefix(payload, input, tools_present?, tools, instructions)
+      {prefix, input} = responses_lite_prefix(payload, request_options, input, tools_present?, tools, instructions)
 
       Map.put(payload, "input", Enum.map(prefix ++ input, &strip_responses_lite_image_details/1))
     else
@@ -630,14 +652,47 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   # request's, `get_incremental_items`, codex-rs/core/src/client.rs); the
   # compaction bridge's incremental arm above already forwards the input alone
   # (findings#232 row 232-184).
-  defp responses_lite_prefix(payload, input, tools_present?, tools, instructions) do
-    if anchored_upstream_request?(payload) do
-      {[], input}
-    else
-      {tools_prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
-      {tools_prefix ++ maybe_responses_lite_instructions(instructions), input}
+  #
+  # The exception is an anchor whose response was served under Full (the
+  # dialect recorded on its alias, `Aliases.response_alias_metadata/1`): after
+  # the Pool flips the model from Full to Lite, that context holds none of the
+  # tools and instructions the client declared at top level, so the first
+  # anchored Lite request carries them as the manifest and the instructions
+  # message, and every later anchor of the chain is recorded Lite. Only what
+  # the client declared is sent: a client that builds Lite-shaped requests
+  # itself put its own manifest in the context it opened under Full, and its
+  # anchored delta declares nothing, so nothing (not even an empty manifest)
+  # is added. Native connection-bound anchors are refused before sending on
+  # such a flip (row 232-210); `/v1` anchors, the HTTP bridge and native HTTP
+  # tool-output continuations are not tied to a connection, and a `/v1` SDK
+  # does not retry `previous_response_not_found`, so they carry the prefix
+  # instead (the provider honours a manifest that arrives on an anchored
+  # request, row 232-210). The reverse flip needs nothing: a Full request
+  # carries its tools and instructions at top level (findings#232 row 232-270).
+  defp responses_lite_prefix(payload, request_options, input, tools_present?, tools, instructions) do
+    cond do
+      not anchored_upstream_request?(payload) ->
+        {tools_prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
+        {tools_prefix ++ maybe_responses_lite_instructions(instructions), input}
+
+      anchor_served_full?(request_options) ->
+        {declared_responses_lite_prefix(tools_present?, tools, instructions), input}
+
+      true ->
+        {[], input}
     end
   end
+
+  defp declared_responses_lite_prefix(tools_present?, tools, instructions) do
+    tools_prefix = if tools_present?, do: [additional_tools(tools)], else: []
+    tools_prefix ++ maybe_responses_lite_instructions(instructions)
+  end
+
+  defp responses_lite_prefix_sent?(payload, request_options) do
+    not anchored_upstream_request?(payload) or anchor_served_full?(request_options)
+  end
+
+  defp anchor_served_full?(%RequestOptions{continuity: continuity}), do: continuity.previous_response_serving_mode == "full"
 
   defp anchored_upstream_request?(%{"previous_response_id" => response_id}) when is_binary(response_id),
     do: String.trim(response_id) != ""

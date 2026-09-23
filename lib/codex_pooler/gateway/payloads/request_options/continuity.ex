@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     :previous_response_id,
     :response_id,
     :resolved_previous_response_assignment_id,
+    :previous_response_serving_mode,
     :session_header,
     :session_header_source,
     :session_key,
@@ -40,6 +41,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
           previous_response_id: String.t() | nil,
           response_id: String.t() | nil,
           resolved_previous_response_assignment_id: Ecto.UUID.t() | nil,
+          previous_response_serving_mode: String.t() | nil,
           session_header: String.t() | nil,
           session_header_source: String.t() | nil,
           session_key: String.t() | nil,
@@ -110,6 +112,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     |> Normalization.normalize_optional_update(:turn_claim_key, &turn_claim_key/1)
     |> Normalization.normalize_optional_update(:request_claim_key, &request_claim_key/1)
     |> Normalization.normalize_optional_update(:replay_claim_digest, &digest/1)
+    |> Normalization.normalize_optional_update(:previous_response_serving_mode, &serving_mode/1)
     |> Normalization.normalize_optional_update(:upstream_previous_response_id?, &(&1 == true))
     |> Normalization.normalize_optional_update(:pooler_issued_turn_state?, &(&1 == true))
     |> then(&struct!(continuity, &1))
@@ -179,6 +182,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       _invalid -> :error
     end
   end
+
+  defp serving_mode(mode) when mode in ["full", "lite"], do: mode
+  defp serving_mode(_mode), do: nil
 
   defp digest(value) when is_binary(value) and byte_size(value) == 32, do: value
   defp digest(_value), do: nil

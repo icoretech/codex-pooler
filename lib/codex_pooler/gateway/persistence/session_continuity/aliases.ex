@@ -22,6 +22,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
   @alias_active SessionAliasStatus.active_status()
 
+  @alias_metadata %{"source" => "gateway_continuity"}
+  @serving_modes ~w(full lite)
+
   @session_alias_conflict_target {:unsafe_fragment, "(pool_id, api_key_id, alias_kind, alias_hash) WHERE status = 'active'"}
 
   @spec active_session_for_update(
@@ -71,6 +74,20 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   # without locking or registering anything.
   @spec previous_response_assignment_id(map(), String.t(), DateTime.t()) :: Ecto.UUID.t() | nil
   def previous_response_assignment_id(auth, previous_response_id, now) do
+    case previous_response_resolution(auth, previous_response_id, now) do
+      %{assignment_id: assignment_id} -> assignment_id
+      nil -> nil
+    end
+  end
+
+  # The same strict lookup, also returning the Full/Lite dialect recorded on the
+  # anchor's alias when its response completed (`response_alias_metadata/1`).
+  # The mode is `nil` when the alias carries none (written before the record
+  # existed); there is no alias at all for a response a request without a
+  # session produced.
+  @spec previous_response_resolution(map(), String.t(), DateTime.t()) ::
+          %{assignment_id: Ecto.UUID.t() | nil, serving_mode: String.t() | nil} | nil
+  def previous_response_resolution(auth, previous_response_id, now) do
     alias_hash = alias_hash(previous_response_id)
 
     Repo.one(
@@ -86,9 +103,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
             session.status in ^@session_reconnectable_statuses,
         order_by: [desc: alias_record.last_seen_at, desc: alias_record.updated_at],
         limit: 1,
-        select: session.pool_upstream_assignment_id
+        select: %{
+          assignment_id: session.pool_upstream_assignment_id,
+          serving_mode: fragment("?->>'serving_mode'", alias_record.metadata)
+        }
     )
+    |> known_resolution_serving_mode()
   end
+
+  defp known_resolution_serving_mode(%{serving_mode: mode} = resolution), do: %{resolution | serving_mode: known_serving_mode(mode)}
+  defp known_resolution_serving_mode(nil), do: nil
 
   @spec previous_response_session_id(map(), String.t(), DateTime.t()) :: Ecto.UUID.t() | nil
   def previous_response_session_id(auth, previous_response_id, now) do
@@ -115,11 +139,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   def register!(%CodexSession{} = session, auth, %RequestOptions{} = opts, now) do
     expires_at = DateTime.add(now, expired_alias_ttl_seconds(), :second)
 
+    response_alias = {"previous_response_id", blank_to_nil(opts.continuity.response_id)}
+
     rows =
       opts
       |> alias_candidates(session.session_key)
-      |> Enum.map(fn {alias_kind, alias_value} ->
-        alias_attrs(session, auth, alias_kind, alias_value, now, expires_at)
+      |> Enum.map(fn {alias_kind, alias_value} = candidate ->
+        metadata = if candidate == response_alias, do: response_alias_metadata(opts), else: @alias_metadata
+        alias_attrs(session, auth, alias_kind, alias_value, now, expires_at, metadata)
       end)
 
     if rows != [] do
@@ -201,7 +228,17 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     where(query, [session], session.owner_lease_expires_at > ^now)
   end
 
-  defp alias_attrs(session, auth, alias_kind, alias_value, now, expires_at) do
+  # The alias of the response a request produced records the Full/Lite dialect
+  # that request was served in. A context the provider holds keeps the dialect
+  # of the request that built it: one opened under Full holds no Lite tool
+  # manifest and no instructions message, which Lite sends only on a request
+  # that opens a context (findings#232 rows 232-184 and 232-270).
+  defp response_alias_metadata(%RequestOptions{} = opts) do
+    serving_mode = if RequestOptions.use_responses_lite?(opts), do: "lite", else: "full"
+    Map.put(@alias_metadata, "serving_mode", serving_mode)
+  end
+
+  defp alias_attrs(session, auth, alias_kind, alias_value, now, expires_at, metadata) do
     alias_hash = alias_hash(alias_value)
 
     %{
@@ -215,7 +252,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
       status: @alias_active,
       expires_at: expires_at,
       last_seen_at: now,
-      metadata: %{"source" => "gateway_continuity"},
+      metadata: metadata,
       created_at: now,
       updated_at: now
     }
@@ -229,7 +266,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
           alias_preview: fragment("EXCLUDED.alias_preview"),
           expires_at: fragment("GREATEST(?, ?)", alias_record.expires_at, ^expires_at),
           last_seen_at: fragment("GREATEST(COALESCE(?, ?), ?)", alias_record.last_seen_at, ^now, ^now),
-          metadata: fragment("EXCLUDED.metadata"),
+          # Merged, so re-registering a response's alias as the anchor of a
+          # later request keeps the dialect recorded when it completed.
+          metadata: fragment("? || EXCLUDED.metadata", alias_record.metadata),
           updated_at: fragment("GREATEST(?, ?)", alias_record.updated_at, ^now)
         ]
       ]
@@ -354,6 +393,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     do: blank_to_nil(id)
 
   defp response_id_from_decoded(_decoded), do: nil
+
+  defp known_serving_mode(mode) when mode in @serving_modes, do: mode
+  defp known_serving_mode(_mode), do: nil
 
   defp alias_hash(value), do: :crypto.hash(:sha256, value)
 

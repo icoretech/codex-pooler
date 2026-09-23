@@ -100,7 +100,10 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   # The immutable resolution proof for the previous-response anchor, captured
   # by a read-only strict lookup BEFORE any attach fallback can register this
   # request's own anchors as aliases. A self-created alias therefore never
-  # counts as a resolved anchor within the request that created it.
+  # counts as a resolved anchor within the request that created it. The same
+  # lookup reads the Full/Lite dialect the anchor's response was served in,
+  # which the Lite normalizer needs for an anchored request (findings#232 row
+  # 232-270).
   defp put_previous_response_resolution(%RequestOptions{} = request_options, auth) do
     with nil <- request_options.continuity.resolved_previous_response_assignment_id,
          previous_response_id when is_binary(previous_response_id) <-
@@ -108,9 +111,16 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
          %{pool: %{id: _pool_id}, api_key: %{id: _api_key_id}} <- auth do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      RequestOptions.put_continuity(request_options,
-        resolved_previous_response_assignment_id: ContinuityStore.previous_response_assignment_id(auth, previous_response_id, now)
-      )
+      case ContinuityStore.previous_response_resolution(auth, previous_response_id, now) do
+        %{assignment_id: assignment_id, serving_mode: serving_mode} ->
+          RequestOptions.put_continuity(request_options,
+            resolved_previous_response_assignment_id: assignment_id,
+            previous_response_serving_mode: serving_mode
+          )
+
+        nil ->
+          request_options
+      end
     else
       _already_resolved_or_unresolvable -> request_options
     end

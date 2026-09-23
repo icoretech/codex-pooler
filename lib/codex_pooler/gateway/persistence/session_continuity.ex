@@ -97,6 +97,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
           Ecto.UUID.t() | nil
   defdelegate previous_response_assignment_id(auth, previous_response_id, now), to: Aliases
 
+  @spec previous_response_resolution(auth(), String.t(), DateTime.t()) ::
+          %{assignment_id: Ecto.UUID.t() | nil, serving_mode: String.t() | nil} | nil
+  defdelegate previous_response_resolution(auth, previous_response_id, now), to: Aliases
+
   @spec start_codex_session_from_previous_response_id(auth(), opts()) ::
           session_result() | {:error, :session_not_found}
   def start_codex_session_from_previous_response_id(auth, %RequestOptions{} = opts) do

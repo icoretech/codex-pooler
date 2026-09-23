@@ -2556,6 +2556,89 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              ] = upstream["input"]
     end
 
+    # A context keeps the dialect of the request that opened it: one opened
+    # under Full holds no manifest and no instructions message. After the Pool
+    # flips the model to Lite, the first anchored request of such a chain must
+    # carry the prefix, or the provider serves it with no tools and no base
+    # instructions; an anchor recorded Lite (or with no record) stays the
+    # client's input alone (findings#232 row 232-270).
+    test "a Lite continuation anchored on a response served under Full carries the prefix" do
+      endpoint = "/backend-api/codex/responses"
+      tool_output = %{"type" => "function_call_output", "call_id" => "call_flip_anchor", "output" => "synthetic output"}
+
+      payload = %{
+        "model" => "gpt-5.6-terra",
+        "previous_response_id" => "resp_flip_anchor_continuation_0001",
+        "instructions" => "synthetic base instructions",
+        "input" => [tool_output],
+        "tools" => [%{"type" => "function", "name" => "sample_lookup", "parameters" => %{"type" => "object", "properties" => %{}}}]
+      }
+
+      for recorded_mode <- ["full", "lite", nil] do
+        http_options =
+          serving_mode_opts("lite")
+          |> RequestOptions.build(endpoint, payload)
+          |> RequestOptions.put_continuity(previous_response_serving_mode: recorded_mode)
+
+        for {transport, request_options} <- [http: http_options, websocket: RequestOptions.for_websocket(http_options, payload)] do
+          assert {:ok, encoded, request_options} =
+                   PayloadNormalizer.prepare_upstream_payload(payload, %Model{upstream_model_id: "provider-model"}, endpoint, request_options)
+
+          upstream = CodexPooler.JSON.decode!(encoded)
+          label = "#{transport} anchor recorded #{inspect(recorded_mode)}"
+
+          assert upstream["previous_response_id"] == payload["previous_response_id"], label
+          refute Map.has_key?(upstream, "tools"), label
+          refute Map.has_key?(upstream, "instructions"), label
+
+          if recorded_mode == "full" do
+            assert [
+                     %{"type" => "additional_tools", "role" => "developer", "tools" => [%{"name" => "sample_lookup"}]},
+                     %{"type" => "message", "role" => "developer"},
+                     ^tool_output
+                   ] = upstream["input"],
+                   label
+
+            assert request_options.runtime.upstream_input_index_map == {:shift, 0, 2}, label
+          else
+            assert upstream["input"] == [tool_output], label
+            assert request_options.runtime.upstream_input_index_map == :identity, label
+          end
+        end
+      end
+
+      # A client that builds Lite-shaped requests itself opened the context with
+      # its own manifest, even under Full, and its anchored delta declares no
+      # tools and no instructions: nothing is added, not even an empty manifest
+      # (the released Codex client sends such requests for a model its catalog
+      # marks Lite, findings#232 row 232-272).
+      lite_shaped = payload |> Map.delete("tools") |> Map.put("instructions", "")
+
+      lite_shaped_options =
+        serving_mode_opts("lite")
+        |> RequestOptions.build(endpoint, lite_shaped)
+        |> RequestOptions.put_continuity(previous_response_serving_mode: "full")
+
+      assert {:ok, encoded, lite_shaped_options} =
+               PayloadNormalizer.prepare_upstream_payload(lite_shaped, %Model{upstream_model_id: "provider-model"}, endpoint, lite_shaped_options)
+
+      assert CodexPooler.JSON.decode!(encoded)["input"] == [tool_output]
+      assert lite_shaped_options.runtime.upstream_input_index_map == :identity
+
+      # Under Full the recorded dialect changes nothing: tools and instructions
+      # stay at top level.
+      full_options =
+        serving_mode_opts("full")
+        |> RequestOptions.build(endpoint, payload)
+        |> RequestOptions.put_continuity(previous_response_serving_mode: "lite")
+
+      assert {:ok, encoded} = PayloadNormalizer.upstream_payload(payload, %Model{upstream_model_id: "provider-model"}, endpoint, full_options)
+      upstream = CodexPooler.JSON.decode!(encoded)
+      assert upstream["input"] == [tool_output]
+      assert [%{"name" => "sample_lookup"}] = upstream["tools"]
+      assert upstream["instructions"] == "synthetic base instructions"
+    end
+
     test "preserves typed custom tool choice for full, rejects it for Lite, and keeps Lite scalar choices" do
       endpoint = "/backend-api/codex/responses"
       custom_tool = %{"type" => "custom", "name" => "custom_choice_fixture"}
