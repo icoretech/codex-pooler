@@ -2377,8 +2377,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        )
        when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 do
     if WebsocketCodec.replay_eligible?(prepared) do
-      case Service.prepare_replay_intent(state.auth, prepared) do
-        {:ok, intent} -> dispatch_replay_intent(prepared, state, intent)
+      with {:ok, intent} <- Service.prepare_replay_intent(state.auth, prepared),
+           {:ok, prepared} <- rebind_replay_claim(prepared, intent) do
+        dispatch_replay_intent(prepared, state, intent)
+      else
+        {:error, :rebind_failed} -> reject_owner_preflight(:owner_busy, state)
         {:error, reason} -> reject_prepared_response(reason, state)
       end
     else
@@ -2421,6 +2424,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       _invalid -> reject_owner_preflight(:owner_busy, state)
     end
   end
+
+  # A full-history resend of an anchored request carries the armed request's
+  # replay claim from here on (findings#232 row 232-160).
+  defp rebind_replay_claim(prepared, %{replay_claim_digest: replay_claim_digest}) do
+    case WebsocketCodec.rebind_replay_claim(prepared, replay_claim_digest) do
+      {:ok, rebound} -> {:ok, rebound}
+      {:error, _reason} -> {:error, :rebind_failed}
+    end
+  end
+
+  defp rebind_replay_claim(prepared, _intent), do: {:ok, prepared}
 
   defp active_lifecycle_binding(%{intent: :active_reattach, lifecycle: lifecycle}) do
     %{

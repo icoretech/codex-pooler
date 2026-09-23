@@ -446,6 +446,131 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
     end
   end
 
+  describe "replay_tail_digest/2 and replay_claim_alternates/2" do
+    # Released Codex 0.156.0 sends every turn after the first on a socket as an
+    # anchored delta (`previous_response_id` plus the items it adds). After a
+    # reconnect it resends the same turn as full history without the anchor:
+    # the history the anchor stood for followed by exactly the anchored
+    # request's items, every other field unchanged but the stream start stamp
+    # (measured with the released client, findings#232 row 232-160).
+    setup do
+      thread_id = "019a0000-0000-7000-8000-000000000001"
+      semantic = :crypto.hash(:sha256, "tail-turn")
+
+      metadata = %{
+        "session_id" => thread_id,
+        "thread_id" => thread_id,
+        "turn_id" => "turn-b",
+        "root_turn_id" => "turn-b",
+        "x-codex-installation-id" => "install-a",
+        "x-codex-window-id" => thread_id <> ":0",
+        "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"thread_id" => thread_id, "turn_id" => "turn-b", "request_kind" => "turn"}),
+        "x-codex-ws-stream-request-start-ms" => 100
+      }
+
+      history = [
+        %{"type" => "message", "role" => "developer", "content" => [%{"type" => "input_text", "text" => "synthetic instructions"}]},
+        %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic turn a"}]},
+        %{"type" => "message", "role" => "assistant", "content" => [%{"type" => "output_text", "text" => "synthetic answer a"}]}
+      ]
+
+      turn_items = [%{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic turn b"}]}]
+
+      anchored = %{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "instructions" => "synthetic base",
+        "tools" => [%{"type" => "function", "name" => "exec_command"}],
+        "reasoning" => %{"effort" => "low"},
+        "store" => false,
+        "stream" => true,
+        "client_metadata" => metadata,
+        "previous_response_id" => "resp_synthetic_turn_a",
+        "input" => turn_items
+      }
+
+      full =
+        anchored
+        |> Map.delete("previous_response_id")
+        |> Map.put("input", history ++ turn_items)
+        |> put_in(["client_metadata", "x-codex-ws-stream-request-start-ms"], 200)
+
+      %{semantic: semantic, anchored: anchored, full: full, history: history}
+    end
+
+    test "the full-history resend of an anchored request carries that request's tail digest",
+         %{semantic: semantic, anchored: anchored, full: full} do
+      assert {:ok, tail} = WebsocketTurnIdentity.replay_tail_digest(semantic, anchored)
+      assert {:ok, alternates} = WebsocketTurnIdentity.replay_claim_alternates(semantic, full)
+
+      assert tail in alternates
+      assert length(alternates) == 3
+      assert :unanchored = WebsocketTurnIdentity.replay_tail_digest(semantic, full)
+      assert {:ok, []} = WebsocketTurnIdentity.replay_claim_alternates(semantic, anchored)
+
+      # The replay claim still binds the anchor: the two forms differ, and a
+      # byte-identical anchored resend keeps its own claim.
+      assert {:ok, anchored_claim} = WebsocketTurnIdentity.replay_claim_digest(semantic, anchored)
+      assert {:ok, full_claim} = WebsocketTurnIdentity.replay_claim_digest(semantic, full)
+      refute anchored_claim == full_claim
+      refute anchored_claim in alternates
+      assert {:ok, ^anchored_claim} = WebsocketTurnIdentity.replay_claim_digest(semantic, anchored)
+    end
+
+    test "a different request of the same turn is not among the alternates",
+         %{semantic: semantic, anchored: anchored, full: full, history: history} do
+      assert {:ok, tail} = WebsocketTurnIdentity.replay_tail_digest(semantic, anchored)
+
+      altered_item = put_in(full, ["input", Access.at(3), "content"], [%{"type" => "input_text", "text" => "other turn b"}])
+      other_model = Map.put(full, "model", "gpt-other")
+      other_tools = Map.put(full, "tools", [])
+      other_metadata = put_in(full, ["client_metadata", "x-codex-window-id"], "other-window")
+      extra_item = Map.put(full, "input", full["input"] ++ [%{"type" => "message", "role" => "user", "content" => "more"}])
+      no_history = Map.put(full, "input", anchored["input"])
+
+      for resend <- [altered_item, other_model, other_tools, other_metadata, extra_item, no_history] do
+        assert {:ok, alternates} = WebsocketTurnIdentity.replay_claim_alternates(semantic, resend)
+        refute tail in alternates
+      end
+
+      assert {:ok, alternates} = WebsocketTurnIdentity.replay_claim_alternates(:crypto.hash(:sha256, "other-turn"), full)
+      refute tail in alternates
+
+      # A different anchor is a different anchored request (the replay claim
+      # changes), yet the same anchor-free tail: only an unanchored resend is
+      # ever matched through it.
+      assert {:ok, ^tail} = WebsocketTurnIdentity.replay_tail_digest(semantic, Map.put(anchored, "previous_response_id", "resp_altered"))
+
+      assert {:ok, claim} = WebsocketTurnIdentity.replay_claim_digest(semantic, anchored)
+      refute {:ok, claim} == WebsocketTurnIdentity.replay_claim_digest(semantic, Map.put(anchored, "previous_response_id", "resp_altered"))
+
+      # An unanchored original is never found through a longer resend that
+      # prepends items: its witness is its replay claim, another domain.
+      short = Map.put(full, "input", tl(history) ++ anchored["input"])
+      assert {:ok, short_claim} = WebsocketTurnIdentity.replay_claim_digest(semantic, short)
+      assert {:ok, alternates} = WebsocketTurnIdentity.replay_claim_alternates(semantic, full)
+      refute short_claim in alternates
+    end
+
+    test "only trailing slices with a history item before them, at most 256, are alternates",
+         %{semantic: semantic, full: full} do
+      assert {:ok, []} = WebsocketTurnIdentity.replay_claim_alternates(semantic, Map.put(full, "input", [hd(full["input"])]))
+      assert {:ok, []} = WebsocketTurnIdentity.replay_claim_alternates(semantic, Map.put(full, "input", "text input"))
+
+      items = for n <- 1..300, do: %{"type" => "message", "role" => "user", "content" => "item #{n}"}
+      long = Map.put(full, "input", items)
+      assert {:ok, alternates} = WebsocketTurnIdentity.replay_claim_alternates(semantic, long)
+      assert length(alternates) == 256
+
+      within = Map.put(full, "input", Enum.take(items, -256)) |> Map.put("previous_response_id", "resp_synthetic")
+      beyond = Map.put(full, "input", Enum.take(items, -257)) |> Map.put("previous_response_id", "resp_synthetic")
+      assert {:ok, within_tail} = WebsocketTurnIdentity.replay_tail_digest(semantic, within)
+      assert {:ok, beyond_tail} = WebsocketTurnIdentity.replay_tail_digest(semantic, beyond)
+      assert within_tail in alternates
+      refute beyond_tail in alternates
+    end
+  end
+
   defp assert_identity(payload, raw_turn_id) do
     expected = :crypto.hash(:sha256, @session_id <> <<0>> <> raw_turn_id)
 

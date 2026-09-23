@@ -89,12 +89,18 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defmodule OriginalWitness do
     @moduledoc false
     @enforce_keys [:version, :digest, :auth_epoch]
-    defstruct [:version, :digest, :auth_epoch]
+    defstruct [:version, :digest, :auth_epoch, alternates: []]
 
+    # `alternates` never reaches a row: they are the digests the anchored
+    # original of a full-history resend may have stored as `digest`
+    # (`WebsocketTurnIdentity.replay_claim_alternates/2`), carried with the
+    # resend so every predecessor check can recognise it (findings#232
+    # row 232-160).
     @type t :: %__MODULE__{
             version: pos_integer(),
             digest: <<_::256>>,
-            auth_epoch: non_neg_integer()
+            auth_epoch: non_neg_integer(),
+            alternates: [<<_::256>>]
           }
   end
 
@@ -162,15 +168,36 @@ defmodule CodexPooler.Accounting.ClientRetry do
           successor: reclaimable_successor() | nil
         }
 
-  @spec original_witness(binary(), non_neg_integer()) ::
+  @spec original_witness(binary(), non_neg_integer(), [binary()]) ::
           {:ok, OriginalWitness.t()} | {:error, :invalid_witness}
-  def original_witness(digest, auth_epoch)
+  def original_witness(digest, auth_epoch, alternates \\ [])
+
+  def original_witness(digest, auth_epoch, alternates)
       when is_binary(digest) and byte_size(digest) == @digest_bytes and is_integer(auth_epoch) and
-             auth_epoch >= 0 do
-    {:ok, %OriginalWitness{version: @version, digest: digest, auth_epoch: auth_epoch}}
+             auth_epoch >= 0 and is_list(alternates) do
+    if Enum.all?(alternates, &(is_binary(&1) and byte_size(&1) == @digest_bytes)) do
+      {:ok, %OriginalWitness{version: @version, digest: digest, auth_epoch: auth_epoch, alternates: alternates}}
+    else
+      {:error, :invalid_witness}
+    end
   end
 
-  def original_witness(_digest, _auth_epoch), do: {:error, :invalid_witness}
+  def original_witness(_digest, _auth_epoch, _alternates), do: {:error, :invalid_witness}
+
+  @doc """
+  True when `stored` is the witness digest a predecessor recorded for the
+  request `digest` and `alternates` describe: the same digest (a byte-identical
+  resend), or one of the alternates (the full-history resend of an anchored
+  request, findings#232 row 232-160).
+  """
+  @spec witness_matches?(term(), term(), term()) :: boolean()
+  def witness_matches?(stored, digest, alternates)
+      when is_binary(stored) and byte_size(stored) == @digest_bytes do
+    secure_compare(stored, digest) or
+      (is_list(alternates) and Enum.any?(alternates, &secure_compare(stored, &1)))
+  end
+
+  def witness_matches?(_stored, _digest, _alternates), do: false
 
   @spec original_witness!(binary(), non_neg_integer()) :: OriginalWitness.t()
   def original_witness!(digest, auth_epoch) do
@@ -1562,7 +1589,11 @@ defmodule CodexPooler.Accounting.ClientRetry do
       request.native_client_retry_auth_epoch != Map.get(input, :runtime_revocation_epoch) ->
         {:error, :authorization_changed}
 
-      not secure_compare(request.native_client_retry_digest, digest) ->
+      not witness_matches?(
+        request.native_client_retry_digest,
+        digest,
+        Map.get(input, :replay_claim_alternates, [])
+      ) ->
         {:error, :payload_mismatch}
 
       true ->

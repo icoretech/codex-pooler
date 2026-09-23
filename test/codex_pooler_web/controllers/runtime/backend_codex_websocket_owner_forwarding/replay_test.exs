@@ -1522,6 +1522,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     end)
   end
 
+  # Released Codex 0.156.0 sends every turn after the first on a socket as an
+  # anchored delta; after a reconnect it resends that turn as full history
+  # without the anchor (measured with the released client, findings#232 row
+  # 232-160). The armed replay must recognise that resend as the same request.
+  @tag :replay_matrix
+  @tag :replay_race
+  test "the released client's full-history resend of a pre-visible incremental turn redeems its replay" do
+    %{setup: setup, upstream: upstream, request_id: request_id, retry_result: retry_result, armed: armed} =
+      incremental_previsible_scenario(:full_history)
+
+    assert {armed, retry_result["type"], get_in(retry_result, ["error", "code"])} ==
+             {:armed, "response.completed", nil}
+
+    assert_request_settled!(request_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
+    assert %Request{status: "succeeded"} = Repo.get!(Request, request_id)
+
+    assert [%Attempt{replay_generation: 0, status: "retryable_failed"}, %Attempt{replay_generation: 1, status: "succeeded"}] =
+             Repo.all(from(a in Attempt, where: a.request_id == ^request_id, order_by: [asc: a.attempt_number]))
+
+    assert %RequestReplayEntitlement{status: "consumed"} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request_id)
+
+    assert Repo.all(from(l in LedgerEntry, where: l.request_id == ^request_id, select: l.entry_kind)) |> Enum.frequencies() ==
+             %{"reservation" => 1, "settlement" => 1, "release" => 1}
+
+    assert length(request_logs(setup.pool.id)) == 2
+    assert FakeUpstream.count(upstream) == 3
+
+    replayed = upstream |> FakeUpstream.requests() |> List.last() |> Map.fetch!(:json)
+    refute Map.has_key?(replayed, "previous_response_id")
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  @tag :replay_matrix
+  @tag :replay_race
+  test "a full-history resend whose trailing items differ from the armed incremental turn stays a duplicate" do
+    %{setup: setup, upstream: upstream, request_id: request_id, retry_result: retry_result, armed: armed} =
+      incremental_previsible_scenario(:altered_tail)
+
+    assert {armed, retry_result["type"], get_in(retry_result, ["error", "code"])} ==
+             {:armed, "error", "duplicate_turn"}
+
+    assert %RequestReplayEntitlement{status: "armed"} =
+             Repo.get_by!(RequestReplayEntitlement, request_id: request_id)
+
+    assert length(request_logs(setup.pool.id)) == 2
+    assert FakeUpstream.count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   defmodule PrevisibleArmUnsupportedNodeClient do
     @moduledoc false
     # An owner node from a release that predates
@@ -1764,6 +1814,142 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert FakeUpstream.count(upstream) == 2
     assert :ok = FakeUpstream.verify!(upstream)
     _result = Mint.HTTP.close(retry_conn)
+  end
+
+  # Turn A completes on the first socket, turn B goes out as the released
+  # client's anchored delta and is cut before any output, and the retry on a
+  # new socket is the full-history form of turn B (or, as the control, that
+  # form with its own trailing item changed).
+  defp incremental_previsible_scenario(resend_shape) when resend_shape in [:full_history, :altered_tail] do
+    release_ref = make_ref()
+
+    replay =
+      if resend_shape == :full_history,
+        do: [strict_native_request(2, FakeUpstream.websocket_text_frames([completed_frame("resp_incremental_turn_b")]))],
+        else: []
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings#232 row 232-160 (released Codex 0.156.0 incremental turn and its full-history resend)
+        FakeUpstream.strict_sequence(
+          [
+            strict_native_request(1, FakeUpstream.websocket_text_frames([completed_frame("resp_incremental_turn_a", [synthetic_assistant_item()])])),
+            strict_native_request(
+              1,
+              FakeUpstream.websocket_close_without_terminal_barrier(
+                notify: self(),
+                release_ref: release_ref,
+                code: 1001,
+                reason: "synthetic pre-visible downstream loss"
+              )
+            )
+          ] ++ replay
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, "lite")
+    turn_state = Ecto.UUID.generate()
+    thread_id = Ecto.UUID.generate()
+    model = setup.model.exposed_model_id
+    history_a = [synthetic_developer_item(), synthetic_user_item("turn a")]
+    user_b = synthetic_user_item("turn b")
+
+    turn_a = native_turn_payload(thread_id, model, "incremental-turn-a", 100, history_a)
+
+    turn_b =
+      thread_id
+      |> native_turn_payload(model, "incremental-turn-b", 200, [user_b])
+      |> Map.put("previous_response_id", "resp_incremental_turn_a")
+
+    resend_tail = if resend_shape == :full_history, do: user_b, else: synthetic_user_item("another turn b")
+
+    resend =
+      native_turn_payload(thread_id, model, "incremental-turn-b", 300, history_a ++ [synthetic_assistant_item(), resend_tail])
+
+    port = start_public_endpoint!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(turn_a))
+    {conn, websocket, completed_a} = receive_until_terminal!(conn, websocket, ref)
+    assert completed_a["type"] == "response.completed"
+    # The next turn starts once the client has its answer and the socket has
+    # retired turn A's task, as it does between two user prompts.
+    assert [%Request{id: request_a_id}] = request_logs(setup.pool.id)
+    assert_request_settled!(request_a_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
+    await_socket_idle!()
+
+    {conn, _websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(turn_b))
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
+                   @handoff_detection_timeout_ms
+
+    assert [%Request{status: "succeeded"}, %Request{id: request_id, status: "in_progress"}] = request_logs(setup.pool.id)
+
+    retry_deadline_ms = System.monotonic_time(:millisecond) + @released_client_stream_retry_ms
+    _result = Mint.HTTP.close(conn)
+    armed = await_replay_armed(request_id, retry_deadline_ms)
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+
+    {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+
+    {retry_conn, retry_websocket} =
+      public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, CodexPooler.JSON.encode!(resend))
+
+    {retry_conn, _retry_websocket, retry_result} = receive_until_terminal!(retry_conn, retry_websocket, retry_ref)
+    _result = Mint.HTTP.close(retry_conn)
+
+    %{setup: setup, upstream: upstream, request_id: request_id, retry_result: retry_result, armed: armed}
+  end
+
+  defp await_socket_idle!, do: Process.sleep(100)
+
+  defp native_turn_payload(thread_id, model, turn_id, start_ms, input) do
+    %{
+      "type" => "response.create",
+      "model" => model,
+      "instructions" => "synthetic base instructions",
+      "stream" => true,
+      "store" => false,
+      "client_metadata" => %{
+        "session_id" => thread_id,
+        "thread_id" => thread_id,
+        "turn_id" => turn_id,
+        "x-codex-window-id" => thread_id <> ":0",
+        "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"session_id" => thread_id, "thread_id" => thread_id, "turn_id" => turn_id, "request_kind" => "turn"}),
+        "x-codex-ws-stream-request-start-ms" => start_ms
+      },
+      "input" => input
+    }
+  end
+
+  defp synthetic_developer_item,
+    do: %{"type" => "message", "role" => "developer", "content" => [%{"type" => "input_text", "text" => "synthetic developer context"}]}
+
+  defp synthetic_user_item(text),
+    do: %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic " <> text}]}
+
+  defp synthetic_assistant_item,
+    do: %{"type" => "message", "role" => "assistant", "content" => [%{"type" => "output_text", "text" => "synthetic answer a"}]}
+
+  defp completed_frame(response_id, output \\ []) do
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => response_id,
+        "status" => "completed",
+        "output" => output,
+        "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+      }
+    })
+  end
+
+  defp receive_until_terminal!(conn, websocket, ref) do
+    {conn, websocket, text} = public_websocket_receive_text!(conn, websocket, ref)
+    frame = CodexPooler.JSON.decode!(text)
+
+    if frame["type"] in ["response.completed", "response.failed", "response.incomplete", "error"],
+      do: {conn, websocket, frame},
+      else: receive_until_terminal!(conn, websocket, ref)
   end
 
   # The retry goes out at the released client's delay whether or not the

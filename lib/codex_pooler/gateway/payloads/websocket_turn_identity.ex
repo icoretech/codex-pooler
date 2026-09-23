@@ -36,6 +36,12 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     @resume_claim_prefix
   ]
   @replay_claim_domain "native_websocket_response_replay_claim_v1"
+  @replay_tail_domain "native_websocket_response_replay_tail_v1"
+  # How many trailing items of an unanchored resend are tried as the items an
+  # anchored original carried. The released client's anchored tail is the
+  # items it added after the previous response (a user message, or the outputs
+  # of one tool round), far below this; a longer tail keeps today's refusal.
+  @replay_tail_suffix_limit 256
   @http_resume_input_domain "native_http_resume_input_v1"
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
@@ -287,6 +293,117 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
 
   def replay_claim_digest(_semantic_turn_key, _payload),
     do: invalid_replay_claim("semantic_turn_key")
+
+  @doc """
+  The resend identity of an anchored request, independent of its anchor.
+
+  A `previous_response_id` is a transport compression, not part of what the
+  client asked: it stands for the history the previous response closed, and
+  the request adds only its own trailing items. The released Codex client
+  drops the anchor whenever it reconnects (`client.rs` resets the websocket
+  session, so the next `prepare_websocket_request` finds no last response)
+  and resends the same request as full history: the history the anchor stood
+  for, followed by exactly the items the anchored request carried, with every
+  other field unchanged (findings#232 row 232-160, measured with the released
+  client: the anchored request's items are a suffix of the resend, and no
+  other field differs).
+
+  This digest binds the semantic turn, every non-input field except the
+  anchor, and the anchored request's items as a hash chain, so
+  `replay_claim_alternates/2` can find it among the trailing items of the
+  full-history resend. It is not the replay claim: `replay_claim_digest/2`
+  still binds the anchor, so an anchored resend with a different anchor stays
+  a different request. An unanchored request answers `:unanchored`.
+  """
+  @spec replay_tail_digest(<<_::256>>, map()) ::
+          {:ok, <<_::256>>} | :unanchored | {:error, Error.reason()}
+  def replay_tail_digest(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_map(payload) do
+    if anchored?(payload) do
+      with {:ok, key, base} <- replay_tail_base(semantic_turn_key, payload) do
+        {:ok, Enum.reduce(Enum.reverse(replay_tail_items(payload)), base, &replay_tail_link(key, &1, &2))}
+      end
+    else
+      :unanchored
+    end
+  end
+
+  def replay_tail_digest(_semantic_turn_key, _payload),
+    do: invalid_replay_claim("semantic_turn_key")
+
+  @doc """
+  The `replay_tail_digest/2` an anchored original would have had if an
+  unanchored request is its full-history resend: one digest per proper
+  trailing slice of the input (at least one history item before it), shortest
+  slice first, bounded by `#{@replay_tail_suffix_limit}` items. Empty for an anchored
+  request, a request without a list input, or a single-item input.
+  """
+  @spec replay_claim_alternates(<<_::256>>, map()) ::
+          {:ok, [<<_::256>>]} | {:error, Error.reason()}
+  def replay_claim_alternates(semantic_turn_key, %{"input" => [_first, _second | _rest] = input} = payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 do
+    if anchored?(payload) do
+      {:ok, []}
+    else
+      with {:ok, key, base} <- replay_tail_base(semantic_turn_key, payload) do
+        {:ok, trailing_tail_digests(key, base, tl(input))}
+      end
+    end
+  end
+
+  def replay_claim_alternates(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload),
+      do: {:ok, []}
+
+  def replay_claim_alternates(_semantic_turn_key, _payload),
+    do: invalid_replay_claim("semantic_turn_key")
+
+  # The chain is built from the last item back, so the digest of every trailing
+  # slice is one link away from the next shorter one.
+  defp trailing_tail_digests(key, base, items) do
+    {_tail, digests} =
+      items
+      |> Enum.reverse()
+      |> Enum.take(@replay_tail_suffix_limit)
+      |> Enum.reduce({base, []}, fn item, {tail, digests} ->
+        next = replay_tail_link(key, item, tail)
+        {next, [next | digests]}
+      end)
+
+    Enum.reverse(digests)
+  end
+
+  defp anchored?(%{"previous_response_id" => anchor}) when is_binary(anchor), do: anchor != ""
+  defp anchored?(_payload), do: false
+
+  defp replay_tail_items(%{"input" => input}) when is_list(input), do: input
+  defp replay_tail_items(%{"input" => nil}), do: []
+  defp replay_tail_items(%{"input" => input}), do: [input]
+  defp replay_tail_items(_payload), do: []
+
+  defp replay_tail_base(semantic_turn_key, payload) do
+    with {:ok, projection} <- replay_claim_projection(payload),
+         {:ok, secret} <- configured_secret_key_base() do
+      key = :crypto.hash(:sha256, secret <> <<0>> <> @replay_tail_domain)
+      projection = Map.drop(projection, ["input", "previous_response_id"])
+
+      base =
+        :crypto.mac(
+          :hmac,
+          :sha256,
+          key,
+          :erlang.term_to_binary({@replay_tail_domain, semantic_turn_key, projection}, [:deterministic])
+        )
+
+      {:ok, key, base}
+    end
+  end
+
+  defp replay_tail_link(key, item, tail) do
+    item_digest = :crypto.hash(:sha256, :erlang.term_to_binary(item, [:deterministic]))
+    :crypto.mac(:hmac, :sha256, key, item_digest <> tail)
+  end
 
   @spec http_resume_input_digest(<<_::256>>, [term()]) ::
           {:ok, <<_::256>>} | {:error, Error.reason()}

@@ -348,6 +348,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp delivered_provider_output?(%Request{}), do: false
 
+  defp witness_alternates(%ClientRetry.OriginalWitness{alternates: alternates}) when is_list(alternates),
+    do: alternates
+
+  defp witness_alternates(_witness), do: []
+
   defp claim_request_metadata(opts, nil),
     do: Metadata.sanitize_metadata(attr(opts, :request_metadata) || %{})
 
@@ -407,6 +412,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         semantic_turn_digest: attr(opts, :semantic_turn_digest),
         original_request_claim: attr(opts, :original_request_claim),
         replay_claim_digest: attr(opts, :replay_claim_digest),
+        replay_claim_alternates: witness_alternates(attr(opts, :native_client_retry_witness)),
         anchor_present?: retry_anchor(opts, retry_policy),
         after_locks: attr(opts, :after_locks),
         owner_idle_validated?: attr(opts, :owner_idle_validated?) == true,

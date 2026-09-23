@@ -177,10 +177,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
 
-    with %ClientRetry.OriginalWitness{version: 1, digest: digest, auth_epoch: epoch} <-
+    with %ClientRetry.OriginalWitness{version: 1, digest: digest, auth_epoch: epoch} = witness <-
            Map.get(scope, :native_client_retry_witness),
          true <- ClientRetry.original_witness_eligible?(request),
-         true <- request.native_client_retry_digest == digest,
+         true <- ClientRetry.witness_matches?(request.native_client_retry_digest, digest, witness.alternates),
          true <- request.native_client_retry_auth_epoch == epoch,
          false <-
            Repo.exists?(

@@ -81,7 +81,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @type replay_intent_result :: %{
           required(:intent) => replay_intent(),
           required(:authorization_binding) => authorization_binding(),
-          required(:lifecycle) => map() | nil
+          required(:lifecycle) => map() | nil,
+          optional(:replay_claim_digest) => <<_::256>>
         }
   @typep validation_authority ::
            :validate
@@ -845,7 +846,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          requested_model: requested_model,
          semantic_turn_claim_key: prepared.turn_claim_key,
          semantic_turn_digest: semantic_turn_digest,
-         replay_claim_digest: replay_claim_digest
+         replay_claim_digest: replay_claim_digest,
+         replay_claim_alternates: witness_alternates(prepared.native_client_retry_witness)
        }}
     end
   end
@@ -860,6 +862,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
     {:error, public_error}
   end
+
+  defp witness_alternates(%{alternates: alternates}) when is_list(alternates), do: alternates
+  defp witness_alternates(_witness), do: []
 
   defp prepare_replay_intent_transaction(context) do
     Repo.transaction(fn ->
@@ -900,7 +905,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       model_id: model.id,
       model_identifier: authorization_binding.model_identifier,
       semantic_turn_digest: context.semantic_turn_digest,
-      replay_claim_digest: context.replay_claim_digest
+      replay_claim_digest: context.replay_claim_digest,
+      replay_claim_alternates: context.replay_claim_alternates
     }
 
     if final_native_compaction_admission?(context.request_options) do
@@ -1058,6 +1064,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       semantic_turn_digest: context.semantic_turn_digest,
       original_request_claim: context.request_options.continuity.request_claim_key,
       replay_claim_digest: context.replay_claim_digest,
+      replay_claim_alternates: context.replay_claim_alternates,
       anchor_present?: not is_nil(context.request_options.continuity.previous_response_id)
     }
 
@@ -1217,6 +1224,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       codex_session_id: session.id,
       model_identifier: model.exposed_model_id
     }
+  end
+
+  # A lifecycle matched through a full-history resend of an anchored request
+  # names the claim the armed request holds; the socket rebinds the frame to it
+  # before any owner check (findings#232 row 232-160).
+  defp replay_intent_result(intent, authorization_binding, %{matched_replay_claim_digest: matched} = lifecycle) do
+    intent
+    |> replay_intent_result(authorization_binding, Map.delete(lifecycle, :matched_replay_claim_digest))
+    |> Map.put(:replay_claim_digest, matched)
   end
 
   defp replay_intent_result(intent, authorization_binding, lifecycle) do

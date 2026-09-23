@@ -1430,6 +1430,108 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     refute log =~ "websocket client resend admitted"
   end
 
+  # Released Codex 0.156.0 sends a turn after the first as an anchored delta;
+  # when the provider cuts that stream before any output, the client resends
+  # the turn as full history without the anchor (measured with the released
+  # client: every resend used to meet `409 duplicate_turn`, including its HTTPS
+  # fallback, and the turn failed; findings#232 row 232-160).
+  @tag :stream_cut_resend
+  test "lifecycle-only stream cut on an incremental turn admits the released client's full-history resend" do
+    enable_owner_forwarding!()
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings#232 row 232-160 (released client: anchored turn cut, full-history resend)
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, completed_response_frames("resp_incremental_cut_turn_a", 3, 1)),
+          strict_native_request(1, stream_cut_frames("incremental", [])),
+          strict_native_request(2, completed_response_frames("resp_incremental_cut_resend", 3, 1))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    turn_state = Ecto.UUID.generate()
+    thread_id = Ecto.UUID.generate()
+    history_a = native_text_input("incremental cut turn a prompt sentinel")
+    item_b = hd(native_text_input("incremental cut turn b prompt sentinel"))
+    answer_a = %{"type" => "message", "role" => "assistant", "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]}
+
+    turn = fn turn_id, input, extra ->
+      %{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"session_id" => thread_id, "thread_id" => thread_id, "turn_id" => turn_id, "request_kind" => "turn"})
+        },
+        "input" => input,
+        "stream" => true
+      }
+      |> Map.merge(extra)
+      |> CodexPooler.JSON.encode!()
+    end
+
+    {_server, port} = start_public_endpoint_with_server!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, turn.("incremental-cut-a", history_a, %{}))
+    {conn, websocket, _types, completed_a} = receive_public_websocket_until_terminal(conn, websocket, ref, [])
+    assert %{"type" => "response.completed"} = completed_a
+
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @websocket_frame_timeout
+
+    anchored_b = turn.("incremental-cut-b", [item_b], %{"previous_response_id" => "resp_incremental_cut_turn_a"})
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, anchored_b)
+    {conn, _websocket, seen_types, failure_frame} = receive_public_websocket_until_terminal(conn, websocket, ref, [])
+    assert %{"type" => "error", "status" => 502} = failure_frame
+    assert ["response.created", "response.in_progress" | _rest] = seen_types
+
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"request_id" => failed_request_id, "status" => "failed"}}},
+                   @websocket_frame_timeout
+
+    turn_b = await_turn_completed!(failed_request_id)
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn_b.codex_session_id)
+    assert %{downstream: %{pid: downstream_pid}} = :sys.get_state(owner_pid)
+    downstream_monitor = Process.monitor(downstream_pid)
+
+    full_history_b = turn.("incremental-cut-b", history_a ++ [answer_a, item_b], %{})
+
+    {resend_outcome, log} =
+      with_info_log(fn ->
+        Mint.HTTP.close(conn)
+        assert_receive {:DOWN, ^downstream_monitor, :process, ^downstream_pid, _reason}, @connection_shutdown_timeout_ms
+
+        {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+        {retry_conn, retry_websocket} = public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, full_history_b)
+        {retry_conn, _retry_websocket, _types, terminal} = receive_public_websocket_until_terminal(retry_conn, retry_websocket, retry_ref, [])
+        Mint.HTTP.close(retry_conn)
+
+        case terminal do
+          %{"type" => "response.completed", "response" => %{"id" => id}} -> {:completed, id}
+          %{"type" => "error", "status" => status, "error" => %{"code" => code}} -> {:error, status, code}
+        end
+      end)
+
+    assert resend_outcome == {:completed, "resp_incremental_cut_resend"}
+    refute log =~ "prompt sentinel"
+    refute log =~ "websocket replay rejection"
+
+    assert [%Request{status: "succeeded"}, %Request{id: ^failed_request_id, status: "failed"}, %Request{id: resend_id, status: status}] =
+             Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
+
+    assert status in ["in_progress", "succeeded"]
+    assert String.starts_with?(Repo.get!(Request, resend_id).correlation_id, "client-retry-v1:")
+
+    assert Repo.one!(
+             from(link in CodexPooler.Accounting.RequestClientRetryLink,
+               where: link.predecessor_request_id == ^failed_request_id,
+               select: link.successor_request_id
+             )
+           ) == resend_id
+
+    assert FakeUpstream.count(upstream) == 3
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   @tag :stream_cut_resend
   test "lifecycle-only stream cut on a text-only turn admits the byte-identical resend as one client-retry successor" do
     %{request: request, resend: resend} =

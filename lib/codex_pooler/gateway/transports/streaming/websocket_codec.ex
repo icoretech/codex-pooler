@@ -483,6 +483,47 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def attach_replay_intent(_prepared, _authorization, _generation), do: {:error, :invalid}
 
+  @doc """
+  Carries the replay claim of the anchored request a full-history resend
+  repeats.
+
+  The runtime preflight found the armed request's anchor-free witness among
+  this frame's alternates (`WebsocketTurnIdentity.replay_claim_alternates/2`),
+  so the frame is that request resent without its anchor. Every later owner,
+  provisional and admission check compares the replay claim byte for byte, so
+  the frame takes the armed request's claim before any of them runs
+  (findings#232 row 232-160). Only an unanchored frame that has alternates can
+  be rebound.
+  """
+  @spec rebind_replay_claim(PreparedWebsocketFrame.t(), <<_::256>>) ::
+          {:ok, PreparedWebsocketFrame.t()} | {:error, :consumed | :invalid | :binding_mismatch}
+  def rebind_replay_claim(
+        %PreparedWebsocketFrame{
+          variant: :native_response_create,
+          native_replay_binding: nil,
+          native_client_retry_witness: %{alternates: [_first | _rest]},
+          request_options: %RequestOptions{continuity: %{previous_response_id: nil}} = request_options
+        } = prepared,
+        replay_claim_digest
+      )
+      when is_binary(replay_claim_digest) and byte_size(replay_claim_digest) == 32 do
+    request_options = RequestOptions.put_continuity(request_options, replay_claim_digest: replay_claim_digest)
+
+    with true <- valid_prepared_frame?(prepared),
+         :ok <- Capability.consume(prepared.provenance.capability, prepared.provenance.frame) do
+      {:ok,
+       seal_prepared_frame(
+         %{prepared | replay_claim_digest: replay_claim_digest, request_options: request_options},
+         prepared.provenance.validation.completed
+       )}
+    else
+      false -> {:error, :invalid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def rebind_replay_claim(_prepared, _replay_claim_digest), do: {:error, :binding_mismatch}
+
   @spec reseal_runtime_frame(PreparedWebsocketFrame.t(), RequestOptions.t()) ::
           {:ok, PreparedWebsocketFrame.t()} | {:error, :consumed | :invalid}
   def reseal_runtime_frame(%PreparedWebsocketFrame{} = prepared, %RequestOptions{} = options) do
@@ -989,40 +1030,54 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
        when is_binary(semantic_turn_key) and is_binary(turn_claim_key) do
     request_claim_key = native_request_claim(prepared, request_options)
 
-    case WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload) do
-      {:ok, replay_claim_digest} ->
-        request_options =
-          RequestOptions.put_continuity(request_options,
-            request_claim_key: request_claim_key,
-            replay_claim_digest: replay_claim_digest
-          )
+    with {:ok, replay_claim_digest} <-
+           WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload),
+         {:ok, witness_digest} <-
+           resend_witness_digest(semantic_turn_key, payload, replay_claim_digest),
+         {:ok, alternates} <- WebsocketTurnIdentity.replay_claim_alternates(semantic_turn_key, payload) do
+      request_options =
+        RequestOptions.put_continuity(request_options,
+          request_claim_key: request_claim_key,
+          replay_claim_digest: replay_claim_digest
+        )
 
-        {request_options, witness} =
-          case ClientRetry.original_witness(
-                 replay_claim_digest,
-                 request_options.runtime.api_key_runtime_epoch
-               ) do
-            {:ok, witness} ->
-              {RequestOptions.put_native_client_retry_witness(request_options, witness), witness}
+      {request_options, witness} =
+        case ClientRetry.original_witness(
+               witness_digest,
+               request_options.runtime.api_key_runtime_epoch,
+               alternates
+             ) do
+          {:ok, witness} ->
+            {RequestOptions.put_native_client_retry_witness(request_options, witness), witness}
 
-            {:error, :invalid_witness} ->
-              {request_options, nil}
-          end
+          {:error, :invalid_witness} ->
+            {request_options, nil}
+        end
 
-        {:ok,
-         %{
-           prepared
-           | request_options: request_options,
-             replay_claim_digest: replay_claim_digest,
-             native_client_retry_witness: witness
-         }}
-
-      {:error, _reason} = error ->
-        error
+      {:ok,
+       %{
+         prepared
+         | request_options: request_options,
+           replay_claim_digest: replay_claim_digest,
+           native_client_retry_witness: witness
+       }}
     end
   end
 
   defp put_native_request_claim(%PreparedWebsocketFrame{} = prepared), do: {:ok, prepared}
+
+  # The digest a failed or replayed predecessor is recognised by when the client
+  # resends it. An unanchored request is resent byte-identically, so it is the
+  # replay claim itself; an anchored one is resent as full history without its
+  # anchor, so its stored witness is the anchor-free digest of its own items,
+  # which that resend finds among its trailing items (findings#232 row 232-160).
+  defp resend_witness_digest(semantic_turn_key, payload, replay_claim_digest) do
+    case WebsocketTurnIdentity.replay_tail_digest(semantic_turn_key, payload) do
+      {:ok, tail_digest} -> {:ok, tail_digest}
+      :unanchored -> {:ok, replay_claim_digest}
+      {:error, _reason} = error -> error
+    end
+  end
 
   defp native_request_claim(%PreparedWebsocketFrame{} = prepared, request_options) do
     payload = prepared.payload

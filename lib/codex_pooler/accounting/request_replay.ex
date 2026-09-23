@@ -315,7 +315,8 @@ defmodule CodexPooler.Accounting.RequestReplay do
           required(:model_id) => Ecto.UUID.t(),
           required(:model_identifier) => String.t(),
           required(:semantic_turn_digest) => <<_::256>>,
-          required(:replay_claim_digest) => <<_::256>>
+          required(:replay_claim_digest) => <<_::256>>,
+          optional(:replay_claim_alternates) => [<<_::256>>]
         }
 
   @type provisional_reference :: %{
@@ -1188,14 +1189,14 @@ defmodule CodexPooler.Accounting.RequestReplay do
          input
        ) do
     with :ok <- compare_entitlement_authorization(entitlement, input),
-         :ok <- compare_replay_claim(entitlement, input),
+         {:ok, matched} <- compare_replay_claim(entitlement, request, input),
          "armed" <- entitlement.status,
          true <- open_turn?(turn),
          true <- open_request?(request),
          %Attempt{} = attempt <- latest_attempt(request.id),
          true <- coherent_armed_attempt?(attempt, entitlement),
          true <- DateTime.compare(entitlement.expires_at, db_now) == :gt do
-      {:armed_generation_one, entitlement_snapshot(entitlement)}
+      {:armed_generation_one, entitlement |> entitlement_snapshot() |> put_matched_replay_claim(matched)}
     else
       {:error, _reason} = error -> error
       _other -> {:error, :lifecycle_conflict}
@@ -1459,11 +1460,35 @@ defmodule CodexPooler.Accounting.RequestReplay do
     end
   end
 
-  defp compare_replay_claim(entitlement, input) do
-    if secure_digest_match?(entitlement.replay_claim_digest, input.replay_claim_digest),
-      do: :ok,
-      else: {:error, :replay_claim_mismatch}
+  # The byte-identical resend carries the entitlement's own claim. The released
+  # client never resends an anchored request that way: it reconnects without
+  # the anchor and sends the same request as full history, whose trailing items
+  # are exactly the anchored request's (findings#232 row 232-160). The armed
+  # request stored the anchor-free digest of those items as its client-retry
+  # witness, so that resend is the same request when the witness is one of its
+  # alternates; the socket then carries the entitlement's claim for every later
+  # owner and admission check. An anchored resend never has alternates, so a
+  # changed anchor stays a different request.
+  defp compare_replay_claim(entitlement, request, input) do
+    cond do
+      secure_digest_match?(entitlement.replay_claim_digest, input.replay_claim_digest) ->
+        {:ok, nil}
+
+      Enum.any?(
+        Map.get(input, :replay_claim_alternates, []),
+        &secure_digest_match?(request.native_client_retry_digest, &1)
+      ) ->
+        {:ok, entitlement.replay_claim_digest}
+
+      true ->
+        {:error, :replay_claim_mismatch}
+    end
   end
+
+  defp put_matched_replay_claim(snapshot, nil), do: snapshot
+
+  defp put_matched_replay_claim(snapshot, matched),
+    do: Map.put(snapshot, :matched_replay_claim_digest, matched)
 
   defp open_consumed_reference?(
          %RequestReplayEntitlement{status: "consumed", closed_at: nil} = entitlement,
@@ -2058,15 +2083,20 @@ defmodule CodexPooler.Accounting.RequestReplay do
       :replay_claim_digest
     ]
 
-    if Map.keys(input) |> Enum.sort() == Enum.sort(required) and
+    if (Map.keys(input) -- [:replay_claim_alternates]) |> Enum.sort() == Enum.sort(required) and
          Enum.all?([:codex_session_id, :api_key_id, :pool_id, :model_id], &uuid?(input[&1])) and
          is_integer(input.api_key_runtime_epoch) and input.api_key_runtime_epoch >= 0 and
          is_binary(input.model_identifier) and byte_size(input.model_identifier) in 1..255 and
-         digest?(input.semantic_turn_digest) and digest?(input.replay_claim_digest) do
+         valid_preflight_digests?(input) do
       :ok
     else
       {:error, :invalid_input}
     end
+  end
+
+  defp valid_preflight_digests?(input) do
+    digest?(input.semantic_turn_digest) and digest?(input.replay_claim_digest) and
+      valid_alternates?(Map.get(input, :replay_claim_alternates, []))
   end
 
   defp validate_provisional_reference(reference) do
@@ -2091,6 +2121,9 @@ defmodule CodexPooler.Accounting.RequestReplay do
       {:error, :invalid_input}
     end
   end
+
+  defp valid_alternates?(alternates) when is_list(alternates), do: Enum.all?(alternates, &digest?/1)
+  defp valid_alternates?(_alternates), do: false
 
   defp uuid?(value), do: match?({:ok, ^value}, Ecto.UUID.cast(value))
   defp digest?(value), do: is_binary(value) and byte_size(value) == @digest_bytes
