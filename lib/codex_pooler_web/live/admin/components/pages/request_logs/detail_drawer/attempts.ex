@@ -147,7 +147,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
 
   # One compact line per attempt built only from the admin projection's fixed
   # vocabulary (`DebugProjection.DownstreamDelivery`); absent receipts render
-  # nothing.
+  # nothing. The highest frame class a websocket pushed (findings#232 row
+  # 232-203) follows the frame count; a receipt without it (HTTP SSE, older
+  # rows) renders the line without it.
   defp downstream_delivery_rows(%{attempt_number: attempt_number} = attempt) do
     case Map.get(attempt, :downstream_delivery) do
       %{
@@ -156,14 +158,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         pushed_at: pushed_at,
         frames_after_visible: frames,
         transport: transport
-      }
+      } = receipt
       when is_binary(outcome) and is_binary(terminal_class) and is_integer(frames) and
              frames >= 0 and is_binary(transport) and (is_binary(pushed_at) or is_nil(pushed_at)) ->
         [
           detail(
             "request-log-detail-attempt-#{attempt_number}-downstream-delivery",
             "Downstream delivery",
-            downstream_delivery_line(outcome, terminal_class, frames, pushed_at, transport),
+            downstream_delivery_line(outcome, terminal_class, frames, highest_frame_class(receipt), pushed_at, transport),
             mono: true
           )
         ]
@@ -173,11 +175,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
     end
   end
 
-  defp downstream_delivery_line(outcome, terminal_class, frames, pushed_at, transport) do
+  defp highest_frame_class(%{highest_frame_class: class}) when is_binary(class), do: class
+  defp highest_frame_class(_receipt), do: nil
+
+  defp downstream_delivery_line(outcome, terminal_class, frames, highest_frame_class, pushed_at, transport) do
     [
       outcome,
       "terminal #{terminal_class}",
       "#{frames} #{if frames == 1, do: "frame", else: "frames"} after visible",
+      highest_frame_class && "highest frame #{highest_frame_class}",
       pushed_at && "pushed #{pushed_at}",
       transport
     ]

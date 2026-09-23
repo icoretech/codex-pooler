@@ -446,6 +446,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     assert has_element?(view, row_id, "3 frames after visible")
     assert has_element?(view, row_id, pushed_at)
     assert has_element?(view, row_id, "websocket")
+    # A receipt without a frame class (HTTP SSE, rows recorded before it) keeps
+    # the line without one.
+    refute has_element?(view, row_id, "highest frame")
 
     attempt_html = view |> element("#request-log-detail-attempt-1") |> render()
     refute attempt_html =~ "downstream_delivery"

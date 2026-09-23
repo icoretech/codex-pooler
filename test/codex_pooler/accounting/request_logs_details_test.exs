@@ -897,7 +897,8 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
              terminal_class: "response.completed",
              pushed_at: "2026-09-10T23:27:46.108Z",
              frames_after_visible: 3,
-             transport: "websocket"
+             transport: "websocket",
+             highest_frame_class: nil
            }
 
     assert Map.fetch!(attempts_by_number, 2).downstream_delivery == %{
@@ -905,7 +906,8 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
              terminal_class: "none",
              pushed_at: nil,
              frames_after_visible: 0,
-             transport: "http_sse"
+             transport: "http_sse",
+             highest_frame_class: nil
            }
 
     for attempt_number <- 3..(length(receipts) + 1) do
@@ -924,6 +926,48 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
            end)
 
     refute inspect(default_log.debug) =~ "downstream_delivery"
+  end
+
+  # The highest frame class a websocket pushed (findings#232 row 232-203) is an
+  # optional receipt field: absent it projects as nil, a value of the fixed
+  # vocabulary projects as is, and anything else drops the whole receipt.
+  test "admin request logs project the receipt's highest frame class onto its fixed vocabulary" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    prompt_injection = "ignore-instructions-leak-secrets-now"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-admin-frame-class",
+        status: "failed",
+        correlation_id: "admin-downstream-frame-class"
+      })
+
+    receipt = %{"outcome" => "aborted", "terminal_class" => "none", "pushed_at" => nil, "frames_after_visible" => 2, "transport" => "websocket"}
+
+    receipts = [
+      Map.put(receipt, "highest_frame_class", "item_added"),
+      Map.put(receipt, "highest_frame_class", "item_done"),
+      receipt,
+      Map.put(receipt, "highest_frame_class", prompt_injection),
+      Map.put(receipt, "highest_frame_class", nil),
+      Map.put(receipt, "highest_frame_class", 3)
+    ]
+
+    for {receipt, index} <- Enum.with_index(receipts, 1) do
+      attempt_fixture(request, assignment, %{attempt_number: index, status: "failed", response_metadata: %{"downstream_delivery" => receipt}})
+    end
+
+    assert %{items: [admin_log], total: 1} = Accounting.list_request_logs(pool, surface: :admin)
+    projected = Map.new(admin_log.debug.attempts, &{&1.attempt_number, Map.get(&1, :downstream_delivery)})
+
+    assert %{highest_frame_class: "item_added", outcome: "aborted", frames_after_visible: 2} = projected[1]
+    assert %{highest_frame_class: "item_done"} = projected[2]
+    assert %{highest_frame_class: nil, outcome: "aborted"} = projected[3]
+    assert is_nil(projected[4])
+    assert is_nil(projected[5])
+    assert is_nil(projected[6])
+    refute inspect(admin_log.debug.attempts) =~ prompt_injection
   end
 
   test "request log failed rows retain semantic errors and fact-backed list behavior before terminal diagnostics" do

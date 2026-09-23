@@ -67,6 +67,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketDeliveryReceiptTest do
       assert [attempt] = await_delivery_receipt(setup.pool.id, System.monotonic_time(:millisecond) + @frame_timeout_ms)
 
       assert %{"outcome" => "delivered", "terminal_class" => "response.completed"} = attempt.response_metadata["downstream_delivery"]
+      # The public socket classifies what it pushed like the native one; the
+      # admin request-log drawer shows the class for every websocket receipt.
+      assert attempt.response_metadata["downstream_delivery"]["highest_frame_class"] == "terminal"
     end
   end
 
