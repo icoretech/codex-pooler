@@ -156,12 +156,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       end)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
     assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
     response = Task.await(request_task, @detection_timeout_ms)
@@ -272,7 +272,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
         end)
 
       assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       owner = sole_owner_pid!()
       active_turn = :sys.get_state(owner).active_turn
@@ -290,17 +290,17 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
       assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       # If the task exits before this external monitor is fully registered,
       # Erlang reports :noproc instead of preserving its :normal exit reason.
-      assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, task_exit_reason}, 1_000
+      assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, task_exit_reason}, @detection_timeout_ms
       assert task_exit_reason in [:normal, :noproc]
       assert Process.info(owner, :status) == {:status, :suspended}
       close_monitor = Process.monitor(close_barrier_pid)
       send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
-      assert_receive {:DOWN, ^close_monitor, :process, ^close_barrier_pid, _reason}, 1_000
+      assert_receive {:DOWN, ^close_monitor, :process, ^close_barrier_pid, _reason}, @detection_timeout_ms
       assert Process.info(request_task.pid, :status) != nil
       assert Process.info(owner, :status) == {:status, :suspended}
       assert :erlang.resume_process(owner)
@@ -402,7 +402,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       end)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
     response = Task.await(request_task, @detection_timeout_ms)
@@ -498,7 +498,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     assert %CodexTurn{first_visible_output_at: %DateTime{}} =
              turn = await_committed_turn(setup.pool.id)

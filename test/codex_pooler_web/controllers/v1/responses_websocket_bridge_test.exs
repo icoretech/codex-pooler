@@ -51,6 +51,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   @api_key_revocation_close {:close, 1008, "api key is no longer active"}
   @websocket_frame_timeout 5_000
+
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
   # How long a test waits for the fake provider to report that the bridged
   # request reached it: a detection budget, which a green run never spends.
   # 1 s failed at load ~30 (findings#232 row 232-242).
@@ -739,7 +743,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     try do
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, first_payload)
-      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, @detection_timeout_ms
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, queued_payload)
       {conn, websocket} = public_websocket_transport_barrier!(conn, websocket, ref)
@@ -986,7 +990,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              :queue.to_list(queued_state.queued_response_payloads)
 
     assert queued_payload["model"] == "gpt-test"
-    assert_receive {:codex_response_done, ^retarget_task_pid, {:error, reason}}, 1_000
+    assert_receive {:codex_response_done, ^retarget_task_pid, {:error, reason}}, @detection_timeout_ms
 
     {_result, log} =
       with_log(fn ->
@@ -1169,7 +1173,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     owner_ref = Process.monitor(owner_pid)
     assert :ok = GenServer.stop(owner_pid, :shutdown, 1_000)
-    assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :shutdown}, 1_000
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :shutdown}, @detection_timeout_ms
     assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
   end
 
@@ -2110,7 +2114,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     assert %CodexTurn{first_visible_output_at: %DateTime{}} =
              turn =
