@@ -2,8 +2,6 @@ defmodule CodexPooler.DBInvariantsTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounts.{Scope, User}
-  alias CodexPooler.Audit.AuditEvent
-  alias CodexPooler.Pools
   alias CodexPooler.Pools.Membership
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -919,100 +917,6 @@ defmodule CodexPooler.DBInvariantsTest do
                """,
                [[first_membership_id, second_membership_id]]
              ).rows
-  end
-
-  test "membership role demotion blocks the final active owner" do
-    revoke_all_active_memberships!()
-    owner_id = create_user!("owner-final-role-demotion@example.com")
-    membership_id = create_membership!(owner_id, "instance_owner", "active", owner_id)
-    owner = Repo.get!(User, load_uuid!(owner_id))
-    membership = Repo.get!(Membership, load_uuid!(membership_id))
-
-    assert {:error, :last_active_owner} =
-             Pools.change_membership_role(Scope.for_user(owner, []), membership, "instance_admin")
-
-    assert %Membership{role: "instance_owner", status: "active"} = Repo.reload!(membership)
-
-    refute Repo.get_by(AuditEvent,
-             action: "membership.role_update",
-             actor_user_id: owner.id,
-             target_id: membership.id
-           )
-  end
-
-  test "membership revocation blocks the final active owner" do
-    revoke_all_active_memberships!()
-    owner_id = create_user!("owner-final-membership-revoke@example.com")
-    membership_id = create_membership!(owner_id, "instance_owner", "active", owner_id)
-    owner = Repo.get!(User, load_uuid!(owner_id))
-    membership = Repo.get!(Membership, load_uuid!(membership_id))
-
-    assert {:error, :last_active_owner} =
-             Pools.revoke_membership(Scope.for_user(owner, []), membership)
-
-    assert %Membership{role: "instance_owner", status: "active", revoked_at: nil} =
-             Repo.reload!(membership)
-
-    refute Repo.get_by(AuditEvent,
-             action: "membership.revoke",
-             actor_user_id: owner.id,
-             target_id: membership.id
-           )
-  end
-
-  test "membership owner demotion and revocation are deterministic and audited when another active owner remains" do
-    revoke_all_active_memberships!()
-    actor_id = create_user!("owner-membership-change-actor@example.com")
-    demoted_owner_id = create_user!("owner-membership-change-demoted@example.com")
-    revoked_owner_id = create_user!("owner-membership-change-revoked@example.com")
-
-    create_membership!(actor_id, "instance_owner", "active", actor_id)
-
-    demoted_membership_id =
-      create_membership!(demoted_owner_id, "instance_owner", "active", actor_id)
-
-    revoked_membership_id =
-      create_membership!(revoked_owner_id, "instance_owner", "active", actor_id)
-
-    actor = Repo.get!(User, load_uuid!(actor_id))
-    demoted_membership = Repo.get!(Membership, load_uuid!(demoted_membership_id))
-    revoked_membership = Repo.get!(Membership, load_uuid!(revoked_membership_id))
-    scope = Scope.for_user(actor, [])
-
-    assert {:ok, %Membership{} = demoted} =
-             Pools.change_membership_role(scope, demoted_membership, "instance_admin")
-
-    assert demoted.role == "instance_admin"
-    assert demoted.status == "active"
-
-    assert {:ok, %Membership{} = revoked} = Pools.revoke_membership(scope, revoked_membership)
-
-    assert revoked.role == "instance_owner"
-    assert revoked.status == "revoked"
-    refute is_nil(revoked.revoked_at)
-
-    assert Repo.get_by(AuditEvent,
-             action: "membership.role_update",
-             actor_user_id: actor.id,
-             target_id: demoted_membership.id
-           )
-
-    assert Repo.get_by(AuditEvent,
-             action: "membership.revoke",
-             actor_user_id: actor.id,
-             target_id: revoked_membership.id
-           )
-  end
-
-  defp load_uuid!(uuid), do: Ecto.UUID.load!(uuid)
-
-  defp revoke_all_active_memberships! do
-    Repo.query!("""
-    UPDATE memberships
-    SET status = 'revoked',
-        revoked_at = COALESCE(revoked_at, now())
-    WHERE status = 'active'
-    """)
   end
 
   defp create_user!(email) do

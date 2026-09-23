@@ -762,7 +762,7 @@ defmodule CodexPooler.PoolsTest do
       operator_pool_assignment_fixture(unassigned, other_pool, created_by_user_id: owner.id)
       operator_pool_assignment_fixture(revoked, pool, created_by_user_id: owner.id)
       revoked_membership = Repo.get_by!(Membership, user_id: revoked.id)
-      assert {:ok, _revoked} = Pools.revoke_membership(owner_scope, revoked_membership)
+      revoked_membership |> Membership.changeset(%{status: "revoked", revoked_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)}) |> Repo.update!()
 
       assert Enum.sort(Pools.list_pool_operator_ids(pool)) == Enum.sort([owner.id, assigned.id])
       assert Enum.sort(Pools.list_pool_operator_ids(other_pool.id)) == Enum.sort([owner.id, unassigned.id])

@@ -12,7 +12,6 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.Membership
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.AlertNotificationsReadModel
 
@@ -404,10 +403,9 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   end
 
   # A role change changes every Pool the operator sees: an admin promoted to
-  # owner sees them all, an owner demoted to admin only the assigned ones, and
-  # a revoked membership none. Each change reloads the operator's pages once,
-  # through the operator editor and through the Pools membership functions.
-  test "changing or revoking an operator's role reloads that operator's notification centers once and follows the Pools they see", %{conn: owner_conn, scope: owner_scope} do
+  # owner sees them all, an owner demoted to admin only the assigned ones. Each
+  # change through the operator editor reloads the operator's pages once.
+  test "changing an operator's role reloads that operator's notification centers once and follows the Pools they see", %{conn: owner_conn, scope: owner_scope} do
     [assigned_pool, other_pool] = for label <- ["assigned", "other"], do: pool!(owner_scope, label)
     other_id = record_bell_incident!(other_pool).id
     %{user: admin, conn: admin_conn} = assigned_admin!(owner_scope, [assigned_pool])
@@ -426,21 +424,6 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     assert %{badge_count: 0, rows: []} = notification_center(admin_view)
 
     _hidden = record_bell_incident!(other_pool)
-
-    assert Enum.map(views, &notification_reloads/1) == [1, 0]
-
-    membership = Repo.get_by!(Membership, user_id: admin.id, status: "active")
-    assert {:ok, _promoted} = Pools.change_membership_role(owner_scope, membership, "instance_owner")
-
-    assert Enum.map(views, &notification_reloads/1) == [0, 1]
-    assert %{badge_count: 2} = notification_center(admin_view)
-
-    assert {:ok, _revoked} = Pools.revoke_membership(owner_scope, membership)
-
-    assert Enum.map(views, &notification_reloads/1) == [0, 1]
-    assert %{badge_count: 0, rows: []} = notification_center(admin_view)
-
-    _unheard = record_bell_incident!(assigned_pool)
 
     assert Enum.map(views, &notification_reloads/1) == [1, 0]
   end

@@ -408,32 +408,6 @@ defmodule CodexPooler.Pools do
   def create_instance_owner_membership(_actor, _user),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  @spec change_membership_role(Scope.t(), Membership.t() | Ecto.UUID.t(), String.t()) ::
-          membership_result()
-  def change_membership_role(%Scope{} = scope, membership_or_id, role) when is_binary(role) do
-    with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)),
-         {:ok, role} <- normalize_membership_role(role) do
-      scope
-      |> change_membership_role_transaction(membership_or_id, role)
-      |> invalidate_notifications_after_membership_change()
-    end
-  end
-
-  def change_membership_role(_scope, _membership_or_id, _role),
-    do: {:error, access_error(:invalid_request, "user scope is required")}
-
-  @spec revoke_membership(Scope.t(), Membership.t() | Ecto.UUID.t()) :: membership_result()
-  def revoke_membership(%Scope{} = scope, membership_or_id) do
-    with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)) do
-      scope
-      |> revoke_membership_transaction(membership_or_id)
-      |> invalidate_notifications_after_membership_change()
-    end
-  end
-
-  def revoke_membership(_scope, _membership_or_id),
-    do: {:error, access_error(:invalid_request, "user scope is required")}
-
   @spec list_active_memberships_for_user(term()) :: [Membership.t()]
   def list_active_memberships_for_user(user_id) when is_binary(user_id) do
     Repo.all(
@@ -454,146 +428,6 @@ defmodule CodexPooler.Pools do
 
   @spec access_error(atom(), String.t()) :: access_error()
   defdelegate access_error(code, message), to: Authorization
-
-  defp change_membership_role_transaction(scope, membership_or_id, role) do
-    Repo.transaction(fn ->
-      with {:ok, membership} <- lock_membership(membership_or_id),
-           :ok <- ensure_owner_authority_remains(membership, role: role),
-           previous_role = membership.role,
-           {:ok, membership} <-
-             membership
-             |> Membership.changeset(%{role: role})
-             |> Repo.update(),
-           {:ok, _audit} <-
-             record_membership_audit_event(scope, "membership.role_update", membership, %{
-               previous_role: previous_role,
-               role: membership.role,
-               status: membership.status
-             }) do
-        {membership, previous_role != membership.role}
-      else
-        error -> rollback_transaction_error(error)
-      end
-    end)
-    |> normalize_transaction_error()
-  end
-
-  defp revoke_membership_transaction(scope, membership_or_id) do
-    Repo.transaction(fn ->
-      with {:ok, membership} <- lock_membership(membership_or_id),
-           :ok <- ensure_owner_authority_remains(membership, status: @status_revoked),
-           now = now(),
-           previous_status = membership.status,
-           {:ok, membership} <-
-             membership
-             |> Membership.changeset(%{status: @status_revoked, revoked_at: now})
-             |> Repo.update(),
-           {:ok, _audit} <-
-             record_membership_audit_event(scope, "membership.revoke", membership, %{
-               previous_status: previous_status,
-               status: membership.status,
-               role: membership.role
-             }) do
-        {membership, previous_status != membership.status}
-      else
-        error -> rollback_transaction_error(error)
-      end
-    end)
-    |> normalize_transaction_error()
-  end
-
-  # A membership's role decides which Pools its operator sees, so a committed
-  # role change or revocation invalidates the operator's notification centers
-  # (findings#206 row 206-319).
-  defp invalidate_notifications_after_membership_change({:ok, {%Membership{} = membership, changed?}}) do
-    if changed?, do: _ = Alerts.invalidate_notifications_after_operator_visibility_change(membership.user_id)
-    {:ok, membership}
-  end
-
-  defp invalidate_notifications_after_membership_change({:error, _reason} = error), do: error
-
-  defp lock_membership(%Membership{id: id}), do: lock_membership(id)
-
-  defp lock_membership(id) when is_binary(id) do
-    case Repo.one(from membership in Membership, where: membership.id == ^id, lock: "FOR UPDATE") do
-      %Membership{} = membership -> {:ok, membership}
-      nil -> {:error, access_error(:membership_not_found, "membership was not found")}
-    end
-  end
-
-  defp lock_membership(_membership_or_id),
-    do: {:error, access_error(:membership_not_found, "membership was not found")}
-
-  defp normalize_membership_role(role) when is_binary(role) do
-    if role in Authorization.role_values() do
-      {:ok, role}
-    else
-      {:error, access_error(:invalid_role, "role must be instance_owner or instance_admin")}
-    end
-  end
-
-  defp ensure_owner_authority_remains(
-         %Membership{status: @status_active} = membership,
-         role: replacement_role
-       ) do
-    owner_role = Authorization.role(:instance_owner)
-
-    if membership.role == owner_role and replacement_role != owner_role do
-      ensure_not_final_active_owner(membership)
-    else
-      :ok
-    end
-  end
-
-  defp ensure_owner_authority_remains(
-         %Membership{status: @status_active} = membership,
-         status: @status_revoked
-       ) do
-    if membership.role == Authorization.role(:instance_owner) do
-      ensure_not_final_active_owner(membership)
-    else
-      :ok
-    end
-  end
-
-  defp ensure_owner_authority_remains(_membership, _attrs), do: :ok
-
-  defp ensure_not_final_active_owner(%Membership{user_id: user_id}) do
-    owner_role = Authorization.role(:instance_owner)
-
-    active_owner_user_ids =
-      Repo.all(
-        from membership in Membership,
-          join: user in User,
-          on: user.id == membership.user_id,
-          where:
-            membership.role == ^owner_role and membership.status == ^@status_active and
-              user.status == ^@status_active and is_nil(user.deleted_at),
-          order_by: [asc: membership.user_id],
-          lock: "FOR UPDATE",
-          select: membership.user_id
-      )
-      |> Enum.map(&normalize_uuid/1)
-      |> Enum.uniq()
-
-    if active_owner_user_ids == [user_id], do: {:error, :last_active_owner}, else: :ok
-  end
-
-  defp normalize_uuid(<<_::128>> = raw_uuid), do: Ecto.UUID.load!(raw_uuid)
-  defp normalize_uuid(uuid), do: uuid
-
-  defp rollback_transaction_error({:error, %Ecto.Changeset{} = changeset}),
-    do: Repo.rollback(changeset)
-
-  defp rollback_transaction_error({:error, reason}), do: Repo.rollback(reason)
-  defp rollback_transaction_error(reason), do: Repo.rollback(reason)
-
-  defp normalize_transaction_error({:ok, value}), do: {:ok, value}
-
-  defp normalize_transaction_error({:error, %Ecto.Changeset{} = changeset}),
-    do: {:error, changeset}
-
-  defp normalize_transaction_error({:error, reason}), do: {:error, reason}
 
   defp normalize_pool(%Pool{} = pool), do: pool
 
@@ -677,8 +511,7 @@ defmodule CodexPooler.Pools do
     {:ok, pool}
   end
 
-  defp normalize_pool_lifecycle_transaction({:error, reason}),
-    do: normalize_transaction_error({:error, reason})
+  defp normalize_pool_lifecycle_transaction({:error, reason}), do: {:error, reason}
 
   @spec revoke_active_operator_pool_assignments(Pool.t(), String.t() | nil, DateTime.t()) ::
           {:ok, non_neg_integer()}
@@ -745,24 +578,6 @@ defmodule CodexPooler.Pools do
   end
 
   defp record_pool_audit_event(_scope, _action, _pool, _details), do: :ok
-
-  defp record_membership_audit_event(%Scope{user: %User{} = user}, action, membership, details) do
-    Audit.record_user_event(user, %{
-      action: action,
-      target_type: "membership",
-      target_id: membership.id,
-      details:
-        Map.merge(
-          %{
-            membership_id: membership.id,
-            user_id: membership.user_id
-          },
-          details
-        )
-    })
-  end
-
-  defp record_membership_audit_event(_scope, _action, _membership, _details), do: {:ok, nil}
 
   defp pool_audit_details(%Pool{} = pool) do
     %{
