@@ -11,7 +11,10 @@ defmodule CodexPooler.Gateway.Persistence.CodexSession do
     field :pool_id, :binary_id
     field :api_key_id, :binary_id
     field :session_key, :string
-    field :conversation_key, :string
+    # The table still has the never-written `conversation_key` column and its
+    # CHECK. The schema stops naming it first, so a later migration can drop the
+    # column without breaking the session reads of a release still rolling out
+    # (Ecto selects every schema field by name).
     field :pool_upstream_assignment_id, :binary_id
     field :status, :string
     field :owner_instance_id, :string

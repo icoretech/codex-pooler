@@ -1044,7 +1044,6 @@ defmodule CodexPoolerWeb.McpControllerTest do
       pool_id: pool.id,
       api_key_id: api_key.id,
       session_key: session_key,
-      conversation_key: "conversation-#{session_key}",
       pool_upstream_assignment_id: assignment.id,
       status: "active",
       owner_instance_id: "test-instance",

@@ -1254,7 +1254,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
             where: s.pool_id == ^pool_id,
             select: %{
               session_key: s.session_key,
-              conversation_key: s.conversation_key,
               status: s.status,
               owner_instance_id: s.owner_instance_id
             }

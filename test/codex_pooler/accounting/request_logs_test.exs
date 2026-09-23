@@ -3378,7 +3378,6 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
         pool_id: pool.id,
         api_key_id: api_key.id,
         session_key: "session-key-#{request.correlation_id}",
-        conversation_key: "conversation-#{request.correlation_id}",
         pool_upstream_assignment_id: assignment.id,
         status: "active",
         owner_instance_id: "test-instance",

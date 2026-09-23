@@ -295,7 +295,6 @@ defmodule CodexPooler.Dev.Seeds.Perf do
         pool_id: pool.id,
         api_key_id: api_key.id,
         session_key: "dev-perf-session-#{index}",
-        conversation_key: "dev-perf-conversation-#{index}",
         pool_upstream_assignment_id: assignment.id,
         status: "active",
         created_at: minutes_ago(index + 5),

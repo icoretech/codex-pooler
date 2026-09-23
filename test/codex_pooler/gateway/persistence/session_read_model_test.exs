@@ -149,7 +149,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
       pool_id: pool.id,
       api_key_id: api_key.id,
       session_key: Map.get(attrs, :session_key, "session-#{System.unique_integer([:positive])}"),
-      conversation_key: Map.get(attrs, :conversation_key),
       pool_upstream_assignment_id: assignment.id,
       status: Map.get(attrs, :status, "active"),
       owner_instance_id: Map.get(attrs, :owner_instance_id, "gateway-node"),
