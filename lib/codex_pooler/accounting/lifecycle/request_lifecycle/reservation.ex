@@ -873,13 +873,34 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   defp insert_or_update_claimed_request!(attrs, %Request{} = turn_claim),
     do: update_claimed_request!(turn_claim, attrs)
 
+  # A refusal records history; it never takes a claim away from the row that
+  # holds it. Its correlation id is taken already when an earlier refusal of the
+  # same socket recorded the websocket handshake request id every frame of that
+  # socket shares (a frame that names no Codex turn, or one refused before its
+  # turn was claimed), or when an earlier row holds the request claim. The
+  # conflict used to escape as `Ecto.ConstraintError` and the client got `500
+  # websocket_response_task_failed` instead of the refusal (findings#206 row
+  # 206-361); the refusal is recorded under a fresh correlation id instead,
+  # like every unclaimed admission, and the earlier row keeps the claim.
   defp insert_or_update_claimed_request!(attrs, nil) do
-    request =
-      %Request{}
-      |> Ecto.Changeset.change(attrs)
-      |> Repo.insert!()
+    case insert_denied_request(attrs) do
+      {:ok, %Request{} = request} ->
+        request
 
-    request
+      {:error, %Ecto.Changeset{}} ->
+        %Request{}
+        |> Ecto.Changeset.change(Map.put(attrs, :correlation_id, Ecto.UUID.generate()))
+        |> Repo.insert!()
+    end
+  end
+
+  # The savepoint keeps the surrounding transaction usable after the unique
+  # conflict, so the refusal can still be recorded in it.
+  defp insert_denied_request(attrs) do
+    %Request{}
+    |> Ecto.Changeset.change(attrs)
+    |> Ecto.Changeset.unique_constraint(:correlation_id, name: :requests_correlation_id_uq)
+    |> Repo.insert(mode: :savepoint)
   end
 
   defp update_claimed_request!(%Request{id: request_id}, attrs) do

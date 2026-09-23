@@ -886,6 +886,53 @@ defmodule CodexPooler.AccountingTest do
                )
     end
 
+    # A refusal recorded without a turn claim under a correlation id that is
+    # already recorded (the websocket handshake request id an earlier refusal
+    # of the same socket took, or a claim another row holds) is its own row
+    # under a fresh correlation id; the earlier row keeps the correlation
+    # (findings#206 row 206-361).
+    test "an unclaimed denial whose correlation id is taken records its own row and leaves the holder alone" do
+      setup = accounting_setup()
+
+      assert {:ok, %{request: first}} =
+               Accounting.record_denied_request(setup.auth, setup.model, %{
+                 correlation_id: "socket-handshake-request-id",
+                 transport: "websocket",
+                 last_error_code: "pinned_continuation_unavailable"
+               })
+
+      assert {:ok, %{request: second}} =
+               Accounting.record_denied_request(setup.auth, setup.model, %{
+                 correlation_id: "socket-handshake-request-id",
+                 transport: "websocket",
+                 last_error_code: "pinned_continuation_unavailable"
+               })
+
+      assert first.correlation_id == "socket-handshake-request-id"
+      refute second.id == first.id
+      assert {:ok, _uuid} = Ecto.UUID.cast(second.correlation_id)
+      assert second.status == "rejected"
+      assert second.last_error_code == "pinned_continuation_unavailable"
+
+      assert {:ok, %{request: claim}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: "held-turn-claim"
+               })
+
+      assert {:ok, %{request: refused}} =
+               Accounting.record_denied_request(setup.auth, setup.model, %{
+                 correlation_id: claim.correlation_id,
+                 transport: "websocket"
+               })
+
+      refute refused.id == claim.id
+      assert {:ok, _uuid} = Ecto.UUID.cast(refused.correlation_id)
+      assert Repo.reload!(claim) == claim
+
+      assert Repo.aggregate(from(request in CodexPooler.Accounting.Request, where: request.pool_id == ^setup.pool.id), :count, :id) == 4
+    end
+
     test "settles stale dispatched reservations from reserved estimate when usage is unknown" do
       setup = accounting_setup()
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
