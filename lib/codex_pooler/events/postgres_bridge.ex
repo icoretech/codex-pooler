@@ -1,8 +1,8 @@
 defmodule CodexPooler.Events.PostgresBridge do
   @moduledoc false
 
-  # Relays the PostgreSQL notifications of pool events and OpenAI status
-  # events to this node's PubSub subscribers.
+  # Relays the PostgreSQL notifications of pool events, OpenAI status events
+  # and alert notification invalidations to this node's PubSub subscribers.
   #
   # Every node runs one bridge, and each delivers what it relays on its own
   # node only. A notification whose origin node is in this node's PubSub
@@ -15,6 +15,7 @@ defmodule CodexPooler.Events.PostgresBridge do
 
   use GenServer
 
+  alias CodexPooler.Alerts.Incidents.NotificationEvents
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
   alias CodexPooler.Status.Events, as: StatusEvents
@@ -34,6 +35,7 @@ defmodule CodexPooler.Events.PostgresBridge do
           required(:notifications) => GenServer.server(),
           required(:listen_ref) => reference() | nil,
           required(:status_listen_ref) => reference() | nil,
+          required(:alert_listen_ref) => reference() | nil,
           required(:notifications_monitor) => reference() | nil,
           required(:relisten_token) => reference() | nil,
           required(:relisten_attempt) => non_neg_integer(),
@@ -67,6 +69,7 @@ defmodule CodexPooler.Events.PostgresBridge do
       notifications: Keyword.get(opts, :notifications, @notifications),
       listen_ref: nil,
       status_listen_ref: nil,
+      alert_listen_ref: nil,
       notifications_monitor: nil,
       relisten_token: nil,
       relisten_attempt: 0,
@@ -99,7 +102,7 @@ defmodule CodexPooler.Events.PostgresBridge do
   def handle_info({:DOWN, monitor_ref, :process, _pid, reason}, %{notifications_monitor: monitor_ref} = state) do
     Logger.warning("postgres event relay lost its notifications listener; listening again reason=#{exit_reason_label(reason)}")
 
-    {:noreply, relisten(%{state | listen_ref: nil, status_listen_ref: nil, notifications_monitor: nil})}
+    {:noreply, relisten(%{state | listen_ref: nil, status_listen_ref: nil, alert_listen_ref: nil, notifications_monitor: nil})}
   end
 
   def handle_info({__MODULE__, :relisten, token}, %{relisten_token: token, notifications_monitor: nil} = state) do
@@ -112,6 +115,7 @@ defmodule CodexPooler.Events.PostgresBridge do
   # nothing, as does a channel other than the one the registration was for.
   defp channel_for(listen_ref, %{listen_ref: listen_ref}), do: Events.postgres_channel()
   defp channel_for(listen_ref, %{status_listen_ref: listen_ref}), do: StatusEvents.postgres_channel()
+  defp channel_for(listen_ref, %{alert_listen_ref: listen_ref}), do: NotificationEvents.postgres_channel()
   defp channel_for(_listen_ref, _state), do: nil
 
   defp relay_notification(channel, channel, payload, state) do
@@ -247,6 +251,7 @@ defmodule CodexPooler.Events.PostgresBridge do
     cond do
       channel == Events.postgres_channel() -> relay_payload(payload)
       channel == StatusEvents.postgres_channel() -> StatusEvents.relay_payload(payload)
+      channel == NotificationEvents.postgres_channel() -> NotificationEvents.relay_payload(payload)
       true -> {:error, :unknown_channel}
     end
   end
@@ -328,11 +333,13 @@ defmodule CodexPooler.Events.PostgresBridge do
     monitor_ref = Process.monitor(pid)
 
     with {:ok, listen_ref} <- listen_channel(pid, Events.postgres_channel()),
-         {:ok, status_listen_ref} <- listen_channel(pid, StatusEvents.postgres_channel(), [listen_ref]) do
+         {:ok, status_listen_ref} <- listen_channel(pid, StatusEvents.postgres_channel(), [listen_ref]),
+         {:ok, alert_listen_ref} <- listen_channel(pid, NotificationEvents.postgres_channel(), [listen_ref, status_listen_ref]) do
       %{
         state
         | listen_ref: listen_ref,
           status_listen_ref: status_listen_ref,
+          alert_listen_ref: alert_listen_ref,
           notifications_monitor: monitor_ref,
           relisten_token: nil,
           relisten_attempt: 0

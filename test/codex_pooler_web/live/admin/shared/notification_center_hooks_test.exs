@@ -7,7 +7,16 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Alerts
+  alias CodexPooler.Alerts.Incidents.NotificationEvents
+  alias CodexPooler.Events
+  alias CodexPooler.Events.Event
   alias CodexPooler.Pools
+  alias CodexPooler.Repo
+
+  # Named detection budget for a NOTIFY committed on another connection to come
+  # back through the application's notifications process, bridge and PubSub;
+  # the green path finishes on the relayed message.
+  @relay_detection_timeout_ms 15_000
 
   setup :register_and_log_in_user
 
@@ -99,6 +108,138 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
 
     assert hidden_incident_id == hidden_incident.id
     assert %{badge_count: 0, rows: [], empty?: true} = notification_center(assigned_view)
+  end
+
+  # The alert evaluation jobs run on the worker role, which is not in the app
+  # pods' PubSub cluster: an incident it records reaches the app pods' pages only
+  # as a PostgreSQL notification. A separate connection commits the worker's
+  # notification; the incident rows are written without any PubSub broadcast.
+  test "an incident another node recorded refreshes the notification center once through postgres", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug("worker"), name: "Worker"})
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = render_async(view, 2_000)
+    assert %{badge_count: 0, rows: []} = notification_center(view)
+
+    rule = alert_rule_fixture(pool, %{display_name: "Worker incident #{unique_suffix()}"})
+    incident = alert_incident_fixture(pool: pool)
+    _target = alert_incident_target_fixture(incident, rule, pool)
+    incident_id = incident.id
+
+    assert :ok = NotificationEvents.subscribe_pool(pool.id)
+    assert :ok = Events.subscribe_pool(pool.id)
+    sender = start_supervised!(%{id: :worker_connection, start: {Postgrex, :start_link, [connection_config()]}})
+    marker = remote_pool_event(pool.id)
+
+    notify!(sender, NotificationEvents.postgres_channel(), worker_alert_payload(pool.id))
+    notify!(sender, Events.postgres_channel(), marker.payload)
+
+    assert %{badge_count: 1, rows: [%{id: ^incident_id}]} = await_notification_center!(view, &(&1.badge_count == 1))
+
+    # The trailing pool event travels the same connection and bridge, so once it
+    # arrives a second copy of the invalidation would already be here.
+    marker_event = marker.event
+    assert_receive {Events, ^marker_event}, @relay_detection_timeout_ms
+    assert_received {NotificationEvents, :invalidated}
+    refute_received {NotificationEvents, :invalidated}
+  end
+
+  test "an incident invalidation is also sent as a postgres notification naming its Pool", %{scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug("notify"), name: "Notify"})
+    test_pid = self()
+    telemetry_ref = make_ref()
+    telemetry_id = "alert-notification-postgres-notify-#{unique_suffix()}"
+
+    :ok =
+      :telemetry.attach(
+        telemetry_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {telemetry_ref, metadata.query, metadata.params})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(telemetry_id) end)
+
+    incident = record_bell_incident!(pool)
+    channel = NotificationEvents.postgres_channel()
+
+    assert_received {^telemetry_ref, "SELECT pg_notify($1, $2)", [^channel, payload]}
+    pool_id = pool.id
+    origin_node = Atom.to_string(node())
+    origin_id = Events.origin_id()
+
+    assert %{"version" => 1, "scope" => "pool", "target_id" => ^pool_id, "origin_id" => ^origin_id, "origin_node" => ^origin_node, "id" => id} =
+             CodexPooler.JSON.decode!(payload)
+
+    assert is_binary(id)
+    assert incident.pool_id == pool_id
+  end
+
+  defp await_notification_center!(view, predicate) do
+    deadline = System.monotonic_time(:millisecond) + @relay_detection_timeout_ms
+    await_notification_center(view, predicate, deadline)
+  end
+
+  defp await_notification_center(view, predicate, deadline) do
+    center = notification_center(view)
+
+    cond do
+      predicate.(center) ->
+        center
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("the notification center was not refreshed: #{inspect(Map.take(center, [:badge_count]))}")
+
+      true ->
+        receive do
+        after
+          10 -> await_notification_center(view, predicate, deadline)
+        end
+    end
+  end
+
+  defp worker_alert_payload(pool_id) do
+    assert {:ok, payload} = NotificationEvents.postgres_payload("pool", pool_id)
+
+    payload
+    |> CodexPooler.JSON.decode!()
+    |> Map.put("origin_id", "notification-hooks-test-worker-" <> Ecto.UUID.generate())
+    |> Map.put("origin_node", "notification-hooks-test-worker@127.0.0.1")
+    |> CodexPooler.JSON.encode!()
+  end
+
+  defp remote_pool_event(pool_id) do
+    event = %Event{
+      version: 1,
+      id: Ecto.UUID.generate(),
+      pool_id: pool_id,
+      topics: ["pools"],
+      reason: "notification_hooks_marker",
+      emitted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+      payload: %{}
+    }
+
+    assert {:ok, payload} = Events.event_to_postgres_payload(event)
+
+    payload =
+      payload
+      |> CodexPooler.JSON.decode!()
+      |> Map.put("origin_id", "notification-hooks-test-worker-" <> Ecto.UUID.generate())
+      |> CodexPooler.JSON.encode!()
+
+    %{event: event, payload: payload}
+  end
+
+  defp notify!(sender, channel, payload) do
+    assert {:ok, _result} = Postgrex.query(sender, "SELECT pg_notify($1, $2)", [channel, payload])
+  end
+
+  defp connection_config do
+    Keyword.take(Repo.config(), [:hostname, :port, :database, :username, :password, :ssl])
   end
 
   defp notification_center(view) do

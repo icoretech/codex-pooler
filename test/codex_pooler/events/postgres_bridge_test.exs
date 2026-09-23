@@ -1,6 +1,7 @@
 defmodule CodexPooler.Events.PostgresBridgeTest do
   use CodexPooler.DataCase, async: false
 
+  alias CodexPooler.Alerts.Incidents.NotificationEvents
   alias CodexPooler.Events
   alias CodexPooler.Events.{Event, PostgresBridge}
   alias CodexPooler.Repo
@@ -151,6 +152,7 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     pool_id = Ecto.UUID.generate()
     assert :ok = Events.subscribe_pool(pool_id)
     assert :ok = StatusEvents.subscribe()
+    assert :ok = NotificationEvents.subscribe_pool(pool_id)
     pool_id
   end
 
@@ -165,13 +167,16 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
 
     {event, payload} = remote_pool_event(pool_id, label)
     {marker, marker_payload} = remote_pool_event(pool_id, label <> "_marker")
+    alert_payload = remote_alert_payload(pool_id)
     notify!(ctx.sender, Events.postgres_channel(), payload)
     notify!(ctx.sender, StatusEvents.postgres_channel(), status_payload(revision))
+    notify!(ctx.sender, NotificationEvents.postgres_channel(), alert_payload)
     notify!(ctx.sender, Events.postgres_channel(), marker_payload)
 
     # PostgreSQL delivered both notifications to the notifications process the
     # bridge is supposed to listen on; losing them is the bridge's doing.
     assert_receive {:notification, ^notifications, _ref, _channel, ^payload}, @relay_detection_timeout_ms
+    assert_receive {:notification, ^notifications, _ref, _channel, ^alert_payload}, @relay_detection_timeout_ms
     assert_receive {:notification, ^notifications, _ref, _channel, ^marker_payload}, @relay_detection_timeout_ms
 
     assert_receive {Events, ^marker},
@@ -185,11 +190,14 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     assert_receive {:openai_status_updated, %{aggregate_revision: ^revision}}, @relay_detection_timeout_ms
     refute_received {:openai_status_updated, %{aggregate_revision: ^revision}}
 
+    assert_received {NotificationEvents, :invalidated}
+    refute_received {NotificationEvents, :invalidated}
+
     :ok = control_unlisten!(notifications, control)
   end
 
   defp control_listen!(notifications) do
-    for channel <- [Events.postgres_channel(), StatusEvents.postgres_channel()] do
+    for channel <- [Events.postgres_channel(), StatusEvents.postgres_channel(), NotificationEvents.postgres_channel()] do
       assert {:ok, ref} = Postgrex.Notifications.listen(notifications, channel)
       ref
     end
@@ -199,9 +207,9 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     Enum.each(refs, &(:ok = Postgrex.Notifications.unlisten(notifications, &1)))
   end
 
-  # The bridge registers as a listener on both channels, and the notifications
-  # process monitors every listener, so two monitors from the restarted process
-  # mean both registrations are in place. The test's own listen issued the
+  # The bridge registers as a listener on all three channels, and the
+  # notifications process monitors every listener, so three monitors from the
+  # restarted process mean every registration is in place. The test's own listen issued the
   # LISTEN statements first, so each registration is complete when it appears.
   defp await_bridge_listening!(bridge, notifications) do
     control = control_listen!(notifications)
@@ -218,7 +226,7 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
     {:monitored_by, monitors} = Process.info(bridge, :monitored_by)
 
     cond do
-      Enum.count(monitors, &(&1 == notifications)) >= 2 ->
+      Enum.count(monitors, &(&1 == notifications)) >= 3 ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
@@ -294,6 +302,18 @@ defmodule CodexPooler.Events.PostgresBridgeTest do
       |> CodexPooler.JSON.encode!()
 
     {event, payload}
+  end
+
+  # The notification an unclustered node (the worker) sends for an incident on
+  # this Pool.
+  defp remote_alert_payload(pool_id) do
+    assert {:ok, local_payload} = NotificationEvents.postgres_payload("pool", pool_id)
+
+    local_payload
+    |> CodexPooler.JSON.decode!()
+    |> Map.put("origin_id", "postgres-bridge-test-worker-" <> Ecto.UUID.generate())
+    |> Map.put("origin_node", "postgres-bridge-test-worker@127.0.0.1")
+    |> CodexPooler.JSON.encode!()
   end
 
   defp status_payload(revision) do
