@@ -231,14 +231,6 @@ defmodule CodexPooler.Pools do
   def create_pool(_scope, _attrs, _opts),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  @spec delete_pool(Scope.t(), pool_ref()) :: pool_result()
-  def delete_pool(%Scope{} = scope, pool_or_id) do
-    delete_archived_pool(scope, pool_or_id, nil)
-  end
-
-  def delete_pool(_scope, _pool_or_id),
-    do: {:error, access_error(:invalid_request, "user scope is required")}
-
   @spec update_pool(Scope.t(), pool_ref(), map(), keyword()) :: pool_result()
   def update_pool(scope, pool_or_id, attrs, opts \\ [])
 

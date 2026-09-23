@@ -122,11 +122,11 @@ defmodule CodexPooler.PoolsTest do
       assert {:error, changeset} = Pools.create_pool(scope, %{slug: "SHARED", name: "Shared 2"})
       assert %{slug: ["has already been taken"]} = errors_on(changeset)
 
-      assert {:error, %{code: :pool_not_archived}} = Pools.delete_pool(scope, pool)
+      assert {:error, %{code: :pool_not_archived}} = Pools.delete_archived_pool(scope, pool, pool.slug)
       assert Pools.get_pool(pool.id)
 
       assert {:ok, archived_pool} = Pools.change_pool_status(scope, pool, "archived")
-      assert {:error, %{code: :confirmation_mismatch}} = Pools.delete_pool(scope, archived_pool)
+      assert {:error, %{code: :confirmation_mismatch}} = Pools.delete_archived_pool(scope, archived_pool, nil)
       assert Pools.get_pool(pool.id)
 
       assert {:ok, deleted_pool} =
