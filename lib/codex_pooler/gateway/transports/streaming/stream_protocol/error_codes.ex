@@ -69,6 +69,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "overloaded_error",
     "server_is_overloaded"
   ]
+  # A provider parameter-validation refusal is the client's error: every code
+  # `Finalization.ValidationRejection` relays (`invalid_value`, `invalid_type`,
+  # `string_above_max_length` and the three `unsupported_*`/`missing_*`
+  # below) stays health-neutral, or a websocket terminal refused with one of
+  # them demotes the assignment and records a circuit failure the HTTP 400 of
+  # the same refusal never records (findings#254 row 254-20).
   @health_neutral_error_codes [
     "context_length_exceeded",
     "cyber_policy",
@@ -76,6 +82,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "invalid_request_error",
     "invalid_previous_response_id",
     "invalid_prompt",
+    "invalid_type",
+    "invalid_value",
     "bio_policy",
     "max_output_tokens",
     "misalignment_policy_violation",
@@ -85,6 +93,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "server_is_overloaded",
     "slow_down",
     "server_error",
+    "string_above_max_length",
     "unsupported_input_image_format",
     "unsupported_parameter",
     "unsupported_value",
