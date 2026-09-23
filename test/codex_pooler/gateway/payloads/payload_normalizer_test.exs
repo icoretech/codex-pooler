@@ -2459,20 +2459,24 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
-    test "ordinary Lite continuations retain the tools prefix when previous_response_id is nonblank" do
+    # A request anchored on `previous_response_id` continues the context the
+    # provider already holds, and that context carries the Lite prefix of the
+    # request that opened it. Repeating the tool manifest and the instructions
+    # message on every anchored turn appended them to the conversation again (the
+    # released Codex 0.156.1 app-server, websocket, one node, 9.6 KB manifest and
+    # 21 KB instructions per anchored delta), and a Lite-shaped client's anchored
+    # delta got an empty manifest appended after its own (findings#232 row
+    # 232-184). The client itself sends neither on an anchored delta.
+    test "ordinary Lite continuations anchored on previous_response_id carry the client's input alone" do
       endpoint = "/backend-api/codex/responses"
+      tool_output = %{"type" => "function_call_output", "call_id" => "call_ordinary_lite_continuation", "output" => "synthetic output"}
 
-      payload = %{
+      anchored = %{
         "type" => "response.create",
         "model" => "gpt-5.6-terra",
         "previous_response_id" => "resp_ordinary_lite_continuation_0001",
-        "input" => [
-          %{
-            "type" => "function_call_output",
-            "call_id" => "call_ordinary_lite_continuation",
-            "output" => "synthetic output"
-          }
-        ],
+        "instructions" => "synthetic base instructions",
+        "input" => [tool_output],
         "tools" => [
           %{
             "type" => "function",
@@ -2484,35 +2488,72 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         "generate" => true
       }
 
-      http_options = RequestOptions.build(serving_mode_opts("lite"), endpoint, payload)
+      # Full-shaped (top-level tools and instructions) and Lite-shaped (neither,
+      # the manifest already sits in the provider-held context) anchored deltas.
+      for {shape, payload} <- [full_shaped: anchored, lite_shaped: anchored |> Map.delete("tools") |> Map.put("instructions", "")] do
+        http_options = RequestOptions.build(serving_mode_opts("lite"), endpoint, payload)
 
-      assert http_options.payload_context.compaction_input_mode == :incremental
-      refute http_options.payload_context.compaction_trigger_bridge?
+        assert http_options.payload_context.compaction_input_mode == :incremental
+        refute http_options.payload_context.compaction_trigger_bridge?
 
-      for {transport, request_options} <- [
-            http: http_options,
-            websocket: RequestOptions.for_websocket(http_options, payload)
-          ] do
-        assert {:ok, encoded} =
-                 PayloadNormalizer.upstream_payload(
-                   payload,
-                   %Model{upstream_model_id: "provider-model"},
-                   endpoint,
-                   request_options
-                 )
+        for {transport, request_options} <- [
+              http: http_options,
+              websocket: RequestOptions.for_websocket(http_options, payload)
+            ] do
+          assert {:ok, encoded, request_options} =
+                   PayloadNormalizer.prepare_upstream_payload(
+                     payload,
+                     %Model{upstream_model_id: "provider-model"},
+                     endpoint,
+                     request_options
+                   )
 
+          upstream = CodexPooler.JSON.decode!(encoded)
+
+          assert upstream["previous_response_id"] == payload["previous_response_id"]
+          assert upstream["input"] == [tool_output], "#{shape} #{transport} anchored continuation repeated the Lite prefix"
+          refute Map.has_key?(upstream, "tools")
+          refute Map.has_key?(upstream, "instructions")
+          assert request_options.runtime.upstream_input_index_map == :identity
+        end
+
+        # The same request without an anchor opens a context, so it carries the prefix.
+        unanchored = Map.delete(payload, "previous_response_id")
+
+        unanchored_options = serving_mode_opts("lite") |> RequestOptions.build(endpoint, unanchored) |> RequestOptions.for_websocket(unanchored)
+        assert {:ok, encoded} = PayloadNormalizer.upstream_payload(unanchored, %Model{upstream_model_id: "provider-model"}, endpoint, unanchored_options)
         upstream = CodexPooler.JSON.decode!(encoded)
 
-        assert [
-                 %{
-                   "type" => "additional_tools",
-                   "role" => "developer",
-                   "tools" => [%{"name" => "sample_lookup"}]
-                 },
-                 %{"type" => "function_call_output"}
-               ] = upstream["input"],
-               "ordinary #{transport} continuation lost its tools prefix"
+        assert [%{"type" => "additional_tools", "role" => "developer", "tools" => manifest_tools} | rest] = upstream["input"]
+        assert manifest_tools == Map.get(payload, "tools", [])
+
+        case shape do
+          :full_shaped -> assert [%{"type" => "message", "role" => "developer"}, ^tool_output] = rest
+          :lite_shaped -> assert [^tool_output] = rest
+        end
       end
+    end
+
+    test "an ordinary HTTP Lite continuation whose previous_response_id is dropped keeps the prefix" do
+      # Native HTTP drops the anchor of a turn that is not a tool-result
+      # continuation, so the request opens a context and must carry the prefix.
+      payload = %{
+        "model" => "gpt-5.6-terra",
+        "previous_response_id" => "resp_ordinary_http_continuation_0001",
+        "instructions" => "synthetic base instructions",
+        "input" => [%{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "next"}]}],
+        "tools" => [%{"type" => "function", "name" => "sample_lookup", "parameters" => %{"type" => "object", "properties" => %{}}}]
+      }
+
+      upstream = prepare_lite_payload(payload)
+
+      refute Map.has_key?(upstream, "previous_response_id")
+
+      assert [
+               %{"type" => "additional_tools", "tools" => [%{"name" => "sample_lookup"}]},
+               %{"type" => "message", "role" => "developer"},
+               %{"type" => "message", "role" => "user"}
+             ] = upstream["input"]
     end
 
     test "preserves typed custom tool choice for full, rejects it for Lite, and keeps Lite scalar choices" do

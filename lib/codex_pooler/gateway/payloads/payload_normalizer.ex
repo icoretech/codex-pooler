@@ -309,14 +309,15 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   # How a provider's `input[N]` maps back to the client's input, so a relayed
   # validation rejection names the item the client sent (findings#254 row
   # 254-61). Between the two lists the Pooler only drops items (unusable
-  # encrypted reasoning) or, under Lite, puts the tool manifest and the
-  # instructions message in front (`normalize_backend_codex_responses_lite_input/2`);
-  # every other step rewrites items in place. Equal lengths without Lite are
-  # therefore the identity, and a Lite list that grew by exactly the inserted
+  # encrypted reasoning) or, under Lite on a request that is not anchored on
+  # `previous_response_id`, puts the tool manifest and the instructions message
+  # in front (`normalize_backend_codex_responses_lite_input/2`); every other step
+  # rewrites items in place. Equal lengths without that prefix are therefore
+  # the identity, and a Lite list that grew by exactly the inserted
   # count is a shift. Anything else, including a Lite list that also lost an
   # item, is `:unknown`, and the relayed param then drops the index rather
   # than name another item.
-  defp upstream_input_index_map(%{"input" => client} = payload, %{"input" => upstream}, endpoint, %RequestOptions{} = request_options)
+  defp upstream_input_index_map(%{"input" => client} = payload, %{"input" => upstream} = upstream_payload, endpoint, %RequestOptions{} = request_options)
        when is_list(client) and is_list(upstream) do
     cond do
       endpoint == "/backend-api/codex/responses/compact" or
@@ -324,7 +325,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
           request_options.payload_context.compaction_trigger_bridge? ->
         :unknown
 
-      not RequestOptions.use_responses_lite?(request_options) ->
+      not RequestOptions.use_responses_lite?(request_options) or anchored_upstream_request?(upstream_payload) ->
         if length(client) == length(upstream), do: :identity, else: :unknown
 
       true ->
@@ -610,17 +611,38 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       {instructions, payload} = Map.pop(payload, "instructions")
       input = Map.get(payload, "input", [])
       input = if is_list(input), do: input, else: []
-      {prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
+      {prefix, input} = responses_lite_prefix(payload, input, tools_present?, tools, instructions)
 
-      input =
-        (prefix ++ maybe_responses_lite_instructions(instructions) ++ input)
-        |> Enum.map(&strip_responses_lite_image_details/1)
-
-      Map.put(payload, "input", input)
+      Map.put(payload, "input", Enum.map(prefix ++ input, &strip_responses_lite_image_details/1))
     else
       payload
     end
   end
+
+  # The Lite prefix (tool manifest, then the instructions message) opens the
+  # provider-held context. A request anchored on `previous_response_id`
+  # continues that context, so the provider already holds the prefix the
+  # request that opened it carried: repeating it appends the whole manifest and
+  # base instructions to the conversation again on every anchored turn, and an
+  # empty manifest built for a client that sent neither was appended after the
+  # client's own. The released client sends neither on its own anchored deltas
+  # (it only anchors a request whose tools and instructions equal the previous
+  # request's, `get_incremental_items`, codex-rs/core/src/client.rs); the
+  # compaction bridge's incremental arm above already forwards the input alone
+  # (findings#232 row 232-184).
+  defp responses_lite_prefix(payload, input, tools_present?, tools, instructions) do
+    if anchored_upstream_request?(payload) do
+      {[], input}
+    else
+      {tools_prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
+      {tools_prefix ++ maybe_responses_lite_instructions(instructions), input}
+    end
+  end
+
+  defp anchored_upstream_request?(%{"previous_response_id" => response_id}) when is_binary(response_id),
+    do: String.trim(response_id) != ""
+
+  defp anchored_upstream_request?(_payload), do: false
 
   defp maybe_project_compact_payload(
          payload,

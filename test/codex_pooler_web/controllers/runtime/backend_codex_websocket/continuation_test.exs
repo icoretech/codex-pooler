@@ -1108,7 +1108,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
     end
   end
 
-  test "websocket Full-to-Lite tool continuations keep previous_response_id after the tools prefix" do
+  # The anchor opens the provider-held context with the Lite prefix; the
+  # anchored continuation continues it and carries the client's input alone,
+  # as the released client's own Lite anchored deltas do (findings#232 row
+  # 232-184: the prefix used to be repeated on every anchored turn).
+  test "websocket Full-to-Lite tool continuations keep previous_response_id without repeating the tools prefix" do
     upstream =
       start_upstream(
         # Strict finite scenario: the anchor carries no previous response and
@@ -1122,8 +1126,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
             websocket_connection_ordinal: 1,
             json: [
               valid: true,
-              equals: %{"type" => "response.create"},
-              forbidden: ["previous_response_id"]
+              equals: %{"type" => "response.create", "input.0.type" => "additional_tools", "input.1.role" => "developer"},
+              forbidden: ["previous_response_id", "tools", "instructions"]
             ],
             respond:
               FakeUpstream.websocket_text_frames([
@@ -1143,9 +1147,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
               equals: %{
                 "type" => "response.create",
                 "previous_response_id" => "resp_ws_tool_origin",
-                "input.0.type" => "additional_tools",
-                "input.1.type" => "function_call_output"
-              }
+                "input.0.type" => "function_call_output"
+              },
+              forbidden: ["tools", "instructions"]
             ],
             respond:
               FakeUpstream.websocket_text_frames([
@@ -1180,10 +1184,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
       })
 
     try do
+      tools = [
+        %{
+          "type" => "function",
+          "name" => "sample_lookup",
+          "parameters" => %{
+            "type" => "object",
+            "properties" => %{},
+            "required" => []
+          }
+        }
+      ]
+
       anchor_payload =
         CodexPooler.JSON.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
+          "instructions" => "synthetic base instructions",
+          "tools" => tools,
           "input" => native_text_input("anchor"),
           "stream" => true,
           "generate" => true
@@ -1207,17 +1225,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
               "output" => tool_output
             }
           ],
-          "tools" => [
-            %{
-              "type" => "function",
-              "name" => "sample_lookup",
-              "parameters" => %{
-                "type" => "object",
-                "properties" => %{},
-                "required" => []
-              }
-            }
-          ],
+          "instructions" => "synthetic base instructions",
+          "tools" => tools,
           "stream" => true,
           "generate" => true,
           "previous_response_id" => previous_response_id
@@ -1238,10 +1247,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
       assert captured.json["type"] == "response.create"
       assert captured.json["generate"] == true
 
-      assert [tools_prefix, captured_tool_output] = captured.json["input"]
+      assert [tools_prefix, instructions_message | _anchor_input] = anchor_request.json["input"]
       assert tools_prefix["type"] == "additional_tools"
       assert tools_prefix["role"] == "developer"
       assert [%{"name" => "sample_lookup"}] = tools_prefix["tools"]
+      assert %{"type" => "message", "role" => "developer"} = instructions_message
+
+      assert [captured_tool_output] = captured.json["input"]
 
       assert captured_tool_output == %{
                "type" => "function_call_output",
@@ -1295,6 +1307,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
       refute persistence_text =~ tool_call_id
       refute persistence_text =~ tool_output
       refute persistence_text =~ "upstream-token"
+      assert :ok = FakeUpstream.verify!(upstream)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  # A Lite-shaped client (the released client on a Lite catalog entry) puts its
+  # own manifest and instructions message at the head of the request that opens
+  # the context and sends neither on an anchored delta. The Pooler used to
+  # append an empty `additional_tools` manifest to every such delta
+  # (findings#232 row 232-184).
+  test "websocket anchored Lite-shaped deltas reach the upstream without an injected empty manifest" do
+    manifest = %{"type" => "additional_tools", "id" => "at_sample", "role" => "developer", "tools" => [%{"type" => "function", "name" => "sample_lookup", "parameters" => %{"type" => "object", "properties" => %{}}}]}
+    next_message = hd(native_text_input("next"))
+
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create", "input.0.id" => "at_sample"}, forbidden: ["previous_response_id"]],
+            respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(%{"id" => "resp_ws_lite_anchor", "object" => "response", "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}})])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            json: [valid: true, equals: %{"type" => "response.create", "previous_response_id" => "resp_ws_lite_anchor", "input.0.type" => "message"}],
+            respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(%{"id" => "resp_ws_lite_delta", "object" => "response", "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}})])
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, "lite")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{auth: auth, opts: %{request_id: "ws-lite-shaped-delta", accepted_turn_state: "stable-ws-lite-shaped-delta", client_ip: "127.0.0.1"}})
+
+    try do
+      frames = [
+        %{"type" => "response.create", "model" => setup.model.exposed_model_id, "instructions" => "", "input" => [manifest | native_text_input("anchor")], "stream" => true, "generate" => true},
+        %{"type" => "response.create", "model" => setup.model.exposed_model_id, "instructions" => "", "input" => [next_message], "previous_response_id" => "resp_ws_lite_anchor", "stream" => true, "generate" => true}
+      ]
+
+      _state =
+        Enum.reduce(frames, state, fn frame, state ->
+          assert {:ok, state} = CodexResponsesSocket.handle_in({CodexPooler.JSON.encode!(frame), [opcode: :text]}, state)
+          assert {:push, {:text, _frame}, state} = receive_socket_push(state)
+          assert {:ok, state} = receive_socket_done(state)
+          state
+        end)
+
+      assert [anchor_request, delta_request] = FakeUpstream.requests(upstream)
+      assert anchor_request.websocket_connection_id == delta_request.websocket_connection_id
+      assert [^manifest | _anchor_input] = anchor_request.json["input"]
+      assert Enum.count(anchor_request.json["input"], &(&1["type"] == "additional_tools")) == 1
+      assert delta_request.json["previous_response_id"] == "resp_ws_lite_anchor"
+      assert delta_request.json["input"] == [next_message]
       assert :ok = FakeUpstream.verify!(upstream)
     after
       CodexResponsesSocket.terminate(:closed, state)

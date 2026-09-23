@@ -109,7 +109,9 @@ On the ordinary Responses lanes — HTTP, SSE, and the websocket `response.creat
   </tbody>
 </table>
 
-The `additional_tools` item is always present in Lite, even when the request declared no tools. In that case its `tools` array is empty.
+A request that opens a context, one without `previous_response_id`, always carries the `additional_tools` item in Lite, even when the request declared no tools. In that case its `tools` array is empty.
+
+A request anchored on `previous_response_id` continues a context the provider already holds, and that context already carries the tools item and the instructions message of the request that opened it. Lite therefore sends an anchored request's `input` as the client sent it: it adds neither item, and still removes top-level `tools` and `instructions`. This is how a Lite-aware Codex client builds its own anchored requests, since it only anchors a request whose tools and instructions equal those of the request before it. A client that changes its tools or instructions has to send a request without `previous_response_id` for the change to reach the provider in Lite.
 
 ### A Request In Both Dialects
 
@@ -163,9 +165,9 @@ Codex Pooler decides, and it closes the loop at both ends.
 2. `GET /backend-api/codex/models` advertises `use_responses_lite` as that **effective** serving mode, not as the raw value an upstream account reported. This is what a Codex-compatible client reads to decide which dialect to build.
 3. A Lite-aware client therefore builds the Lite shape itself, and Codex Pooler applies the same translation again at egress.
 
-Applying the translation twice is safe because it is idempotent. A leading `additional_tools` developer item that carries no `id` is reused rather than wrapped a second time, and a request that already omits top-level `instructions` produces no duplicate developer message. Normalizing an already-normalized request produces an identical request.
+Applying the translation twice is safe because it is idempotent. An `additional_tools` developer item the request already carries is reused rather than wrapped a second time, and a request that already omits top-level `instructions` produces no duplicate developer message. Normalizing an already-normalized request produces an identical request.
 
-`additional_tools` is also an ordinary public Responses item type. Codex Pooler adopts an existing item as the Lite tools prefix only when the request declared no top-level `tools` and the item is leading, carries role `developer`, and has no `id` — the exact shape a Lite-aware client produces. An `additional_tools` item that carries an `id` is always treated as ordinary input.
+`additional_tools` is also an ordinary public Responses item type. When the request declared no top-level `tools`, an `additional_tools` item with role `developer`, a `tools` array and either no `id` or a non-blank `id` is the request's manifest wherever it sits in `input`, and Codex Pooler forwards it as sent instead of adding another one; a Lite-aware Codex client puts it first and gives it an `id`. When the request declared top-level `tools`, the Lite tools item is built from those tools alone, and any `additional_tools` item in `input` stays ordinary input.
 
 Clients cannot set the dialect. Codex Pooler removes any client-supplied `x-openai-internal-codex-responses-lite` header and any client-supplied `ws_request_header_x_openai_internal_codex_responses_lite` entry from `client_metadata` on every request, then adds its own only when the effective mode is Lite. Codex Pooler never reads a Lite preference out of a request body or header.
 
