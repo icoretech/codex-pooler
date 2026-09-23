@@ -48,6 +48,42 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     refute RuntimeCleanup.active_runtime_request?(expired_request.id, now)
   end
 
+  test "an active owner lease row holds the request after the session owner stamp has run out" do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    stale_started_at = DateTime.add(now, -7, :hour)
+
+    stamp_expired = fn ->
+      [
+        owner_instance_id: "runtime-cleanup-test",
+        owner_lease_token: Ecto.UUID.generate(),
+        owner_lease_expires_at: DateTime.add(now, -1, :second),
+        last_heartbeat_at: stale_started_at
+      ]
+    end
+
+    leased_request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    leased_attempt = attempt_fixture(leased_request, assignment, %{status: "in_progress", completed_at: nil})
+    leased_session = session_fixture(pool, api_key, assignment, stale_started_at, stamp_expired.())
+    _turn = turn_fixture(leased_session, leased_request, stale_started_at, status: CodexTurn.in_progress_status())
+
+    lease_fixture(pool, api_key, assignment, leased_session, status: BridgeOwnerLease.active_status(), expires_at: DateTime.add(now, 60, :second), now: now)
+
+    unleased_request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    unleased_attempt = attempt_fixture(unleased_request, assignment, %{status: "in_progress", completed_at: nil})
+    unleased_session = session_fixture(pool, api_key, assignment, stale_started_at, stamp_expired.())
+    _turn = turn_fixture(unleased_session, unleased_request, stale_started_at, status: CodexTurn.in_progress_status())
+
+    # Only the lease row separates the two requests: both session stamps have
+    # run out, so the lease branch alone decides.
+    assert RuntimeCleanup.active_runtime_request?(leased_request, leased_attempt, now, [])
+    assert RuntimeCleanup.active_runtime_request?(leased_request.id, now)
+    refute RuntimeCleanup.active_runtime_request?(unleased_request, unleased_attempt, now, [])
+    refute RuntimeCleanup.active_runtime_request?(unleased_request.id, now)
+  end
+
   test "a disconnected successor incarnation proves the old runtime owner is gone" do
     pool = pool_fixture()
     %{api_key: api_key} = active_api_key_fixture(pool)

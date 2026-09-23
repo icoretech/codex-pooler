@@ -4,7 +4,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Gateway.Persistence.{
-    BridgeOwnerLease,
     CodexSession,
     CodexTurn,
     SessionReadModel
@@ -67,81 +66,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
     end
   end
 
-  describe "active_runtime_request?/2" do
-    test "detects in-progress turns owned by session lease timestamps or active lease rows" do
-      now = usec(~U[2026-06-08 10:00:00Z])
-      %{pool: pool, api_key: api_key} = active_api_key_fixture()
-      %{assignment: assignment} = upstream_assignment_fixture(pool)
-
-      session_with_owner_timestamp =
-        session_fixture(pool, api_key, assignment, now, %{
-          owner_lease_expires_at: DateTime.add(now, 60, :second)
-        })
-
-      timestamp_request =
-        request_fixture(%{pool: pool, api_key: api_key}, %{
-          correlation_id: "active-runtime-owner-timestamp",
-          status: "in_progress",
-          completed_at: nil,
-          response_status_code: nil
-        })
-
-      timestamp_attempt =
-        attempt_fixture(timestamp_request, assignment, %{status: "in_progress", completed_at: nil})
-
-      turn_fixture(session_with_owner_timestamp, timestamp_request, timestamp_attempt, now, status: "in_progress")
-
-      session_with_active_lease =
-        session_fixture(pool, api_key, assignment, now, %{
-          owner_lease_expires_at: DateTime.add(now, -1, :second)
-        })
-
-      lease_request =
-        request_fixture(%{pool: pool, api_key: api_key}, %{
-          correlation_id: "active-runtime-lease-row",
-          status: "in_progress",
-          completed_at: nil,
-          response_status_code: nil
-        })
-
-      lease_attempt =
-        attempt_fixture(lease_request, assignment, %{status: "in_progress", completed_at: nil})
-
-      turn_fixture(session_with_active_lease, lease_request, lease_attempt, now, status: "in_progress")
-
-      lease_fixture(
-        session_with_active_lease,
-        pool,
-        api_key,
-        assignment,
-        now,
-        DateTime.add(now, 60, :second)
-      )
-
-      expired_session =
-        session_fixture(pool, api_key, assignment, now, %{
-          owner_lease_expires_at: DateTime.add(now, -1, :second)
-        })
-
-      expired_request =
-        request_fixture(%{pool: pool, api_key: api_key}, %{
-          correlation_id: "inactive-runtime-expired",
-          status: "in_progress",
-          completed_at: nil,
-          response_status_code: nil
-        })
-
-      expired_attempt =
-        attempt_fixture(expired_request, assignment, %{status: "in_progress", completed_at: nil})
-
-      turn_fixture(expired_session, expired_request, expired_attempt, now, status: "in_progress")
-
-      assert SessionReadModel.active_runtime_request?(timestamp_request, now)
-      assert SessionReadModel.active_runtime_request?(lease_request.id, now)
-      refute SessionReadModel.active_runtime_request?(expired_request.id, now)
-    end
-  end
-
   defp session_fixture(pool, api_key, assignment, now, attrs) do
     now = usec(now)
 
@@ -181,29 +105,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
       created_at: started_at,
       updated_at: started_at
     }
-    |> Repo.insert!()
-  end
-
-  defp lease_fixture(session, pool, api_key, assignment, now, expires_at) do
-    now = usec(now)
-    expires_at = usec(expires_at)
-
-    %BridgeOwnerLease{}
-    |> BridgeOwnerLease.changeset(%{
-      codex_session_id: session.id,
-      pool_id: pool.id,
-      api_key_id: api_key.id,
-      pool_upstream_assignment_id: assignment.id,
-      owner_instance_id: session.owner_instance_id,
-      lease_token: Ecto.UUID.generate(),
-      status: "active",
-      acquired_at: now,
-      renewed_at: now,
-      expires_at: expires_at,
-      metadata: %{"source" => "session_read_model_test"},
-      created_at: now,
-      updated_at: now
-    })
     |> Repo.insert!()
   end
 

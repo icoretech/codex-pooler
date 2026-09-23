@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
   import Ecto.Query
 
   alias CodexPooler.Accounting.Request
-  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, RuntimeCleanup}
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Repo
 
@@ -96,11 +96,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
   end
 
   def turn_statuses_for_pool_ids(_pool_ids, _started_at, _ended_at), do: []
-
-  @spec active_runtime_request?(Request.t() | Ecto.UUID.t(), DateTime.t()) :: boolean()
-  def active_runtime_request?(request_ref, %DateTime{} = now) do
-    RuntimeCleanup.active_runtime_request?(request_ref, now)
-  end
 
   defp valid_uuid_ids(ids) do
     ids
