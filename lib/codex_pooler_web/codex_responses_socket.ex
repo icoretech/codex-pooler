@@ -3853,14 +3853,28 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp record_unreported_termination_receipts(state) do
     state
     |> Map.get(:terminate_pending_receipts, MapSet.new())
-    |> Enum.each(&record_downstream_delivery_receipt(state, &1, :aborted))
+    |> Enum.each(&record_downstream_delivery_receipt(state, &1, termination_receipt_outcome(state, &1, :aborted)))
   end
 
   defp acknowledge_and_record_termination(state, registry, pid, token, ack_pid) do
     outcome = response_task_cleanup_outcome(state, pid, token, ack_pid, registry)
     ResponseTask.acknowledge_delivery(ack_pid, token, outcome)
-    record_downstream_delivery_receipt(state, pid, outcome)
+    record_downstream_delivery_receipt(state, pid, termination_receipt_outcome(state, pid, outcome))
   end
+
+  # A terminating socket acknowledges a task whose result it never saw
+  # `:aborted` (it cannot certify a settlement it did not observe, findings#225
+  # row 225-105). The delivery receipt records what the client received
+  # instead: when the socket already pushed and accepted the turn's completed
+  # terminal, the receipt is `delivered` even though the acknowledgement is
+  # not (findings#225 row 225-130). Only the receipt changes.
+  defp termination_receipt_outcome(state, pid, :aborted) do
+    if MapSet.member?(Map.get(state, :response_task_completed_terminals, MapSet.new()), pid),
+      do: :delivered,
+      else: :aborted
+  end
+
+  defp termination_receipt_outcome(_state, _pid, outcome), do: outcome
 
   # The authoritative target with its registry status; a task the registry
   # does not track answers from the socket's own state.
