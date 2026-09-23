@@ -1333,10 +1333,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   def decode_public_websocket_data!(websocket, data) do
     case Mint.WebSocket.decode(websocket, data) do
       {:ok, websocket, frames} ->
-        case decoded_public_websocket_text(websocket, frames) do
-          {:ok, websocket, texts} -> {:ok, websocket, texts}
-          {:cont, websocket} -> {:cont, {:cont, websocket}}
-        end
+        decoded_public_websocket_text(websocket, frames)
 
       {:error, _websocket, reason} ->
         flunk("websocket decode failed: #{inspect(reason)}")

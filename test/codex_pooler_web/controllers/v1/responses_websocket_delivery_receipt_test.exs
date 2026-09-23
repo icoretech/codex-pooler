@@ -151,7 +151,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketDeliveryReceiptTest do
       {:data, ^ref, data}, {websocket, acc} ->
         case decode_public_websocket_data!(websocket, data) do
           {:ok, websocket, texts} -> {websocket, acc ++ texts}
-          {:cont, {:cont, websocket}} -> {websocket, acc}
+          {:cont, websocket} -> {websocket, acc}
         end
 
       _part, acc ->

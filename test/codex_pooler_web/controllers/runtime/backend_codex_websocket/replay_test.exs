@@ -1199,7 +1199,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
   defp append_raw_texts!(websocket, texts, data) do
     case decode_public_websocket_data!(websocket, data) do
       {:ok, websocket, new_texts} -> {websocket, texts ++ new_texts}
-      {:cont, {:cont, websocket}} -> {websocket, texts}
+      {:cont, websocket} -> {websocket, texts}
     end
   end
 
