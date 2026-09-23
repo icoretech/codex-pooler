@@ -13,6 +13,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessed do
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
 
+  require Logger
+
   @endpoint "/backend-api/codex/responses"
 
   @type auth :: Access.auth_context()
@@ -49,6 +51,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessed do
         with :ok <- record_processed_ack(auth, payload, request_options) do
           {:ok, WebsocketCodec.ack_result()}
         end
+
+      {:error, :owner_forward_timeout} ->
+        :ok = record_timed_out_forward(auth, payload, request_options)
+        {:error, forward_error(:owner_forward_timeout)}
 
       {:error, reason} ->
         {:error, forward_error(reason)}
@@ -124,6 +130,47 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessed do
     case Accounting.record_metadata_request(auth, attrs) do
       {:ok, %{request: _request}} -> :ok
       {:error, reason} -> {:error, accounting_failure_error(reason)}
+    end
+  end
+
+  # A remote forward that timed out may still reach the provider: an erpc
+  # timeout abandons only the reply, and the owner takes the queued frame when
+  # it runs again (findings#206 row 206-300). Nothing here can know whether it
+  # will, so the row records the answer the client got and that the upstream
+  # delivery is unknown, where no row at all used to hide an ack the provider
+  # may have received. Every other forward failure is certain to have sent
+  # nothing and still records nothing. A failure to write this row is logged
+  # and never replaces the client's error.
+  defp record_timed_out_forward(auth, payload, %RequestOptions{} = request_options) do
+    attrs = %{
+      endpoint: @endpoint,
+      transport: "websocket",
+      status: "failed",
+      correlation_id: correlation_id(payload, request_options),
+      client_ip: request_options.request_metadata.client_ip,
+      user_agent: request_options.request_metadata.user_agent,
+      request_metadata:
+        auth
+        |> metadata(request_options)
+        |> Map.put("response_processed_forward", %{
+          "outcome" => "owner_forward_timeout",
+          "upstream_delivery" => "unknown"
+        }),
+      response_status_code: 502,
+      last_error_code: "owner_forward_timeout"
+    }
+
+    case Accounting.record_metadata_request(auth, attrs) do
+      {:ok, %{request: _request}} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "websocket response.processed timeout row not recorded " <>
+            "reason=#{FinalizationMetadata.safe_reason(reason)}"
+        )
+
+        :ok
     end
   end
 

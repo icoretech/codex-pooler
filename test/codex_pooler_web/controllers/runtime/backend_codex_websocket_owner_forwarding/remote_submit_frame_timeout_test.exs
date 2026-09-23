@@ -16,8 +16,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
+  import Ecto.Query, only: [from: 2]
 
   alias CodexPooler.Access
+  alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
@@ -138,6 +140,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     refute Enum.any?(pushes, &(CodexPooler.JSON.decode!(&1)["type"] == "error"))
 
     assert ["response.create", "response.processed", "response.create"] = Enum.map(FakeUpstream.requests(upstream), & &1.json["type"])
+
+    # The client's 502 stays the only answer on the wire, and the ack the
+    # provider still received is on record as a forward that timed out with an
+    # unknown upstream delivery, not missing (findings#206 row 206-300).
+    assert [ack] = Repo.all(from request in Request, where: fragment("?->>'response_processed' = 'true'", request.request_metadata))
+
+    assert %Request{status: "failed", response_status_code: 502, last_error_code: "owner_forward_timeout", correlation_id: "ws-remote-frame-timeout-processed"} = ack
+
+    assert ack.request_metadata["response_processed_forward"] == %{"outcome" => "owner_forward_timeout", "upstream_delivery" => "unknown"}
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
   end
 
