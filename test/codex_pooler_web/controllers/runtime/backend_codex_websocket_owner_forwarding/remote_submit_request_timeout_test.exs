@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounting.RequestReplayEntitlement
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Transports.Websocket.AbandonedSubmissions
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
@@ -178,6 +179,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     end
   end
 
+  defmodule OwnerGoneNodeClient do
+    @moduledoc false
+    # Every remote owner call runs through the production erpc client against
+    # the local node. Once armed with an owner, the next turn submission finds
+    # that owner gone: it is stopped before the submission and its abandon
+    # reach the node, the proxy gets its budget's timeout at once, and the
+    # owner-node process carrying the submission is held until the test
+    # releases it, as one still starting or recovering the owner would be.
+    @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
+
+    alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.ERPCNodeClient
+    alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.ReplayRemoteNodeClient
+
+    def arm(owner_pid) when is_pid(owner_pid), do: Application.put_env(:codex_pooler, __MODULE__, owner_pid)
+    def reset, do: Application.delete_env(:codex_pooler, __MODULE__)
+
+    @impl true
+    defdelegate connected_app_nodes, to: ReplayRemoteNodeClient
+
+    @impl true
+    defdelegate app_node?(node), to: ReplayRemoteNodeClient
+
+    @impl true
+    def call_owner(remote_node, module, :remote_submit_request_v1 = function, args, timeout) do
+      notify = :persistent_term.get({ReplayRemoteNodeClient, :state}).notify
+
+      case Application.get_env(:codex_pooler, __MODULE__) do
+        owner_pid when is_pid(owner_pid) ->
+          reset()
+          monitor = Process.monitor(owner_pid)
+          Process.exit(owner_pid, :kill)
+
+          receive do
+            {:DOWN, ^monitor, :process, ^owner_pid, _reason} -> :ok
+          end
+
+          late =
+            spawn(fn ->
+              receive do
+                :reach_owner -> send(notify, {:owner_gone_late_result, ERPCNodeClient.call_owner(node(), module, function, args, timeout)})
+              end
+            end)
+
+          send(notify, {:owner_gone_late_held, late})
+          {:error, :owner_forward_timeout}
+
+        _unarmed ->
+          forward(notify, remote_node, module, function, args, timeout)
+      end
+    end
+
+    def call_owner(remote_node, module, function, args, timeout),
+      do: forward(:persistent_term.get({ReplayRemoteNodeClient, :state}).notify, remote_node, module, function, args, timeout)
+
+    defp forward(notify, remote_node, module, function, args, timeout) do
+      result = ERPCNodeClient.call_owner(node(), module, function, args, timeout)
+      send(notify, {:owner_gone_client_result, remote_node, function, result})
+      result
+    end
+  end
+
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
@@ -185,6 +247,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     on_exit(fn ->
       ShortTurnBudgetNodeClient.reset()
       LateSubmissionNodeClient.reset()
+      OwnerGoneNodeClient.reset()
       cleanup_local_owner_sessions()
       ReplayRemoteNodeClient.reset()
 
@@ -364,6 +427,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     refute_received {:websocket_owner_frame, _correlation, _epoch, ^late_task, _payload}
   end
 
+  # The abandon can also find no owner registered at all (findings#206 row
+  # 206-316): the owner is gone when the budget expires and the owner-node
+  # process carrying the submission starts or recovers one only afterwards.
+  # The abandon leaves a node-level record of the per-call downstream, and the
+  # submission that recovers the owner reads it and is refused before
+  # dispatch, and the record is consumed.
+  test "a timed-out turn submission that recovers its owner after an abandon found none is refused before dispatch" do
+    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node, upstream: upstream} = remote_socket_after_first_turn("full")
+    state = remote_owner_state(state, remote_node, node_client: OwnerGoneNodeClient)
+    upstream_requests = FakeUpstream.count(upstream)
+
+    OwnerGoneNodeClient.arm(owner_pid)
+    assert {:ok, state} = CodexResponsesSocket.handle_in({websocket_payload(setup, "owner gone second"), [opcode: :text]}, state)
+    assert_receive {:owner_gone_late_held, late}, @detection_timeout_ms
+    {pushes, late_task, state} = drive_until_done(state)
+    assert [error_frame] = pushes
+    assert %{"type" => "error"} = CodexPooler.JSON.decode!(error_frame)
+    assert_received {:owner_gone_client_result, ^remote_node, :remote_abandon_turn_v1, {:error, :owner_unavailable}}
+    assert AbandonedSubmissions.recorded?(abandoned_key(state, late_task))
+
+    # The late submission runs on the node the session names as its owner.
+    session = own_session_locally!(state.codex_session)
+    send(late, :reach_owner)
+    assert_receive {:owner_gone_late_result, {:error, :stale_downstream}}, @detection_timeout_ms
+    assert FakeUpstream.count(upstream) == upstream_requests
+    refute AbandonedSubmissions.recorded?(abandoned_key(state, late_task))
+    refute_received {:websocket_owner_frame, _correlation, _epoch, ^late_task, _payload}
+
+    # The record is per turn: the recovered owner took the downstream, and a
+    # later submission from the same socket, a new response task, is not
+    # refused by it.
+    assert {:ok, recovered_owner} = WebsocketOwnerSession.lookup(session.id)
+    assert %{active_turn: nil} = :sys.get_state(recovered_owner)
+    refute AbandonedSubmissions.consume(abandoned_key(state, self()))
+    terminate_and_await_cleanup(state)
+  end
+
+  # The other direction: an abandon that reaches a registered owner leaves no
+  # node-level record, the owner keeps what it needs itself (row 206-307).
+  test "an abandon that reaches a registered owner leaves no node-level record" do
+    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node} = remote_socket_after_first_turn("full")
+    {_pushes, second_task, state} = time_out_second_turn(setup, state, owner_pid, remote_node)
+    assert_received {:short_turn_remote_result, ^remote_node, :remote_abandon_turn_v1, :ok}
+    refute AbandonedSubmissions.recorded?(abandoned_key(state, second_task))
+    terminate_and_await_cleanup(state)
+  end
+
   # The client-retry submission (owner request v5): the released client resends
   # a turn whose opening request the provider failed, and the owner's
   # client-retry preflight admits the resend as the failed request's one
@@ -448,6 +558,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     assert FakeUpstream.count(upstream) == 3
     assert :ok = FakeUpstream.verify!(upstream)
     terminate_and_await_cleanup(resend_state)
+  end
+
+  defp abandoned_key(state, task), do: AbandonedSubmissions.key(state.codex_session.id, Map.put(state.websocket_owner_downstream, :owner_turn_id, task))
+
+  defp own_session_locally!(session) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    local = Atom.to_string(node())
+    active_owner_lease(session.id) |> Ecto.Changeset.change(owner_instance_id: local, updated_at: now) |> Repo.update!()
+    session |> Ecto.Changeset.change(owner_instance_id: local, updated_at: now) |> Repo.update!()
   end
 
   # A socket whose next frame is a released-client turn that times out: a

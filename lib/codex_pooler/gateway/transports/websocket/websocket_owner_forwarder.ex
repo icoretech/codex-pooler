@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.AbandonedSubmissions
   alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
   alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -768,13 +769,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   def remote_submit_request_v1(codex_session_id, downstream, owner_request)
       when is_binary(codex_session_id) and is_map(downstream) do
     with {:ok, owner_request} <- validate_owner_request(owner_request),
-         {:ok, {owner_pid, downstream}} <-
-           ensure_remote_owner(
-             codex_session_id,
-             downstream,
-             owner_request,
-             request_recovery_opts(owner_request)
-           ),
+         opts = remote_submission_opts(owner_request, codex_session_id, downstream),
+         {:ok, {owner_pid, downstream}} <- ensure_remote_owner(codex_session_id, downstream, owner_request, opts),
          {:ok, request} <- WebsocketRequestCallbacks.materialize(owner_request, nil) do
       submit_remote_owner_request(
         owner_pid,
@@ -782,7 +778,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         downstream,
         request,
         owner_request.submission_notification?,
-        request_recovery_opts(owner_request)
+        opts
       )
     else
       {:error, {:invalid_owner_request, _reason}} -> {:error, :owner_unavailable}
@@ -925,13 +921,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   def remote_submit_request_v5(codex_session_id, downstream, owner_request)
       when is_binary(codex_session_id) and is_map(downstream) do
     with :ok <- validate_owner_request_v5(owner_request),
-         {:ok, {owner_pid, downstream}} <-
-           ensure_remote_owner(
-             codex_session_id,
-             downstream,
-             owner_request,
-             request_recovery_opts(owner_request)
-           ),
+         opts = remote_submission_opts(owner_request, codex_session_id, downstream),
+         {:ok, {owner_pid, downstream}} <- ensure_remote_owner(codex_session_id, downstream, owner_request, opts),
          {:ok, request} <- WebsocketRequestCallbacks.materialize(owner_request, nil) do
       submit_remote_owner_request(
         owner_pid,
@@ -939,7 +930,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         downstream,
         request,
         owner_request.submission_notification?,
-        request_recovery_opts(owner_request)
+        opts
       )
     else
       {:error, {:invalid_owner_request, _reason}} -> {:error, :stale_owner}
@@ -989,9 +980,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           :ok | {:error, WebsocketOwnerContract.owner_error()}
   def remote_abandon_turn_v1(codex_session_id, %{owner_turn_id: owner_turn_id} = downstream)
       when is_binary(codex_session_id) and is_pid(owner_turn_id) do
+    case abandon_on_registered_owner(codex_session_id, downstream) do
+      # No owner took the abandon (none registered, or the one holding the
+      # submission died under it), while the submission may still start or
+      # recover one here (findings#206 row 206-316). The record comes first and
+      # the owner is looked up again, so a submission that registered its owner
+      # in between is abandoned there.
+      {:error, reason} when reason in [:owner_unavailable, :owner_crashed] ->
+        :ok = AbandonedSubmissions.record(AbandonedSubmissions.key(codex_session_id, downstream))
+        abandon_on_registered_owner(codex_session_id, downstream)
+
+      result ->
+        result
+    end
+  end
+
+  defp abandon_on_registered_owner(codex_session_id, downstream) do
     with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
       WebsocketOwnerSession.abandon_turn(owner_pid, downstream)
     end
+  catch
+    :exit, _reason -> {:error, :owner_crashed}
   end
 
   @doc false
@@ -1658,12 +1667,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
          visibility,
          opts
        ) do
-    WebsocketOwnerSession.submit_request(
-      owner_pid,
-      downstream,
-      request,
-      submission_notification?
-    )
+    with :ok <- refuse_abandoned_submission(opts) do
+      WebsocketOwnerSession.submit_request(
+        owner_pid,
+        downstream,
+        request,
+        submission_notification?
+      )
+    end
   catch
     :exit, reason ->
       if bound_reset_probe?(request) or Process.alive?(owner_pid) or
@@ -1678,7 +1689,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
                  opts,
                  :replace_unavailable_lease
                ),
-             :ok <- notify_recovered_runtime(replacement_session, replacement_downstream) do
+             :ok <- notify_recovered_runtime(replacement_session, replacement_downstream),
+             :ok <- refuse_abandoned_submission(opts) do
           WebsocketOwnerSession.submit_request(
             replacement_pid,
             replacement_downstream,
@@ -1822,6 +1834,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   defp validate_admission_control(_control), do: {:error, :owner_unavailable}
+
+  # A remote turn submission carries the node-level key of its per-call
+  # downstream, read after its owner is registered or recovered: a proxy that
+  # abandoned it while no owner was registered here left that record
+  # (findings#206 row 206-316).
+  defp remote_submission_opts(owner_request, codex_session_id, downstream),
+    do: Keyword.put(request_recovery_opts(owner_request), :abandoned_submission_key, AbandonedSubmissions.key(codex_session_id, downstream))
+
+  defp refuse_abandoned_submission(opts) do
+    if AbandonedSubmissions.consume(Keyword.get(opts, :abandoned_submission_key)),
+      do: {:error, :stale_downstream},
+      else: :ok
+  end
 
   defp request_recovery_opts(%WebsocketOwnerRequest{observation: observation}) do
     case Map.get(observation, :request_id) do

@@ -29,6 +29,7 @@ defmodule CodexPooler.Application do
       CodexPooler.Gateway.Transports.Admission,
       {Registry, keys: :unique, name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry},
       {Task.Supervisor, name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
+      {Registry, keys: :unique, name: CodexPooler.Gateway.Transports.Websocket.AbandonedSubmissions.Registry},
       ActivityRegistry,
       CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry,
       CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
