@@ -4822,12 +4822,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         finalize_response_task_exception(opts, state)
 
       previsible_direct_task?(state, pid) ->
-        result = DirectCleanup.terminate_admission(context, "client_disconnected")
-        # The stopped task never hands its result to the drain, which is where
-        # a running task's delivery receipt is recorded (findings#225 row
-        # 225-100), so its single aborted receipt is recorded here.
-        record_downstream_delivery_receipt(state, pid, :aborted)
-        result
+        stop_previsible_direct_task(state, pid, context)
 
       true ->
         cancel_direct_response(state, pid, context)
@@ -4846,6 +4841,24 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     not client_visible_output?(state, pid) and
       not Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid) and
       Process.alive?(pid)
+  end
+
+  # Stopped only while it waits on its upstream request (findings#206 row
+  # 206-110: under load the stop landed inside a query, a commit or the task's
+  # own settlement). A task busy anywhere else keeps the ordinary cancel; if the
+  # provider then answers, its settlement is the correction of the interrupt's.
+  defp stop_previsible_direct_task(state, pid, context) do
+    case DirectCleanup.stop_upstream_wait(context, "client_disconnected") do
+      :busy ->
+        cancel_direct_response(state, pid, context)
+
+      result ->
+        # The stopped task never hands its result to the drain, which is where
+        # a running task's delivery receipt is recorded (findings#225 row
+        # 225-100), so its single aborted receipt is recorded here.
+        record_downstream_delivery_receipt(state, pid, :aborted)
+        result
+    end
   end
 
   defp cancel_direct_response(state, pid, context) do

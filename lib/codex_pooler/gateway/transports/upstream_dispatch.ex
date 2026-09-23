@@ -37,6 +37,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV7
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
+  alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
@@ -1028,15 +1029,21 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp owner_request_validation_reason({:unknown_fields, _fields}), do: "unknown_fields"
 
+  # The upstream request runs inside the direct cleanup's upstream-wait span,
+  # the one point where a closing socket may stop this task (findings#206 row
+  # 206-110).
   defp direct_websocket_request(upstream_request, request_options, _identity, request, attempt) do
+    direct_cleanup = request_options.runtime.direct_cleanup
+
     case request_options.transport.upstream_websocket_session do
       pid when is_pid(pid) ->
-        result = UpstreamWebsocketSession.request(pid, upstream_request)
-
-        mark_upstream_websocket_body_visible(result, request, attempt)
+        direct_cleanup
+        |> DirectCleanup.upstream_wait(fn -> UpstreamWebsocketSession.request(pid, upstream_request) end)
+        |> mark_upstream_websocket_body_visible(request, attempt)
 
       _pid ->
-        UpstreamWebsocketSession.request_once(upstream_request)
+        direct_cleanup
+        |> DirectCleanup.upstream_wait(fn -> UpstreamWebsocketSession.request_once(upstream_request) end)
         |> mark_upstream_websocket_body_visible(request, attempt)
     end
   end

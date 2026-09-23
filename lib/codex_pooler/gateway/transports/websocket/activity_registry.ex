@@ -34,6 +34,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def handoff_direct_cleanup(context),
     do: GenServer.call(context.registry, {:direct_handoff, context})
 
+  @doc """
+  The direct task marks the span it spends blocked on its upstream request,
+  the one point where stopping it touches no database work in flight
+  (`stop_direct_upstream_wait/1`). Leaving the span after a stop was granted
+  answers `{:error, :stopped}`: the task must then exit without settling.
+  """
+  @spec enter_direct_upstream_wait(DirectCleanup.t()) :: :ok | {:error, :stopped}
+  def enter_direct_upstream_wait(context),
+    do: GenServer.call(context.registry, {:direct_upstream_wait, context, true})
+
+  @spec leave_direct_upstream_wait(DirectCleanup.t()) :: :ok | {:error, :stopped}
+  def leave_direct_upstream_wait(context),
+    do: GenServer.call(context.registry, {:direct_upstream_wait, context, false})
+
+  @spec stop_direct_upstream_wait(DirectCleanup.t()) :: :stop | :busy
+  def stop_direct_upstream_wait(context),
+    do: GenServer.call(context.registry, {:direct_stop_upstream_wait, context})
+
   @type activity_kind :: Entry.kind()
   @type outcome :: :completed | :aborted | :failed
   @type token :: reference()
@@ -160,6 +178,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
 
       _ ->
         {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:direct_upstream_wait, context, waiting?}, {caller, _}, state) do
+    case direct_entry(state, context.task) do
+      {_token, %{direct_cleanup: %{context: ^context, upstream_stop?: true}}} when caller == context.task ->
+        {:reply, {:error, :stopped}, state}
+
+      {token, %{direct_cleanup: %{context: ^context} = cleanup}} when caller == context.task ->
+        {:reply, :ok, put_in(state.activities[token].direct_cleanup, Map.put(cleanup, :upstream_wait?, waiting?))}
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:direct_stop_upstream_wait, context}, _from, state) do
+    case direct_entry(state, context.task) do
+      {token, %{direct_cleanup: %{context: ^context, upstream_wait?: true} = cleanup}} ->
+        {:reply, :stop, put_in(state.activities[token].direct_cleanup, Map.put(cleanup, :upstream_stop?, true))}
+
+      _ ->
+        {:reply, :busy, state}
     end
   end
 

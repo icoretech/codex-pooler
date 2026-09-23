@@ -169,6 +169,47 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
     end
   end
 
+  @doc """
+  Stops a direct task only while it is blocked on its upstream request, then
+  interrupts its request (`terminate_admission/2`). A task doing anything else,
+  database work above all, is left running and answers `:busy`: killing a
+  process inside a query or a commit drops its connection and can leave its
+  own settlement half done (findings#206 row 206-110, measured under load).
+  """
+  @spec stop_upstream_wait(t(), String.t()) :: cleanup_result() | :busy
+  def stop_upstream_wait(context, reason) do
+    case ActivityRegistry.stop_direct_upstream_wait(context) do
+      :stop -> terminate_admission(context, reason)
+      :busy -> :busy
+    end
+  end
+
+  @doc """
+  Runs the direct task's upstream request inside the span `stop_upstream_wait/2`
+  may stop it in. A stop granted while the request was running makes the task
+  exit before it settles anything; the socket settles the request instead.
+  """
+  @spec upstream_wait(t() | nil, (-> result)) :: result when result: term()
+  def upstream_wait(nil, request), do: request.()
+
+  def upstream_wait(%__MODULE__{} = context, request) do
+    with :ok <- ActivityRegistry.enter_direct_upstream_wait(context),
+         result = request.(),
+         :ok <- ActivityRegistry.leave_direct_upstream_wait(context) do
+      result
+    else
+      {:error, :stopped} -> exit_stopped()
+    end
+  end
+
+  # Exits with the reason the socket's own stop uses; the signal to self
+  # terminates the task before it can reach any settlement.
+  @spec exit_stopped() :: no_return()
+  defp exit_stopped do
+    Process.exit(self(), cancellation_exit_reason("client_disconnected"))
+    Process.sleep(:infinity)
+  end
+
   @spec terminate_admission(t(), String.t()) :: cleanup_result()
   def terminate_admission(context, reason) do
     :ok = ActivityRegistry.mark_direct_cleanup_reason(context, reason)
