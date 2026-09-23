@@ -148,8 +148,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
   # One compact line per attempt built only from the admin projection's fixed
   # vocabulary (`DebugProjection.DownstreamDelivery`); absent receipts render
   # nothing. The highest frame class a websocket pushed (findings#232 row
-  # 232-203) follows the frame count; a receipt without it (HTTP SSE, older
-  # rows) renders the line without it.
+  # 232-203) follows the frame count, then how many items it pushed completed
+  # (row 232-241, the count only, never their digests) and the class of the
+  # connection's failed write that kept the receipt from `delivered` (row
+  # 232-256); a receipt without them (HTTP SSE, older rows) renders the line
+  # without them.
   defp downstream_delivery_rows(%{attempt_number: attempt_number} = attempt) do
     case Map.get(attempt, :downstream_delivery) do
       %{
@@ -165,7 +168,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
           detail(
             "request-log-detail-attempt-#{attempt_number}-downstream-delivery",
             "Downstream delivery",
-            downstream_delivery_line(outcome, terminal_class, frames, highest_frame_class(receipt), pushed_at, transport),
+            downstream_delivery_line(outcome, terminal_class, frames, receipt, pushed_at, transport),
             mono: true
           )
         ]
@@ -175,15 +178,25 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
     end
   end
 
-  defp highest_frame_class(%{highest_frame_class: class}) when is_binary(class), do: class
+  defp highest_frame_class(%{highest_frame_class: class}) when is_binary(class), do: "highest frame #{class}"
   defp highest_frame_class(_receipt), do: nil
 
-  defp downstream_delivery_line(outcome, terminal_class, frames, highest_frame_class, pushed_at, transport) do
+  defp completed_items(%{completed_items: count}) when is_integer(count) and count >= 0,
+    do: "#{count} completed #{if count == 1, do: "item", else: "items"}"
+
+  defp completed_items(_receipt), do: nil
+
+  defp write_failure(%{write_failure: failure}) when is_binary(failure), do: "write failed #{failure}"
+  defp write_failure(_receipt), do: nil
+
+  defp downstream_delivery_line(outcome, terminal_class, frames, receipt, pushed_at, transport) do
     [
       outcome,
       "terminal #{terminal_class}",
       "#{frames} #{if frames == 1, do: "frame", else: "frames"} after visible",
-      highest_frame_class && "highest frame #{highest_frame_class}",
+      highest_frame_class(receipt),
+      completed_items(receipt),
+      write_failure(receipt),
       pushed_at && "pushed #{pushed_at}",
       transport
     ]

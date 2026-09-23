@@ -4,11 +4,15 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.DownstreamDelivery 
   # Admin-only projection of the `downstream_delivery` attempt receipt written by
   # `CodexPooler.Gateway.Websocket.DeliveryReceipt`. Every field is re-checked
   # against the receipt's fixed vocabulary; any field outside it drops the whole
-  # namespace, and nothing beyond the six allowlisted keys is projected.
+  # namespace, and nothing beyond the eight allowlisted keys is projected.
   # `highest_frame_class` is optional: only a transport that classifies what it
   # pushed writes it (the native and `/v1` websockets), so an absent field
   # projects as `nil` ("not classified") while an unknown value drops the
-  # namespace like any other field outside the vocabulary.
+  # namespace like any other field outside the vocabulary. `completed_items`
+  # (how many items the socket pushed completed, findings#232 row 232-241) and
+  # `write_failure` (the class of the connection's first failed write, row
+  # 232-256) are optional the same way. The completed items' digests are
+  # never projected.
 
   alias CodexPooler.Gateway.Websocket.DeliveryReceipt
 
@@ -22,7 +26,9 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.DownstreamDelivery 
           pushed_at: String.t() | nil,
           frames_after_visible: non_neg_integer(),
           transport: String.t(),
-          highest_frame_class: String.t() | nil
+          highest_frame_class: String.t() | nil,
+          completed_items: non_neg_integer() | nil,
+          write_failure: String.t() | nil
         }
 
   @spec build(map() | nil) :: t() | nil
@@ -35,14 +41,18 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.DownstreamDelivery 
          frames when is_integer(frames) <- frame_count(Map.get(receipt, "frames_after_visible")),
          transport when is_binary(transport) <-
            vocabulary(Map.get(receipt, "transport"), DeliveryReceipt.transports()),
-         {:ok, highest_frame_class} <- highest_frame_class(receipt) do
+         {:ok, highest_frame_class} <- highest_frame_class(receipt),
+         {:ok, completed_items} <- completed_items(receipt),
+         {:ok, write_failure} <- write_failure(receipt) do
       %{
         outcome: outcome,
         terminal_class: terminal_class,
         pushed_at: pushed_at,
         frames_after_visible: frames,
         transport: transport,
-        highest_frame_class: highest_frame_class
+        highest_frame_class: highest_frame_class,
+        completed_items: completed_items,
+        write_failure: write_failure
       }
     else
       _invalid -> nil
@@ -63,6 +73,19 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.DownstreamDelivery 
     case vocabulary(class, DeliveryReceipt.frame_classes()) do
       nil -> :error
       class -> {:ok, class}
+    end
+  end
+
+  defp completed_items(receipt) when not is_map_key(receipt, "completed_items"), do: {:ok, nil}
+  defp completed_items(%{"completed_items" => count}) when is_integer(count) and count >= 0, do: {:ok, count}
+  defp completed_items(_receipt), do: :error
+
+  defp write_failure(receipt) when not is_map_key(receipt, "write_failure"), do: {:ok, nil}
+
+  defp write_failure(%{"write_failure" => failure}) do
+    case vocabulary(failure, DeliveryReceipt.write_failures()) do
+      nil -> :error
+      failure -> {:ok, failure}
     end
   end
 

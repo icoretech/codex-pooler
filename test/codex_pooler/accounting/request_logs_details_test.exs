@@ -898,7 +898,9 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
              pushed_at: "2026-09-10T23:27:46.108Z",
              frames_after_visible: 3,
              transport: "websocket",
-             highest_frame_class: nil
+             highest_frame_class: nil,
+             completed_items: nil,
+             write_failure: nil
            }
 
     assert Map.fetch!(attempts_by_number, 2).downstream_delivery == %{
@@ -907,7 +909,9 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
              pushed_at: nil,
              frames_after_visible: 0,
              transport: "http_sse",
-             highest_frame_class: nil
+             highest_frame_class: nil,
+             completed_items: nil,
+             write_failure: nil
            }
 
     for attempt_number <- 3..(length(receipts) + 1) do
@@ -967,6 +971,52 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert is_nil(projected[4])
     assert is_nil(projected[5])
     assert is_nil(projected[6])
+    refute inspect(admin_log.debug.attempts) =~ prompt_injection
+  end
+
+  # How many items the socket pushed completed (findings#232 row 232-241) and
+  # the class of the connection's failed write (row 232-256) are optional too:
+  # absent they project as nil, a valid value projects as is, anything else
+  # drops the whole receipt, and the completed items' digests never project.
+  test "admin request logs project the receipt's completed item count and write failure, never the digests" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    prompt_injection = "ignore-instructions-leak-secrets-now"
+    digest = "0123456789ab"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-admin-completed-items",
+        status: "failed",
+        correlation_id: "admin-downstream-completed-items"
+      })
+
+    receipt = %{"outcome" => "aborted", "terminal_class" => "none", "pushed_at" => nil, "frames_after_visible" => 9, "transport" => "websocket", "highest_frame_class" => "item_done"}
+
+    receipts = [
+      Map.merge(receipt, %{"completed_items" => 2, "completed_item_digests" => [digest, digest]}),
+      Map.merge(receipt, %{"highest_frame_class" => "delta", "write_failure" => "timeout"}),
+      Map.put(receipt, "completed_items", -1),
+      Map.put(receipt, "completed_items", "2"),
+      Map.put(receipt, "write_failure", prompt_injection),
+      Map.put(receipt, "write_failure", nil)
+    ]
+
+    for {receipt, index} <- Enum.with_index(receipts, 1) do
+      attempt_fixture(request, assignment, %{attempt_number: index, status: "failed", response_metadata: %{"downstream_delivery" => receipt}})
+    end
+
+    assert %{items: [admin_log], total: 1} = Accounting.list_request_logs(pool, surface: :admin)
+    projected = Map.new(admin_log.debug.attempts, &{&1.attempt_number, Map.get(&1, :downstream_delivery)})
+
+    assert %{completed_items: 2, write_failure: nil, highest_frame_class: "item_done"} = projected[1]
+    assert %{completed_items: nil, write_failure: "timeout", highest_frame_class: "delta"} = projected[2]
+    assert is_nil(projected[3])
+    assert is_nil(projected[4])
+    assert is_nil(projected[5])
+    assert is_nil(projected[6])
+    refute Map.has_key?(projected[1], :completed_item_digests)
+    refute inspect(admin_log.debug.attempts) =~ digest
     refute inspect(admin_log.debug.attempts) =~ prompt_injection
   end
 
