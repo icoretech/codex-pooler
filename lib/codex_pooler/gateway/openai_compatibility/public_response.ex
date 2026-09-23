@@ -206,13 +206,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   # caused is typed by the shared classifier from the status it is answered
   # with: a refused 4xx is the client's `invalid_request_error`, never
   # `server_error`, which names the retryable class and contradicted the 400 it
-  # rode on (findings#254 row 254-51). The gateway failure statuses keep
-  # `server_error`: an upstream 401/403 is the upstream account's credential or
-  # standing, not the caller's request, and a 429 is a throttle the SDKs
-  # retry on the status alone. `/v1` answers an upstream 404 as a 502, so it
-  # keeps `server_error` too, as does every 5xx and a status-less error.
+  # rode on (findings#254 row 254-51), and a 429 is the classifier's
+  # `rate_limit_error`, OpenAI's type for a throttle (row 254-72; the SDKs
+  # retry a 429 on the status alone, so only the reported class changes). The
+  # upstream 401/403 keep `server_error`: they are the upstream account's
+  # credential or standing, not the caller's request. `/v1` answers an
+  # upstream 404 as a 502, so it keeps `server_error` too, as does every 5xx
+  # and a status-less error.
   defp redacted_error_type(code, status)
-       when is_integer(status) and status in 400..499 and status not in [401, 403, 404, 429],
+       when is_integer(status) and status in 400..499 and status not in [401, 403, 404],
        do: ErrorClassification.error_type(code, status)
 
   defp redacted_error_type(_code, _status), do: "server_error"

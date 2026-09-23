@@ -8000,7 +8000,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert %{"error" => error} = json_response(conn, 429)
     assert error["message"] == "upstream request failed"
-    assert error["type"] == "server_error"
+    # Typed as the throttle it is (findings#254 row 254-72).
+    assert error["type"] == "rate_limit_error"
     assert error["code"] in ["rate_limit_exceeded", "upstream_error"]
     refute Map.has_key?(error, "param")
     refute conn.resp_body =~ "provider failed"

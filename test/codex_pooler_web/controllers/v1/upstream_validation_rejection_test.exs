@@ -225,9 +225,9 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
   # A refusal outside the relay window keeps the redacted body (fixed message,
   # stream startup code `upstream_status`, no param), typed from the status it
   # is answered with like every other Pooler-authored error: a refused 4xx
-  # is `invalid_request_error`; the gateway failure statuses (upstream 401,
-  # 403, 429), a 5xx and an upstream 404 (answered as 502) stay `server_error`
-  # (findings#254 row 254-51).
+  # is `invalid_request_error` and a 429 the throttle class `rate_limit_error`
+  # (row 254-72); an upstream 401 or 403, a 5xx and an upstream 404 (answered
+  # as 502) stay `server_error` (findings#254 row 254-51).
   test "POST /v1 types a redacted upstream refusal from the status it answers", %{conn: conn} do
     codeless = {:json_error, 400, %{"error" => %{"type" => "invalid_request_error", "message" => "Invalid 'input[1].id': '#{@provider_sentinel}'."}}}
 
@@ -238,7 +238,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
       {"chat json 400", "/v1/chat/completions", false, codeless, 400, "invalid_request_error"},
       {"responses 403", "/v1/responses", true, validation_rejection(403, "synthetic_forbidden", nil), 403, "server_error"},
       {"responses 422", "/v1/responses", true, validation_rejection(422, "synthetic_unprocessable", nil), 422, "invalid_request_error"},
-      {"responses 429", "/v1/responses", true, validation_rejection(429, "synthetic_throttle", nil), 429, "server_error"},
+      {"responses 429", "/v1/responses", true, validation_rejection(429, "synthetic_throttle", nil), 429, "rate_limit_error"},
       {"responses 500", "/v1/responses", true, validation_rejection(500, "synthetic_failure", nil, "server_error"), 500, "server_error"},
       {"responses 404", "/v1/responses", true, validation_rejection(404, "synthetic_missing", nil), 502, "server_error"}
     ]

@@ -481,7 +481,9 @@ A surviving code may be a Codex-backend value that is not part of the OpenAI pla
 
 Upstream error messages are replaced with `upstream request failed`, and upstream error types are replaced with
 `server_error`, except that an upstream refusal answered with a `4xx` status other than `401`, `403`, `404` and
-`429` (for example `400` or `422`) is typed `invalid_request_error`, the class its status names.
+`429` (for example `400` or `422`) is typed `invalid_request_error`, the class its status names, and an upstream
+`429` is typed `rate_limit_error`. SDKs retry a `429` on the status alone, so the type changes what a reader sees,
+not whether the request is retried.
 Clients must therefore treat `error.code` as an open string: handle the values they understand and
 keep an unknown-code fallback rather than validating against the platform enum.
 

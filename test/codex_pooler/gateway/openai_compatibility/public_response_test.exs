@@ -84,13 +84,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
         "sibling" => "private_sibling"
       }
 
-      for status <- [401, 403, 404, 429, 500] do
+      for status <- [401, 403, 404, 500] do
         assert PublicResponse.normalize_error(generic_error, status: status) == %{
                  "code" => "provider_code",
                  "message" => "upstream request failed",
                  "type" => "server_error"
                }
       end
+
+      # A redacted 429 is the classifier's throttle class, OpenAI's
+      # `rate_limit_error`, not the retryable server class (findings#254 row
+      # 254-72); the SDKs retry it on the status alone.
+      assert PublicResponse.normalize_error(generic_error, status: 429) == %{
+               "code" => "provider_code",
+               "message" => "upstream request failed",
+               "type" => "rate_limit_error"
+             }
 
       # A refused 4xx outside the gateway failure statuses is the client's
       # error class, whatever type the provider wrote (findings#254 row

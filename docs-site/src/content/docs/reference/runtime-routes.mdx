@@ -660,9 +660,10 @@ On `/v1`, such a failure keeps the redacted error (`upstream request failed`,
 code `upstream_status` or the upstream code, no param) on HTTP and in the
 `GET /v1/responses` websocket `error` event. Its `type` follows the status it is
 answered with: `invalid_request_error` for a refused `4xx` such as `400` or
-`422`, and `server_error` for an upstream `401` or `403` (the upstream account's
-credentials or standing, not the request), a `429`, a `5xx`, and an upstream
-`404`, which `/v1` answers as `502`.
+`422`, `rate_limit_error` for a `429` (OpenAI's type for a throttle; SDKs retry
+it on the status alone), and `server_error` for an upstream `401` or `403` (the
+upstream account's credentials or standing, not the request), a `5xx`, and an
+upstream `404`, which `/v1` answers as `502`.
 
 ### Unsupported `/v1` Responses request shapes
 
