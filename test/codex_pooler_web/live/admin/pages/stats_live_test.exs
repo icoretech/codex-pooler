@@ -2104,30 +2104,30 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     end
   end
 
-  defp await_stats_dashboard(view, attempts \\ 100)
+  defp await_stats_dashboard(view),
+    do: await_stats_dashboard(view, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp await_stats_dashboard(view, attempts) when attempts > 0 do
+  defp await_stats_dashboard(view, deadline) do
     _ = render_async(view, 5_000)
     state = :sys.get_state(view.pid)
 
     if Map.get(state.socket.assigns, :dashboard_loading?, false) or
          Map.get(state.socket.assigns, :stats_dashboard_running?, false) do
+      if System.monotonic_time(:millisecond) >= deadline, do: flunk("stats dashboard did not finish loading: #{inspect(:sys.get_state(view.pid))}")
+
       receive do
       after
-        1 -> await_stats_dashboard(view, attempts - 1)
+        1 -> await_stats_dashboard(view, deadline)
       end
     else
       state
     end
   end
 
-  defp await_stats_dashboard(view, 0) do
-    flunk("stats dashboard did not finish loading: #{inspect(:sys.get_state(view.pid))}")
-  end
+  defp await_stats_dashboard_params(view, expected_params),
+    do: await_stats_dashboard_params(view, expected_params, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp await_stats_dashboard_params(view, expected_params, attempts \\ 100)
-
-  defp await_stats_dashboard_params(view, expected_params, attempts) when attempts > 0 do
+  defp await_stats_dashboard_params(view, expected_params, deadline) do
     state = :sys.get_state(view.pid)
     assigns = state.socket.assigns
 
@@ -2137,15 +2137,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     else
       _ = render_async(view, 5_000)
 
+      if System.monotonic_time(:millisecond) >= deadline, do: flunk("stats dashboard did not load params #{inspect(expected_params)}: #{inspect(:sys.get_state(view.pid))}")
+
       receive do
       after
-        1 -> await_stats_dashboard_params(view, expected_params, attempts - 1)
+        1 -> await_stats_dashboard_params(view, expected_params, deadline)
       end
     end
-  end
-
-  defp await_stats_dashboard_params(view, expected_params, 0) do
-    flunk("stats dashboard did not load params #{inspect(expected_params)}: #{inspect(:sys.get_state(view.pid))}")
   end
 
   defp assert_stats_patch_params(view, expected_params) do

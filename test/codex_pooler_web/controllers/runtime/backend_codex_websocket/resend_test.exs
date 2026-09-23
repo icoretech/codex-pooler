@@ -2475,7 +2475,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   end
 
   defp await_turn_completed!(request_id, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     case Repo.all(from(t in CodexTurn, where: t.request_id == ^request_id)) do
       [%CodexTurn{status: status} = turn] when status != "in_progress" ->

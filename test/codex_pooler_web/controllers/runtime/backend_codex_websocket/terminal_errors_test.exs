@@ -1557,7 +1557,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
   end
 
   defp wait_for_response_header_window(identity, window_kind, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     identity
     |> QuotaWindows.list_quota_windows()

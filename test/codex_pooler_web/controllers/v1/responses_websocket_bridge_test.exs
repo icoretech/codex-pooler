@@ -267,7 +267,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp await_rate_limit_window(identity, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     identity
     |> QuotaWindows.list_quota_windows()
@@ -326,11 +326,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     end)
   end
 
-  defp await_visible_turn(pool_id, attempts_left \\ 1_000)
+  defp await_visible_turn(pool_id),
+    do: await_visible_turn(pool_id, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp await_visible_turn(_pool_id, 0), do: flunk("expected committed public bridge turn")
-
-  defp await_visible_turn(pool_id, attempts_left) do
+  defp await_visible_turn(pool_id, deadline) do
     turn =
       Repo.one(
         from turn in CodexTurn,
@@ -346,46 +345,53 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         turn
 
       _pending ->
+        if System.monotonic_time(:millisecond) >= deadline, do: flunk("expected committed public bridge turn")
+
         receive do
         after
-          1 -> await_visible_turn(pool_id, attempts_left - 1)
+          1 -> await_visible_turn(pool_id, deadline)
         end
     end
   end
 
   # The bridged downstream stays attached until the HTTP relay consumes the
   # stream, so this waits only for the owner to settle the upstream turn.
-  defp await_owner_turn_settled(owner, attempts_left \\ 1_000)
+  defp await_owner_turn_settled(owner),
+    do: await_owner_turn_settled(owner, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp await_owner_turn_settled(_owner, 0),
-    do: flunk("websocket owner did not settle the upstream turn")
-
-  defp await_owner_turn_settled(owner, attempts_left) do
+  defp await_owner_turn_settled(owner, deadline) do
     case :sys.get_state(owner) do
       %{active_turn: nil} = state ->
         state
 
       _active ->
+        if System.monotonic_time(:millisecond) >= deadline, do: flunk("websocket owner did not settle the upstream turn")
+
         receive do
         after
-          1 -> await_owner_turn_settled(owner, attempts_left - 1)
+          1 -> await_owner_turn_settled(owner, deadline)
         end
     end
   end
 
-  defp await_owner_bridge_idle(owner, attempts_left \\ 1_000)
+  # Returns the owner's state once it is idle, or at the detection deadline, for
+  # the caller's own match to report.
+  defp await_owner_bridge_idle(owner),
+    do: await_owner_bridge_idle(owner, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp await_owner_bridge_idle(owner, 0), do: :sys.get_state(owner)
-
-  defp await_owner_bridge_idle(owner, attempts_left) do
+  defp await_owner_bridge_idle(owner, deadline) do
     case :sys.get_state(owner) do
       %{active_turn: nil, downstream: nil} = state ->
         state
 
-      _active ->
-        receive do
-        after
-          1 -> await_owner_bridge_idle(owner, attempts_left - 1)
+      state ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          state
+        else
+          receive do
+          after
+            1 -> await_owner_bridge_idle(owner, deadline)
+          end
         end
     end
   end

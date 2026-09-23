@@ -13,6 +13,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogDeliveryFrameClassLiveTest do
   # that stops reading a large turn on a listener with a short send timeout.
   use CodexPoolerWeb.ConnCase, async: false
 
+  # Failure-detection budget for an asynchronous load the test awaits: a green
+  # run returns as soon as the view has settled.
+  @detection_timeout_ms 15_000
+
   import Ecto.Query
   import Phoenix.LiveViewTest
 
@@ -306,23 +310,22 @@ defmodule CodexPoolerWeb.Admin.RequestLogDeliveryFrameClassLiveTest do
     end
   end
 
-  defp await_request_logs(view, attempts \\ 200)
+  defp await_request_logs(view),
+    do: await_request_logs(view, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp await_request_logs(view, attempts) when attempts > 0 do
+  defp await_request_logs(view, deadline) do
     _ = render_async(view)
     state = :sys.get_state(view.pid)
 
     if state.socket.assigns.request_logs_loading? or state.socket.assigns.request_logs_running? do
+      if System.monotonic_time(:millisecond) >= deadline, do: flunk("request logs did not finish loading: #{inspect(:sys.get_state(view.pid))}")
+
       receive do
       after
-        1 -> await_request_logs(view, attempts - 1)
+        1 -> await_request_logs(view, deadline)
       end
     else
       state
     end
-  end
-
-  defp await_request_logs(view, 0) do
-    flunk("request logs did not finish loading: #{inspect(:sys.get_state(view.pid))}")
   end
 end

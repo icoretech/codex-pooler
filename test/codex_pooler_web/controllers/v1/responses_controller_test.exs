@@ -12183,12 +12183,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end)
   end
 
-  defp await_committed_public_turn(pool_id, attempts_left \\ 1_000)
+  defp await_committed_public_turn(pool_id),
+    do: await_committed_public_turn(pool_id, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp await_committed_public_turn(_pool_id, 0),
-    do: flunk("expected committed public bridge turn")
-
-  defp await_committed_public_turn(pool_id, attempts_left) do
+  defp await_committed_public_turn(pool_id, deadline) do
     turn =
       Repo.one(
         from(turn in CodexTurn,
@@ -12205,9 +12203,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         turn
 
       _pending ->
+        if System.monotonic_time(:millisecond) >= deadline, do: flunk("expected committed public bridge turn")
+
         receive do
         after
-          1 -> await_committed_public_turn(pool_id, attempts_left - 1)
+          1 -> await_committed_public_turn(pool_id, deadline)
         end
     end
   end

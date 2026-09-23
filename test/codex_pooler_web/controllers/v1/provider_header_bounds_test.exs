@@ -18,6 +18,10 @@ defmodule CodexPoolerWeb.V1.ProviderHeaderBoundsTest do
   # end to end so the bound is proven on the persisted row, not on the writer
   # in isolation.
 
+  # Failure-detection budget for the asynchronously written quota window: a
+  # green run returns as soon as the row exists.
+  @detection_timeout_ms 15_000
+
   @completed_response %{
     "id" => "resp_provider_header_bounds",
     "object" => "response",
@@ -145,7 +149,7 @@ defmodule CodexPoolerWeb.V1.ProviderHeaderBoundsTest do
   # Header quota evidence is written during finalization; the window is read
   # back with a bounded poll of the authoritative rows.
   defp await_header_window!(identity, raw_limit_id, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     identity
     |> QuotaWindows.list_quota_windows()

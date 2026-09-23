@@ -1327,19 +1327,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     }
   end
 
-  defp wait_for_rate_limit_event_window(identity, window_kind, attempts \\ 1_000)
+  # The evidence is written by an asynchronous persistence task, so the row is
+  # polled on a monotonic deadline under the detection budget rather than a
+  # count of scheduler yields, which gave about a second (findings#206 row
+  # 206-323).
+  defp wait_for_rate_limit_event_window(identity, window_kind),
+    do: wait_for_rate_limit_event_window(identity, window_kind, System.monotonic_time(:millisecond) + @detection_timeout_ms)
 
-  defp wait_for_rate_limit_event_window(_identity, _window_kind, 0),
-    do: flunk("expected generation-authorized rate-limit evidence")
-
-  defp wait_for_rate_limit_event_window(identity, window_kind, attempts) do
+  defp wait_for_rate_limit_event_window(identity, window_kind, deadline) do
     case Enum.find(
            QuotaWindows.list_quota_windows(identity),
            &(&1.source == "codex_rate_limit_event" and &1.window_kind == window_kind)
          ) do
       nil ->
-        :erlang.yield()
-        wait_for_rate_limit_event_window(identity, window_kind, attempts - 1)
+        if System.monotonic_time(:millisecond) >= deadline, do: flunk("expected generation-authorized rate-limit evidence")
+
+        receive do
+        after
+          10 -> wait_for_rate_limit_event_window(identity, window_kind, deadline)
+        end
 
       window ->
         window

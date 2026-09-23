@@ -27,6 +27,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
   @connection_shutdown_timeout_ms 15_000
+  # Failure-detection budget for the polling helpers below: each returns as
+  # soon as the awaited row or state exists, so only a missing one spends it.
+  @detection_timeout_ms 15_000
 
   def strict_native_request(connection_ordinal, respond) do
     FakeUpstream.expect_request(
@@ -149,7 +152,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
   end
 
   def wait_for_rate_limit_event_window(identity, window_kind, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     identity
     |> QuotaWindows.list_evidence()
@@ -171,7 +174,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
   end
 
   def wait_for_rate_limit_event_tasks(deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     case Task.Supervisor.children(CodexPooler.RateLimitEventSupervisor) do
       [] ->
@@ -229,7 +232,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
   end
 
   def await_succeeded_pool_requests!(pool_id, expected_count, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     requests =
       Repo.all(
