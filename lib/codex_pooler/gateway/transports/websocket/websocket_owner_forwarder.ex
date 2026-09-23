@@ -1257,6 +1257,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       )
 
     stop_remote_cancellation_watcher(cancellation_watcher, submitter)
+
+    # The owner still takes a client-retry turn after its budget expired, as
+    # any turn (findings#206 row 206-306), but an owner node that predates the
+    # abandon keeps the previous release's behaviour for it: no call at all.
+    if result == {:error, :owner_forward_timeout} do
+      best_effort_abandon_client_retry_turn(node, codex_session_id, downstream, opts)
+    end
+
     result
   end
 
@@ -2013,6 +2021,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp best_effort_abandon_turn(node, codex_session_id, downstream, opts),
     do: best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+
+  # The closing-socket detach is no fallback for a client-retry turn: after
+  # it the timed-out response task ended as a success, no error frame reached
+  # the still connected client and the task's delivery never completed, so the
+  # client would wait on a turn that already failed. Before the abandon
+  # existed nothing was sent here, and an owner node from that release keeps
+  # that behaviour (findings#206 row 206-306).
+  defp best_effort_abandon_client_retry_turn(node, codex_session_id, %{owner_turn_id: owner_turn_id} = downstream, opts)
+       when is_pid(owner_turn_id) do
+    budget_opts = Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+    _result = call_remote_abandon_turn(node, [codex_session_id, downstream], budget_opts)
+    :ok
+  end
+
+  defp best_effort_abandon_client_retry_turn(_node, _codex_session_id, _downstream, _opts), do: :ok
 
   defp call_remote_abandon_turn(node, args, opts) do
     opts
