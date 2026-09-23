@@ -221,6 +221,45 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
   end
 
+  # The tier the released Codex client sends for these models when nothing
+  # configures one: `default_service_tier` of gpt-6-sol and gpt-6-luna in the
+  # client's bundled `codex-rs/models-manager/models.json` (0.156.1). The
+  # runtime filter refuses a non-default tier the assignment's model metadata
+  # does not declare, so without it the fixture answered `503
+  # no_compatible_backend` to every such Codex turn (findings#206).
+  @bundled_client_default_service_tier "priority"
+
+  test "fixture text models admit the service tier the released Codex client sends by default", context do
+    assert {:ok, %{status: "ready"}} = OpenAIV1Fixture.acquire(context.options)
+
+    setup = context.receipt_path |> File.read!() |> CodexPooler.JSON.decode!()
+    pool = Repo.get_by!(Pool, slug: @pool_slug)
+    assignment = Repo.get!(PoolUpstreamAssignment, setup["created"]["assignment_id"])
+    identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
+
+    for exposed_model_id <- ["gpt-6-sol", "gpt-6-luna"] do
+      model = Repo.get_by!(Model, pool_id: pool.id, exposed_model_id: exposed_model_id)
+      payload = %{"model" => exposed_model_id, "service_tier" => @bundled_client_default_service_tier}
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      assert {:ok, [{%PoolUpstreamAssignment{id: assignment_id}, %UpstreamIdentity{}}]} =
+               FilterInput.new(%{
+                 model: model,
+                 endpoint: "/backend-api/codex/responses",
+                 payload: payload,
+                 request_options: request_options,
+                 candidates: [{assignment, identity}]
+               })
+               |> CandidateEligibility.filter_runtime_compatible_candidates()
+
+      assert assignment_id == assignment.id
+      source_metadata = ModelMetadata.selected_assignment_metadata(model, assignment.id)
+      assert Enum.map(source_metadata["service_tiers"], & &1["id"]) == [@bundled_client_default_service_tier]
+    end
+
+    assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
+  end
+
   test "rejects a non-loopback upstream before receipt or database mutation", context do
     options = Keyword.put(context.options, :upstream_base_url, "https://example.com")
 

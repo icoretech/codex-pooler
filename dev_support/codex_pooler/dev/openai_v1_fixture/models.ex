@@ -10,6 +10,16 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
+  # The tiers the provider's catalog declares for the fixture's text models, in
+  # the shape the upstream sync stores. The released Codex client sends its
+  # bundled default tier (`priority` for gpt-6-sol and gpt-6-luna) when nothing
+  # configures one, and the runtime filter refuses a non-default tier the
+  # assignment does not declare (`503 no_compatible_backend`).
+  @fast_tier %{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"}
+  @provider_service_tiers Map.new(["gpt-6-sol", "gpt-6-luna"], fn id ->
+                            {id, %{"service_tiers" => [@fast_tier], "default_service_tier" => nil, "additional_speed_tiers" => ["fast"]}}
+                          end)
+
   @type provisioned :: %{
           required(:text) => Model.t(),
           required(:alternate_text) => Model.t(),
@@ -174,6 +184,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
       "supports_tools" => tools?
     }
     |> maybe_put_reasoning_metadata(reasoning?)
+    |> Map.merge(Map.get(@provider_service_tiers, id, %{}))
   end
 
   defp maybe_put_reasoning_metadata(metadata, true) do
