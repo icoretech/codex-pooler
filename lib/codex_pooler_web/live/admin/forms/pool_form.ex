@@ -261,6 +261,11 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
 
   def status_options, do: Enum.map(@pool_statuses, &{status_label(&1), &1})
 
+  # The editor opens only an active Pool; an inactive one is reactivated from
+  # its card menu first (findings#206 row 206-318).
+  def edit_title(%{status: "active"}), do: "Edit Pool"
+  def edit_title(_pool), do: "Reactivate the Pool before editing"
+
   def delete_title(%{status: "archived"}), do: "Delete archived Pool"
   def delete_title(_pool), do: "Archive the Pool before hard deletion"
 

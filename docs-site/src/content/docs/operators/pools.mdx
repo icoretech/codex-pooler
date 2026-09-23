@@ -91,11 +91,11 @@ The lifecycle states are:
     </tr>
     <tr>
       <td>Disabled</td>
-      <td>The Pool stays configured and visible for operations, but should not admit new runtime work.</td>
+      <td>The Pool stays configured and visible for operations, but should not admit new runtime work. <code>Reactivate</code> in the card menu makes it active again.</td>
     </tr>
     <tr>
       <td>Archived</td>
-      <td>The Pool is kept for historical reporting and cleanup. Hard deletion is only available after archive.</td>
+      <td>The Pool is kept for historical reporting and cleanup. Hard deletion is only available after archive. <code>Reactivate</code> in the card menu makes it active again; admin Pool assignments that archiving revoked stay revoked.</td>
     </tr>
   </tbody>
 </table>
@@ -173,7 +173,11 @@ The current actions are:
     </tr>
     <tr>
       <td>Edit</td>
-      <td>Opens the Pool configuration dialog for lifecycle, routing, upstream assignments, and API key assignments.</td>
+      <td>Opens the Pool configuration dialog for lifecycle, routing, upstream assignments, and API key assignments. Available for an active Pool; reactivate a disabled or archived Pool first.</td>
+    </tr>
+    <tr>
+      <td>Reactivate</td>
+      <td>Shown for a disabled or archived Pool. Makes the Pool active again, so its API keys can admit new runtime work, and records a Pool status audit event. Admin Pool assignments that archiving revoked are not restored; assign them again from the Operators page.</td>
     </tr>
     <tr>
       <td>Delete</td>
@@ -288,7 +292,7 @@ An assigned instance admin sees a separate `Models` action for an assigned activ
 
 ![Edit Pool details step](/operators/pools/pools-edit-dialog-details.png)
 
-The edit Details step includes the Pool name and lifecycle status. Status is the safest way to retire or pause a Pool without deleting historical metadata.
+The edit Details step includes the Pool name and lifecycle status. Status is the safest way to retire or pause a Pool without deleting historical metadata. The dialog edits active Pools only: to bring back a disabled or archived Pool, use `Reactivate` from its card menu, then edit it.
 
 ![Edit Pool routing step](/operators/pools/pools-edit-dialog-routing.png)
 

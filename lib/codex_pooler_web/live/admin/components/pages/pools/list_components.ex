@@ -702,6 +702,18 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             label="Edit"
             phx-click="edit_pool"
             phx-value-id={@pool_row.pool.id}
+            disabled={@pool_row.pool.status != "active"}
+            title={PoolForm.edit_title(@pool_row.pool)}
+          />
+        </li>
+        <li :if={@can_manage_pools? && @pool_row.pool.status != "active"}>
+          <AdminComponents.dropdown_action_item
+            id={"reactivate-pool-#{@pool_row.pool.id}"}
+            icon="hero-play"
+            label="Reactivate"
+            variant={:positive}
+            phx-click="reactivate_pool"
+            phx-value-id={@pool_row.pool.id}
           />
         </li>
         <li :if={!@can_manage_pools? && @can_operate_pools?}>

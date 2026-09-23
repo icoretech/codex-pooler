@@ -400,6 +400,34 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     end
   end
 
+  # A disabled or archived Pool is restored to active from its card; the
+  # editor opens only active Pools (findings#206 row 206-318). The status
+  # change is owner-only, audited, and invalidates the notification centers
+  # inside `Pools.change_pool_status/3`. The Pool is re-read first, so a card
+  # that is behind another owner's reactivation changes nothing.
+  def handle_event("reactivate_pool", %{"id" => pool_id}, socket) do
+    with :ok <- ensure_can_manage_pools(socket),
+         %{} = listed_pool <- find_pool(socket, pool_id),
+         :ok <- ensure_inactive_pool(Pools.get_pool(listed_pool.id)),
+         {:ok, _pool} <- Pools.change_pool_status(socket.assigns.current_scope, listed_pool.id, "active") do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Pool reactivated")
+       |> clear_pool_traffic_refresh()
+       |> load_structural()
+       |> start_pool_traffic_load()}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "Pool was not found")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, error_message(reason))
+         |> load_structural()}
+    end
+  end
+
   def handle_event("filter_pools", %{"pool_filters" => filter_params}, socket) do
     filters = PoolForm.filter(filter_params)
 
@@ -1134,6 +1162,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       {:error, %{message: "Pool management is not available for this session"}}
     end
   end
+
+  defp ensure_inactive_pool(%{status: status}) when status in ["disabled", "archived"], do: :ok
+  defp ensure_inactive_pool(%{status: "active"}), do: {:error, %{message: "Pool is already active"}}
+  defp ensure_inactive_pool(nil), do: {:error, %{message: "Pool was not found"}}
 
   defp ensure_can_operate_pool(socket, pool) do
     case Pools.require_capability(
