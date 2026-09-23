@@ -45,7 +45,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
+      registry = Keyword.get(opts, :registry, CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry)
+
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {registry, key}})
     end
 
     @impl GenServer
@@ -103,7 +105,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
+      registry = Keyword.get(opts, :registry, CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry)
+
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {registry, key}})
     end
 
     @impl GenServer
@@ -265,7 +269,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
+      registry = Keyword.get(opts, :registry, CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry)
+
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {registry, key}})
     end
 
     @spec complete_turn(pid()) :: :ok
@@ -336,7 +342,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
+      registry = Keyword.get(opts, :registry, CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry)
+
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {registry, key}})
     end
 
     @impl GenServer
@@ -405,7 +413,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
+      registry = Keyword.get(opts, :registry, CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry)
+
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {registry, key}})
     end
 
     @impl GenServer
@@ -622,6 +632,19 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     end
   end
 
+  # A drain enumerates every owner in its owner registry, and the application one also holds the
+  # owners of whatever test ran before (findings#206 row 206-375: a leaked pair turned a single
+  # failing probe owner into `owners_seen: 3`). A test whose owners are probe owners starts its own
+  # registry here, starts them with `registry:` and hands it to the harness as `owner_registry:`,
+  # so its drain counts only its own owners. Real `WebsocketOwnerSession`s always register in the
+  # application registry.
+  @spec start_owner_registry!() :: atom()
+  def start_owner_registry! do
+    registry = :"rollout-drain-owners-#{System.unique_integer([:positive])}"
+    ExUnit.Callbacks.start_supervised!({Registry, keys: :unique, name: registry})
+    registry
+  end
+
   @spec start_rollout_drain_harness(pid(), keyword()) :: %{
           activity_registry: atom(),
           deadline: pid(),
@@ -647,7 +670,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
         name: drain_name,
         activity_registry: activity_registry,
         stream_registry: stream_registry
-      ] ++ tracked_deadline_options(deadline, worker_tracker)
+      ] ++ Keyword.take(opts, [:owner_registry]) ++ tracked_deadline_options(deadline, worker_tracker)
 
     {RolloutDrain, start_opts}
     |> Supervisor.child_spec(id: {RolloutDrain, drain_name})

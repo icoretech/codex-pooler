@@ -63,6 +63,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           | {:deadline_floor_ms, non_neg_integer()}
           | {:activity_registry, GenServer.server()}
           | {:stream_registry, GenServer.server()}
+          | {:owner_registry, Registry.registry()}
           | {:owner_post_deadline_call_budget_ms, pos_integer()}
           | {:relay, GenServer.server()}
 
@@ -134,6 +135,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   def init(opts) do
     activity_registry = Keyword.get(opts, :activity_registry, ActivityRegistry)
     stream_registry = Keyword.get(opts, :stream_registry, DeferredStreamRegistry)
+    # The registry whose local owners a drain enumerates. Only a test passes its own, so owners
+    # another test leaves in the application registry cannot join its drain.
+    owner_registry = Keyword.get(opts, :owner_registry, @registry)
 
     {:ok,
      %{
@@ -145,6 +149,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
        drain_policy: drain_policy(opts),
        activity_registry: activity_registry,
        stream_registry: stream_registry,
+       owner_registry: owner_registry,
        relay: Keyword.get(opts, :relay, RelayRuntime)
      }}
   end
@@ -212,19 +217,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           pos_integer(),
           boolean(),
           map(),
-          GenServer.server(),
+          {GenServer.server(), Registry.registry()},
           {GenServer.server(), reference(), integer()}
         ) :: summary()
   defp drain_local_work(
          timeout_ms,
          already_draining?,
          drain_policy,
-         activity_registry,
+         {activity_registry, owner_registry},
          {stream_registry, stream_drain_epoch, deadline_ms}
        ) do
     started_at = System.monotonic_time(:millisecond)
     {drain_epoch, activities} = ActivityRegistry.begin_drain(name: activity_registry)
-    owners = local_owner_sessions()
+    owners = local_owner_sessions(owner_registry)
 
     work =
       Enum.map(owners, &{:owner, &1}) ++
@@ -286,8 +291,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     }
   end
 
-  defp local_owner_sessions do
-    Registry.select(@registry, [{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
+  defp local_owner_sessions(owner_registry) do
+    Registry.select(owner_registry, [{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
     |> Enum.filter(fn {_key, owner} -> is_pid(owner) and Process.alive?(owner) end)
   end
 
@@ -529,7 +534,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
             timeout_ms,
             already_draining?,
             drain_policy,
-            state.activity_registry,
+            {state.activity_registry, state.owner_registry},
             {state.stream_registry, stream_epoch, deadline_ms}
           )
 

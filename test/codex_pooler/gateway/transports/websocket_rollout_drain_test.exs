@@ -32,6 +32,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   # outcome.
   @drain_timeout_ms 1_000
   @await_timeout_ms 10_000
+  @owner_registry_key {__MODULE__, :owner_registry}
 
   setup do
     previous_config = Application.get_env(:codex_pooler, RolloutDrain)
@@ -45,7 +46,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     # HTTP SSE stream through the global registry.
     start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
-    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry})
+    # Every drain and probe owner here uses this test's own owner registry: the application one also
+    # holds any owner an earlier test left running, and a drain counts every owner it enumerates
+    # (findings#206 row 206-375, Drone 1531: a leaked pair made one failing owner `owners_seen: 3`).
+    owner_registry = start_owner_registry!()
+    Process.put(@owner_registry_key, owner_registry)
+
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry, owner_registry: owner_registry})
 
     on_exit(fn ->
       if previous_config do
@@ -60,8 +67,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     {:ok, activity_registry: activity_registry, drain_name: drain_name, stream_registry: stream_registry}
   end
 
-  test "flips the app drain flag and drains local owner sessions with a compact summary",
-       %{drain_name: drain_name} do
+  # Real `WebsocketOwnerSession`s register only in the application registry, so this drain reads it.
+  test "flips the app drain flag and drains local owner sessions with a compact summary" do
+    drain_name = :"rollout-drain-application-owners-#{System.unique_integer([:positive])}"
+    start_isolated_rollout_drain!(drain_name, owner_registry: WebsocketOwnerSession.Registry)
     first_context = owner_context()
     second_context = owner_context()
 
@@ -109,7 +118,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     first_key = owner_key()
     second_key = owner_key()
 
-    first_owner = start_supervised!({DrainProbeOwner, key: first_key, parent: self()})
+    first_owner = start_probe_owner!({DrainProbeOwner, key: first_key, parent: self()})
 
     first_task =
       Task.async(fn ->
@@ -145,7 +154,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
            } = Task.await(second_task, @await_timeout_ms)
 
     second_owner =
-      start_supervised!({DrainProbeOwner, key: second_key, parent: self()})
+      start_probe_owner!({DrainProbeOwner, key: second_key, parent: self()})
 
     repeated_task =
       Task.async(fn ->
@@ -167,7 +176,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   test "isolated harness joins its unlinked drain worker before supervised teardown" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
 
     assert %{result: :ok, owners_seen: 0} =
              RolloutDrain.start_drain(
@@ -181,7 +190,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   test "harness deadline tracking records the calling worker rather than the tracker" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     %{drain_policy: policy} = :sys.get_state(harness.name)
     parent = self()
 
@@ -213,7 +222,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     System.put_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS", "750")
 
     owner_key = owner_key()
-    owner = start_supervised!({DrainProbeOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({DrainProbeOwner, key: owner_key, parent: self()})
 
     first_task = Task.async(fn -> RolloutDrain.drain_for_shutdown() end)
 
@@ -255,7 +264,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     # cost the suite a second of pure waiting. The assertions below hold
     # whichever of the two elapses first.
     _owner =
-      start_supervised!({DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 250})
+      start_probe_owner!({DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 250})
 
     first_summary = RolloutDrain.drain_for_shutdown()
 
@@ -278,7 +287,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     survivor_key = owner_key()
 
     _survivor =
-      start_supervised!({DrainProbeOwner, key: survivor_key, parent: self(), release_timeout_ms: 1_000})
+      start_probe_owner!({DrainProbeOwner, key: survivor_key, parent: self(), release_timeout_ms: 1_000})
 
     second_summary = RolloutDrain.drain_for_shutdown()
 
@@ -312,7 +321,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   test "owner post-deadline call budget defaults to two owner calls and stays per server",
        %{drain_name: drain_name} do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     default_budget_ms = WebsocketOwnerContract.default_owner_call_timeout_ms() * 2
 
     assert %{
@@ -374,7 +383,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     System.put_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS", "750")
 
     owner_key = owner_key()
-    owner = start_supervised!({DrainProbeOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({DrainProbeOwner, key: owner_key, parent: self()})
 
     prep_stop_task = Task.async(fn -> CodexPooler.Application.prep_stop(:shutdown_state) end)
 
@@ -395,7 +404,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     owner_key = owner_key()
 
     owner =
-      start_supervised!({ActiveShutdownProbeOwner, key: owner_key, parent: self()})
+      start_probe_owner!({ActiveShutdownProbeOwner, key: owner_key, parent: self()})
 
     first_task = Task.async(fn -> RolloutDrain.drain_for_shutdown() end)
 
@@ -424,10 +433,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   test "T1 drain waits for an active turn terminal before stopping its owner", %{
     drain_name: _drain_name
   } do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     deadline = harness.deadline
     owner_key = owner_key()
-    owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
     owner_ref = Process.monitor(owner)
 
     drain_task =
@@ -459,9 +468,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   test "an active local owner turn contributes exactly one owner-derived completed turn" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     owner_key = owner_key()
-    owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
 
     drain_task =
       Task.async(fn ->
@@ -485,7 +494,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   test "drain waits for a registered direct response task and counts its completion" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     parent = self()
 
     {:ok, response_task} =
@@ -531,7 +540,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   test "drain deadline cancels a registered proxy task once and counts one abort" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     parent = self()
 
     {:ok, response_task} =
@@ -591,7 +600,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   test "a restarted rollout coordinator re-enumerates the registry's active proxy task" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     parent = self()
 
     {:ok, response_task} =
@@ -645,10 +654,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   @tag :rollout_drain_t2
   test "T2 injectable deadline clamps a tiny budget and preserves exact abort fallback" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     deadline = harness.deadline
     owner_key = owner_key()
-    owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
     owner_ref = Process.monitor(owner)
 
     drain_task =
@@ -683,13 +692,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   @tag :rollout_drain_t4
   test "T4 joined shutdown drains share one active-turn wait and one abort decision" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     deadline = harness.deadline
     configure_rollout_drain_server(harness.name)
     System.put_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS", "240")
 
     owner_key = owner_key()
-    owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
 
     first_task = Task.async(fn -> RolloutDrain.drain_for_shutdown() end)
     assert_receive {:rollout_drain_begin_wait, ^owner_key, 1}
@@ -712,9 +721,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   @tag :rollout_drain_t5
   test "T5 client disconnect wins during rollout wait without blocking socket cleanup" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     owner_key = owner_key()
-    owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
     owner_ref = Process.monitor(owner)
 
     drain_task =
@@ -743,9 +752,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   test "tiny deadline reserves the final owner status and near-timeout drain calls" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     owner_key = owner_key()
-    owner = start_supervised!({SlowFinalStatusOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({SlowFinalStatusOwner, key: owner_key, parent: self()})
 
     drain_task =
       Task.async(fn ->
@@ -778,9 +787,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   @tag :rollout_drain_cleanup_budget
   @tag slow: "proves the real post-deadline owner shutdown budget"
   test "harness budget leaves room for a normal post-deadline owner shutdown" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     owner_key = owner_key()
-    owner = start_supervised!({DrainProbeOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({DrainProbeOwner, key: owner_key, parent: self()})
     started_at = System.monotonic_time(:millisecond)
 
     drain_task =
@@ -820,9 +829,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   @task_timeout_min_elapsed_ms 600
 
   test "task timeout leaves no hung deadline waiter process" do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     owner_key = owner_key()
-    _owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    _owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
 
     started_at = System.monotonic_time(:millisecond)
 
@@ -938,7 +947,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     start_isolated_rollout_drain!(drain_name, deadline: deadline)
 
     owner_key = owner_key()
-    _owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    _owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
 
     assert %{owners_failed: 1, owners_drained: 0} =
              RolloutDrain.start_drain(name: drain_name, timeout_ms: 500, deadline: deadline)
@@ -948,9 +957,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   defp assert_waiting_owner_failure(failure) do
-    harness = start_rollout_drain_harness(self())
+    harness = start_own_rollout_drain_harness()
     owner_key = owner_key()
-    owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+    owner = start_probe_owner!({WaitingOwner, key: owner_key, parent: self()})
     owner_ref = Process.monitor(owner)
 
     drain_task =
@@ -1000,7 +1009,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     )
 
     key = owner_key()
-    owner = start_supervised!({UnresponsiveOwner, [key: key, parent: self()] ++ opts})
+    owner = start_probe_owner!({UnresponsiveOwner, [key: key, parent: self()] ++ opts})
 
     %{drain: drain_name, key: key, owner: owner, ref: Process.monitor(owner)}
   end
@@ -1050,8 +1059,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     {RolloutDrain,
      [name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry] ++
-       opts}
+       Keyword.put_new(opts, :owner_registry, own_owner_registry())}
     |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
     |> start_supervised!()
+  end
+
+  defp start_probe_owner!({module, opts}) do
+    start_supervised!({module, Keyword.put(opts, :registry, own_owner_registry())})
+  end
+
+  defp start_own_rollout_drain_harness do
+    start_rollout_drain_harness(self(), owner_registry: own_owner_registry())
+  end
+
+  # Set by `setup` in the test process, which is the process that runs every test body here.
+  defp own_owner_registry do
+    case Process.get(@owner_registry_key) do
+      registry when is_atom(registry) and not is_nil(registry) -> registry
+      nil -> raise "the owner registry is started by this module's setup"
+    end
   end
 end
