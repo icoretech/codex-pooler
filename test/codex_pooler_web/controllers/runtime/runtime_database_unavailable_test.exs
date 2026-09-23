@@ -5,8 +5,9 @@ defmodule CodexPoolerWeb.Runtime.RuntimeDatabaseUnavailableTest do
   # PostgreSQL restart (authentication is the first query of every runtime
   # request) and behind a migration's table locks (the reservation transaction).
   # Both now answer a retryable 503 that names no database detail
-  # (findings#206 row 206-358). One node, HTTP; the websocket upgrade is refused
-  # by the same authentication before it happens.
+  # (findings#206 row 206-358), and so does a failure while the request is
+  # prepared (findings#206 row 206-368). One node, HTTP; the websocket upgrade is
+  # refused by the same authentication before it happens.
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
@@ -18,6 +19,7 @@ defmodule CodexPoolerWeb.Runtime.RuntimeDatabaseUnavailableTest do
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
+  alias CodexPooler.UnavailableRepo
 
   @unavailable_body %{
     "error" => %{
@@ -32,7 +34,7 @@ defmodule CodexPoolerWeb.Runtime.RuntimeDatabaseUnavailableTest do
     setup do
       upstream = start_upstream(FakeUpstream.json_response(%{}))
       setup = gateway_setup(upstream)
-      unavailable = hold_unavailable_repo!()
+      unavailable = UnavailableRepo.hold!(:runtime_database_unavailable_repo)
       %{setup: setup, upstream: upstream, unavailable: unavailable}
     end
 
@@ -108,6 +110,32 @@ defmodule CodexPoolerWeb.Runtime.RuntimeDatabaseUnavailableTest do
     assert Repo.aggregate(from(l in LedgerEntry, where: l.pool_id == ^setup.pool.id), :count) == 0
   end
 
+  # The HTTP session start is the preparation's first write. A shutdown there
+  # already answers `503 owner_unavailable` (`SessionContinuity`); any other
+  # transient failure, here a statement the server cancelled, used to escape the
+  # preparation as a 500 (findings#206 row 206-368).
+  test "a session start cancelled by the database answers a retryable 503 before anything is reserved", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{}))
+    setup = gateway_setup(upstream)
+
+    Repo.query!("CREATE FUNCTION pg_temp.p80_session_cancel() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'canceling statement due to statement timeout' USING ERRCODE = 'query_canceled'; END $$")
+    Repo.query!("CREATE TRIGGER p80_session_cancel BEFORE INSERT ON codex_sessions FOR EACH ROW EXECUTE FUNCTION pg_temp.p80_session_cancel()")
+
+    {response, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        conn
+        |> auth(setup)
+        |> put_req_header("session-id", Ecto.UUID.generate())
+        |> post("/backend-api/codex/responses", %{"model" => setup.model.exposed_model_id, "input" => native_text_input("hello"), "stream" => true})
+      end)
+
+    assert_unavailable!(response, log, "pre_dispatch", "postgres_query_canceled")
+    refute log =~ "statement timeout"
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.pool_id == ^setup.pool.id), :count) == 0
+  end
+
   defp assert_unavailable!(response, log, stage, reason_class \\ "DBConnection.ConnectionError") do
     fixture = CompatibilityMatrix.fixture!(:database_unavailable)
     assert stage in Enum.map(fixture.stages, &Atom.to_string/1)
@@ -119,61 +147,8 @@ defmodule CodexPoolerWeb.Runtime.RuntimeDatabaseUnavailableTest do
     refute log =~ "administrator command"
   end
 
-  # All database calls the request makes in this process go to a second Repo
-  # instance outside the sandbox, whose only connection a task holds and whose
-  # queue drops a waiter after a few milliseconds: the same
-  # `DBConnection.ConnectionError` a production pool raises when PostgreSQL is
-  # restarting or stalled ("connection not available and request was dropped
-  # from queue").
-  defp request_on_unavailable_repo(%{unavailable: %{repo: repo} = unavailable}, request) do
-    previous = Repo.put_dynamic_repo(repo)
-
-    try do
-      ExUnit.CaptureLog.with_log(request)
-    after
-      Repo.put_dynamic_repo(previous)
-      release_unavailable_repo!(unavailable)
-    end
-  end
-
-  defp release_unavailable_repo!(%{holder: holder, release_ref: release_ref}) do
-    send(holder.pid, {:release_unavailable_repo, release_ref})
-    assert Task.await(holder, 15_000) == :released
-  end
-
-  defp hold_unavailable_repo! do
-    repo = start_supervised!({Repo, name: nil, pool: DBConnection.ConnectionPool, pool_size: 1, queue_target: 1, queue_interval: 10}, id: :runtime_database_unavailable_repo)
-    test_pid = self()
-    release_ref = make_ref()
-
-    holder =
-      Task.async(fn ->
-        _previous = Repo.put_dynamic_repo(repo)
-        hold_only_connection(test_pid, release_ref, System.monotonic_time(:millisecond) + 15_000)
-      end)
-
-    assert_receive {:unavailable_repo_held, ^release_ref}, 15_000
-    %{repo: repo, holder: holder, release_ref: release_ref}
-  end
-
-  # The pool's only connection may still be connecting when the holder asks for
-  # it, and the queue that drops the request's checkout drops the holder's too
-  # until the connection is up; retry against a bounded deadline.
-  defp hold_only_connection(test_pid, release_ref, deadline) do
-    Repo.checkout(fn ->
-      send(test_pid, {:unavailable_repo_held, release_ref})
-
-      receive do
-        {:release_unavailable_repo, ^release_ref} -> :released
-      end
-    end)
-  rescue
-    error in DBConnection.ConnectionError ->
-      if System.monotonic_time(:millisecond) < deadline do
-        Process.sleep(10)
-        hold_only_connection(test_pid, release_ref, deadline)
-      else
-        reraise error, __STACKTRACE__
-      end
-  end
+  # All database calls the request makes in this process go to
+  # `CodexPooler.UnavailableRepo`, whose queue drops them.
+  defp request_on_unavailable_repo(%{unavailable: unavailable}, request),
+    do: UnavailableRepo.run(unavailable, fn -> ExUnit.CaptureLog.with_log(request) end)
 end

@@ -399,25 +399,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          visible_model_data,
          validation
        ) do
-    case PreDispatch.prepare(
-           auth,
-           endpoint,
-           payload,
-           request_options,
-           model,
-           visible_model_data,
-           validation
-         ) do
+    case before_dispatch("pre_dispatch", fn -> PreDispatch.prepare(auth, endpoint, payload, request_options, model, visible_model_data, validation) end) do
       {:ok, prepared} ->
-        case claim_explicit_websocket_turn(
-               auth,
-               model,
-               payload,
-               endpoint,
-               prepared.request_options,
-               prepared.route_state,
-               runtime_admission_proof(validation)
-             ) do
+        case claim_prepared_turn(auth, model, payload, endpoint, prepared, validation) do
           {:ok, turn_claim, authorized_correlation_id} ->
             execute_session_routable_model(%{
               auth: auth,
@@ -434,11 +418,19 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           {:error, %{code: :duplicate_request} = reason} ->
             websocket_turn_claim_duplicate(prepared.request_options, reason)
 
+          # The claim rolled back; an admitted compaction must not keep the
+          # owner waiting for a turn that will not run.
+          {:error, %{code: "service_unavailable"} = reason} ->
+            clear_native_compaction_admission(prepared.request_options)
+            {:error, reason}
+
           {:error, reason} ->
             {:error, reason}
         end
 
-      {:error, %{code: "duplicate_turn"} = reason} ->
+      # Not recorded as a denied request: the record needs the database that
+      # just failed (findings#206 row 206-368).
+      {:error, %{code: code} = reason} when code in ["duplicate_turn", "service_unavailable"] ->
         {:error, reason}
 
       {:error, %{code: "unsupported_parameter", param: "mask"} = reason} ->
@@ -447,6 +439,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:error, %{code: _code} = reason} ->
         log_gateway_denial(denial_context(auth, model, reason, endpoint, payload, request_options))
     end
+  end
+
+  defp claim_prepared_turn(auth, model, payload, endpoint, prepared, validation) do
+    before_dispatch("turn_claim", fn ->
+      claim_explicit_websocket_turn(auth, model, payload, endpoint, prepared.request_options, prepared.route_state, runtime_admission_proof(validation))
+    end)
   end
 
   defp native_replay_execution?(
@@ -762,7 +760,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   def prepare_replay_intent(auth, %PreparedWebsocketFrame{} = prepared) do
     with :ok <- validate_replay_prepared_frame(prepared),
          {:ok, replay_context} <- replay_preflight_context(auth, prepared) do
-      prepare_replay_intent_transaction(replay_context)
+      before_dispatch("replay_intent", fn -> prepare_replay_intent_transaction(replay_context) end)
     end
   end
 
@@ -2285,12 +2283,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       clear_native_compaction_admission(request_options)
       cancel_compaction_retry_hold(request_options)
 
-      if TransientDatabaseError.transient?(error) do
-        Logger.warning("runtime request refused before dispatch stage=reservation reason_class=#{TransientDatabaseError.reason_class(error)}")
-        {:error, Contracts.database_unavailable_error()}
-      else
-        reraise(error, __STACKTRACE__)
-      end
+      if TransientDatabaseError.transient?(error),
+        do: database_unavailable("reservation", error),
+        else: reraise(error, __STACKTRACE__)
 
     error ->
       clear_native_compaction_admission(request_options)
@@ -2301,6 +2296,29 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       clear_native_compaction_admission(request_options)
       cancel_compaction_retry_hold(request_options)
       :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
+  # Work that meets a transient database failure (`TransientDatabaseError`)
+  # before anything was reserved or sent upstream answers the retryable 503 of
+  # `Contracts.database_unavailable_error/0` instead of raising: over HTTP the
+  # exception rendered a 500, and a websocket turn's response task ended as
+  # `websocket_response_task_failed` (`owner_task_exception`). The reservation
+  # transaction (`transact_reserved_turn/8`, which also holds the retry
+  # successor claims) has its own rescue; this one bounds the preparation, the
+  # websocket turn claim and the replay intent read. Any other database error
+  # still raises (findings#206 rows 206-358 and 206-368).
+  defp before_dispatch(stage, fun) do
+    fun.()
+  rescue
+    error in [DBConnection.ConnectionError, Postgrex.Error] ->
+      if TransientDatabaseError.transient?(error),
+        do: database_unavailable(stage, error),
+        else: reraise(error, __STACKTRACE__)
+  end
+
+  defp database_unavailable(stage, error) do
+    Logger.warning("runtime request refused before dispatch stage=#{stage} reason_class=#{TransientDatabaseError.reason_class(error)}")
+    {:error, Contracts.database_unavailable_error()}
   end
 
   defp reserve_turn_transaction(

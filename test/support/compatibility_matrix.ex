@@ -674,7 +674,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       future_routes: [],
       fixture: :database_unavailable,
-      contract: "a transient database failure (unreachable or stalled pool, PostgreSQL connection, shutdown, start-up, resource or cancellation condition) during runtime authentication or inside the reservation transaction answers a retryable 503 service_unavailable with a server_error type and no database detail, records no denied request, reserves nothing and sends nothing upstream"
+      contract: "a transient database failure (unreachable or stalled pool, PostgreSQL connection, shutdown, start-up, resource or cancellation condition) during runtime authentication, request preparation, the websocket turn claim, the websocket replay intent read or inside the reservation transaction (retry successor claims included) answers a retryable 503 service_unavailable with a server_error type and no database detail (an error event on the websocket), records no denied request, reserves nothing and sends nothing upstream"
     },
     %{
       slug: :degraded_routing,
@@ -2587,7 +2587,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       status: 503,
       error_code: "service_unavailable",
       error_type: "server_error",
-      stages: [:authentication, :reservation],
+      stages: [:authentication, :pre_dispatch, :turn_claim, :replay_intent, :reservation],
       upstream_dispatch: false,
       reservation: false,
       denied_request_record: false

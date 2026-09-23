@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Transports.CompactionRetryOwnerCompatibilityTest d
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.DirectCleanup
+  alias CodexPooler.UnavailableRepo
 
   @moduletag capture_log: true
   @detection_timeout_ms 15_000
@@ -392,6 +393,73 @@ defmodule CodexPooler.Gateway.Transports.CompactionRetryOwnerCompatibilityTest d
     assert envelope.compaction_retry_submit_hold == hold
     assert [link] = Repo.all(RequestClientRetryLink)
     assert link.predecessor_request_id == predecessor.id
+  end
+
+  # The successor claim of a full-history compaction retry runs inside the
+  # reservation transaction, so a database that stopped answering there gets
+  # the reservation's retryable 503 (findings#206 rows 206-358 and 206-368):
+  # nothing is claimed, the owner's submit hold is released and nothing is sent.
+  test "a compaction retry whose successor claim meets a database shutdown answers a retryable 503 and claims nothing" do
+    upstream = start_upstream(FakeUpstream.websocket_sse_then_close([]))
+    setup = gateway_setup(upstream, compact?: true)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    assert {:ok, session} = Websocket.start_codex_session(auth, %{owner_instance_id: "owner@app.example"})
+
+    payload = payload(setup)
+
+    assert {:ok, prepared} =
+             Service.prepare_websocket_response(payload, options(session, payload, CompatibleOwner) |> RequestOptions.capture_api_key_runtime_epoch(auth), fn _ -> :ok end)
+
+    predecessor = failed_predecessor!(setup, auth, session, prepared.request_options)
+    prepared = admit_retry!(auth, session, prepared)
+    before = counts()
+
+    # PostgreSQL ends in-flight statements with `57P01 admin_shutdown` when the
+    # instance stops; only a successor claim writes a retry link.
+    Repo.query!("CREATE FUNCTION pg_temp.p80_successor_shutdown() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'terminating connection due to administrator command' USING ERRCODE = 'admin_shutdown'; END $$")
+    Repo.query!("CREATE TRIGGER p80_successor_shutdown BEFORE INSERT ON request_client_retry_links FOR EACH ROW EXECUTE FUNCTION pg_temp.p80_successor_shutdown()")
+
+    {result, log} = ExUnit.CaptureLog.with_log(fn -> Service.execute_prepared_websocket_response(auth, prepared, true) end)
+
+    assert {:error, %{status: 503, code: "service_unavailable"}} = result
+    assert log =~ "runtime request refused before dispatch stage=reservation reason_class=postgres_admin_shutdown"
+    refute log =~ "administrator command"
+    assert_received {:compatible_owner_hold, _hold}
+    refute_received {:compatible_owner_submission, _args}
+    assert FakeUpstream.count(upstream) == 0
+    assert counts() == before
+    assert Repo.get!(Request, predecessor.id).status == "failed"
+  end
+
+  # The replay intent is the resend's first read, on the socket before any
+  # claim. A database that cannot be reached there answers the retryable 503
+  # instead of raising out of the socket (findings#206 row 206-368).
+  test "a replay intent read that cannot reach the database answers a retryable 503" do
+    upstream = start_upstream(FakeUpstream.websocket_sse_then_close([]))
+    setup = gateway_setup(upstream, compact?: true)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    assert {:ok, session} = Websocket.start_codex_session(auth, %{owner_instance_id: "owner@app.example"})
+
+    payload = payload(setup)
+
+    assert {:ok, prepared} =
+             Service.prepare_websocket_response(payload, options(session, payload, CompatibleOwner) |> RequestOptions.capture_api_key_runtime_epoch(auth), fn _ -> :ok end)
+
+    _predecessor = failed_predecessor!(setup, auth, session, prepared.request_options)
+    unavailable = UnavailableRepo.hold!(:replay_intent_unavailable_repo)
+
+    {result, log} =
+      UnavailableRepo.run(unavailable, fn ->
+        ExUnit.CaptureLog.with_log(fn -> Service.prepare_replay_intent(auth, prepared) end)
+      end)
+
+    assert {:error, %{status: 503, code: "service_unavailable"}} = result
+    assert log =~ "runtime request refused before dispatch stage=replay_intent reason_class=DBConnection.ConnectionError"
+    refute log =~ ~r/dropped from queue|codex_pooler_test/
+
+    # With the database back, the same frame reaches its intent.
+    assert {:ok, %{intent: :fresh}} = Service.prepare_replay_intent(auth, prepared)
+    assert FakeUpstream.count(upstream) == 0
   end
 
   defp admit_retry!(auth, session, prepared) do
