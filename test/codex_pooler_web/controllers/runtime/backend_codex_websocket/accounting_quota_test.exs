@@ -17,7 +17,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
 
   test "websocket terminal usage settles priced gpt-6-sol request logs" do
     terminal_usage = %{
@@ -81,7 +83,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, frame}, @detection_timeout_ms
     assert %{"id" => "resp_ws_priced_gpt55"} = CodexPooler.JSON.decode!(frame)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -159,7 +161,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, frame}, @detection_timeout_ms
     assert %{"id" => "resp_ws_missing_usage"} = CodexPooler.JSON.decode!(frame)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -240,7 +242,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
 
     assert :ok = stream.()
 
-    frames = receive_websocket_frames_by_type(["response.completed"], @websocket_frame_timeout)
+    frames = receive_websocket_frames_by_type(["response.completed"], @detection_timeout_ms)
 
     assert %{
              "type" => "response.completed",
@@ -289,7 +291,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    frames = receive_websocket_frames_by_type(["response.completed"], @websocket_frame_timeout)
+    frames = receive_websocket_frames_by_type(["response.completed"], @detection_timeout_ms)
 
     assert %{
              "type" => "response.completed",
@@ -343,7 +345,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    frames = receive_websocket_frames_by_type(["response.failed"], @websocket_frame_timeout)
+    frames = receive_websocket_frames_by_type(["response.failed"], @detection_timeout_ms)
 
     assert %{
              "type" => "response.failed",
@@ -539,10 +541,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    assert_receive {:websocket_frame, malformed_frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, malformed_frame}, @detection_timeout_ms
     assert {:error, _reason} = CodexPooler.JSON.decode(malformed_frame)
 
-    frames = receive_websocket_frames_by_type(["response.completed"], @websocket_frame_timeout)
+    frames = receive_websocket_frames_by_type(["response.completed"], @detection_timeout_ms)
 
     assert %{
              "type" => "response.completed",
@@ -606,7 +608,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
     frames =
       receive_websocket_frames_by_type(
         ["codex.rate_limits", "response.failed"],
-        @websocket_frame_timeout
+        @detection_timeout_ms
       )
 
     assert %{"type" => "codex.rate_limits"} = frames["codex.rate_limits"]

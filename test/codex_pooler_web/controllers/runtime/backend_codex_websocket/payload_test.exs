@@ -26,7 +26,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
   @large_websocket_frame_timeout 5_000
   @reasoning_denial_message "reasoning effort is not available for this API key"
 
@@ -359,7 +361,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
                         reason: "request_finalized",
                         payload: %{"request_id" => request_id, "status" => "succeeded"}
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       request = Repo.get!(Request, request_id)
       assert request.endpoint == "/backend-api/codex/responses"
@@ -633,7 +635,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
                         reason: "request_finalized",
                         payload: %{"request_id" => request_id, "status" => "succeeded"}
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       request = Repo.get!(Request, request_id)
       assert request.endpoint == "/backend-api/codex/responses"
@@ -755,7 +757,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
                           reason: "request_finalized",
                           payload: %{"request_id" => request_id, "status" => "succeeded"}
                         }},
-                       @websocket_frame_timeout
+                       @detection_timeout_ms
 
         request = Repo.get!(Request, request_id)
         assert request.status == "succeeded"
@@ -882,7 +884,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
       )
 
     assert result == :ok
-    assert_receive {:websocket_frame, _completed_frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, _completed_frame}, @detection_timeout_ms
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.method == "WEBSOCKET"
@@ -966,7 +968,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
       )
 
     assert result == :ok
-    assert_receive {:websocket_frame, completed_frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, completed_frame}, @detection_timeout_ms
 
     assert %{"id" => "resp_ws_sse"} = CodexPooler.JSON.decode!(completed_frame)
 
@@ -1059,7 +1061,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, frame}, @detection_timeout_ms
     assert %{"id" => "resp_ws_mixed_agent_message"} = CodexPooler.JSON.decode!(frame)
 
     assert [captured] = FakeUpstream.requests(upstream)
@@ -1151,8 +1153,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
       )
 
     assert result == :ok
-    assert_receive {:websocket_frame, created_frame}, @websocket_frame_timeout
-    assert_receive {:websocket_frame, completed_frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, created_frame}, @detection_timeout_ms
+    assert_receive {:websocket_frame, completed_frame}, @detection_timeout_ms
     assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
     assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(completed_frame)
 

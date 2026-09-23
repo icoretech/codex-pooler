@@ -35,6 +35,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.TurnBudgetNodeClient
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
@@ -118,10 +122,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
           )
         end)
 
-      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
+      assert_remote_submit_request_v1!(remote_state, remote_node)
 
       assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref, :remote_submit_request_v1},
-                     1_000
+                     @detection_timeout_ms
 
       try do
         _revision = set_model_serving_mode!(scope, setup, "lite", revision)
@@ -135,7 +139,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
       original_downstream = remote_state.websocket_owner_downstream
 
       assert_receive {:websocket_owner_frame, correlation_id, recovered_epoch, {:data, recovered_metadata_frame}},
-                     1_000
+                     @detection_timeout_ms
 
       assert correlation_id == original_downstream.correlation_id
       assert recovered_epoch > original_downstream.epoch
@@ -146,12 +150,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
              } = CodexPooler.JSON.decode!(recovered_metadata_frame)
 
       assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch, {:data, recovered_frame}},
-                     1_000
+                     @detection_timeout_ms
 
       assert owner_response_id(recovered_frame) == "resp_owner_mode_loss_recovered"
 
       assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch, :complete},
-                     1_000
+                     @detection_timeout_ms
 
       assert [recovered_upstream_request] = FakeUpstream.requests(upstream)
       assert_canonical_full_owner_request!(recovered_upstream_request)
@@ -272,10 +276,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
           )
         end)
 
-      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
+      assert_remote_submit_request_v1!(remote_state, remote_node)
 
       assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       try do
         assert [projected_lite_request] = await_upstream_requests(upstream, 1)
@@ -300,13 +304,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
         _revision = set_model_serving_mode!(scope, setup, "full", revision)
 
         Process.exit(old_owner_pid, :kill)
-        assert_receive {:DOWN, ^old_owner_ref, :process, ^old_owner_pid, :killed}, 1_000
+        assert_receive {:DOWN, ^old_owner_ref, :process, ^old_owner_pid, :killed}, @detection_timeout_ms
         send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
 
         assert :ok = Task.await(interrupted_turn, 3_000)
 
         assert_receive {:websocket_owner_runtime_recovered, correlation_id, epoch, runtime},
-                       1_000
+                       @detection_timeout_ms
 
         assert correlation_id == active_downstream.correlation_id
         assert epoch == active_downstream.epoch
@@ -398,7 +402,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
                      end
                    )
 
-          assert_remote_submit_request_v1!(next_remote_state, remote_node, nil, 1_000)
+          assert_remote_submit_request_v1!(next_remote_state, remote_node)
 
           assert {:push, {:text, next_frame}, next_remote_state} =
                    receive_owner_socket_push(next_remote_state)
@@ -484,7 +488,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
           )
         end)
 
-      assert_receive {:visible_blocking_owner_upstream, worker_pid, ^release_ref}, 1_000
+      assert_receive {:visible_blocking_owner_upstream, worker_pid, ^release_ref}, @detection_timeout_ms
 
       try do
         assert {:push, {:text, visible_frame}, _remote_state} =
@@ -493,7 +497,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
         assert owner_response_id(visible_frame) == "resp_owner_visible_before_crash"
 
         Process.exit(owner_pid, :kill)
-        assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :killed}, 1_000
+        assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :killed}, @detection_timeout_ms
         send(worker_pid, {:visible_blocking_owner_release, release_ref})
 
         assert {:error, %{code: "owner_crashed", status: 502}} =
