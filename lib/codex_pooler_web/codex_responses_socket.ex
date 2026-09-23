@@ -1445,6 +1445,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           |> maybe_mark_public_turn_output_committed(data)
           |> count_public_downstream_frame(data)
           |> record_public_downstream_terminal(DeliveryReceipt.terminal_class(data))
+          |> maybe_mark_public_completed_terminal(data)
 
         {:push, {:text, normalized}, state}
 
@@ -3736,6 +3737,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp record_public_downstream_terminal(state, class),
     do: record_downstream_terminal(state, Map.get(state, :public_response_task_pid), class)
 
+  # The public route's own record that the client was sent its turn's
+  # `response.completed`: an SDK closes the moment that terminal arrives, while
+  # the turn's task is still settling, and the receipt of that turn used to say
+  # `aborted` (findings#225 row 225-240, openai-node `ResponsesWS`). It feeds
+  # only the termination receipt (`termination_receipt_outcome/3`), never the
+  # task's acknowledgement, which keeps reading
+  # `response_task_completed_terminals` (row 225-130 changed only the receipt).
+  defp maybe_mark_public_completed_terminal(state, data) do
+    pid = Map.get(state, :public_response_task_pid)
+
+    if is_pid(pid) and DeliveryReceipt.terminal_class(data) == "response.completed",
+      do: Map.update(state, :public_completed_terminals, MapSet.new([pid]), &MapSet.put(&1, pid)),
+      else: state
+  end
+
+  defp forget_public_completed_terminal(%{public_completed_terminals: pids} = state, pid),
+    do: %{state | public_completed_terminals: MapSet.delete(pids, pid)}
+
+  defp forget_public_completed_terminal(state, _pid), do: state
+
   defp maybe_record_skipped_downstream_terminal(state, pid, data) when is_pid(pid) do
     with true <- tracked_response_task?(state, pid),
          class when is_binary(class) <- DeliveryReceipt.terminal_class(data) do
@@ -3859,6 +3880,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> Map.update(:response_task_results_ready, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_terminals_accepted, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_completed_terminals, MapSet.new(), &MapSet.delete(&1, pid))
+        |> forget_public_completed_terminal(pid)
         |> clear_downstream_delivery_evidence(pid)
         |> do_remove_tracked_response_task(pid)
         |> remove_native_turn_output(pid)
@@ -3944,9 +3966,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # terminal, the receipt is `delivered` even though the acknowledgement is
   # not (findings#225 row 225-130). Only the receipt changes.
   defp termination_receipt_outcome(state, pid, :aborted) do
-    if MapSet.member?(Map.get(state, :response_task_completed_terminals, MapSet.new()), pid),
-      do: :delivered,
-      else: :aborted
+    if MapSet.member?(Map.get(state, :response_task_completed_terminals, MapSet.new()), pid) or
+         MapSet.member?(Map.get(state, :public_completed_terminals, MapSet.new()), pid),
+       do: :delivered,
+       else: :aborted
   end
 
   defp termination_receipt_outcome(_state, _pid, outcome), do: outcome
