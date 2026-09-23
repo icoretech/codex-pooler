@@ -275,6 +275,41 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
     end
   end
 
+  # provenance: observed findings#232 row 232-275 live probe (ChatGPT Codex
+  # backend, HTTP 400 `{"detail": ...}` whose 43-byte text fingerprints to
+  # the unsupported previous_response_id message) on an anchored HTTP request
+  test "reads an unsupported-parameter detail body as the unsupported_parameter code and its param" do
+    options = request_options("/backend-api/codex/responses")
+    detail = fn text -> %Req.Response{status: 400, body: CodexPooler.JSON.encode!(%{"detail" => text})} end
+
+    rejection = ValidationRejection.fetch(detail.("Unsupported parameter: previous_response_id"), options)
+
+    assert rejection == %{code: "unsupported_parameter", param: "previous_response_id", supported_values: nil, supported_values_state: nil}
+
+    assert ValidationRejection.error(rejection) == %{
+             "type" => "invalid_request_error",
+             "code" => "unsupported_parameter",
+             "param" => "previous_response_id",
+             "message" => "upstream rejected parameter previous_response_id (unsupported_parameter)"
+           }
+
+    assert %{code: "unsupported_parameter", param: "reasoning.context"} =
+             ValidationRejection.fetch(detail.("Unsupported parameter: reasoning.context"), options)
+
+    for text <- [
+          "Unsupported parameter: previous_response_id " <> @provider_sentinel,
+          "Unsupported parameter: " <> @provider_sentinel <> "; drop",
+          "Unsupported parameter: ",
+          "Unsupported parameter:previous_response_id",
+          "unsupported parameter: previous_response_id",
+          "Stream must be set to true"
+        ] do
+      assert ValidationRejection.fetch(detail.(text), options) == nil, text
+    end
+
+    assert ValidationRejection.fetch(%Req.Response{status: 404, body: CodexPooler.JSON.encode!(%{"detail" => "Unsupported parameter: previous_response_id"})}, options) == nil
+  end
+
   test "drops an invalid param and never reuses provider message text" do
     options = request_options("/backend-api/codex/responses")
 

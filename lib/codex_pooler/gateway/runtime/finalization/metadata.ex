@@ -18,6 +18,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   @rejection_token_max_bytes 80
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
   @rejection_detail_classes %{"Stream must be set to true" => "stream_must_be_true"}
+  @unsupported_parameter_detail_prefix "Unsupported parameter: "
+  @unsupported_parameter_code "unsupported_parameter"
+  @invalid_request_error_type "invalid_request_error"
   @rejection_param_max_bytes 160
   @rejection_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
   @upstream_websocket_connection_atom_keys [
@@ -226,10 +229,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   # request content. Only a fixed class, an identifier-shaped value, or a
   # 12-character fingerprint is recorded, next to the bounded message size.
   defp detail_rejection_metadata(detail) when is_binary(detail) do
-    put_rejection_message_metadata(
-      %{"rejection_detail_class" => rejection_detail_class(detail)},
-      detail
-    )
+    metadata =
+      case unsupported_parameter_detail(detail) do
+        {:ok, param} -> %{"rejection_detail_class" => @unsupported_parameter_code, "rejection_error_param" => param}
+        :error -> %{"rejection_detail_class" => rejection_detail_class(detail)}
+      end
+
+    put_rejection_message_metadata(metadata, detail)
   end
 
   defp detail_rejection_metadata(_detail) do
@@ -254,12 +260,36 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
         |> maybe_put_rejection_value(:type, valid_rejection_token(error["type"]))
         |> maybe_put_rejection_value(:param, valid_rejection_param(error["param"]))
 
+      {:ok, %{"detail" => detail}} when is_binary(detail) ->
+        case unsupported_parameter_detail(detail) do
+          {:ok, param} -> %{code: @unsupported_parameter_code, type: @invalid_request_error_type, param: param}
+          :error -> %{}
+        end
+
       _other ->
         %{}
     end
   end
 
   defp decode_rejection_error(_body), do: %{}
+
+  # The ChatGPT Codex backend answers a top-level parameter it does not accept
+  # on HTTP with `400 {"detail": "Unsupported parameter: <name>"}` instead of
+  # an `"error"` object: every HTTP request anchored on `previous_response_id`
+  # gets it, because the backend resolves that anchor only on the websocket
+  # connection that produced the response (findings#232 row 232-275). The text
+  # is the OpenAI `unsupported_parameter` message, so a detail that is exactly
+  # that prefix and a bounded field path is read as that code and param. Only
+  # the field path is taken from the provider text; any other detail keeps the
+  # fixed-class or fingerprint projection and relays nothing.
+  defp unsupported_parameter_detail(@unsupported_parameter_detail_prefix <> param) do
+    case valid_rejection_param(param) do
+      nil -> :error
+      param -> {:ok, param}
+    end
+  end
+
+  defp unsupported_parameter_detail(_detail), do: :error
 
   defp maybe_put_rejection_value(metadata, _key, nil), do: metadata
   defp maybe_put_rejection_value(metadata, key, value), do: Map.put(metadata, key, value)

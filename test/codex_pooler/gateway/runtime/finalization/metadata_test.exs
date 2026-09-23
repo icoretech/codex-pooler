@@ -735,6 +735,30 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     refute Map.has_key?(error_precedence, "rejection_detail_class")
   end
 
+  # provenance: observed findings#232 row 232-275 live probe (HTTP 400 detail
+  # body on an anchored HTTP request, 43-byte text); the other params are
+  # synthetic
+  test "response metadata names an unsupported-parameter detail body by fixed class and param" do
+    detail_response = fn detail -> %Req.Response{status: 400, body: CodexPooler.JSON.encode!(%{"detail" => detail})} end
+    anchored_detail = "Unsupported parameter: previous_response_id"
+
+    metadata = detail_response.(anchored_detail) |> Metadata.response_metadata("upstream_status", %{})
+
+    assert metadata["rejection_detail_class"] == "unsupported_parameter"
+    assert metadata["rejection_error_param"] == "previous_response_id"
+    assert metadata["rejection_message_bytes"] == 43
+    refute Map.has_key?(metadata, "rejection_error_code")
+    refute inspect(metadata) =~ anchored_detail
+
+    assert Metadata.rejection_error(detail_response.(anchored_detail)) == %{code: "unsupported_parameter", type: "invalid_request_error", param: "previous_response_id"}
+
+    unbounded = "Unsupported parameter: previous_response_id synthetic prompt sentinel"
+    unbounded_metadata = detail_response.(unbounded) |> Metadata.response_metadata("upstream_status", %{})
+    assert "sha256_" <> _fingerprint = unbounded_metadata["rejection_detail_class"]
+    refute Map.has_key?(unbounded_metadata, "rejection_error_param")
+    assert Metadata.rejection_error(detail_response.(unbounded)) == %{}
+  end
+
   test "response metadata records response body limit evidence without retaining body bytes" do
     collect = BoundedResponseBody.collector(8)
 

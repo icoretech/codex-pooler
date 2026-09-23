@@ -863,6 +863,11 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       # upstream status (row 254-80).
       assert fixture.native_final_4xx_refusal == %{answered_status: 400, statuses: "402..499 except 408 and 429", message_names_upstream_status: true, serving_modes: :all, recorded_status: :upstream}
       assert fixture.public_v1_body == "openai_error_object"
+      # The Codex backend refuses previous_response_id on HTTP with a detail
+      # body, relayed as the parameter it names (findings#232 row 232-275).
+      assert fixture.unsupported_parameter_detail.relayed_code in ValidationRejection.relayable_codes()
+      assert fixture.unsupported_parameter_detail.other_detail_text == "not_relayed"
+      assert :detail_body in fixture.unchanged_scopes
       refute :explicit_full_override in fixture.unchanged_scopes
       assert :websocket_frames in fixture.unchanged_scopes
       assert fixture.accounting_error_code == "upstream_status"

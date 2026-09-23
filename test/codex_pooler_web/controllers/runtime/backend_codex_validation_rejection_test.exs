@@ -886,6 +886,65 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     })
   end
 
+  # The provider resolves `previous_response_id` only on the websocket
+  # connection that produced the response, and refuses the parameter on HTTP
+  # with a detail body. A client that recovers by resending the full input
+  # (as OpenAI-compatible agents do on an unsupported or unknown
+  # previous_response_id) needs that parameter named in the answer, which the
+  # sanitized refusal used to drop (findings#232 row 232-275).
+  for stream? <- [true, false] do
+    test "native HTTP anchored tool-output continuation relays the provider's unsupported previous_response_id (stream #{stream?})", %{conn: conn} do
+      stream? = unquote(stream?)
+      anchor_id = "resp_http_anchor_unsupported_sample"
+      tool_output = %{"type" => "function_call_output", "call_id" => "call_http_anchor_unsupported", "output" => @prompt_sentinel}
+
+      upstream =
+        start_upstream(
+          # provenance: observed findings#232 row 232-275 live probe (HTTP 400, `{"detail": ...}` body whose 43-byte text fingerprints to the unsupported previous_response_id message, on an anchored native HTTP tool-output continuation)
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/backend-api/codex/responses",
+              json: [valid: true, equals: %{"previous_response_id" => anchor_id}],
+              respond: {:json_error, 400, %{"detail" => "Unsupported parameter: previous_response_id"}}
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+
+      response =
+        conn
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => anchor_id,
+          "input" => [tool_output],
+          "stream" => stream?
+        })
+
+      assert response.status == 400
+
+      assert CodexPooler.JSON.decode(response.resp_body) ==
+               {:ok, %{"error" => refusal_error("unsupported_parameter", "previous_response_id")}}
+
+      refute response.resp_body =~ @prompt_sentinel
+      FakeUpstream.verify!(upstream)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "failed"
+      assert request.last_error_code == "upstream_status"
+      assert request.response_status_code == 400
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.response_metadata["rejection_detail_class"] == "unsupported_parameter"
+      assert attempt.response_metadata["rejection_error_param"] == "previous_response_id"
+      refute inspect({request, attempt}) =~ anchor_id
+      refute inspect({request, attempt}) =~ @prompt_sentinel
+      assert Repo.aggregate(BridgeDemotion, :count) == 0
+      assert Repo.aggregate(RoutingCircuitState, :count) == 0
+    end
+  end
+
   defp post_native(conn, setup, stream? \\ true) do
     conn
     |> recycle()

@@ -621,6 +621,8 @@ included, and the list is omitted when it cannot be read safely.
 
 Auto, Lite, Full relay the same bounded supported-values list from persisted attempt metadata.
 
+The Codex backend answers some unsupported parameters with a `{"detail": "Unsupported parameter: <name>"}` body instead of an error object, notably `previous_response_id` on every HTTP request, because it resolves that anchor only on the websocket connection that produced the response. A detail that is exactly that text followed by a bounded field path is relayed as `unsupported_parameter` with that path as `param`, for example `upstream rejected parameter previous_response_id (unsupported_parameter)`, so a client can send the complete input again without the parameter. Any other detail text is not relayed.
+
 A streaming
 `POST /backend-api/codex/responses` request receives this JSON body with
 `content-type: application/json` and no SSE stream, and a non-streaming native
@@ -680,7 +682,7 @@ still demotes the account.
 
 A native HTTP `POST /backend-api/codex/responses` answers a `400` refusal
 outside the relayed validation codes (no code, an unknown code, another error
-type, or a `{"detail": ...}` body) with the same Codex Pooler-authored error
+type, or any other `{"detail": ...}` body) with the same Codex Pooler-authored error
 object as the websocket event, as JSON, streaming or
 not, keeping the `400` status; an `input[N]` param keeps the index the client
 sent. A streaming request used to receive the `400` with an empty body, which

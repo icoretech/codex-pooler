@@ -535,6 +535,68 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
     assert attempt.response_metadata["rejection_supported_values_state"] == "present"
   end
 
+  # The provider refuses `previous_response_id` on HTTP with a detail body; it
+  # resolves the anchor only on the websocket connection that produced the
+  # response. An SDK tool loop sent over HTTP gets the parameter named, so a
+  # client can resend the complete input (findings#232 row 232-275).
+  test "POST /v1/responses relays the provider's unsupported previous_response_id on an HTTP tool-output continuation", %{conn: conn} do
+    anchor_id = "resp_v1_http_anchor_unsupported_sample"
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings#232 row 232-275 live probe (HTTP 400, `{"detail": ...}` body whose 43-byte text fingerprints to the unsupported previous_response_id message, on /v1/responses stream false and true without owner forwarding)
+        FakeUpstream.strict_sequence(
+          for _stream <- [true, false] do
+            FakeUpstream.expect_request(
+              method: "POST",
+              path: "/backend-api/codex/responses",
+              json: [valid: true, equals: %{"previous_response_id" => anchor_id}],
+              respond: {:json_error, 400, %{"detail" => "Unsupported parameter: previous_response_id"}}
+            )
+          end
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    for stream? <- [true, false] do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => anchor_id,
+          "input" => [%{"type" => "function_call_output", "call_id" => "call_v1_anchor_unsupported", "output" => @prompt_sentinel}],
+          "stream" => stream?
+        })
+
+      assert json_response(response, 400) == %{
+               "error" => %{
+                 "message" => "upstream rejected parameter previous_response_id (unsupported_parameter)",
+                 "type" => "invalid_request_error",
+                 "code" => "unsupported_parameter",
+                 "param" => "previous_response_id"
+               }
+             },
+             "stream #{stream?}"
+
+      refute response.resp_body =~ @prompt_sentinel
+    end
+
+    FakeUpstream.verify!(upstream)
+
+    for attempt <- Repo.all(from(attempt in Attempt)) do
+      assert attempt.response_metadata["rejection_detail_class"] == "unsupported_parameter"
+      assert attempt.response_metadata["rejection_error_param"] == "previous_response_id"
+      refute inspect(attempt) =~ anchor_id
+    end
+
+    assert Repo.aggregate(Attempt, :count) == 2
+    assert Repo.aggregate(BridgeDemotion, :count) == 0
+    assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
   # A rejection whose provider message carries no `Supported values are: …`
   # list, so neither path can append a suffix and the two bodies are
   # comparable field for field.
