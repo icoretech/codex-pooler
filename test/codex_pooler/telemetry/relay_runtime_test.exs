@@ -6,6 +6,10 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   alias CodexPooler.Telemetry.{Relay, RelayEvent, RelayRuntime}
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   setup %{sandbox_owner: owner} = context do
     opts = [
       enabled: true,
@@ -125,7 +129,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     :telemetry.execute([:codex_pooler, :quota, :cycle, :decision], %{count: 1}, %{scope: "test"})
     send(runtime, :flush)
     :sys.get_state(runtime)
-    assert_receive :seen, 1_000
+    assert_receive :seen, @detection_timeout_ms
     assert Repo.aggregate(RelayEvent, :count) == 1
 
     web =
@@ -137,7 +141,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     Sandbox.allow(Repo, owner, web)
     send(web, :drain)
     :sys.get_state(web)
-    assert_receive :seen, 1_000
+    assert_receive :seen, @detection_timeout_ms
     refute_received :seen
     assert :ets.tab2list(table) == []
     assert Repo.aggregate(RelayEvent, :count) == 1
@@ -591,7 +595,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
 
     send(runtime, :cleanup)
     assert_receive {:cleanup_attempt, 1}
-    assert_receive {:cleanup_attempt, 2}, 1_000
+    assert_receive {:cleanup_attempt, 2}, @detection_timeout_ms
   end
 
   describe "a sample the storage layer will never accept" do

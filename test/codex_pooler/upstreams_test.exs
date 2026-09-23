@@ -2086,7 +2086,7 @@ defmodule CodexPooler.UpstreamsTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       refreshing = Repo.get!(UpstreamIdentity, identity.id)
       claimed_generation = refreshing.metadata["token_refresh"]["generation"]

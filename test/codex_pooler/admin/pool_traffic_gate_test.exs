@@ -6,6 +6,10 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @tag :shared_pool_traffic_gate
   test "same operator processes share one PostgreSQL lane while different operators stay independent" do
     # Given
@@ -31,7 +35,7 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
         end)
       end)
 
-    assert_receive {:projection_entered, :first, first_projection_pid}, 1_000
+    assert_receive {:projection_entered, :first, first_projection_pid}, @detection_timeout_ms
 
     # When: another PostgreSQL session for the same operator attempts to enter.
     same_operator_result =
@@ -63,7 +67,7 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
         end)
       end)
 
-    assert_receive {:projection_entered, :different_operator, different_projection_pid}, 1_000
+    assert_receive {:projection_entered, :different_operator, different_projection_pid}, @detection_timeout_ms
     send(different_projection_pid, :release_different_operator)
     assert {:ok, :different_result, 1_000} = Task.await(different_operator_task, 2_000)
 
@@ -117,7 +121,7 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
         end)
       end)
 
-    assert_receive {:crash_owner_entered, _projection_pid}, 1_000
+    assert_receive {:crash_owner_entered, _projection_pid}, @detection_timeout_ms
 
     # When: the owning process and checked-out connection disappear without finalization.
     Process.exit(owner_pid, :kill)

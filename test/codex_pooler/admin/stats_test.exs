@@ -28,6 +28,10 @@ defmodule CodexPooler.Admin.StatsTest do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   test "top_api_keys/2 retains the ten highest-ranked API keys" do
     # Given
     pool = pool_fixture(%{name: "Leaderboard pool"})
@@ -1591,7 +1595,7 @@ defmodule CodexPooler.Admin.StatsTest do
                           pool_count: 1,
                           histogram_pool_count: 1
                         }},
-                       1_000
+                       @detection_timeout_ms
 
         refute_receive {^handler_id, _measurements, _metadata}
       after

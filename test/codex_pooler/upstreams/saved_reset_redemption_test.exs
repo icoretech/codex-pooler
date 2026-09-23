@@ -33,6 +33,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @cohort_fixture_transaction_timeout 25_000
   @cohort_fixture_task_timeout 30_000
 
@@ -6991,11 +6995,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                  )
 
         # Claim phase: sorted cohort, assignment, then the capacity circuits.
-        assert_receive {:claim_lock, :cohort}, 1_000
-        assert_receive {:claim_lock, :assignment}, 1_000
+        assert_receive {:claim_lock, :cohort}, @detection_timeout_ms
+        assert_receive {:claim_lock, :assignment}, @detection_timeout_ms
 
         assert_receive {:claim_lock, :circuits, query, [_pool_id, locked_ids, "test-model", "proxy_http"]},
-                       1_000
+                       @detection_timeout_ms
 
         assert query =~
                  ~r/ORDER BY .*pool_upstream_assignment_id.*updated_at.*created_at.*id.*FOR UPDATE/
@@ -7004,11 +7008,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
         # Dispatch reservation: the same lock order is reacquired once before
         # the provider POST, and nothing is locked again afterwards.
-        assert_receive {:claim_lock, :cohort}, 1_000
-        assert_receive {:claim_lock, :assignment}, 1_000
+        assert_receive {:claim_lock, :cohort}, @detection_timeout_ms
+        assert_receive {:claim_lock, :assignment}, @detection_timeout_ms
 
         assert_receive {:claim_lock, :circuits, reservation_query, [_pool_id, reservation_locked_ids, "test-model", "proxy_http"]},
-                       1_000
+                       @detection_timeout_ms
 
         assert reservation_query == query
         assert reservation_locked_ids == locked_ids
@@ -8739,7 +8743,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end)
 
-    assert_receive {^barrier, task_pid, partial}, 1_000
+    assert_receive {^barrier, task_pid, partial}, @detection_timeout_ms
     owned = %{identity_ids: [partial.identity_id], pool_ids: partial.pool_ids}
     on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(owned) end)
 

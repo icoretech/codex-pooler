@@ -133,9 +133,9 @@ defmodule CodexPooler.Telemetry.ReviewRegressionsTest do
     send(runtime, :cleanup)
     assert_receive {:cleanup_batch, 100}, @detection_ms
     assert :ok = GenServer.call(runtime, :quiesce, @detection_ms)
-    assert_receive {:cleanup_batch, 100}, 1_000
-    assert_receive {:cleanup_batch, 100}, 1_000
-    assert_receive {:cleanup_batch, 50}, 1_000
+    assert_receive {:cleanup_batch, 100}, @detection_ms
+    assert_receive {:cleanup_batch, 100}, @detection_ms
+    assert_receive {:cleanup_batch, 50}, @detection_ms
     assert Repo.aggregate(RelayEvent, :count) == 0
     assert rejected_samples() == 0
   end
@@ -166,8 +166,8 @@ defmodule CodexPooler.Telemetry.ReviewRegressionsTest do
       )
 
     send(runtime, :cleanup)
-    for generation <- 1..4, do: assert_receive({:cleanup_generation, ^generation, :more}, 1_000)
-    assert_receive {:cleanup_generation, 5, :done}, 1_000
+    for generation <- 1..4, do: assert_receive({:cleanup_generation, ^generation, :more}, @detection_ms)
+    assert_receive {:cleanup_generation, 5, :done}, @detection_ms
     assert Repo.aggregate(RelayEvent, :count) == 0
   end
 

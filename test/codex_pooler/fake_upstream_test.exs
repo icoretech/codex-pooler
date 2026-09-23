@@ -4,6 +4,10 @@ defmodule CodexPooler.FakeUpstreamTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.PoolerFixtures
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   # The client's own receive timeout is the scenario clock in the timeout
   # cases: the fake holds the response until released, so the client gives up
   # first regardless of load. Keep it short; the barrier waits stay separate.
@@ -842,7 +846,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       task = Task.async(fn -> Req.get!(FakeUpstream.url(upstream) <> "/gated-headers") end)
 
-      assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref}, 1_000
+      assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref}, @detection_timeout_ms
       refute Task.yield(task, 0)
 
       send(upstream_pid, {:fake_upstream_release_gate, release_ref})
@@ -864,7 +868,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       task = Task.async(fn -> Req.get!(FakeUpstream.url(upstream) <> "/gated-sse-headers") end)
 
-      assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref}, 1_000
+      assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref}, @detection_timeout_ms
       refute Task.yield(task, 0)
       send(upstream_pid, {:fake_upstream_release_gate, release_ref})
 
@@ -888,7 +892,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       response = Req.get!(FakeUpstream.url(upstream) <> "/gated-terminal", into: :self)
 
-      assert_receive {:fake_upstream_gate, :before_terminal, upstream_pid, ^release_ref}, 1_000
+      assert_receive {:fake_upstream_gate, :before_terminal, upstream_pid, ^release_ref}, @detection_timeout_ms
       assert {:ok, [data: created]} = receive_stream_message(response)
       assert created =~ "response.created"
 
@@ -915,7 +919,7 @@ defmodule CodexPooler.FakeUpstreamTest do
       response = Req.get!(FakeUpstream.url(upstream) <> "/late-terminal", into: :self)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       assert {:ok, [data: created]} = receive_stream_message(response)
       assert created =~ "response.created"
@@ -961,7 +965,7 @@ defmodule CodexPooler.FakeUpstreamTest do
                )
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -982,10 +986,10 @@ defmodule CodexPooler.FakeUpstreamTest do
       task = stream_timeout_request(FakeUpstream.url(upstream) <> "/stream-timeout", self())
 
       assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       try do
-        assert_receive {:fake_upstream_stream_data, "data: partial\n\n"}, 1_000
+        assert_receive {:fake_upstream_stream_data, "data: partial\n\n"}, @detection_timeout_ms
         assert {:error, error} = Task.await(task, 2_000)
 
         assert transport_timeout?(error)

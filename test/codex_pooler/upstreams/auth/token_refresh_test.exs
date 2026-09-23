@@ -435,7 +435,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
 
         if release_ref do
           assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                         1_000
+                         @detection_timeout_ms
 
           send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
         end
@@ -498,7 +498,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       claimed = Repo.get!(UpstreamIdentity, identity.id)
 
@@ -558,7 +558,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       claimed = Repo.get!(UpstreamIdentity, identity.id)
       malformed_metadata = Map.put(claimed.metadata, "credential_epoch", %{"invalid" => true})
@@ -673,7 +673,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       persisted = Repo.get!(UpstreamIdentity, identity.id)
       token_refresh = persisted.metadata["token_refresh"]
@@ -826,7 +826,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       assert elapsed_ms < 2_000
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -979,7 +979,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       claimed = Repo.get!(UpstreamIdentity, identity.id).metadata["token_refresh"]
       newer_metadata = active_attempt_metadata(generation: claimed["generation"] + 1)

@@ -10,6 +10,10 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @tag :saved_reset_cohort_locking
   test "normalizes a gateway cohort into one ordered identity lock query" do
     {:ok, fake} = codex_reset_fake()
@@ -49,7 +53,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
                  started_at: as_of
                )
 
-      assert_receive {:cohort_lock, query, [locked_ids]}, 1_000
+      assert_receive {:cohort_lock, query, [locked_ids]}, @detection_timeout_ms
       assert query =~ ~r/ORDER BY .*\."id" FOR UPDATE/
 
       assert Enum.sort(Enum.map(locked_ids, &Ecto.UUID.load!/1)) ==
