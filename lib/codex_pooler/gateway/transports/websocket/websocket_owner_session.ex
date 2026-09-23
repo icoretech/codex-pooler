@@ -2895,12 +2895,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp attach_downstream_now(state, downstream) do
     state = settle_probe_before_reconnect(state)
 
+    downstream = Map.take(downstream, @restore_downstream_keys)
+
     state =
       state
       |> DownstreamState.demonitor_downstream()
       |> DownstreamState.cancel_idle_shutdown()
+      |> clear_replaced_downstream_admission(downstream)
 
-    downstream = Map.take(downstream, @restore_downstream_keys)
     monitor = Process.monitor(downstream.pid)
 
     downstream =
@@ -2919,6 +2921,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          downstream_monitor: monitor,
          downstream_epoch: downstream.epoch
      }}
+  end
+
+  # A socket that attaches while another is still attached replaces it without
+  # a detach, and the demonitor above flushes the replaced socket's pending
+  # DOWN, so nothing else would clear an admission armed for that socket. Its
+  # binding names the replaced socket's epoch and every admission control
+  # checks the downstream it was armed for, so the replacement could never use
+  # it; kept, it refused the replacement's full-history compact collection
+  # `stale_downstream` after the provider had served and billed it, and the
+  # client received `invalid_compaction_response` (findings#206 row 206-265).
+  # A restore of the downstream the admission belongs to keeps it.
+  defp clear_replaced_downstream_admission(%{native_compaction_admission_downstream: nil} = state, _downstream), do: state
+
+  defp clear_replaced_downstream_admission(state, downstream) do
+    if admission_downstream_matches?(state.native_compaction_admission_downstream, downstream),
+      do: state,
+      else: clear_native_compaction_admission(state, :downstream_detached)
   end
 
   defp finish_active_turn(state, result) do

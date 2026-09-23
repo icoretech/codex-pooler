@@ -296,6 +296,105 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       assert {:ok, nil} = WebsocketOwnerSession.admission_control(armed.owner, admission_control(:clear, armed.downstream, []))
       assert_receive {:admission_clear, %{reason: :request_rejected, phase_from: :pending_compact}}
     end
+
+    test "a replacement socket clears the admission armed for the socket it replaced", context do
+      armed = armed_admission!(context)
+      attach_admission_clear_observer(armed.binding.lifecycle_id)
+      replacement_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+      on_exit(fn -> send(replacement_pid, :stop) end)
+
+      assert {:ok, replacement} = WebsocketOwnerSession.attach_downstream(armed.owner, %{pid: replacement_pid, correlation_id: "admission-replacement"})
+
+      assert replacement.epoch == armed.downstream.epoch + 1
+      assert_receive {:admission_clear, %{reason: :downstream_detached, phase_from: :pending_compact, phase_to: :cleared}}
+      assert %{native_compaction_admission: nil, native_compaction_admission_downstream: nil} = :sys.get_state(armed.owner)
+      assert {:ok, nil} = WebsocketOwnerSession.admission_control(armed.owner, admission_control(:snapshot, replacement, []))
+    end
+  end
+
+  # findings#206 row 206-265: a socket that attached while the previous one was
+  # still attached (a client reconnect over a half-open connection, or a
+  # previous socket whose close never reached the owner) inherited the
+  # admission bound to the replaced socket. Its full-history compact reached the
+  # provider and settled succeeded, then the collection authorization was refused
+  # `stale_downstream` and the client received `invalid_compaction_response`, so
+  # it paid again for an HTTP compact.
+  test "a full-history compact on a replacement socket is authorized after an admission armed for the replaced socket",
+       context do
+    item =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => "synthetic-compact"}
+      })
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.websocket_text_frames([terminal_frame("response.completed", "resp_replaced_socket_ordinary")]),
+          FakeUpstream.websocket_text_frames([item, terminal_frame("response.completed", "resp_replacement_compact")])
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    assert {:ok, owner} = start_owner(context, [])
+
+    assert {:ok, replaced} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("replaced-socket"))
+
+    {binding, receipt} = OrdinarySuccessTestSeed.request(owner, replaced, forwarded_binding(context, replaced), FakeUpstream.url(upstream))
+
+    assert {:ok, pending} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_ordinary_success, replaced,
+                 binding: binding,
+                 first_compact_collection: receipt,
+                 expires_at_ms: System.system_time(:millisecond) + 30_000
+               )
+             )
+
+    assert NativeCompactionAdmission.phase(pending) == :pending_compact
+
+    replacement_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> send(replacement_pid, :stop) end)
+
+    assert {:ok, replacement} = WebsocketOwnerSession.attach_downstream(owner, %{pid: replacement_pid, correlation_id: "replacement-socket"})
+
+    request = %UpstreamWebsocketSession.Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      headers: [],
+      payload:
+        CodexPooler.JSON.encode!(%{
+          "model" => "sample-model",
+          "input" => [%{"role" => "user", "content" => "sample"}, %{"type" => "compaction_trigger"}]
+        }),
+      request_id: Ecto.UUID.generate(),
+      attempt_id: Ecto.UUID.generate(),
+      websocket_delivery_mode: :collect_full_history,
+      effective_serving_mode: "full",
+      native_compaction_metadata: %NativeCodexTurnMetadata{
+        request_kind: :compaction,
+        semantic_turn_key: <<1::256>>,
+        window_id_digest: <<2::256>>,
+        context_window_id_digest: <<3::256>>,
+        window_number: 1
+      },
+      timeouts: %{connect_timeout_ms: 5_000, receive_timeout_ms: 5_000},
+      message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
+    }
+
+    assert {:ok, %{first_compact_result: compact_receipt}} = WebsocketOwnerSession.submit_request(owner, replacement, request)
+
+    assert {:ok, _provenance} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:authorize_first_compact_collection, replacement,
+                 binding: compact_receipt.binding,
+                 control_ref: compact_receipt.result_ref,
+                 first_compact_collection: compact_receipt
+               )
+             )
+
+    assert FakeUpstream.count(upstream) == 2
   end
 
   test "forwarded admission follows one socket across per-turn correlation ids", context do
