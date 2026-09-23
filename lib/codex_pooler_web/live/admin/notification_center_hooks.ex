@@ -45,7 +45,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
       socket
       |> assign_notification_center()
       |> Phoenix.LiveView.put_private(@recent_invalidations_key, [])
-      |> Phoenix.LiveView.put_private(@subscribed_pools_key, MapSet.new())
+      |> Phoenix.LiveView.put_private(@subscribed_pools_key, [])
       |> subscribe_to_scoped_topics()
       |> Phoenix.LiveView.attach_hook(
         :alert_notification_center,
@@ -216,7 +216,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
 
   # The visible Pools are the ones `sync_pool_subscriptions/1` just read.
   defp viewer_visibility(%Socket{} = socket) do
-    {Pools.owner?(socket.assigns[:current_scope]), Map.get(socket.private, @subscribed_pools_key, MapSet.new())}
+    {Pools.owner?(socket.assigns[:current_scope]), Map.get(socket.private, @subscribed_pools_key, [])}
   end
 
   defp subscribe_to_scoped_topics(%Socket{} = socket) do
@@ -238,23 +238,26 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   # ones it no longer can, so a page never listens to a Pool its viewer cannot
   # see and picks up one that became visible (an owner's reactivated Pool).
   defp sync_pool_subscriptions(%Socket{} = socket) do
-    subscribed = Map.get(socket.private, @subscribed_pools_key, MapSet.new())
+    subscribed = Map.get(socket.private, @subscribed_pools_key, [])
     visible = visible_pool_ids(socket.assigns[:current_scope])
 
-    visible |> MapSet.difference(subscribed) |> Enum.each(&(:ok = NotificationEvents.subscribe_pool(&1)))
-    subscribed |> MapSet.difference(visible) |> Enum.each(&(:ok = NotificationEvents.unsubscribe_pool(&1)))
+    Enum.each(visible -- subscribed, &(:ok = NotificationEvents.subscribe_pool(&1)))
+    Enum.each(subscribed -- visible, &(:ok = NotificationEvents.unsubscribe_pool(&1)))
 
     Phoenix.LiveView.put_private(socket, @subscribed_pools_key, visible)
   end
 
+  # A sorted, unique id list rather than a MapSet: the visibility comparison
+  # stays a plain equality, and dialyzer does not track MapSet opaqueness
+  # through the socket's private map.
   defp visible_pool_ids(%Scope{user: %{id: operator_id}} = scope) when is_binary(operator_id) do
     case Alerts.list_manageable_pools(scope) do
-      {:ok, pools} -> MapSet.new(pools, & &1.id)
-      {:error, _reason} -> MapSet.new()
+      {:ok, pools} -> pools |> Enum.map(& &1.id) |> Enum.uniq() |> Enum.sort()
+      {:error, _reason} -> []
     end
   end
 
-  defp visible_pool_ids(_scope), do: MapSet.new()
+  defp visible_pool_ids(_scope), do: []
 
   defp badge_label(count) when is_integer(count) and count > 99, do: "99+"
   defp badge_label(count) when is_integer(count) and count >= 0, do: Integer.to_string(count)
