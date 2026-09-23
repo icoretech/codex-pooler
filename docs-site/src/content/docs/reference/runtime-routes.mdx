@@ -609,8 +609,10 @@ item Codex Pooler added, or cannot be mapped back, it is left out
 (`input[].id`). Chat Completions requests
 receive the Chat field they sent where Codex Pooler renamed it, such as
 `reasoning_effort`, `max_tokens` or `max_completion_tokens`, `verbosity`,
-`response_format`, and nested `tools[N].function` fields; other paths stay as
-upstream reported them. The message is written by Codex Pooler from the code
+`response_format`, and nested `tools[N].function` fields. A path into the
+Responses input that Codex Pooler built from `messages` is reported as
+`messages`, because those input items do not correspond one to one with the
+messages the client sent; other paths stay as upstream reported them. The message is written by Codex Pooler from the code
 and param; the provider message is never forwarded because validation messages
 can quote submitted or gateway-normalized values. For `unsupported_value` and
 `invalid_value`, the message may list up to 12 supported values when upstream
@@ -621,8 +623,8 @@ Auto, Lite, Full relay the same bounded supported-values list from persisted att
 
 A streaming
 `POST /backend-api/codex/responses` request receives this JSON body with
-`content-type: application/json` and no SSE stream; a non-streaming native
-request keeps its existing upstream body.
+`content-type: application/json` and no SSE stream, and a non-streaming native
+request receives the same body instead of the upstream one.
 
 A native `/backend-api/codex/responses` websocket turn receives the same error
 object in one wrapped error event, `{"type":"error","status":400,"error":{...}}`,

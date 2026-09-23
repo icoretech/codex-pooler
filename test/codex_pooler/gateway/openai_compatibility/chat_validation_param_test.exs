@@ -46,7 +46,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatValidationParamTest do
       {"tools[5].name", %{"tools" => [%{"type" => "function", "function" => %{}}]}},
       {"tools[0].name", %{"tools" => [%{"type" => "web_search_preview"}]}},
       {"tools[01].name", %{"tools" => [%{"type" => "function", "function" => %{}}]}},
-      {"input[0].content", %{"reasoning_effort" => "high"}},
       {"temperature", %{"temperature" => 9}},
       {"model", %{}}
     ]
@@ -54,6 +53,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatValidationParamTest do
     for {upstream, chat_fields} <- cases do
       payload = Map.put(chat_fields, "messages", @messages)
       assert Chat.public_validation_param(upstream, payload) == upstream, upstream
+    end
+  end
+
+  # The adapter's input items do not map one to one onto messages, so a
+  # Responses input path names nothing the Chat client sent (findings#254 row
+  # 254-54).
+  test "reports a Responses input path as the messages field" do
+    for upstream <- ["input", "input[0].content", "input[3].id", "input[].id", "input.0"] do
+      assert Chat.public_validation_param(upstream, %{"messages" => @messages}) == "messages", upstream
+    end
+
+    for upstream <- ["inputs", "input_tokens", "instructions"] do
+      assert Chat.public_validation_param(upstream, %{"messages" => @messages}) == upstream, upstream
     end
   end
 

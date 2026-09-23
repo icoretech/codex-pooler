@@ -72,6 +72,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
        when is_list(tools),
        do: tool_validation_param(param, tools)
 
+  # The adapter rebuilds `messages` into Responses input items, not one item
+  # per message (every tool call and some content parts become items of their
+  # own, an assistant message with empty content and tool calls leaves none,
+  # Lite prepends Pooler items), so no `input` path, index or item field names
+  # anything this client sent. The relay names the field that carried the
+  # refused item instead of a Responses path (findings#254 row 254-54).
+  defp chat_validation_param("input", _chat_payload), do: "messages"
+  defp chat_validation_param("input[" <> _rest, _chat_payload), do: "messages"
+  defp chat_validation_param("input." <> _rest, _chat_payload), do: "messages"
+
   defp chat_validation_param(param, _chat_payload), do: param
 
   defp response_format_validation_param("", %{"type" => type})

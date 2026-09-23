@@ -62,6 +62,57 @@ defmodule CodexPoolerWeb.V1.ResponsesValidationParamIndexTest do
     assert attempt_rejection_param!(setup) == "input[2].id"
   end
 
+  # The non-streaming native answer used to relay the provider body verbatim:
+  # the provider's `input[2].id` (a position the client never sent) and its
+  # message quoting the rejected value. It now answers the same Pooler-authored
+  # error as the streaming answer (findings#254 row 254-54).
+  test "native /backend-api/codex/responses Lite: the non-streaming answer names the client's position", %{conn: conn} do
+    {upstream, setup} = rejecting_setup("input[2].id", "lite")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{"model" => setup.model.exposed_model_id, "input" => client_input()})
+
+    assert json_response(response, 400) == %{
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_value",
+               "param" => "input[1].id",
+               "message" => "upstream rejected parameter input[1].id (invalid_value)"
+             }
+           }
+
+    refute response.resp_body =~ @rejected_id
+    assert_provider_names_the_item!(upstream, 2, ".id")
+    assert attempt_rejection_param!(setup) == "input[2].id"
+  end
+
+  # A Chat Completions client sent `messages`, which the adapter rebuilds into
+  # Responses input items (not one item per message), so no `input[N]` path
+  # names anything the client sent: the relayed param names the client field
+  # that carried the refused item (findings#254 row 254-54).
+  for mode <- ["lite", "full"] do
+    @tag mode: mode
+    test "/v1/chat/completions #{mode}: a refused input item is relayed as the client's messages field", %{conn: conn, mode: mode} do
+      {_upstream, setup} = rejecting_setup("input[2].content", mode)
+
+      response =
+        conn
+        |> auth(setup)
+        |> post("/v1/chat/completions", %{"model" => setup.model.exposed_model_id, "messages" => [%{"role" => "user", "content" => "first"}, %{"role" => "assistant", "content" => "earlier answer"}, %{"role" => "user", "content" => "second"}]})
+
+      assert json_response(response, 400)["error"] == %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_value",
+               "param" => "messages",
+               "message" => "upstream rejected parameter messages (invalid_value)"
+             }
+
+      assert attempt_rejection_param!(setup) == "input[2].content"
+    end
+  end
+
   defp rejecting_setup(provider_param, mode) do
     error = %{"type" => "invalid_request_error", "code" => "invalid_value", "message" => "Invalid '#{provider_param}': '#{@rejected_id}'.", "param" => provider_param}
 
