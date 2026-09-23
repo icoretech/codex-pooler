@@ -225,7 +225,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDeliveryFrameClassLiveTest do
   end
 
   defp await_request_id!(pool_id, deadline_ms) do
-    case safe_all(from(r in Request, where: r.pool_id == ^pool_id, select: r.id)) do
+    case Repo.all(from(r in Request, where: r.pool_id == ^pool_id, select: r.id)) do
       [request_id] ->
         request_id
 
@@ -283,7 +283,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDeliveryFrameClassLiveTest do
   # The closing socket's cleanup can hold the shared sandbox connection longer
   # than a checkout waits under load; a dropped checkout is retried.
   defp await_receipt!(request_id, deadline_ms) do
-    case safe_all(from(a in Attempt, where: a.request_id == ^request_id)) do
+    case Repo.all(from(a in Attempt, where: a.request_id == ^request_id)) do
       [%Attempt{response_metadata: %{"downstream_delivery" => %{} = receipt}}] ->
         receipt
 
@@ -295,7 +295,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDeliveryFrameClassLiveTest do
   end
 
   defp await_settled!(request_id, deadline_ms) do
-    case safe_all(from(r in Request, where: r.id == ^request_id and r.status != "in_progress")) do
+    case Repo.all(from(r in Request, where: r.id == ^request_id and r.status != "in_progress")) do
       [%Request{} = request] ->
         request
 
@@ -304,12 +304,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogDeliveryFrameClassLiveTest do
           do: flunk("request never settled"),
           else: Process.sleep(@poll_ms) && await_settled!(request_id, deadline_ms)
     end
-  end
-
-  defp safe_all(query) do
-    Repo.all(query)
-  rescue
-    DBConnection.ConnectionError -> []
   end
 
   defp await_request_logs(view, attempts \\ 200)
