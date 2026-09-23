@@ -21,6 +21,7 @@ defmodule CodexPooler.DataCase do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.Repo
   alias CodexPooler.RollupCoverageFence
+  alias CodexPooler.TestLoggerLevel
   alias Ecto.Adapters.SQL.Sandbox
 
   using do
@@ -56,9 +57,14 @@ defmodule CodexPooler.DataCase do
   ignore their own settings broadcasts as stale.
 
   It also puts the test under `CodexPooler.CommittedWriteGuard`, which fails
-  the test when it leaves committed rows behind.
+  the test when it leaves committed rows behind, and starts a sync test at the
+  configured Logger level (`CodexPooler.TestLoggerLevel`).
   """
   def setup_sandbox(tags) do
+    # A level restore an earlier test lost to a queued logger handler removal
+    # must not reach this test. Async tests never change the global level.
+    unless tags[:async], do: TestLoggerLevel.reset!()
+
     guard = CommittedWriteGuard.begin_test!(tags)
     pid = Sandbox.start_owner!(Repo, shared: not tags[:async])
 
