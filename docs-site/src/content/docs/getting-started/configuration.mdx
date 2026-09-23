@@ -125,6 +125,8 @@ Proxy and `no_proxy` selection is evaluated again when an allowed Req caller fol
 
 The upstream secret key must decode to 32 raw bytes. The TOTP and upstream key versions let operators rotate encrypted secret roots deliberately.
 
+Every app, worker, and scheduler process of one installation must run with the same `SECRET_KEY_BASE`. Besides signing browser sessions, it keys the duplicate-turn and reconnect-replay protection of native Codex websocket turns. Changing it signs out every admin and API Key Observatory browser session, and for turns that are in flight while the change rolls out, a client resend of a turn started under the old value is not recognized as a duplicate and can be served again, and a reconnect replay of such a turn is refused. Change it during low traffic.
+
 Official release images include the OS IANA timezone database used for operator timezone display. Custom runtime images or hosts must provide zoneinfo files at `/usr/share/zoneinfo` or set `TZDIR`.
 
 ## Admin-Managed Settings
