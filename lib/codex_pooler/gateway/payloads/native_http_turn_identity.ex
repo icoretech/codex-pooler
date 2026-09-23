@@ -296,6 +296,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # (row 232-160). Without it the HTTP turn claim had no witness, and
   # `FailedPredecessorResend` refused every HTTPS fallback of a websocket
   # predecessor, whichever shape the websocket resend itself was admitted for.
+  # The grown-resend candidates of both variants ride along: after a cut that
+  # pushed completed items the fallback carries them appended (row 232-232).
   defp native_client_retry_witness(identity, %{"input" => input} = payload, request_options, :opening)
        when is_list(input) do
     frame = Map.put(payload, "type", "response.create")
@@ -303,11 +305,13 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
 
     with {:ok, [digest | variant_digests]} <- collect_digests(variants, &WebsocketTurnIdentity.replay_claim_digest(identity.semantic_turn_key, &1)),
          {:ok, tail_digests} <- collect_digests(variants, &WebsocketTurnIdentity.replay_claim_alternates(identity.semantic_turn_key, &1)),
+         {:ok, grown} <- collect_digests(variants, &WebsocketTurnIdentity.grown_resend_candidates(identity.semantic_turn_key, &1)),
          {:ok, witness} <-
            ClientRetry.original_witness(
              digest,
              request_options.runtime.api_key_runtime_epoch,
-             Enum.uniq(variant_digests ++ List.flatten(tail_digests)) -- [digest]
+             Enum.uniq(variant_digests ++ List.flatten(tail_digests)) -- [digest],
+             List.flatten(grown)
            ) do
       witness
     else

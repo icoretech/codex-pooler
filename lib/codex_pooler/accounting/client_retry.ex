@@ -92,18 +92,28 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defmodule OriginalWitness do
     @moduledoc false
     @enforce_keys [:version, :digest, :auth_epoch]
-    defstruct [:version, :digest, :auth_epoch, alternates: []]
+    defstruct [:version, :digest, :auth_epoch, alternates: [], grown: []]
 
     # `alternates` never reaches a row: they are the digests the anchored
     # original of a full-history resend may have stored as `digest`
     # (`WebsocketTurnIdentity.replay_claim_alternates/2`), carried with the
     # resend so every predecessor check can recognise it (findings#232
-    # row 232-160).
+    # row 232-160). `grown` never reaches a row either: the requests this one
+    # can be the grown resend of, each named by the witness it would have
+    # stored and the completed-item digests appended to it
+    # (`WebsocketTurnIdentity.grown_resend_candidates/2`, row 232-232).
+    @type grown_candidate :: %{
+            required(:items) => [String.t()],
+            required(:digest) => <<_::256>>,
+            required(:alternates) => [<<_::256>>]
+          }
+
     @type t :: %__MODULE__{
             version: pos_integer(),
             digest: <<_::256>>,
             auth_epoch: non_neg_integer(),
-            alternates: [<<_::256>>]
+            alternates: [<<_::256>>],
+            grown: [grown_candidate()]
           }
   end
 
@@ -171,21 +181,28 @@ defmodule CodexPooler.Accounting.ClientRetry do
           successor: reclaimable_successor() | nil
         }
 
-  @spec original_witness(binary(), non_neg_integer(), [binary()]) ::
+  @spec original_witness(binary(), non_neg_integer(), [binary()], [OriginalWitness.grown_candidate()]) ::
           {:ok, OriginalWitness.t()} | {:error, :invalid_witness}
-  def original_witness(digest, auth_epoch, alternates \\ [])
+  def original_witness(digest, auth_epoch, alternates \\ [], grown \\ [])
 
-  def original_witness(digest, auth_epoch, alternates)
+  def original_witness(digest, auth_epoch, alternates, grown)
       when is_binary(digest) and byte_size(digest) == @digest_bytes and is_integer(auth_epoch) and
-             auth_epoch >= 0 and is_list(alternates) do
-    if Enum.all?(alternates, &(is_binary(&1) and byte_size(&1) == @digest_bytes)) do
-      {:ok, %OriginalWitness{version: @version, digest: digest, auth_epoch: auth_epoch, alternates: alternates}}
+             auth_epoch >= 0 and is_list(alternates) and is_list(grown) do
+    if Enum.all?(alternates, &digest?/1) and Enum.all?(grown, &grown_candidate?/1) do
+      {:ok, %OriginalWitness{version: @version, digest: digest, auth_epoch: auth_epoch, alternates: alternates, grown: grown}}
     else
       {:error, :invalid_witness}
     end
   end
 
-  def original_witness(_digest, _auth_epoch, _alternates), do: {:error, :invalid_witness}
+  def original_witness(_digest, _auth_epoch, _alternates, _grown), do: {:error, :invalid_witness}
+
+  defp digest?(value), do: is_binary(value) and byte_size(value) == @digest_bytes
+
+  defp grown_candidate?(%{items: [_first | _rest] = items, digest: digest, alternates: alternates}) when is_list(alternates),
+    do: digest?(digest) and Enum.all?(alternates, &digest?/1) and Enum.all?(items, &is_binary/1)
+
+  defp grown_candidate?(_candidate), do: false
 
   @doc """
   True when `stored` is the witness digest a predecessor recorded for the
@@ -1124,12 +1141,12 @@ defmodule CodexPooler.Accounting.ClientRetry do
          db_now
        ) do
     with :ok <- validate_authorization(session, api_key, model, request, input),
-         :ok <- validate_policy_witness(request, input),
+         {:ok, witness_match} <- validate_policy_witness(request, input),
          :ok <- validate_original_claim(request),
          :ok <- maybe_validate_owner_idle(session, owner_lease, input, db_now),
          :ok <- validate_policy_lineage(lineage, request.id, input),
          :ok <- validate_no_entitlement(entitlement),
-         :ok <- validate_retry_lifecycle_for_policy(turn, request, attempt, input) do
+         :ok <- validate_retry_lifecycle_for_policy(turn, request, attempt, input, witness_match) do
       window =
         if input[:retry_policy] == :native_compaction,
           do: @compaction_retry_window_seconds,
@@ -1145,22 +1162,45 @@ defmodule CodexPooler.Accounting.ClientRetry do
          compaction_trigger_bridge?: true,
          anchor_present?: false
        }),
-       do: :ok
+       do: {:ok, :exact}
 
   defp validate_policy_witness(_request, %{retry_policy: :native_compaction}),
     do: {:error, :missing_witness}
 
-  defp validate_policy_witness(request, input), do: validate_original_witness(request, input)
+  defp validate_policy_witness(request, input), do: validate_resend_witness(request, input)
 
-  defp validate_retry_lifecycle_for_policy(turn, request, attempt, %{
-         retry_policy: :native_compaction
-       }) do
+  # The request itself (`:exact`), or the grown resend of it: the predecessor's
+  # witness names the resend without its trailing items, which must then be the
+  # completed items its receipt proves were pushed (findings#232 row 232-232).
+  defp validate_resend_witness(request, input) do
+    case validate_original_witness(request, input) do
+      :ok ->
+        {:ok, :exact}
+
+      {:error, :payload_mismatch} = mismatch ->
+        case grown_witness_candidates(request, Map.get(input, :grown_resend_candidates, [])) do
+          [] -> mismatch
+          candidates -> {:ok, {:grown, candidates}}
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp validate_retry_lifecycle_for_policy(turn, request, attempt, %{retry_policy: :native_compaction}, _witness_match) do
     if verified_compaction_execution_failure?(turn, request, attempt),
       do: :ok,
       else: validate_compaction_lifecycle(turn, request, attempt)
   end
 
-  defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input),
+  defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input, {:grown, candidates}) do
+    if verified_completed_item_resend?(turn, request, attempt, candidates),
+      do: :ok,
+      else: {:error, :terminal_predecessor}
+  end
+
+  defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input, :exact),
     do: validate_retry_lifecycle(turn, request, attempt)
 
   # Local execution failures carry no provider terminal. Compaction still
@@ -1601,6 +1641,73 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: true
 
   defp undelivered_partial_output_settlement?(_turn, _request, _attempt), do: false
+
+  @doc """
+  The grown-resend candidates (`WebsocketTurnIdentity.grown_resend_candidates/2`)
+  whose predecessor witness is the one `request` stored: the resend is `request`
+  with the candidate's items appended (findings#232 row 232-232). Empty when the
+  request stored no witness or none matches.
+  """
+  @spec grown_witness_candidates(term(), term()) :: [OriginalWitness.grown_candidate()]
+  def grown_witness_candidates(%Request{} = request, candidates) when is_list(candidates) do
+    if original_witness_eligible?(request) do
+      Enum.filter(candidates, &grown_candidate_matches?(request.native_client_retry_digest, &1))
+    else
+      []
+    end
+  end
+
+  def grown_witness_candidates(_request, _candidates), do: []
+
+  defp grown_candidate_matches?(stored, %{digest: digest, alternates: alternates} = candidate),
+    do: grown_candidate?(candidate) and witness_matches?(stored, digest, alternates)
+
+  defp grown_candidate_matches?(_stored, _candidate), do: false
+
+  @doc """
+  A native websocket turn whose socket pushed the client completed items and
+  nothing that ended the turn before the client left, resent by the released
+  Codex client as the same request with exactly those items appended
+  (findings#232 row 232-232, measured with Codex 0.156.1: the client records
+  every `response.output_item.done` item and its retry rebuilds the request from
+  that history; a direct provider serves it). `candidates` are the grown-resend
+  candidates whose witness already matched this predecessor
+  (`grown_witness_candidates/2`); one of them must carry exactly the digests the
+  receipt names, in order, and the receipt must name every item it counted. The
+  receipt is otherwise the partial-output one with the class `item_done`: outcome
+  `aborted`, no terminal. The turn settled `client_disconnected` after its
+  output became visible (the owner, or the closing socket, stopped it) or the
+  provider completed it after the client left; either way the resend is one
+  successor, a new dispatch with its own single settlement. Only the ordinary
+  Responses route, generation zero.
+  """
+  @spec verified_completed_item_resend?(term(), term(), term(), term()) :: boolean()
+  def verified_completed_item_resend?(
+        %CodexTurn{final_attempt_id: attempt_id, transport_kind: "websocket", completed_at: %DateTime{}} = turn,
+        %Request{transport: "websocket", endpoint: "/backend-api/codex/responses", completed_at: %DateTime{}} = request,
+        %Attempt{
+          id: attempt_id,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata: %{
+            "downstream_delivery" => %{
+              "outcome" => "aborted",
+              "terminal_class" => "none",
+              "highest_frame_class" => "item_done",
+              "completed_items" => count,
+              "completed_item_digests" => [_first | _rest] = digests
+            }
+          }
+        } = attempt,
+        candidates
+      )
+      when is_binary(attempt_id) and is_integer(count) and is_list(candidates) do
+    length(digests) == count and Enum.any?(candidates, &match?(%{items: ^digests}, &1)) and
+      undelivered_partial_output_settlement?(turn, request, attempt)
+  end
+
+  def verified_completed_item_resend?(_turn, _request, _attempt, _candidates), do: false
 
   defp latest_attempt?(%Attempt{} = attempt) do
     not Repo.exists?(

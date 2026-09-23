@@ -79,6 +79,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           | :previsible_disconnect
           | :undelivered_completion
           | :undelivered_partial_output
+          | :completed_item_resend
 
   @type resolution :: %{
           claim: String.t(),
@@ -191,7 +192,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     with %ClientRetry.OriginalWitness{version: 1, digest: digest, auth_epoch: epoch} = witness <-
            Map.get(scope, :native_client_retry_witness),
          true <- ClientRetry.original_witness_eligible?(request),
-         true <- ClientRetry.witness_matches?(request.native_client_retry_digest, digest, witness.alternates),
+         true <- ClientRetry.witness_matches?(request.native_client_retry_digest, digest, witness.alternates) or shape == :completed_item_resend,
          true <- request.native_client_retry_auth_epoch == epoch,
          false <-
            Repo.exists?(
@@ -202,7 +203,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          true <-
            ClientRetry.verified_dead_execution?(turn, request, attempt) or
              ClientRetry.verified_quota_rejection?(turn, request, attempt) or
-             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion, :undelivered_partial_output] do
+             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion, :undelivered_partial_output, :completed_item_resend] do
       :ok
     else
       _invalid -> {:error, :terminal_predecessor}
@@ -252,11 +253,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # frames after which the released client resends the identical request (the
   # client resends it); `ClientRetry.verified_undelivered_completion?/3`
   # (findings#232 row 232-201) and `verified_undelivered_partial_output?/3`
-  # (row 232-203). The turn-claim branch still requires the witness.
+  # (row 232-203). Or completed items and no terminal, after which the client
+  # resends it with those items appended (`verified_completed_item_resend?/4`,
+  # row 232-232). The turn-claim branch still requires the witness.
   defp undelivered_completion(request, scope, now) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
-    shape = undelivered_completion_shape(turn, request, attempt)
+    shape = undelivered_completion_shape(turn, request, attempt, scope)
 
     cond do
       Map.get(scope, :semantic_claim?) != true -> {:error, :terminal_predecessor}
@@ -267,11 +270,29 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     end
   end
 
-  defp undelivered_completion_shape(turn, request, attempt) do
+  defp undelivered_completion_shape(turn, request, attempt, scope) do
     cond do
       ClientRetry.verified_undelivered_completion?(turn, request, attempt) -> :undelivered_completion
       ClientRetry.verified_undelivered_partial_output?(turn, request, attempt) -> :undelivered_partial_output
+      completed_item_resend?(turn, request, attempt, scope) -> :completed_item_resend
       true -> nil
+    end
+  end
+
+  # The resend is the predecessor with exactly the completed items its socket
+  # proved it pushed appended: the witness names the predecessor through one of
+  # the resend's grown candidates, and the receipt names the same items
+  # (findings#232 row 232-232).
+  defp completed_item_resend?(turn, request, attempt, scope) do
+    case Map.get(scope, :native_client_retry_witness) do
+      %ClientRetry.OriginalWitness{grown: [_first | _rest] = grown} ->
+        case ClientRetry.grown_witness_candidates(request, grown) do
+          [] -> false
+          candidates -> ClientRetry.verified_completed_item_resend?(turn, request, attempt, candidates)
+        end
+
+      _no_grown_candidates ->
+        false
     end
   end
 
@@ -347,8 +368,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       advanced_http_resume?(request, scope) -> {:ok, :advanced_http_resume}
       previsible_websocket_disconnect?(request) -> {:ok, :previsible_disconnect}
       undelivered_partial_output?(request) -> {:ok, :undelivered_partial_output}
+      completed_item_resend?(request, scope) -> {:ok, :completed_item_resend}
       true -> {:error, :terminal_predecessor}
     end
+  end
+
+  defp completed_item_resend?(%Request{} = request, scope) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+    completed_item_resend?(turn, request, attempt, scope)
   end
 
   # A websocket turn whose client left after seeing only frames the released

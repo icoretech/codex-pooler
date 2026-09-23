@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptTest do
     ]
 
   alias CodexPooler.Accounting.Attempt
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Websocket.DeliveryReceipt
   alias CodexPooler.Repo
 
@@ -133,6 +134,30 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptTest do
     assert DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: nil})["highest_frame_class"] == "none"
     assert DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: "Bearer sk-secret"})["highest_frame_class"] == "other"
     refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", transport: "http_sse"}), "highest_frame_class")
+  end
+
+  test "the receipt names the completed items pushed, bounded, and only when it counted them" do
+    item = %{"id" => "msg_receipt", "type" => "message", "role" => "assistant", "status" => "completed", "content" => [%{"type" => "output_text", "text" => "synthetic", "annotations" => []}]}
+    frame = CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "output_index" => 0, "item" => item})
+    {:ok, expected} = WebsocketTurnIdentity.completed_item_digest(item)
+
+    assert DeliveryReceipt.completed_item_digest(frame) == expected
+    assert DeliveryReceipt.completed_item_digest(~s({"type":"response.output_item.added","item":{"type":"message"}})) == nil
+    assert DeliveryReceipt.completed_item_digest(~s({"type":"response.output_item.done","item":"text"})) == nil
+    assert DeliveryReceipt.completed_item_digest("not json") == nil
+
+    receipt = DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: "item_done", completed_items: 1, completed_item_digests: [expected]})
+    assert %{"completed_items" => 1, "completed_item_digests" => [^expected]} = receipt
+
+    many = for _n <- 1..10, do: expected
+    assert %{"completed_items" => 10, "completed_item_digests" => bounded} = DeliveryReceipt.build(%{outcome: "aborted", completed_items: 10, completed_item_digests: many})
+    assert length(bounded) == DeliveryReceipt.completed_item_digest_limit()
+
+    # Anything that is not a digest is dropped, so the list no longer matches the count.
+    assert %{"completed_items" => 2, "completed_item_digests" => [^expected]} =
+             DeliveryReceipt.build(%{outcome: "aborted", completed_items: 2, completed_item_digests: [expected, "synthetic answer text"]})
+
+    refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: "delta"}), "completed_item_digests")
   end
 
   test "terminal_class maps provider terminal outcomes onto the fixed vocabulary" do

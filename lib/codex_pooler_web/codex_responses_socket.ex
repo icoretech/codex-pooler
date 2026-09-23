@@ -3707,6 +3707,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # (`DeliveryReceipt.frame_class/1`): a turn cut after only lifecycle, item or
   # part openings and deltas is resent identically by the released client, one
   # that pushed a completed item or a terminal is not (findings#232 row 232-203).
+  # Every completed item pushed is also named by its bounded digest, in push
+  # order: after such a cut the client resends the turn with exactly those items
+  # appended (row 232-232). Both keys exist only once an item completed.
   defp count_downstream_frame(state, pid, data) when is_pid(pid) and is_binary(data) do
     if response_task_delivery_candidate?(state, pid) and
          not StreamProtocol.internal_control_event?(data) do
@@ -3716,6 +3719,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         evidence
         |> Map.update!(:frames, &(&1 + 1))
         |> Map.put(:highest_class, DeliveryReceipt.higher_frame_class(Map.get(evidence, :highest_class), class))
+        |> maybe_count_completed_item(class, data)
       end)
     else
       state
@@ -3723,6 +3727,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp count_downstream_frame(state, _pid, _data), do: state
+
+  defp maybe_count_completed_item(evidence, "item_done", data) do
+    count = Map.get(evidence, :completed_items, 0)
+    digests = Map.get(evidence, :completed_item_digests, [])
+
+    digests =
+      if count < DeliveryReceipt.completed_item_digest_limit(),
+        do: [DeliveryReceipt.completed_item_digest(data) | digests],
+        else: digests
+
+    Map.merge(evidence, %{completed_items: count + 1, completed_item_digests: digests})
+  end
+
+  defp maybe_count_completed_item(evidence, _class, _data), do: evidence
 
   defp count_public_downstream_frame(state, data),
     do: count_downstream_frame(state, Map.get(state, :public_response_task_pid), data)
@@ -3804,17 +3822,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         attempt_id: Map.get(cleanup, :attempt_id),
         codex_session_id: codex_session_id(state)
       },
-      DeliveryReceipt.build(%{
+      %{
         outcome: downstream_delivery_outcome(ack, evidence),
         terminal_class: evidence.terminal_class,
         pushed_at: evidence.pushed_at,
         frames_after_visible: evidence.frames,
         highest_frame_class: highest_pushed_frame_class(evidence)
-      })
+      }
+      |> Map.merge(pushed_completed_items(evidence))
+      |> DeliveryReceipt.build()
     )
   end
 
   defp record_downstream_delivery_receipt(_cleanup, _evidence, _state, _ack), do: :ok
+
+  # A digest that could not be derived stays in the list as `nil` and is
+  # dropped by the receipt, so the list no longer matches the count.
+  defp pushed_completed_items(%{completed_items: count, completed_item_digests: digests}) when is_integer(count) and count > 0,
+    do: %{completed_items: count, completed_item_digests: Enum.reverse(digests)}
+
+  defp pushed_completed_items(_evidence), do: %{}
 
   # A terminal the socket pushed itself (its own error frame) is recorded only
   # as `terminal_class`; it ranks as a terminal here too. A skipped terminal was
@@ -4964,7 +4991,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # running inside the post-cleanup grace would stream a second generation
   # beside it, the way the owner path already avoids by cancelling its active
   # turn at the detach (findings#232 row 232-203). A turn whose client saw a
-  # completed item keeps the grace and its late-answer correction (row 232-173).
+  # frame the classification does not rank (`other`, with no completed item)
+  # keeps the grace and its late-answer correction (row 232-173).
   defp resendable_postvisible_direct_task?(state, pid) do
     client_visible_output?(state, pid) and
       not Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid) and
@@ -4972,8 +5000,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       Process.alive?(pid)
   end
 
+  # A task whose client was also shown completed items, and no terminal, is
+  # stopped too: the released client resends that turn with the completed
+  # items appended, which is admitted as its successor
+  # (`ClientRetry.verified_completed_item_resend?/4`, findings#232 row
+  # 232-232), so a generation left running would stream beside it.
   defp resendable_delivery_evidence?(%{terminal_class: nil} = evidence),
-    do: Map.get(evidence, :highest_class) in DeliveryReceipt.resendable_frame_classes()
+    do: Map.get(evidence, :highest_class) in ["item_done" | DeliveryReceipt.resendable_frame_classes()]
 
   defp resendable_delivery_evidence?(_evidence), do: false
 

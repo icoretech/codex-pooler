@@ -100,27 +100,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PrevisibleDirectLateAnswe
   # usage: the interrupt's settlement is voided and linked, never kept beside the
   # new one, so the request carries exactly one recorded settlement and the
   # rollups count it once (findings#232 row 232-173). The output the client saw
-  # is a completed item: a task that showed only lifecycle frames, an item
-  # opening or deltas is stopped at the cleanup instead, because the released
-  # client resends that turn identically (row 232-203).
+  # is a frame the delivery classification does not rank (`other`: a text part
+  # finished, no completed item): a task that showed only lifecycle frames, an
+  # item opening or deltas is stopped at the cleanup instead, because the
+  # released client resends that turn identically (row 232-203), and so is one
+  # that showed completed items, which the client resends with those items
+  # appended (row 232-232).
   @tag slow: "waits out the closing socket's 250 ms response-task drain and then a late provider answer"
   test "a provider answer after the client left a turn it had shown output corrects the interrupt's settlement instead of adding one" do
     release_ref = make_ref()
 
     upstream =
       start_upstream(
-        # provenance: observed findings#232 row 232-173 (owner forwarding off, client gone after visible output, provider answering afterwards); the visible output is a completed item since row 232-203
+        # provenance: observed findings#232 row 232-173 (owner forwarding off, client gone after visible output, provider answering afterwards); the visible output is an unranked frame since rows 232-203 and 232-232
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
             FakeUpstream.barrier_websocket_frames(
               [
                 CodexPooler.JSON.encode!(%{"type" => "response.created", "response" => %{"id" => "resp_direct_postvisible", "status" => "in_progress", "output" => []}}),
-                CodexPooler.JSON.encode!(%{
-                  "type" => "response.output_item.done",
-                  "output_index" => 0,
-                  "item" => %{"id" => "msg_direct_postvisible", "type" => "message", "role" => "assistant", "status" => "completed", "content" => [%{"type" => "output_text", "text" => "partial", "annotations" => []}]}
-                }),
+                CodexPooler.JSON.encode!(%{"type" => "response.output_text.done", "item_id" => "msg_direct_postvisible", "output_index" => 0, "content_index" => 0, "text" => "partial"}),
                 CodexPooler.JSON.encode!(%{
                   "type" => "response.completed",
                   "response" => %{"id" => "resp_direct_postvisible", "status" => "completed", "output" => [], "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}}
@@ -158,7 +157,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PrevisibleDirectLateAnswe
     end
 
     assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^release_ref}, @detection_timeout_ms
-    conn = await_client_frame!(conn, websocket, ref, "response.output_item.done")
+    conn = await_client_frame!(conn, websocket, ref, "response.output_text.done")
     assert [%Request{id: request_id}] = pool_requests(setup.pool.id)
 
     _result = Mint.HTTP.close(conn)

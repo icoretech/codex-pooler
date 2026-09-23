@@ -353,6 +353,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp witness_alternates(_witness), do: []
 
+  defp witness_grown(%ClientRetry.OriginalWitness{grown: grown}) when is_list(grown), do: grown
+  defp witness_grown(_witness), do: []
+
   defp claim_request_metadata(opts, nil),
     do: Metadata.sanitize_metadata(attr(opts, :request_metadata) || %{})
 
@@ -413,6 +416,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         original_request_claim: attr(opts, :original_request_claim),
         replay_claim_digest: attr(opts, :replay_claim_digest),
         replay_claim_alternates: witness_alternates(attr(opts, :native_client_retry_witness)),
+        grown_resend_candidates: witness_grown(attr(opts, :native_client_retry_witness)),
         anchor_present?: retry_anchor(opts, retry_policy),
         after_locks: attr(opts, :after_locks),
         owner_idle_validated?: attr(opts, :owner_idle_validated?) == true,

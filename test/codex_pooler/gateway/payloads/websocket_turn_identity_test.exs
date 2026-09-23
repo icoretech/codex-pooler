@@ -571,6 +571,116 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
     end
   end
 
+  describe "completed_item_digest/1 and grown_resend_candidates/2" do
+    # After a cut in which the client received completed items and no terminal,
+    # the released Codex client resends the turn as the original request with
+    # those items appended, each re-serialized by its own model (measured with
+    # Codex 0.156.1 through a recording proxy, findings#232 row 232-232).
+    setup do
+      thread_id = "019a0000-0000-7000-8000-000000000002"
+      semantic = :crypto.hash(:sha256, "grown-turn")
+
+      original = %{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "instructions" => "synthetic base",
+        "store" => false,
+        "stream" => true,
+        "client_metadata" => %{
+          "thread_id" => thread_id,
+          "turn_id" => "turn-g",
+          "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"thread_id" => thread_id, "turn_id" => "turn-g", "request_kind" => "turn"}),
+          "x-codex-ws-stream-request-start-ms" => 100
+        },
+        "input" => [
+          %{"type" => "message", "role" => "developer", "content" => [%{"type" => "input_text", "text" => "synthetic instructions"}]},
+          %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic prompt"}]}
+        ]
+      }
+
+      # provenance: observed findings#232 row 232-232 (the provider's item as pushed, and the same item as the released client resends it)
+      provider_message = %{"id" => "msg_grown", "type" => "message", "role" => "assistant", "status" => "completed", "content" => [%{"type" => "output_text", "text" => "synthetic answer", "annotations" => [], "logprobs" => []}]}
+      client_message = %{"id" => "msg_grown", "type" => "message", "role" => "assistant", "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]}
+      provider_reasoning = %{"id" => "rs_grown", "type" => "reasoning", "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}], "encrypted_content" => "enc_synthetic"}
+      client_reasoning = Map.put(provider_reasoning, "content", nil)
+
+      %{semantic: semantic, original: original, provider_message: provider_message, client_message: client_message, provider_reasoning: provider_reasoning, client_reasoning: client_reasoning}
+    end
+
+    test "names the pushed item and the item the client resends alike, and nothing else alike", ctx do
+      assert {:ok, message_digest} = WebsocketTurnIdentity.completed_item_digest(ctx.provider_message)
+      assert message_digest =~ ~r/\A[0-9a-f]{12}\z/
+      assert {:ok, ^message_digest} = WebsocketTurnIdentity.completed_item_digest(ctx.client_message)
+      assert {:ok, reasoning_digest} = WebsocketTurnIdentity.completed_item_digest(ctx.provider_reasoning)
+      assert {:ok, ^reasoning_digest} = WebsocketTurnIdentity.completed_item_digest(ctx.client_reasoning)
+
+      altered = [
+        put_in(ctx.client_message, ["content", Access.at(0), "text"], "synthetic answer!"),
+        Map.put(ctx.client_message, "id", "msg_other"),
+        Map.put(ctx.client_message, "role", "user"),
+        Map.put(ctx.client_message, "phase", "commentary"),
+        Map.put(ctx.client_reasoning, "encrypted_content", "enc_other"),
+        put_in(ctx.client_reasoning, ["summary", Access.at(0), "text"], "other summary")
+      ]
+
+      for item <- altered do
+        assert {:ok, digest} = WebsocketTurnIdentity.completed_item_digest(item)
+        refute digest in [message_digest, reasoning_digest]
+      end
+
+      assert :error = WebsocketTurnIdentity.completed_item_digest("synthetic answer")
+      assert :error = WebsocketTurnIdentity.completed_item_digest(%{"text" => "no type"})
+    end
+
+    test "the grown resend names its original and the items appended to it", ctx do
+      assert {:ok, original_claim} = WebsocketTurnIdentity.replay_claim_digest(ctx.semantic, ctx.original)
+      {:ok, message_digest} = WebsocketTurnIdentity.completed_item_digest(ctx.provider_message)
+      {:ok, reasoning_digest} = WebsocketTurnIdentity.completed_item_digest(ctx.provider_reasoning)
+
+      grown =
+        ctx.original
+        |> Map.update!("input", &(&1 ++ [ctx.client_message]))
+        |> put_in(["client_metadata", "x-codex-ws-stream-request-start-ms"], 200)
+
+      assert {:ok, [%{items: [^message_digest], digest: ^original_claim}]} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, grown)
+
+      two = Map.update!(ctx.original, "input", &(&1 ++ [ctx.client_reasoning, ctx.client_message]))
+      assert {:ok, [one_item, two_items]} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, two)
+      assert one_item.items == [message_digest]
+      refute one_item.digest == original_claim
+      assert %{items: [^reasoning_digest, ^message_digest], digest: ^original_claim} = two_items
+    end
+
+    test "the grown resend of an anchored request carries that request's tail digest among a candidate's alternates", ctx do
+      anchored = Map.merge(ctx.original, %{"previous_response_id" => "resp_synthetic_prewarm", "input" => [List.last(ctx.original["input"])]})
+      assert {:ok, tail} = WebsocketTurnIdentity.replay_tail_digest(ctx.semantic, anchored)
+
+      grown = Map.update!(ctx.original, "input", &(&1 ++ [ctx.client_message]))
+      assert {:ok, [%{alternates: alternates}]} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, grown)
+      assert tail in alternates
+    end
+
+    test "names no candidate for a request that ends with the client's own input, an anchored request or a lone item", ctx do
+      assert {:ok, []} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, ctx.original)
+
+      tool_result = Map.update!(ctx.original, "input", &(&1 ++ [ctx.client_message, %{"type" => "function_call_output", "call_id" => "call_1", "output" => "ok"}]))
+      assert {:ok, []} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, tool_result)
+
+      anchored = ctx.original |> Map.put("previous_response_id", "resp_synthetic") |> Map.update!("input", &(&1 ++ [ctx.client_message]))
+      assert {:ok, []} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, anchored)
+
+      assert {:ok, []} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, Map.put(ctx.original, "input", [ctx.client_message]))
+      assert {:ok, []} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, Map.put(ctx.original, "input", "text input"))
+    end
+
+    test "tries at most four trailing items", ctx do
+      items = for n <- 1..6, do: put_in(ctx.client_message, ["content", Access.at(0), "text"], "answer #{n}")
+      long = Map.update!(ctx.original, "input", &(&1 ++ items))
+      assert {:ok, candidates} = WebsocketTurnIdentity.grown_resend_candidates(ctx.semantic, long)
+      assert Enum.map(candidates, &length(&1.items)) == [1, 2, 3, 4]
+    end
+  end
+
   defp assert_identity(payload, raw_turn_id) do
     expected = :crypto.hash(:sha256, @session_id <> <<0>> <> raw_turn_id)
 

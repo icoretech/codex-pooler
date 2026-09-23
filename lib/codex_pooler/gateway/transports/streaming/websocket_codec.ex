@@ -1034,7 +1034,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
            WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload),
          {:ok, witness_digest} <-
            resend_witness_digest(semantic_turn_key, payload, replay_claim_digest),
-         {:ok, alternates} <- WebsocketTurnIdentity.replay_claim_alternates(semantic_turn_key, payload) do
+         {:ok, alternates} <- WebsocketTurnIdentity.replay_claim_alternates(semantic_turn_key, payload),
+         {:ok, grown} <- WebsocketTurnIdentity.grown_resend_candidates(semantic_turn_key, payload) do
       request_options =
         RequestOptions.put_continuity(request_options,
           request_claim_key: request_claim_key,
@@ -1045,7 +1046,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         case ClientRetry.original_witness(
                witness_digest,
                request_options.runtime.api_key_runtime_epoch,
-               alternates
+               alternates,
+               grown
              ) do
           {:ok, witness} ->
             {RequestOptions.put_native_client_retry_witness(request_options, witness), witness}

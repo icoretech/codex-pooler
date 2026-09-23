@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   require Logger
 
   alias CodexPooler.Accounting.Attempt
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
@@ -42,11 +43,17 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   @lifecycle_frame_types ~w(response.created response.in_progress response.queued response.metadata)
   @part_added_frame_types ~w(response.content_part.added response.reasoning_summary_part.added)
   @terminal_frame_types ~w(response.completed response.done response.failed response.incomplete error)
+  # How many completed items a receipt names (findings#232 row 232-232): the
+  # released client resends a turn cut after completed items with those items
+  # appended, and a resend is admitted only when every pushed item is named.
+  # `completed_items` keeps the exact count, so a longer run is visibly
+  # truncated and keeps the fence.
+  @completed_item_digest_limit 8
 
   @type outcome :: String.t()
   @type terminal_class :: String.t() | nil
   @type receipt :: %{
-          required(String.t()) => String.t() | non_neg_integer() | nil
+          required(String.t()) => String.t() | non_neg_integer() | [String.t()] | nil
         }
   @type context :: %{
           required(:request_id) => term(),
@@ -97,6 +104,28 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
 
   def frame_class(_data), do: "other"
 
+  @doc "How many completed-item digests a receipt carries at most."
+  @spec completed_item_digest_limit() :: pos_integer()
+  def completed_item_digest_limit, do: @completed_item_digest_limit
+
+  @doc """
+  The bounded identity (`WebsocketTurnIdentity.completed_item_digest/1`) of the
+  item a pushed `response.output_item.done` frame completed, or `nil` for any
+  other frame and for a frame whose item cannot be named. Only a websocket JSON
+  text is read; the digest is keyed and never carries content.
+  """
+  @spec completed_item_digest(binary() | term()) :: String.t() | nil
+  def completed_item_digest(data) when is_binary(data) do
+    with {:ok, %{"type" => "response.output_item.done", "item" => %{} = item}} <- CodexPooler.JSON.decode(data),
+         {:ok, digest} <- WebsocketTurnIdentity.completed_item_digest(item) do
+      digest
+    else
+      _other -> nil
+    end
+  end
+
+  def completed_item_digest(_data), do: nil
+
   @doc "The higher of two frame classes; `nil` is no frame pushed yet."
   @spec higher_frame_class(String.t() | nil, String.t()) :: String.t()
   def higher_frame_class(nil, class) when class in @frame_classes, do: class
@@ -123,7 +152,24 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
       "transport" => vocabulary(Map.get(fields, :transport), @transports, @default_transport)
     }
     |> maybe_put_highest_frame_class(fields)
+    |> maybe_put_completed_items(fields)
   end
+
+  # Written with the class by the transport that classifies what it pushed:
+  # the digests of the completed items in push order, at most
+  # `@completed_item_digest_limit`, and their exact count.
+  defp maybe_put_completed_items(receipt, %{completed_item_digests: digests, completed_items: count})
+       when is_list(digests) and is_integer(count) and count >= 0 do
+    digests = digests |> Enum.filter(&completed_item_digest_value?/1) |> Enum.take(@completed_item_digest_limit)
+
+    receipt
+    |> Map.put("completed_item_digests", digests)
+    |> Map.put("completed_items", count)
+  end
+
+  defp maybe_put_completed_items(receipt, _fields), do: receipt
+
+  defp completed_item_digest_value?(digest), do: is_binary(digest) and byte_size(digest) == 12 and digest =~ ~r/\A[0-9a-f]{12}\z/
 
   # Only a transport that classifies what it pushed writes the field (the
   # native websocket); a receipt without it keeps meaning "not classified".

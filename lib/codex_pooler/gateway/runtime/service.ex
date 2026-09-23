@@ -843,7 +843,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          semantic_turn_claim_key: prepared.turn_claim_key,
          semantic_turn_digest: semantic_turn_digest,
          replay_claim_digest: replay_claim_digest,
-         replay_claim_alternates: witness_alternates(prepared.native_client_retry_witness)
+         replay_claim_alternates: witness_alternates(prepared.native_client_retry_witness),
+         grown_resend_candidates: witness_grown(prepared.native_client_retry_witness)
        }}
     end
   end
@@ -861,6 +862,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp witness_alternates(%{alternates: alternates}) when is_list(alternates), do: alternates
   defp witness_alternates(_witness), do: []
+
+  defp witness_grown(%{grown: grown}) when is_list(grown), do: grown
+  defp witness_grown(_witness), do: []
 
   defp prepare_replay_intent_transaction(context) do
     Repo.transaction(fn ->
@@ -1061,6 +1065,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       original_request_claim: context.request_options.continuity.request_claim_key,
       replay_claim_digest: context.replay_claim_digest,
       replay_claim_alternates: context.replay_claim_alternates,
+      grown_resend_candidates: Map.get(context, :grown_resend_candidates, []),
       anchor_present?: not is_nil(context.request_options.continuity.previous_response_id)
     }
 

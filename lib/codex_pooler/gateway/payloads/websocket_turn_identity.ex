@@ -43,6 +43,13 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   # of one tool round), far below this; a longer tail keeps today's refusal.
   @replay_tail_suffix_limit 256
   @http_resume_input_domain "native_http_resume_input_v1"
+  @completed_item_domain "native_websocket_completed_item_v1"
+  # How many trailing items of an unanchored request are tried as the completed
+  # items a cut predecessor pushed before its client left (findings#232 row
+  # 232-232). The released client appends what it recorded from
+  # `response.output_item.done`: a reasoning item, a message, or both, far
+  # below this; a longer run keeps the fence.
+  @grown_resend_item_limit 4
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
     "ws_request_header_traceparent",
@@ -62,6 +69,12 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
         }
 
   @type result :: {:ok, identity()} | :missing | {:error, Error.reason()}
+
+  @type grown_candidate :: %{
+          required(:items) => [String.t()],
+          required(:digest) => <<_::256>>,
+          required(:alternates) => [<<_::256>>]
+        }
 
   @doc """
   The identity of a native Codex turn, under the claim scope `claim_scope/2`
@@ -403,6 +416,146 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   defp replay_tail_link(key, item, tail) do
     item_digest = :crypto.hash(:sha256, :erlang.term_to_binary(item, [:deterministic]))
     :crypto.mac(:hmac, :sha256, key, item_digest <> tail)
+  end
+
+  @doc """
+  The bounded identity of one completed output item, as the released Codex
+  client resends it after a cut (findings#232 row 232-232).
+
+  The client records every `response.output_item.done` item in its history and,
+  when the connection drops before the terminal, resends the turn with those
+  items appended (measured with Codex 0.156.1 through a recording proxy). It
+  re-serializes each item from its own model, so the item it resends differs
+  from the one it was pushed only in what that model does not keep: the item's
+  `status`, a content part's `annotations` and `logprobs`, and fields it never
+  had or writes as `null` (a reasoning item's `content`). The identity drops
+  exactly those and binds everything else under a keyed digest, the house
+  12-character shape, so a receipt can carry it without carrying content.
+  `:error` for anything that is not an item map.
+  """
+  @spec completed_item_digest(term()) :: {:ok, String.t()} | :error
+  def completed_item_digest(%{"type" => type} = item) when is_binary(type) do
+    case completed_item_hmac_key() do
+      {:ok, key} ->
+        digest = :crypto.mac(:hmac, :sha256, key, :erlang.term_to_binary(completed_item_identity(item), [:deterministic]))
+        {:ok, digest |> Base.encode16(case: :lower) |> String.slice(0, 12)}
+
+      {:error, _reason} ->
+        :error
+    end
+  end
+
+  def completed_item_digest(_item), do: :error
+
+  @doc """
+  The requests an unanchored native request can be the grown resend of.
+
+  After a cut in which the client received completed items, the released
+  client resends the turn as the original request with exactly those items
+  appended (findings#232 row 232-232). For every count `k` of trailing items
+  that could be such items (provider output: not a user, developer or system
+  message and not a tool result), up to #{@grown_resend_item_limit}, this names the request
+  without them (`digest`, its replay claim, which is an unanchored original's
+  witness; `alternates`, the tail digests an anchored original's witness is
+  found among) and the completed-item digests of the `k` items, in order. A
+  predecessor is admitted only when its witness is one of those and its
+  delivery receipt proves it pushed exactly those items. Empty for an anchored
+  request, for a request that ends with the client's own input, and for an
+  input of fewer than two items.
+  """
+  @spec grown_resend_candidates(<<_::256>>, map()) :: {:ok, [grown_candidate()]} | {:error, Error.reason()}
+  def grown_resend_candidates(semantic_turn_key, %{"input" => [_first, _second | _rest] = input} = payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 do
+    if anchored?(payload) do
+      {:ok, []}
+    else
+      input
+      |> trailing_output_run(min(@grown_resend_item_limit, length(input) - 1))
+      |> Enum.reduce_while({:ok, []}, &collect_grown_resend_candidate(semantic_turn_key, payload, input, &1, &2))
+      |> case do
+        {:ok, candidates} -> {:ok, Enum.reverse(candidates)}
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  def grown_resend_candidates(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload),
+      do: {:ok, []}
+
+  def grown_resend_candidates(_semantic_turn_key, _payload),
+    do: invalid_replay_claim("semantic_turn_key")
+
+  defp collect_grown_resend_candidate(semantic_turn_key, payload, input, count, {:ok, candidates}) do
+    case grown_resend_candidate(semantic_turn_key, payload, input, count) do
+      {:ok, candidate} -> {:cont, {:ok, [candidate | candidates]}}
+      {:error, _reason} = error -> {:halt, error}
+    end
+  end
+
+  defp grown_resend_candidate(semantic_turn_key, payload, input, count) do
+    {prefix, appended} = Enum.split(input, -count)
+    prefix_payload = Map.put(payload, "input", prefix)
+
+    with {:ok, digest} <- replay_claim_digest(semantic_turn_key, prefix_payload),
+         {:ok, alternates} <- replay_claim_alternates(semantic_turn_key, prefix_payload),
+         {:ok, items} <- completed_item_digests(appended) do
+      {:ok, %{items: items, digest: digest, alternates: alternates}}
+    end
+  end
+
+  defp completed_item_digests(items) do
+    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, digests} ->
+      case completed_item_digest(item) do
+        {:ok, digest} -> {:cont, {:ok, [digest | digests]}}
+        :error -> {:halt, invalid_replay_claim("input")}
+      end
+    end)
+    |> case do
+      {:ok, digests} -> {:ok, Enum.reverse(digests)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  # The counts 1..n of the trailing items that could be completed provider
+  # output, at most `limit`.
+  defp trailing_output_run(input, limit) do
+    run =
+      input
+      |> Enum.reverse()
+      |> Enum.take(limit)
+      |> Enum.take_while(&completed_output_item?/1)
+      |> length()
+
+    Enum.to_list(1..run//1)
+  end
+
+  defp completed_output_item?(%{"type" => "message", "role" => "assistant"}), do: true
+  defp completed_output_item?(%{"type" => "message"}), do: false
+  defp completed_output_item?(%{"type" => type}) when is_binary(type), do: not String.ends_with?(type, "_output")
+  defp completed_output_item?(_item), do: false
+
+  defp completed_item_identity(item) do
+    item
+    |> Map.drop(["status", "internal_chat_message_metadata_passthrough"])
+    |> Map.new(fn
+      {"content", parts} when is_list(parts) -> {"content", Enum.map(parts, &completed_item_part/1)}
+      {key, value} -> {key, without_nulls(value)}
+    end)
+    |> without_nulls()
+  end
+
+  defp completed_item_part(%{} = part), do: part |> Map.drop(["annotations", "logprobs"]) |> without_nulls()
+  defp completed_item_part(part), do: without_nulls(part)
+
+  defp without_nulls(%{} = value), do: for({key, child} <- value, not is_nil(child), into: %{}, do: {key, without_nulls(child)})
+  defp without_nulls(value) when is_list(value), do: Enum.map(value, &without_nulls/1)
+  defp without_nulls(value), do: value
+
+  defp completed_item_hmac_key do
+    with {:ok, secret} <- configured_secret_key_base() do
+      {:ok, :crypto.hash(:sha256, secret <> <<0>> <> @completed_item_domain)}
+    end
   end
 
   @spec http_resume_input_digest(<<_::256>>, [term()]) ::
