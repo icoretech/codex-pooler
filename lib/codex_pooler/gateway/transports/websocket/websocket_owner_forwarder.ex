@@ -998,6 +998,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   # that it accepted nothing of the closing downstream and fenced it. Everything
   # else, including an owner node that predates this call (`undef`), leaves the
   # downstream attached for the socket's ordinary detach after its drain.
+  #
+  # The closing socket waits for this answer before its drain, so it keeps the
+  # one-second budget (findings#206 row 206-245). An answer lost to it
+  # converges: an erpc timeout abandons only the reply, the owner still suspends
+  # or fences the downstream when it reaches the call, and the ordinary detach
+  # the socket sends after its drain queues behind it and reads the stale
+  # downstream (`:detached_stale_downstream`), with no owner-lost recovery and
+  # no turn interrupt. The one step that path skips is the socket's turn
+  # interrupt after a `:detached`, and the owner fences only a downstream it
+  # holds no turn, suspended replay or handoff for.
   @spec detach_previsible_remote_downstream(
           node(),
           binary(),
@@ -1092,6 +1102,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp dispatch_reconnect_control({:remote, node, _owner_instance_id}, control, opts) do
     result = call_remote_control(node, control, opts)
 
+    # The cancel keeps the one-second budget and its answer is ignored
+    # (findings#206 row 206-245), as in `best_effort_cancel_downstream/5`: the
+    # owner-node process still makes the call after an erpc timeout, and the
+    # owner takes it after the timed-out preflight, which reached it first.
     if control.action == :preflight and result == {:error, :owner_forward_timeout} do
       cancel_control = %{control | action: :cancel}
 

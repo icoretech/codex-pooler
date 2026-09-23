@@ -234,6 +234,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     end
   end
 
+  defmodule LateEarlyDetachNodeClient do
+    @moduledoc false
+    # The closing socket's early detach goes through the production erpc
+    # client against the local node, so its one-second budget is enforced as
+    # between two nodes; the owner receives the call only after
+    # `@owner_busy_ms`, as behind a replay arm of another turn. Every other call
+    # runs in process.
+    alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
+    alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.ERPCNodeClient
+
+    @owner_busy_ms 1_200
+
+    def connected_app_nodes, do: [:"codex_pooler@late-early-detach.example"]
+    def app_node?(_node), do: true
+
+    def call_owner(_node, _module, :remote_detach_previsible_downstream_v1, args, timeout),
+      do: ERPCNodeClient.call_owner(node(), __MODULE__, :late_detach_previsible, [args], timeout)
+
+    def call_owner(_node, module, function, args, _timeout), do: apply(module, function, args)
+
+    def late_detach_previsible(args) do
+      Process.sleep(@owner_busy_ms)
+      result = apply(WebsocketOwnerForwarder, :remote_detach_previsible_downstream_v1, args)
+
+      if pid = Process.whereis(:late_early_detach_test), do: send(pid, {:late_early_detach_answer, result})
+
+      result
+    end
+  end
+
   setup_all do
     ensure_epmd_started!()
     :ok
@@ -2073,6 +2103,47 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
              )
 
     assert_receive {:websocket_owner_frame, "corr-current-detach", 2, {:data, "after-stale-detach"}}
+  end
+
+  # findings#206 row 206-245: the closing socket's early detach keeps its
+  # one-second budget because an answer lost to it converges. The owner still
+  # fences the downstream once it gets to the call, and the ordinary detach the
+  # socket then sends after its drain reads that fence as a stale downstream:
+  # no owner-lost recovery and no turn interrupt, as when the answer arrives.
+  test "a remote early detach answered after its budget leaves the fence to the ordinary detach", %{auth: auth} do
+    Process.register(self(), :late_early_detach_test)
+    remote_node = :"codex_pooler@late-early-detach.example"
+
+    %{session: session, token: token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node), "late-early-detach")
+
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self(), messages: [])
+    {:ok, owner} = start_owner(session, upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    opts = [node_client: LateEarlyDetachNodeClient]
+
+    assert {:ok, closing} =
+             WebsocketOwnerForwarder.call_remote(
+               remote_node,
+               :remote_attach_downstream,
+               [session.id, downstream("corr-late-early-detach")],
+               opts
+             )
+
+    gateway_opts = %{websocket_owner_forwarder_opts: opts}
+
+    assert :not_previsible =
+             Gateway.detach_previsible_websocket_owner_downstream(session, token, closing, gateway_opts)
+
+    assert_receive {:late_early_detach_answer, :detached}, @peer_detection_timeout_ms
+    fenced = Map.take(closing, [:pid, :epoch, :correlation_id])
+    assert %{downstream: nil, closed_downstream: ^fenced} = :sys.get_state(owner)
+
+    assert :detached_stale_downstream =
+             Gateway.detach_websocket_owner_downstream(session, token, closing, gateway_opts)
+
+    assert %{downstream: nil, closed_downstream: ^fenced, active_turn: nil} = :sys.get_state(owner)
   end
 
   test "unknown malicious owner_instance_id does not create atoms", %{auth: auth} do
