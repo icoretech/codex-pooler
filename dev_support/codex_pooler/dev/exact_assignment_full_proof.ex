@@ -93,9 +93,8 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
     with :ok <- reject_parser_remainders(positional, invalid),
          :ok <- reject_duplicate_options(args, options),
          :ok <- require_safe_scope(options),
-         {:ok, owner_id} <- required_owner_id(options),
-         {:ok, command} <- command_from_options(options, owner_id) do
-      {:ok, command}
+         {:ok, owner_id} <- required_owner_id(options) do
+      command_from_options(options, owner_id)
     end
   end
 
@@ -133,11 +132,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   @spec verify_loopback_fake(FakeUpstream.server()) :: :ok | {:error, String.t()}
   def verify_loopback_fake(%{url: url, profiles: profiles, run_id: run_id})
       when is_binary(url) and is_list(profiles) and is_binary(run_id) do
-    uri = URI.parse(url)
-
-    if uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost", "::1"] and
-         is_integer(uri.port) and uri.port > 0 and is_nil(uri.userinfo) and
-         uri.path in [nil, ""] and is_nil(uri.query) and is_nil(uri.fragment) and
+    if loopback_origin?(URI.parse(url)) and
          profiles == [Enum.find(FakeUpstream.profiles(), &(&1["name"] == "opencode-text-ok"))] and
          valid_run_id?(run_id) do
       :ok
@@ -148,6 +143,14 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
 
   def verify_loopback_fake(_fake),
     do: {:error, "fake upstream must be the verified loopback Full profile"}
+
+  defp loopback_origin?(uri) do
+    uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost", "::1"] and
+      is_integer(uri.port) and uri.port > 0 and bare_origin?(uri)
+  end
+
+  defp bare_origin?(uri),
+    do: is_nil(uri.userinfo) and uri.path in [nil, ""] and is_nil(uri.query) and is_nil(uri.fragment)
 
   defp reject_parser_remainders([], []), do: :ok
 
@@ -298,9 +301,8 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   defp rollback(run_id, reason, opts) do
     cleanup_result =
       with {:ok, journal} <- Journal.read_journal(run_id),
-           {:ok, journal} <- Journal.recover_pools(journal),
-           {:ok, receipt} <- execute_cleanup(journal, remove_run_dir?: true) do
-        {:ok, receipt}
+           {:ok, journal} <- Journal.recover_pools(journal) do
+        execute_cleanup(journal, remove_run_dir?: true)
       end
 
     case cleanup_result do
@@ -750,44 +752,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
 
       true ->
         receive do
-          message ->
-            case Mint.WebSocket.stream(conn, message) do
-              :unknown ->
-                websocket_await_upgrade(conn, ref, status, headers, rest, deadline)
-
-              {:ok, conn, entries} ->
-                status =
-                  status ||
-                    Enum.find_value(entries, fn
-                      {:status, ^ref, code} -> code
-                      _other -> nil
-                    end)
-
-                headers =
-                  headers ||
-                    Enum.find_value(entries, fn
-                      {:headers, ^ref, found} -> found
-                      _other -> nil
-                    end)
-
-                data_entries =
-                  Enum.filter(entries, fn
-                    {:data, ^ref, _data} -> true
-                    _other -> false
-                  end)
-
-                websocket_await_upgrade(
-                  conn,
-                  ref,
-                  status,
-                  headers,
-                  rest ++ data_entries,
-                  deadline
-                )
-
-              {:error, _conn, reason, _responses} ->
-                {:error, "websocket upgrade receive failed: #{safe_reason(reason)}"}
-            end
+          message -> websocket_upgrade_message(conn, ref, message, status, headers, rest, deadline)
         after
           5_000 ->
             websocket_await_upgrade(conn, ref, status, headers, rest, deadline)
@@ -795,26 +760,35 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
     end
   end
 
+  defp websocket_upgrade_message(conn, ref, message, status, headers, rest, deadline) do
+    case Mint.WebSocket.stream(conn, message) do
+      :unknown ->
+        websocket_await_upgrade(conn, ref, status, headers, rest, deadline)
+
+      {:ok, conn, entries} ->
+        status = status || Enum.find_value(entries, &upgrade_status(&1, ref))
+        headers = headers || Enum.find_value(entries, &upgrade_headers(&1, ref))
+        data_entries = Enum.filter(entries, &match?({:data, ^ref, _data}, &1))
+        websocket_await_upgrade(conn, ref, status, headers, rest ++ data_entries, deadline)
+
+      {:error, _conn, reason, _responses} ->
+        {:error, "websocket upgrade receive failed: #{safe_reason(reason)}"}
+    end
+  end
+
+  defp upgrade_status({:status, ref, code}, ref), do: code
+  defp upgrade_status(_entry, _ref), do: nil
+
+  defp upgrade_headers({:headers, ref, found}, ref), do: found
+  defp upgrade_headers(_entry, _ref), do: nil
+
   defp websocket_await_terminal(conn, ref, websocket, initial_entries) do
     deadline = System.monotonic_time(:millisecond) + @traffic_deadline_ms
     websocket_drain_entries(conn, ref, websocket, initial_entries, deadline)
   end
 
   defp websocket_drain_entries(conn, ref, websocket, entries, deadline) do
-    {websocket, terminal} =
-      Enum.reduce(entries, {websocket, nil}, fn
-        {:data, ^ref, data}, {socket, found} ->
-          case Mint.WebSocket.decode(socket, data) do
-            {:ok, socket, frames} ->
-              {socket, found || websocket_terminal_in(frames)}
-
-            {:error, socket, _reason} ->
-              {socket, found}
-          end
-
-        _entry, acc ->
-          acc
-      end)
+    {websocket, terminal} = decode_websocket_terminal(entries, ref, websocket)
 
     cond do
       is_binary(terminal) ->
@@ -825,21 +799,37 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
 
       true ->
         receive do
-          message ->
-            case Mint.WebSocket.stream(conn, message) do
-              :unknown ->
-                websocket_drain_entries(conn, ref, websocket, [], deadline)
-
-              {:ok, conn, new_entries} ->
-                websocket_drain_entries(conn, ref, websocket, new_entries, deadline)
-
-              {:error, _conn, reason, _responses} ->
-                {:error, "websocket receive failed: #{safe_reason(reason)}"}
-            end
+          message -> websocket_drain_message(conn, ref, websocket, message, deadline)
         after
           5_000 ->
             websocket_drain_entries(conn, ref, websocket, [], deadline)
         end
+    end
+  end
+
+  defp decode_websocket_terminal(entries, ref, websocket) do
+    Enum.reduce(entries, {websocket, nil}, fn
+      {:data, ^ref, data}, {socket, found} ->
+        case Mint.WebSocket.decode(socket, data) do
+          {:ok, socket, frames} -> {socket, found || websocket_terminal_in(frames)}
+          {:error, socket, _reason} -> {socket, found}
+        end
+
+      _entry, acc ->
+        acc
+    end)
+  end
+
+  defp websocket_drain_message(conn, ref, websocket, message, deadline) do
+    case Mint.WebSocket.stream(conn, message) do
+      :unknown ->
+        websocket_drain_entries(conn, ref, websocket, [], deadline)
+
+      {:ok, conn, new_entries} ->
+        websocket_drain_entries(conn, ref, websocket, new_entries, deadline)
+
+      {:error, _conn, reason, _responses} ->
+        {:error, "websocket receive failed: #{safe_reason(reason)}"}
     end
   end
 
@@ -990,36 +980,46 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
       http_entry = captures[http_fingerprint]
       websocket_entry = captures[websocket_fingerprint]
 
-      checks = [
-        {is_map(http_entry), "HTTP wire capture entry missing for the attempt fingerprint"},
-        {is_map(websocket_entry), "websocket wire capture entry missing for the attempt fingerprint"},
-        {is_map(http_entry) and http_entry["upstreamRequestIdFingerprint"] == http_fingerprint, "HTTP capture fingerprint mismatch"},
-        {is_map(websocket_entry) and
-           websocket_entry["upstreamRequestIdFingerprint"] == websocket_fingerprint, "websocket capture fingerprint mismatch"},
-        {is_map(http_entry) and http_entry["httpHeaderNames"] != [], "HTTP capture observed no header names"},
-        {is_map(http_entry) and @lite_http_header not in List.wrap(http_entry["httpHeaderNames"]), "HTTP Lite header reached the fake upstream"},
-        {is_map(websocket_entry) and websocket_entry["websocketClientMetadataKeys"] != [], "websocket capture observed no client metadata keys"},
-        {is_map(websocket_entry) and
-           @websocket_probe_metadata_key in List.wrap(websocket_entry["websocketClientMetadataKeys"]), "websocket capture did not observe the probe metadata key"},
-        {is_map(websocket_entry) and
-           @lite_websocket_metadata_key not in List.wrap(websocket_entry["websocketClientMetadataKeys"]), "websocket Lite client metadata reached the fake upstream"}
-      ]
-
-      case Enum.find(checks, fn {ok?, _message} -> not ok? end) do
-        nil ->
-          {:ok,
-           %{
-             "http_header_name_count" => length(http_entry["httpHeaderNames"]),
-             "http_lite_header_present" => false,
-             "websocket_metadata_key_count" => length(websocket_entry["websocketClientMetadataKeys"]),
-             "websocket_lite_metadata_present" => false,
-             "fingerprints_matched" => true
-           }}
-
-        {_failed, message} ->
-          {:error, "wire evidence failed: #{message}"}
-      end
+      http_entry
+      |> wire_evidence_checks(websocket_entry, http_fingerprint, websocket_fingerprint)
+      |> Enum.find(fn {ok?, _message} -> not ok? end)
+      |> wire_evidence_result(http_entry, websocket_entry)
     end
+  end
+
+  # The first two checks require map entries; every later check reads a
+  # non-map entry as empty, which is never reached as the first failure.
+  defp wire_evidence_checks(http_entry, websocket_entry, http_fingerprint, websocket_fingerprint) do
+    http = if is_map(http_entry), do: http_entry, else: %{}
+    websocket = if is_map(websocket_entry), do: websocket_entry, else: %{}
+    http_header_names = List.wrap(http["httpHeaderNames"])
+    websocket_metadata_keys = List.wrap(websocket["websocketClientMetadataKeys"])
+
+    [
+      {is_map(http_entry), "HTTP wire capture entry missing for the attempt fingerprint"},
+      {is_map(websocket_entry), "websocket wire capture entry missing for the attempt fingerprint"},
+      {http["upstreamRequestIdFingerprint"] == http_fingerprint, "HTTP capture fingerprint mismatch"},
+      {websocket["upstreamRequestIdFingerprint"] == websocket_fingerprint, "websocket capture fingerprint mismatch"},
+      {http["httpHeaderNames"] != [], "HTTP capture observed no header names"},
+      {@lite_http_header not in http_header_names, "HTTP Lite header reached the fake upstream"},
+      {websocket["websocketClientMetadataKeys"] != [], "websocket capture observed no client metadata keys"},
+      {@websocket_probe_metadata_key in websocket_metadata_keys, "websocket capture did not observe the probe metadata key"},
+      {@lite_websocket_metadata_key not in websocket_metadata_keys, "websocket Lite client metadata reached the fake upstream"}
+    ]
+  end
+
+  defp wire_evidence_result({_failed, message}, _http_entry, _websocket_entry),
+    do: {:error, "wire evidence failed: #{message}"}
+
+  defp wire_evidence_result(nil, http_entry, websocket_entry) do
+    {:ok,
+     %{
+       "http_header_name_count" => length(http_entry["httpHeaderNames"]),
+       "http_lite_header_present" => false,
+       "websocket_metadata_key_count" => length(websocket_entry["websocketClientMetadataKeys"]),
+       "websocket_lite_metadata_present" => false,
+       "fingerprints_matched" => true
+     }}
   end
 
   defp read_wire_captures(fake_url) do
@@ -1207,25 +1207,20 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
     plan
     |> Enum.reduce_while({:ok, %{}}, fn resource, {:ok, counts} ->
       kind = resource["kind"]
-      schema = Map.fetch!(schema_by_kind, kind)
-
-      case Repo.get(schema, resource["id"]) do
-        nil ->
-          {:cont, {:ok, Map.update(counts, kind, 0, & &1)}}
-
-        row ->
-          case delete_plan_row(kind, row) do
-            {:ok, _deleted} ->
-              {:cont, {:ok, Map.update(counts, kind, 1, &(&1 + 1))}}
-
-            {:error, reason} ->
-              {:halt, {:error, "cleanup of #{kind} failed: #{safe_reason(reason)}"}}
-          end
-      end
+      delete_plan_resource(kind, Repo.get(Map.fetch!(schema_by_kind, kind), resource["id"]), counts)
     end)
     |> case do
       {:ok, counts} -> {:ok, %{"plan_rows" => counts}}
       error -> error
+    end
+  end
+
+  defp delete_plan_resource(kind, nil, counts), do: {:cont, {:ok, Map.update(counts, kind, 0, & &1)}}
+
+  defp delete_plan_resource(kind, row, counts) do
+    case delete_plan_row(kind, row) do
+      {:ok, _deleted} -> {:cont, {:ok, Map.update(counts, kind, 1, &(&1 + 1))}}
+      {:error, reason} -> {:halt, {:error, "cleanup of #{kind} failed: #{safe_reason(reason)}"}}
     end
   end
 

@@ -32,6 +32,8 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserver do
 
     use GenServer
 
+    alias CodexPooler.Dev.NativeCompactionAuthorizationObserver
+
     @spec start_link(reference(), map()) :: GenServer.on_start()
     def start_link(generation, counts) do
       GenServer.start_link(
@@ -49,7 +51,7 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserver do
       do: {:reply, :ok, %{state | break_mode: break_mode}}
 
     def handle_call(:captures, _from, state) do
-      counts = CodexPooler.Dev.NativeCompactionAuthorizationObserver.projected_counts(state)
+      counts = NativeCompactionAuthorizationObserver.projected_counts(state)
       {:reply, %{"schemaVersion" => 1, "counts" => counts}, state}
     end
 
@@ -213,11 +215,9 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserver do
   end
 
   defp call_existing(pid, message, absent_result) do
-    try do
-      GenServer.call(pid, message, 15_000)
-    catch
-      :exit, reason -> if lifecycle_exit?(reason), do: absent_result, else: exit(reason)
-    end
+    GenServer.call(pid, message, 15_000)
+  catch
+    :exit, reason -> if lifecycle_exit?(reason), do: absent_result, else: exit(reason)
   end
 
   defp lifecycle_exit?({reason, {GenServer, :call, _details}}), do: lifecycle_exit?(reason)

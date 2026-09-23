@@ -498,11 +498,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   # outside this boundary so unexpected publication failures remain visible and
   # a database failure can never publish a partially persisted bundle.
   defp persist_import_accounts(prepared_accounts, pool, scope) do
-    try do
-      Repo.transaction(fn -> import_accounts_transaction(prepared_accounts, pool, scope) end)
-    rescue
-      _exception in [Postgrex.Error, Ecto.ConstraintError] -> {:error, :persistence_failed}
-    end
+    Repo.transaction(fn -> import_accounts_transaction(prepared_accounts, pool, scope) end)
+  rescue
+    _exception in [Postgrex.Error, Ecto.ConstraintError] -> {:error, :persistence_failed}
   end
 
   defp import_accounts_transaction(prepared_accounts, pool, scope) do
@@ -530,16 +528,14 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   end
 
   defp validate_import_accounts_transaction_result(prepared_accounts, pool, scope) do
-    try do
-      Repo.transaction(fn ->
-        case TokenLinking.validate_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
-          {:ok, count} -> count
-          {:error, _reason} -> Repo.rollback(:bundle_import_failed)
-        end
-      end)
-    rescue
-      _exception in [Postgrex.Error, Ecto.ConstraintError] -> {:error, :persistence_failed}
-    end
+    Repo.transaction(fn ->
+      case TokenLinking.validate_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
+        {:ok, count} -> count
+        {:error, _reason} -> Repo.rollback(:bundle_import_failed)
+      end
+    end)
+  rescue
+    _exception in [Postgrex.Error, Ecto.ConstraintError] -> {:error, :persistence_failed}
   end
 
   defp publish_import_results(results, pool, scope) do

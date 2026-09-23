@@ -232,36 +232,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   end
 
   defp cache_receipt_generation(row) do
-    settlement =
-      Repo.one(
-        from entry in LedgerEntry,
-          where: entry.request_id == ^row.request_id and entry.entry_kind == "settlement",
-          order_by: [desc: entry.id],
-          limit: 1,
-          select: %{
-            input_tokens: entry.input_tokens,
-            cached_input_tokens: entry.cached_input_tokens,
-            output_tokens: entry.output_tokens,
-            total_tokens: entry.total_tokens,
-            usage_status: entry.usage_status
-          }
-      )
-
-    attempt =
-      Repo.one(
-        from attempt in Attempt,
-          where: attempt.request_id == ^row.request_id,
-          order_by: [desc: attempt.attempt_number],
-          limit: 1,
-          select: %{
-            transport: attempt.transport,
-            status: attempt.status,
-            usage_status: attempt.usage_status,
-            pool_upstream_assignment_id: attempt.pool_upstream_assignment_id,
-            upstream_model_id: attempt.upstream_model_id,
-            response_metadata: attempt.response_metadata
-          }
-      )
+    settlement = latest_settlement(row.request_id)
+    attempt = latest_attempt(row.request_id)
 
     %{
       transport: row.transport,
@@ -269,20 +241,78 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       usage_status: row.usage_status,
       turn_sequence: row.turn_sequence,
       requested_model: row.requested_model,
-      upstream_model: attempt && attempt.upstream_model_id,
-      attempt_transport: attempt && attempt.transport,
-      attempt_status: attempt && attempt.status,
-      pool_upstream_assignment_id: attempt && fingerprint(attempt.pool_upstream_assignment_id),
       codex_session_fingerprint: fingerprint(row.codex_session_id),
-      usage_observation_classification: usage_observation_classification(attempt),
-      # NULL-preserving: nil means the provider omitted the field entirely,
-      # 0 means it was present and zero. Never coalesce one into the other.
-      ledger_input_tokens: settlement && settlement.input_tokens,
-      ledger_cached_input_tokens: settlement && settlement.cached_input_tokens,
-      ledger_cached_input_tokens_present: not is_nil(settlement) and not is_nil(settlement.cached_input_tokens),
-      ledger_output_tokens: settlement && settlement.output_tokens,
-      ledger_total_tokens: settlement && settlement.total_tokens,
-      settlement_present: not is_nil(settlement)
+      usage_observation_classification: usage_observation_classification(attempt)
+    }
+    |> Map.merge(attempt_receipt_fields(attempt))
+    |> Map.merge(settlement_receipt_fields(settlement))
+  end
+
+  defp latest_settlement(request_id) do
+    Repo.one(
+      from entry in LedgerEntry,
+        where: entry.request_id == ^request_id and entry.entry_kind == "settlement",
+        order_by: [desc: entry.id],
+        limit: 1,
+        select: %{
+          input_tokens: entry.input_tokens,
+          cached_input_tokens: entry.cached_input_tokens,
+          output_tokens: entry.output_tokens,
+          total_tokens: entry.total_tokens,
+          usage_status: entry.usage_status
+        }
+    )
+  end
+
+  defp latest_attempt(request_id) do
+    Repo.one(
+      from attempt in Attempt,
+        where: attempt.request_id == ^request_id,
+        order_by: [desc: attempt.attempt_number],
+        limit: 1,
+        select: %{
+          transport: attempt.transport,
+          status: attempt.status,
+          usage_status: attempt.usage_status,
+          pool_upstream_assignment_id: attempt.pool_upstream_assignment_id,
+          upstream_model_id: attempt.upstream_model_id,
+          response_metadata: attempt.response_metadata
+        }
+    )
+  end
+
+  defp attempt_receipt_fields(nil), do: %{upstream_model: nil, attempt_transport: nil, attempt_status: nil, pool_upstream_assignment_id: nil}
+
+  defp attempt_receipt_fields(attempt) do
+    %{
+      upstream_model: attempt.upstream_model_id,
+      attempt_transport: attempt.transport,
+      attempt_status: attempt.status,
+      pool_upstream_assignment_id: fingerprint(attempt.pool_upstream_assignment_id)
+    }
+  end
+
+  # NULL-preserving: a nil token count means the provider omitted the field
+  # entirely, 0 means it was present and zero. Never coalesce one into the other.
+  defp settlement_receipt_fields(nil) do
+    %{
+      ledger_input_tokens: nil,
+      ledger_cached_input_tokens: nil,
+      ledger_cached_input_tokens_present: false,
+      ledger_output_tokens: nil,
+      ledger_total_tokens: nil,
+      settlement_present: false
+    }
+  end
+
+  defp settlement_receipt_fields(settlement) do
+    %{
+      ledger_input_tokens: settlement.input_tokens,
+      ledger_cached_input_tokens: settlement.cached_input_tokens,
+      ledger_cached_input_tokens_present: not is_nil(settlement.cached_input_tokens),
+      ledger_output_tokens: settlement.output_tokens,
+      ledger_total_tokens: settlement.total_tokens,
+      settlement_present: true
     }
   end
 

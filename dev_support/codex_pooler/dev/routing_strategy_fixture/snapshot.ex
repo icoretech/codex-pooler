@@ -120,8 +120,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture.Snapshot do
     function.()
   rescue
     error ->
-      raise RuntimeError,
-            "routing strategy fixture restore failed at #{phase} (#{inspect(error.__struct__)})"
+      reraise RuntimeError, "routing strategy fixture restore failed at #{phase} (#{inspect(error.__struct__)})", __STACKTRACE__
   end
 
   defp delete_created_rows!(snapshot, created) do

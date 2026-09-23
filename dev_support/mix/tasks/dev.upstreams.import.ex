@@ -21,6 +21,7 @@ defmodule Mix.Tasks.Dev.Upstreams.Import do
 
     # Match the export task's narrow Dialyzer boundary. Parsing and environment
     # gating above remain direct and execute before application boot.
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
     case apply(UpstreamAccountBundle, :run_import, [args]) do
       {:ok, receipt} -> Mix.shell().info(CodexPooler.JSON.encode!(receipt))
       {:error, message} -> Mix.raise(message)

@@ -122,13 +122,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
     database = Keyword.get(repo_config, :database)
 
     cond do
-      environment == :dev and database == @database ->
-        :ok
-
-      environment == :dev and allow_isolated_dev_database? and isolated_dev_database?(database) ->
-        :ok
-
-      environment == :test and allow_test_database? ->
+      allowed_environment?(environment, database, allow_isolated_dev_database?, allow_test_database?) ->
         :ok
 
       environment != :dev ->
@@ -144,6 +138,11 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
   end
 
   defp isolated_dev_database?(_database), do: false
+
+  defp allowed_environment?(:dev, @database, _allow_isolated_dev_database?, _allow_test_database?), do: true
+  defp allowed_environment?(:dev, database, true, _allow_test_database?), do: isolated_dev_database?(database)
+  defp allowed_environment?(:test, _database, _allow_isolated_dev_database?, true), do: true
+  defp allowed_environment?(_environment, _database, _allow_isolated_dev_database?, _allow_test_database?), do: false
 
   defp acquire_locked(path, request) do
     case Receipt.read(path) do

@@ -9,8 +9,8 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
 
   use GenServer
 
-  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace, as: TraceEvent
   alias CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace, as: TraceEvent
 
   @name __MODULE__
   @handler_id "codex-pooler-native-compaction-run-trace"
@@ -122,11 +122,8 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   @doc false
   @spec validate_full_limits(keyword()) :: :ok | {:error, map()}
   def validate_full_limits(opts) when is_list(opts) do
-    with :ok <-
-           validate_optional_limit(opts, :max_events, @min_full_max_events, @max_full_max_events),
-         :ok <-
-           validate_optional_limit(opts, :max_bytes, @min_full_max_bytes, @max_full_max_bytes) do
-      :ok
+    with :ok <- validate_optional_limit(opts, :max_events, @min_full_max_events, @max_full_max_events) do
+      validate_optional_limit(opts, :max_bytes, @min_full_max_bytes, @max_full_max_bytes)
     end
   end
 
@@ -488,42 +485,9 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
          )}
 
   def handle_info({:DOWN, monitor, :process, pid, reason}, state) do
-    cond do
-      state.sensitivity_restorer == pid and state.sensitivity_restorer_monitor == monitor ->
-        :ok = TraceEvent.deactivate_sensitivity_control()
-
-        Enum.each(state.traced, fn {target, %{role: role}} ->
-          if Process.alive?(target) and
-               role in [:response_task, :owner_session, :upstream_session] do
-            send(
-              target,
-              {:native_compaction_trace_sensitivity, :restore, state.generation, state.sensitivity_authorization, pid}
-            )
-          end
-        end)
-
-        Process.send_after(self(), :sensitivity_fail_safe, @sensitivity_fail_safe_ms)
-
-        {:noreply,
-         %{
-           state
-           | sensitivity_restorer: nil,
-             sensitivity_restorer_monitor: nil,
-             sensitivity_restorer_failed: true
-         }}
-
-      true ->
-        case state.traced do
-          %{^pid => %{monitor: ^monitor, role: role}} ->
-            status = Map.put(state.sensitivity_status, inspect(pid), %{role: role, state: :dead})
-            next = %{state | traced: Map.delete(state.traced, pid), sensitivity_status: status}
-
-            {:noreply, append(next, :beam_process_down, %{pid: pid, pid_role: role, reason: reason}, :beam)}
-
-          _unknown ->
-            {:noreply, state}
-        end
-    end
+    if state.sensitivity_restorer == pid and state.sensitivity_restorer_monitor == monitor,
+      do: sensitivity_restorer_down(state, pid),
+      else: traced_process_down(state, monitor, pid, reason)
   end
 
   def handle_info({:trace_delivered, pid, reference}, state) do
@@ -618,6 +582,39 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
     end
 
     :ok
+  end
+
+  defp sensitivity_restorer_down(state, restorer) do
+    :ok = TraceEvent.deactivate_sensitivity_control()
+    Enum.each(state.traced, &request_sensitivity_restore(&1, state, restorer))
+    Process.send_after(self(), :sensitivity_fail_safe, @sensitivity_fail_safe_ms)
+
+    {:noreply,
+     %{
+       state
+       | sensitivity_restorer: nil,
+         sensitivity_restorer_monitor: nil,
+         sensitivity_restorer_failed: true
+     }}
+  end
+
+  defp request_sensitivity_restore({target, %{role: role}}, state, restorer) do
+    if Process.alive?(target) and role in [:response_task, :owner_session, :upstream_session] do
+      send(target, {:native_compaction_trace_sensitivity, :restore, state.generation, state.sensitivity_authorization, restorer})
+    end
+  end
+
+  defp traced_process_down(state, monitor, pid, reason) do
+    case state.traced do
+      %{^pid => %{monitor: ^monitor, role: role}} ->
+        status = Map.put(state.sensitivity_status, inspect(pid), %{role: role, state: :dead})
+        next = %{state | traced: Map.delete(state.traced, pid), sensitivity_status: status}
+
+        {:noreply, append(next, :beam_process_down, %{pid: pid, pid_role: role, reason: reason}, :beam)}
+
+      _unknown ->
+        {:noreply, state}
+    end
   end
 
   defp attach(generation, trace_plan) do

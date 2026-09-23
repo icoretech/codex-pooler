@@ -124,19 +124,23 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
               {:error, "saved-reset confirmation fixture lock could not connect"}
           end
         after
-          # Only a held lock needs releasing; a failed lock query means no
-          # connection, and a second query would just wait out the budget again.
-          if Process.alive?(inspector) do
-            if match?({:ok, %{rows: [[true]]}}, lock_result) do
-              _ = Postgrex.query(inspector, "SELECT pg_advisory_unlock_all()", [])
-            end
-
-            GenServer.stop(inspector)
-          end
+          release_lock_inspector(inspector, lock_result)
         end
 
       {:error, _reason} ->
         {:error, "saved-reset confirmation fixture lock could not connect"}
+    end
+  end
+
+  # Only a held lock needs releasing; a failed lock query means no
+  # connection, and a second query would just wait out the budget again.
+  defp release_lock_inspector(inspector, lock_result) do
+    if Process.alive?(inspector) do
+      if match?({:ok, %{rows: [[true]]}}, lock_result) do
+        _ = Postgrex.query(inspector, "SELECT pg_advisory_unlock_all()", [])
+      end
+
+      GenServer.stop(inspector)
     end
   end
 
@@ -521,17 +525,23 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
   defp scenario_metadata("absent", _now), do: %{}
 
   defp scenario_metadata(scenario, now) do
-    base = %{
-      "saved_resets" => %{
-        "status" => if(scenario == "usage_unavailable", do: "unavailable", else: "reported"),
-        "available_count" => if(scenario in ["not_applied", "expired"], do: 0, else: 1),
-        "source" => "synthetic_fixture",
-        "observed_at" => DateTime.to_iso8601(now),
-        "reason" => if(scenario == "usage_unavailable", do: "usage_unavailable", else: nil)
-      },
-      "fixture_scenario" => scenario
-    }
+    %{"saved_resets" => scenario_saved_resets(scenario, now), "fixture_scenario" => scenario}
+    |> put_scenario_lifecycle(scenario, now)
+  end
 
+  defp scenario_saved_resets(scenario, now) do
+    unavailable? = scenario == "usage_unavailable"
+
+    %{
+      "status" => if(unavailable?, do: "unavailable", else: "reported"),
+      "available_count" => if(scenario in ["not_applied", "expired"], do: 0, else: 1),
+      "source" => "synthetic_fixture",
+      "observed_at" => DateTime.to_iso8601(now),
+      "reason" => if(unavailable?, do: "usage_unavailable", else: nil)
+    }
+  end
+
+  defp put_scenario_lifecycle(base, scenario, now) do
     case scenario do
       "candidate_progression" -> put_lifecycle(base, "redeeming", "consumed_pending_probe", now)
       "confirmed" -> put_lifecycle(base, "succeeded", "confirmed_by_quota", now)

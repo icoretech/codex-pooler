@@ -206,17 +206,19 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture.Provisioner do
         {identity, true}
 
       {:error, %Ecto.Changeset{errors: errors}} ->
-        if Keyword.has_key?(errors, :chatgpt_account_id) do
-          case Repo.get_by(UpstreamIdentity, chatgpt_account_id: account_id) do
-            %UpstreamIdentity{} = identity -> {identity, false}
-            nil -> raise "routing strategy fixture identity was not persisted"
-          end
-        else
-          raise "failed to create routing strategy fixture identity"
-        end
+        if Keyword.has_key?(errors, :chatgpt_account_id),
+          do: existing_identity!(account_id),
+          else: raise("failed to create routing strategy fixture identity")
 
       {:error, _reason} ->
         raise "failed to create routing strategy fixture identity"
+    end
+  end
+
+  defp existing_identity!(account_id) do
+    case Repo.get_by(UpstreamIdentity, chatgpt_account_id: account_id) do
+      %UpstreamIdentity{} = identity -> {identity, false}
+      nil -> raise "routing strategy fixture identity was not persisted"
     end
   end
 

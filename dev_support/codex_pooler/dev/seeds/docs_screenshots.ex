@@ -138,23 +138,21 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     primary_pool = pool_by_name!(pools, "Example Production")
 
     Enum.map(models, fn model ->
-      if model.pool_id == primary_pool.id and model.exposed_model_id == "gpt-5.4-mini" do
-        source_models =
-          model.metadata
-          |> Map.fetch!("source_assignment_models")
-          |> Map.new(fn {assignment_id, source_metadata} ->
-            {assignment_id, Map.put(source_metadata, "use_responses_lite", true)}
-          end)
-
-        model
-        |> Model.changeset(%{
-          metadata: Map.put(model.metadata, "source_assignment_models", source_models)
-        })
-        |> Repo.update!()
-      else
-        model
-      end
+      if model.pool_id == primary_pool.id and model.exposed_model_id == "gpt-5.4-mini",
+        do: mark_sources_lite!(model),
+        else: model
     end)
+  end
+
+  defp mark_sources_lite!(model) do
+    source_models =
+      model.metadata
+      |> Map.fetch!("source_assignment_models")
+      |> Map.new(fn {assignment_id, source_metadata} -> {assignment_id, Map.put(source_metadata, "use_responses_lite", true)} end)
+
+    model
+    |> Model.changeset(%{metadata: Map.put(model.metadata, "source_assignment_models", source_models)})
+    |> Repo.update!()
   end
 
   defp seed_catalog_sync_runs!(pools, models) do

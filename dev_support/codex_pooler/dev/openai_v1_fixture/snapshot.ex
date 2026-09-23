@@ -122,8 +122,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Snapshot do
     function.()
   rescue
     error ->
-      raise RuntimeError,
-            "OpenAI V1 fixture restore failed at #{phase} (#{inspect(error.__struct__)})"
+      reraise RuntimeError, "OpenAI V1 fixture restore failed at #{phase} (#{inspect(error.__struct__)})", __STACKTRACE__
   end
 
   defp delete_fixture_rows!(snapshot, existing_identity_id, existing_pool_id) do

@@ -106,17 +106,19 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Provisioner do
         {identity, true}
 
       {:error, %Ecto.Changeset{errors: errors}} ->
-        if Keyword.has_key?(errors, :chatgpt_account_id) do
-          case Repo.get_by(UpstreamIdentity, chatgpt_account_id: @account_id) do
-            %UpstreamIdentity{} = identity -> {identity, false}
-            nil -> raise "OpenAI V1 fixture identity was not persisted"
-          end
-        else
-          raise "failed to create OpenAI V1 fixture identity"
-        end
+        if Keyword.has_key?(errors, :chatgpt_account_id),
+          do: existing_identity!(),
+          else: raise("failed to create OpenAI V1 fixture identity")
 
       {:error, _reason} ->
         raise "failed to create OpenAI V1 fixture identity"
+    end
+  end
+
+  defp existing_identity! do
+    case Repo.get_by(UpstreamIdentity, chatgpt_account_id: @account_id) do
+      %UpstreamIdentity{} = identity -> {identity, false}
+      nil -> raise "OpenAI V1 fixture identity was not persisted"
     end
   end
 

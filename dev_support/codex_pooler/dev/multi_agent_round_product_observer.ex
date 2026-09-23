@@ -173,33 +173,24 @@ defmodule CodexPooler.Dev.MultiAgentRoundProductObserver do
   defp merge_response_terminal(entry, direction, response_fingerprint) do
     case Map.fetch(entry, "responses") do
       {:ok, responses} when is_list(responses) ->
-        case Enum.find_index(responses, &(&1["responseFingerprint"] == response_fingerprint)) do
-          nil when length(responses) < @max_response_fingerprints ->
-            response = response_terminal(response_fingerprint, direction)
-
-            Map.put(
-              entry,
-              "responses",
-              Enum.sort_by([response | responses], & &1["responseFingerprint"])
-            )
-
-          nil ->
-            Map.put(entry, "responses", nil)
-
-          index ->
-            Map.update!(entry, "responses", fn current ->
-              List.update_at(
-                current,
-                index,
-                &Map.merge(&1, response_terminal(response_fingerprint, direction))
-              )
-            end)
-        end
+        index = Enum.find_index(responses, &(&1["responseFingerprint"] == response_fingerprint))
+        Map.put(entry, "responses", merge_response_at(responses, index, response_fingerprint, direction))
 
       _poisoned_or_invalid ->
         Map.put(entry, "responses", nil)
     end
   end
+
+  defp merge_response_at(responses, nil, response_fingerprint, direction)
+       when length(responses) < @max_response_fingerprints do
+    response = response_terminal(response_fingerprint, direction)
+    Enum.sort_by([response | responses], & &1["responseFingerprint"])
+  end
+
+  defp merge_response_at(_responses, nil, _response_fingerprint, _direction), do: nil
+
+  defp merge_response_at(responses, index, response_fingerprint, direction),
+    do: List.update_at(responses, index, &Map.merge(&1, response_terminal(response_fingerprint, direction)))
 
   defp response_terminal(response_fingerprint, :provider_to_pooler),
     do: %{"responseFingerprint" => response_fingerprint, "providerStatus" => "completed"}

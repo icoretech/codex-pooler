@@ -9,6 +9,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
 
   import Ecto.Query
 
+  alias __MODULE__.Provider
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -17,7 +18,6 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets.Convergence
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
-  alias __MODULE__.Provider
 
   @scenarios ~w(sibling-barrier ambiguous-replay markerless-legacy first-turn-capacity reblocked-convergence)
   @database "codex_pooler_dev"

@@ -11,8 +11,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Access.APIKeys.TouchDebounce
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.{Model, SyncRun}
@@ -92,9 +92,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       )
 
     with :ok <- reject_parser_remainders(positional, invalid),
-         {:ok, mode} <- select_mode(options),
-         {:ok, command} <- validate_mode(mode, options) do
-      {:ok, command}
+         {:ok, mode} <- select_mode(options) do
+      validate_mode(mode, options)
     end
   end
 
@@ -377,12 +376,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   end
 
   defp dry_run(command, opts) do
-    with :ok <- server_preflight(command.base_url, opts),
-         {:ok, result} <-
-           with_inspection(opts, fn inspection ->
-             validate_dry_run_inspection(command, inspection)
-           end) do
-      {:ok, result}
+    with :ok <- server_preflight(command.base_url, opts) do
+      with_inspection(opts, fn inspection -> validate_dry_run_inspection(command, inspection) end)
     end
   end
 
@@ -629,39 +624,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   def candidate_capability_matrix_runner(base_url, scope, journal, fixtures, run_dir, opts) do
     fixtures = Enum.take(fixtures, Keyword.get(opts, :candidate_fixture_limit, length(fixtures)))
 
-    results =
-      Enum.flat_map(fixtures, fn fixture ->
-        case certification_models(base_url, fixture) do
-          {:ok, models} ->
-            models = candidate_probe_models(models, opts)
-
-            Enum.flat_map(models, fn model ->
-              Enum.flat_map(Keyword.get(opts, :candidate_profiles, ~w(lite full)), fn profile ->
-                probe_candidate_profile(
-                  base_url,
-                  scope,
-                  journal,
-                  fixture,
-                  model,
-                  profile,
-                  run_dir,
-                  opts
-                )
-              end)
-            end)
-
-          {:error, reason} ->
-            [
-              %{
-                model: "discovery",
-                profile: "none",
-                control: "discovery",
-                transport: "http",
-                status: classify_candidate_probe_result(reason)
-              }
-            ]
-        end
-      end)
+    results = Enum.flat_map(fixtures, &candidate_fixture_results(base_url, scope, journal, &1, run_dir, opts))
 
     Process.put(
       :responses_tool_candidate_capability_results,
@@ -669,6 +632,29 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     )
 
     {:error, "candidate capability probe completed without certification"}
+  end
+
+  defp candidate_fixture_results(base_url, scope, journal, fixture, run_dir, opts) do
+    case certification_models(base_url, fixture) do
+      {:ok, models} ->
+        profiles = Keyword.get(opts, :candidate_profiles, ~w(lite full))
+
+        for model <- candidate_probe_models(models, opts),
+            profile <- profiles,
+            result <- probe_candidate_profile(base_url, scope, journal, fixture, model, profile, run_dir, opts),
+            do: result
+
+      {:error, reason} ->
+        [
+          %{
+            model: "discovery",
+            profile: "none",
+            control: "discovery",
+            transport: "http",
+            status: classify_candidate_probe_result(reason)
+          }
+        ]
+    end
   end
 
   defp candidate_probe_models(models, opts) do
@@ -707,25 +693,9 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
             )
           end)
 
-        reset_result = reset_profile(scope, fixture.pool, model.exposed_model_id)
-
-        case reset_result do
-          :ok ->
-            Enum.map(results, fn result ->
-              probe_result(model, profile, result.control, result.transport, result.result)
-            end)
-
-          {:error, reason} ->
-            [
-              probe_result(
-                model,
-                profile,
-                "profile",
-                "none",
-                {:error, "profile_reset: #{reason}"}
-              )
-            ]
-        end
+        scope
+        |> reset_profile(fixture.pool, model.exposed_model_id)
+        |> candidate_probe_results(results, model, profile)
 
       {:error, reason} ->
         [
@@ -739,6 +709,12 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         ]
     end
   end
+
+  defp candidate_probe_results(:ok, results, model, profile),
+    do: Enum.map(results, &probe_result(model, profile, &1.control, &1.transport, &1.result))
+
+  defp candidate_probe_results({:error, reason}, _results, model, profile),
+    do: [probe_result(model, profile, "profile", "none", {:error, "profile_reset: #{reason}"})]
 
   @doc false
   @spec candidate_capability_cases(String.t()) :: %{String.t() => map()}
@@ -883,10 +859,11 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     optional_ids = Enum.map(["id", "slug"], &Map.fetch(metadata_model, &1))
 
     id == model.upstream_model_id and Enum.all?(optional_ids, &optional_model_id?(&1, id)) and
-      Enum.any?(public_models, &(&1["id"] == id)) and
-      (id == "gpt-5.6" or String.starts_with?(id, "gpt-5.6-")) and
+      Enum.any?(public_models, &(&1["id"] == id)) and certification_family?(id) and
       model.supports_responses and model.supports_streaming and model.supports_tools
   end
+
+  defp certification_family?(id), do: id == "gpt-5.6" or String.starts_with?(id, "gpt-5.6-")
 
   defp optional_model_id?(:error, _id), do: true
   defp optional_model_id?({:ok, value}, id), do: is_binary(value) and value == id
@@ -959,28 +936,9 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
     Enum.reduce_while(["http", "websocket"], {:ok, []}, fn transport, {:ok, cells} ->
       Enum.reduce_while(cases, {:ok, cells}, fn smoke_case, {:ok, current} ->
-        case run_case(base_url, fixture, model, profile, transport, smoke_case, opts) do
-          result when result == :ok or result == {:expected_denial, :lite_typed_tool_choice} ->
-            smoke_case = Map.put(smoke_case, :result, result)
-            status = certification_case_status(profile, smoke_case)
-
-            if status == "failed_unexpected_success" do
-              {:halt, {:error, "#{profile}/#{transport}/#{smoke_case.label}: Lite typed tool choice was unexpectedly accepted"}}
-            else
-              cell = %{
-                identity: short_hash(fixture.identity.id),
-                profile: profile,
-                transport: transport,
-                case: smoke_case.label,
-                status: status
-              }
-
-              {:cont, {:ok, current ++ [cell]}}
-            end
-
-          {:error, reason} ->
-            {:halt, {:error, "#{profile}/#{transport}/#{smoke_case.label}: #{reason}"}}
-        end
+        base_url
+        |> run_case(fixture, model, profile, transport, smoke_case, opts)
+        |> profile_matrix_step(smoke_case, fixture, profile, transport, current)
       end)
       |> case do
         {:ok, next} -> {:cont, {:ok, next}}
@@ -988,6 +946,23 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       end
     end)
   end
+
+  defp profile_matrix_step(result, smoke_case, fixture, profile, transport, current)
+       when result == :ok or result == {:expected_denial, :lite_typed_tool_choice} do
+    smoke_case = Map.put(smoke_case, :result, result)
+
+    case certification_case_status(profile, smoke_case) do
+      "failed_unexpected_success" ->
+        {:halt, {:error, "#{profile}/#{transport}/#{smoke_case.label}: Lite typed tool choice was unexpectedly accepted"}}
+
+      status ->
+        cell = %{identity: short_hash(fixture.identity.id), profile: profile, transport: transport, case: smoke_case.label, status: status}
+        {:cont, {:ok, current ++ [cell]}}
+    end
+  end
+
+  defp profile_matrix_step({:error, reason}, smoke_case, _fixture, profile, transport, _current),
+    do: {:halt, {:error, "#{profile}/#{transport}/#{smoke_case.label}: #{reason}"}}
 
   @doc false
   @spec certification_case_status(String.t(), map()) :: String.t()
@@ -1075,9 +1050,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
        ) do
     with {:ok, body} <- public_sse_terminal_body(sse_body),
          :ok <- validate_terminal_status(body),
-         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts),
-         :ok <- validate_terminal_output(body, smoke_case) do
-      :ok
+         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts) do
+      validate_terminal_output(body, smoke_case)
     end
   end
 
@@ -1114,9 +1088,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          before_counts
        ) do
     with :ok <- validate_terminal_status(body),
-         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts),
-         :ok <- validate_terminal_output(body, smoke_case) do
-      :ok
+         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts) do
+      validate_terminal_output(body, smoke_case)
     end
   end
 
@@ -1684,59 +1657,61 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
   defp receive_websocket_terminal(conn, websocket, ref, frames) do
     receive do
-      message ->
-        case Mint.WebSocket.stream(conn, message) do
-          :unknown ->
-            receive_websocket_terminal(conn, websocket, ref, frames)
-
-          {:ok, conn, responses} ->
-            Enum.reduce_while(responses, {:ok, conn, websocket, frames}, fn
-              {:data, ^ref, data}, {:ok, current_conn, current_websocket, current_frames} ->
-                case Mint.WebSocket.decode(current_websocket, data) do
-                  {:ok, next_websocket, decoded_frames} ->
-                    decoded =
-                      decoded_frames
-                      |> Enum.flat_map(fn
-                        {:text, text} -> [CodexPooler.JSON.decode!(text)]
-                        _frame -> []
-                      end)
-
-                    all_frames = current_frames ++ decoded
-
-                    case Enum.find(all_frames, &(&1["type"] in ["response.completed", "error"])) do
-                      nil ->
-                        {:cont, {:ok, current_conn, next_websocket, all_frames}}
-
-                      terminal ->
-                        # Carry every frame alongside the terminal: the terminal
-                        # object's own output array is empty on this provider,
-                        # so the tool call lives in the earlier
-                        # response.output_item.done frames.
-                        {:halt, {:ok, current_conn, next_websocket, {terminal, all_frames}}}
-                    end
-
-                  {:error, _websocket, reason} ->
-                    {:halt, {:error, reason}}
-                end
-
-              _response, accumulator ->
-                {:cont, accumulator}
-            end)
-            |> case do
-              {:ok, next_conn, next_websocket, next_frames} when is_list(next_frames) ->
-                receive_websocket_terminal(next_conn, next_websocket, ref, next_frames)
-
-              terminal ->
-                terminal
-            end
-
-          {:error, _conn, reason, _responses} ->
-            {:error, reason}
-        end
+      message -> handle_websocket_message(conn, websocket, ref, frames, message)
     after
       300_000 -> {:error, :response_timeout}
     end
   end
+
+  defp handle_websocket_message(conn, websocket, ref, frames, message) do
+    case Mint.WebSocket.stream(conn, message) do
+      :unknown ->
+        receive_websocket_terminal(conn, websocket, ref, frames)
+
+      {:ok, conn, responses} ->
+        responses
+        |> Enum.reduce_while({:ok, conn, websocket, frames}, &collect_websocket_response(&1, &2, ref))
+        |> continue_websocket_terminal(ref)
+
+      {:error, _conn, reason, _responses} ->
+        {:error, reason}
+    end
+  end
+
+  defp collect_websocket_response({:data, ref, data}, {:ok, conn, websocket, frames}, ref) do
+    case Mint.WebSocket.decode(websocket, data) do
+      {:ok, next_websocket, decoded_frames} -> websocket_terminal_step(conn, next_websocket, frames ++ decode_text_frames(decoded_frames))
+      {:error, _websocket, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp collect_websocket_response(_response, accumulator, _ref), do: {:cont, accumulator}
+
+  defp decode_text_frames(frames) do
+    Enum.flat_map(frames, fn
+      {:text, text} -> [CodexPooler.JSON.decode!(text)]
+      _frame -> []
+    end)
+  end
+
+  defp websocket_terminal_step(conn, websocket, all_frames) do
+    case Enum.find(all_frames, &(&1["type"] in ["response.completed", "error"])) do
+      nil ->
+        {:cont, {:ok, conn, websocket, all_frames}}
+
+      terminal ->
+        # Carry every frame alongside the terminal: the terminal
+        # object's own output array is empty on this provider,
+        # so the tool call lives in the earlier
+        # response.output_item.done frames.
+        {:halt, {:ok, conn, websocket, {terminal, all_frames}}}
+    end
+  end
+
+  defp continue_websocket_terminal({:ok, conn, websocket, frames}, ref) when is_list(frames),
+    do: receive_websocket_terminal(conn, websocket, ref, frames)
+
+  defp continue_websocket_terminal(terminal, _ref), do: terminal
 
   defp random_suffix, do: :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
   defp short_hash(value), do: value |> sha256() |> String.slice(0, 12)
@@ -1859,32 +1834,30 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
     with :ok <- validate_cleanup_ownership(plan, journal) do
       plan
-      |> Enum.reduce_while({:ok, journal}, fn resource, {:ok, current} ->
-        case cleanup_resource(scope, resource) do
-          :ok ->
-            updated =
-              append_operation(current, "completed", "cleanup_#{resource["kind"]}", %{
-                id: resource["id"]
-              })
-
-            :ok = write_journal!(run_dir, updated)
-            {:cont, {:ok, updated}}
-
-          {:error, reason} ->
-            {:halt, {:error, reason}}
-        end
-      end)
-      |> case do
-        {:ok, cleaned} ->
-          cleaned = Map.put(cleaned, "cleanup_status", "completed")
-          :ok = write_journal!(run_dir, cleaned)
-          {:ok, cleaned}
-
-        error ->
-          error
-      end
+      |> Enum.reduce_while({:ok, journal}, fn resource, {:ok, current} -> cleanup_journaled_resource(scope, resource, current, run_dir) end)
+      |> complete_cleanup(run_dir)
     end
   end
+
+  defp cleanup_journaled_resource(scope, resource, journal, run_dir) do
+    case cleanup_resource(scope, resource) do
+      :ok ->
+        updated = append_operation(journal, "completed", "cleanup_#{resource["kind"]}", %{id: resource["id"]})
+        :ok = write_journal!(run_dir, updated)
+        {:cont, {:ok, updated}}
+
+      {:error, reason} ->
+        {:halt, {:error, reason}}
+    end
+  end
+
+  defp complete_cleanup({:ok, cleaned}, run_dir) do
+    cleaned = Map.put(cleaned, "cleanup_status", "completed")
+    :ok = write_journal!(run_dir, cleaned)
+    {:ok, cleaned}
+  end
+
+  defp complete_cleanup(error, _run_dir), do: error
 
   defp recover_committed_resources(journal, run_dir) do
     with {:ok, journal} <- recover_pools(journal),
@@ -1897,37 +1870,37 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   @doc false
   @spec recover_pools(journal()) :: {:ok, journal()} | {:error, String.t()}
   def recover_pools(journal) do
+    owner_user_id = journal["owner_user_id"]
+
     Enum.reduce_while(journal["pool_slugs"] || [], {:ok, journal}, fn slug, {:ok, current} ->
-      case Enum.find(current["resources"] || [], fn resource ->
-             resource["kind"] == "pool" and String.downcase(resource["slug"] || "") == slug
-           end) do
-        nil ->
-          pools =
-            Repo.all(
-              from pool in Pool,
-                where: pool.slug == ^slug and pool.created_by_user_id == ^journal["owner_user_id"]
-            )
-
-          case pools do
-            [] ->
-              {:cont, {:ok, current}}
-
-            [%Pool{} = pool] ->
-              {:cont, {:ok, record_resource(current, "pool", pool.id, %{slug: pool.slug})}}
-
-            _many ->
-              {:halt, {:error, "deterministic Pool recovery was ambiguous"}}
-          end
-
-        resource ->
-          updated =
-            Enum.map(current["resources"] || [], fn candidate ->
-              if candidate == resource, do: Map.put(candidate, "slug", slug), else: candidate
-            end)
-
-          {:cont, {:ok, Map.put(current, "resources", updated)}}
-      end
+      recover_pool(current, slug, owner_user_id)
     end)
+  end
+
+  defp recover_pool(journal, slug, owner_user_id) do
+    resources = journal["resources"] || []
+
+    case Enum.find(resources, &journaled_pool?(&1, slug)) do
+      nil ->
+        recover_unjournaled_pool(journal, slug, owner_user_id)
+
+      resource ->
+        updated = Enum.map(resources, &put_journaled_slug(&1, resource, slug))
+        {:cont, {:ok, Map.put(journal, "resources", updated)}}
+    end
+  end
+
+  defp put_journaled_slug(candidate, resource, slug) when candidate == resource, do: Map.put(candidate, "slug", slug)
+  defp put_journaled_slug(candidate, _resource, _slug), do: candidate
+
+  defp journaled_pool?(resource, slug), do: resource["kind"] == "pool" and String.downcase(resource["slug"] || "") == slug
+
+  defp recover_unjournaled_pool(journal, slug, owner_user_id) do
+    case Repo.all(from pool in Pool, where: pool.slug == ^slug and pool.created_by_user_id == ^owner_user_id) do
+      [] -> {:cont, {:ok, journal}}
+      [%Pool{} = pool] -> {:cont, {:ok, record_resource(journal, "pool", pool.id, %{slug: pool.slug})}}
+      _many -> {:halt, {:error, "deterministic Pool recovery was ambiguous"}}
+    end
   end
 
   defp recover_intended_children(journal) do
@@ -2425,13 +2398,15 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       statuses_match?(projection.api_keys, "revoked", projection.expected.api_keys) and
       statuses_match?(projection.assignments, "deleted", projection.expected.assignments) and
       statuses_match?(projection.models, "retired", projection.expected.models) and
-      projection.overrides == [] and
-      Enum.all?(projection.sessions, fn [_id, status] -> status != "active" end) and
-      Enum.all?(projection.aliases, fn [_id, status] -> status != "active" end) and
-      Enum.all?(projection.leases, fn [_id, status] -> status != "active" end) and
-      Enum.all?(projection.turns, fn [_id, status] -> status != "in_progress" end) and
-      projection.catalog_jobs == []
+      projection.overrides == [] and runtime_rows_inactive?(projection) and projection.catalog_jobs == []
   end
+
+  defp runtime_rows_inactive?(projection) do
+    none_with_status?(projection.sessions, "active") and none_with_status?(projection.aliases, "active") and
+      none_with_status?(projection.leases, "active") and none_with_status?(projection.turns, "in_progress")
+  end
+
+  defp none_with_status?(rows, status), do: Enum.all?(rows, fn [_id, row_status] -> row_status != status end)
 
   defp statuses_match?(rows, expected, expected_count) do
     length(rows) == expected_count and Enum.all?(rows, fn [_id, status] -> status == expected end)
@@ -2761,17 +2736,16 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         config = Repo.config() |> Keyword.take(@connection_keys) |> put_inspector_name()
 
         case Postgrex.start_link(config) do
-          {:ok, inspector} ->
-            try do
-              fun.(inspector)
-            after
-              if Process.alive?(inspector), do: GenServer.stop(inspector)
-            end
-
-          {:error, _reason} ->
-            {:error, "standalone database inspector could not connect"}
+          {:ok, inspector} -> run_with_owned_inspector(inspector, fun)
+          {:error, _reason} -> {:error, "standalone database inspector could not connect"}
         end
     end
+  end
+
+  defp run_with_owned_inspector(inspector, fun) do
+    fun.(inspector)
+  after
+    if Process.alive?(inspector), do: GenServer.stop(inspector)
   end
 
   defp put_inspector_name(config) do

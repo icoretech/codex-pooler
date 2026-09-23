@@ -3,6 +3,8 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
 
   use GenServer
 
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace, as: TraceEvent
+
   @name __MODULE__
   @default_restore_timeout_ms 1_000
   @restore_attempts 3
@@ -139,28 +141,26 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
 
   @impl true
   def handle_info({:DOWN, monitor, :process, pid, _reason}, state) do
-    cond do
-      state.collector == pid and state.collector_monitor == monitor ->
-        state =
-          state
-          |> Map.put(:collector, nil)
-          |> Map.put(:collector_monitor, nil)
-          |> Map.put(:collector_cleanup?, true)
-          |> cleanup_tracing()
-          |> request_restore()
+    if state.collector == pid and state.collector_monitor == monitor do
+      state =
+        state
+        |> Map.put(:collector, nil)
+        |> Map.put(:collector_monitor, nil)
+        |> Map.put(:collector_cleanup?, true)
+        |> cleanup_tracing()
+        |> request_restore()
 
-        timer = Process.send_after(self(), :restore_timeout, restore_timeout_ms())
-        state = %{state | stop_timer: timer, restore_attempt: 1}
-        {:noreply, state}
+      timer = Process.send_after(self(), :restore_timeout, restore_timeout_ms())
+      state = %{state | stop_timer: timer, restore_attempt: 1}
+      {:noreply, state}
+    else
+      state =
+        case state.processes do
+          %{^pid => %{monitor: ^monitor}} -> update_process_state(state, pid, :dead)
+          _other -> state
+        end
 
-      true ->
-        state =
-          case state.processes do
-            %{^pid => %{monitor: ^monitor}} -> update_process_state(state, pid, :dead)
-            _other -> state
-          end
-
-        maybe_finish_stop(state)
+      maybe_finish_stop(state)
     end
   end
 
@@ -230,7 +230,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
     end)
 
     Enum.each(state.patterns, &:erlang.trace_pattern(&1, false, [:local]))
-    CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace.deactivate_mode()
+    TraceEvent.deactivate_mode()
     state
   end
 

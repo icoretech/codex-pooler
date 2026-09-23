@@ -21,6 +21,7 @@ defmodule Mix.Tasks.Dev.Upstreams.Export do
     # The dev-only repository boundary is intentionally opaque to Dialyzer;
     # invoke only this top-level task call dynamically so its real success path
     # remains representable without suppressing warnings.
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
     case apply(UpstreamAccountBundle, :run_export, [args]) do
       {:ok, receipt} -> Mix.shell().info(CodexPooler.JSON.encode!(receipt))
       {:error, message} -> Mix.raise(message)
