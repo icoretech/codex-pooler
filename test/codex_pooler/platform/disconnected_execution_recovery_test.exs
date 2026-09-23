@@ -7,6 +7,11 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
   alias CodexPooler.Repo
   alias CodexPooler.UnboxedFixture
 
+  # Failure-detection budget for each call into the peer. `:peer.call/4`
+  # defaults to 5 s, and the peer's bootstrap (application starts and a fresh
+  # PostgreSQL pool) outgrew it on a loaded host (findings#206 row 206-184).
+  @peer_call_budget_ms 15_000
+
   for database <- [
         :available,
         :unavailable,
@@ -65,22 +70,19 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
         )
 
       assert_receive {:peer, peer}, 15_000
-      peer_os_pid = :peer.call(peer, :os, :getpid, []) |> List.to_string()
+      peer_os_pid = :peer.call(peer, :os, :getpid, [], @peer_call_budget_ms) |> List.to_string()
 
       on_exit(fn ->
         assert not Process.alive?(peer)
         assert_peer_process_absent(peer_os_pid, System.monotonic_time(:millisecond) + 15_000)
       end)
 
-      :ok = :peer.call(peer, :code, :add_paths, [:code.get_path()])
+      :ok = :peer.call(peer, :code, :add_paths, [:code.get_path()], @peer_call_budget_ms)
 
       :ok =
-        :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :bootstrap, [
-          Application.get_all_env(:codex_pooler),
-          Repo.config()
-        ])
+        :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :bootstrap, [Application.get_all_env(:codex_pooler), Repo.config()], @peer_call_budget_ms)
 
-      identity = :peer.call(peer, CodexPooler.Platform.InstancePresence.Identity, :local, [])
+      identity = :peer.call(peer, CodexPooler.Platform.InstancePresence.Identity, :local, [], @peer_call_budget_ms)
 
       UnboxedFixture.register_unboxed_cleanup!(fn ->
         assert not Process.alive?(peer)
@@ -99,11 +101,11 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
         )
       end)
 
-      assert [] == :peer.call(peer, Node, :list, [])
-      refute :peer.call(peer, Node, :alive?, [])
+      assert [] == :peer.call(peer, Node, :list, [], @peer_call_budget_ms)
+      refute :peer.call(peer, Node, :alive?, [], @peer_call_budget_ms)
 
       {request, attempt, worker} =
-        :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup])
+        :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup], @peer_call_budget_ms)
 
       now = DateTime.add(DateTime.utc_now(), 121)
       assert ExecutionIdentity.status(attempt) == :unknown
@@ -113,18 +115,13 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
 
       if unquote(database) == :unavailable do
         assert %{queued: 1, warned: true, publisher_alive: true} =
-                 :peer.call(
-                   peer,
-                   CodexPooler.DisconnectedExecutionPeer,
-                   :finish_without_database,
-                   [worker, attempt]
-                 )
+                 :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :finish_without_database, [worker, attempt], @peer_call_budget_ms)
 
         assert {:ok, %{dead_execution_attempts_recovered: 0}} =
                  UnboxedFixture.run_unboxed(fn -> DeadExecutionRecovery.recover(now) end)
 
         :ok =
-          :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :restore_database, [attempt])
+          :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :restore_database, [attempt], @peer_call_budget_ms)
       else
         if unquote(database) == :uncertain_commit do
           assert %{
@@ -141,11 +138,11 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
                    )
         else
           :ok =
-            :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :finish, [worker, attempt])
+            :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :finish, [worker, attempt], @peer_call_budget_ms)
         end
       end
 
-      assert [] == :peer.call(peer, Node, :list, [])
+      assert [] == :peer.call(peer, Node, :list, [], @peer_call_budget_ms)
 
       handler = {__MODULE__, make_ref()}
       on_exit(fn -> :telemetry.detach(handler) end)
@@ -184,13 +181,10 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
 
         :candidate_failure ->
           {_other_request, other_attempt, other_worker} =
-            :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup])
+            :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup], @peer_call_budget_ms)
 
           :ok =
-            :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :finish, [
-              other_worker,
-              other_attempt
-            ])
+            :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :finish, [other_worker, other_attempt], @peer_call_budget_ms)
 
           UnboxedFixture.register_unboxed_cleanup!(fn ->
             Repo.query!("DROP TRIGGER IF EXISTS execution_test_fail_finalization ON attempts")

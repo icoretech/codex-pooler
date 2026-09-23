@@ -14,6 +14,9 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
   alias CodexPooler.Repo
   alias CodexPooler.UnboxedFixture
 
+  # Also the budget of every call into a peer: `:peer.call/4` defaults to
+  # 5 s, which a peer's bootstrap outgrew on a loaded host (findings#206 row
+  # 206-184).
   @peer_timeout_ms 15_000
   # Every unboxed cleanup gets a task timeout above the detection budgets it
   # may wait on (an OS-process wait plus a connection wait, each bounded by
@@ -64,7 +67,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
 
     {first_peer, first_os_identity, first_identity} = start_named_peer!(name, setup)
     refute first_identity.node_name == "nonode@nohost"
-    assert [] == :peer.call(first_peer, Node, :list, [])
+    assert [] == :peer.call(first_peer, Node, :list, [], @peer_timeout_ms)
 
     UnboxedFixture.register_unboxed_cleanup!(
       fn ->
@@ -92,7 +95,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     )
 
     {request, attempt, _worker} =
-      :peer.call(first_peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup])
+      :peer.call(first_peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup], @peer_timeout_ms)
 
     assert attempt.owner_instance_id == first_identity.node_name
     assert attempt.owner_instance_boot_id == first_identity.boot_id
@@ -128,7 +131,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     {second_peer, second_os_identity, second_identity} = start_named_peer!(name, setup)
     assert second_identity.node_name == first_identity.node_name
     refute second_identity.boot_id == first_identity.boot_id
-    assert [] == :peer.call(second_peer, Node, :list, [])
+    assert [] == :peer.call(second_peer, Node, :list, [], @peer_timeout_ms)
     assert InstancePresence.superseded?(first_identity)
 
     assert {:ok, %{absent_instance_attempts_recovered: 1}} =
@@ -150,7 +153,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
 
     # The successor's own live execution is untouched by the same pass.
     {successor_request, successor_attempt, successor_worker} =
-      :peer.call(second_peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup])
+      :peer.call(second_peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup], @peer_timeout_ms)
 
     assert {:ok, %{absent_instance_attempts_recovered: 0}} =
              UnboxedFixture.run_unboxed(fn ->
@@ -161,10 +164,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
              "in_progress"
 
     :ok =
-      :peer.call(second_peer, CodexPooler.DisconnectedExecutionPeer, :finish, [
-        successor_worker,
-        successor_attempt
-      ])
+      :peer.call(second_peer, CodexPooler.DisconnectedExecutionPeer, :finish, [successor_worker, successor_attempt], @peer_timeout_ms)
 
     assert UnboxedFixture.run_unboxed(fn -> Repo.get!(Request, successor_request.id).status end) in [
              "in_progress",
@@ -198,22 +198,19 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
       )
 
     assert_receive {:peer, ^peer_owner, peer}, @peer_timeout_ms
-    os_pid = :peer.call(peer, :os, :getpid, []) |> List.to_string()
-    :ok = :peer.call(peer, :code, :add_paths, [:code.get_path()])
+    os_pid = :peer.call(peer, :os, :getpid, [], @peer_timeout_ms) |> List.to_string()
+    :ok = :peer.call(peer, :code, :add_paths, [:code.get_path()], @peer_timeout_ms)
 
     :ok =
-      :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :bootstrap, [
-        Application.get_all_env(:codex_pooler),
-        Repo.config()
-      ])
+      :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :bootstrap, [Application.get_all_env(:codex_pooler), Repo.config()], @peer_timeout_ms)
 
     # The peer is identified by PID plus kernel start signature so a reused
     # PID never reads as the peer, and so a hard-killed peer that lingers as a
     # zombie until its port is reaped counts as stopped rather than surviving.
     os_identity = InstancePresencePeer.capture_os_process_identity!(os_pid)
 
-    identity = :peer.call(peer, CodexPooler.Platform.InstancePresence.Identity, :local, [])
-    {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [])
+    identity = :peer.call(peer, CodexPooler.Platform.InstancePresence.Identity, :local, [], @peer_timeout_ms)
+    {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [], @peer_timeout_ms)
 
     UnboxedFixture.register_unboxed_cleanup!(
       fn ->

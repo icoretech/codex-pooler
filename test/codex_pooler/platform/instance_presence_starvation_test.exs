@@ -5,6 +5,11 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
   alias CodexPooler.Platform.{ExecutionIdentity, InstancePresence}
   alias CodexPooler.Platform.InstancePresence.Instance
 
+  # Failure-detection budget for each call into the peer. `:peer.call/4`
+  # defaults to 5 s, and the peer's bootstrap (application starts and a fresh
+  # PostgreSQL pool) outgrew it on a loaded host (findings#206 row 206-184).
+  @peer_call_budget_ms 15_000
+
   # Keep the real disconnected peer and failing writes; seed stale presence
   # and shorten only the publisher cadence, not the production liveness window.
   @tag slow: "boots a disconnected BEAM peer and proves live execution preservation through failed heartbeat writes"
@@ -66,7 +71,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
       )
 
     assert_receive {:presence_peer, peer, remote}, 15_000
-    os_pid = :peer.call(peer, :os, :getpid, []) |> List.to_string()
+    os_pid = :peer.call(peer, :os, :getpid, [], @peer_call_budget_ms) |> List.to_string()
     os_identity = CodexPooler.InstancePresencePeer.capture_os_process_identity!(os_pid)
 
     on_exit(fn ->
@@ -74,15 +79,12 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
       CodexPooler.InstancePresencePeer.assert_os_process_stopped!(os_identity)
     end)
 
-    :ok = :peer.call(peer, :code, :add_paths, [:code.get_path()])
+    :ok = :peer.call(peer, :code, :add_paths, [:code.get_path()], @peer_call_budget_ms)
 
     :ok =
-      :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :bootstrap, [
-        Application.get_all_env(:codex_pooler),
-        Repo.config()
-      ])
+      :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :bootstrap, [Application.get_all_env(:codex_pooler), Repo.config()], @peer_call_budget_ms)
 
-    identity = :peer.call(peer, InstancePresence, :local_identity, [])
+    identity = :peer.call(peer, InstancePresence, :local_identity, [], @peer_call_budget_ms)
 
     UnboxedFixture.register_unboxed_cleanup!(
       fn ->
@@ -102,12 +104,12 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
       CodexPooler.InstancePresencePeer.cleanup_timeout_ms(15_000)
     )
 
-    {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [])
+    {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [], @peer_call_budget_ms)
 
     {request, attempt, executor} =
-      :peer.call(peer, CodexPooler.InstancePresencePeer, :start, [setup])
+      :peer.call(peer, CodexPooler.InstancePresencePeer, :start, [setup], @peer_call_budget_ms)
 
-    assert :alive == :peer.call(peer, ExecutionIdentity, :status, [attempt])
+    assert :alive == :peer.call(peer, ExecutionIdentity, :status, [attempt], @peer_call_budget_ms)
     assert ExecutionIdentity.status(attempt) == :unknown
 
     # The exercise owns committed fixtures and separate peer connections.
@@ -147,8 +149,8 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
 
     assert failures >= 8
     assert age > 120
-    assert :alive == :peer.call(peer, ExecutionIdentity, :status, [attempt])
-    assert [] == :peer.call(peer, Node, :list, [])
+    assert :alive == :peer.call(peer, ExecutionIdentity, :status, [attempt], @peer_call_budget_ms)
+    assert [] == :peer.call(peer, Node, :list, [], @peer_call_budget_ms)
 
     UnboxedFixture.run_unboxed(fn ->
       {:ok, _} = InstancePresence.record_heartbeat()
@@ -174,7 +176,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
                Accounting.recover_absent_instance_attempts(InstancePresence.database_now())
     end)
 
-    :ok = :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :finish, [executor, attempt])
+    :ok = :peer.call(peer, CodexPooler.DisconnectedExecutionPeer, :finish, [executor, attempt], @peer_call_budget_ms)
     assert ExecutionIdentity.status(attempt) == :dead
 
     UnboxedFixture.run_unboxed(fn ->
