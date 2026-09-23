@@ -83,6 +83,16 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
     {:halt, assign_notification_center(socket)}
   end
 
+  # Any other message under the same tag is a shape a newer release sends
+  # during a rolling update. Every admin page mounts this hook and most have no
+  # catch-all `handle_info/2`, so the hook takes it and reloads instead of
+  # handing it on to crash the page (findings#206 row 206-302). The tag is the
+  # rolling-update contract: a new shape keeps it.
+  defp handle_notification_event(message, socket)
+       when is_tuple(message) and tuple_size(message) > 0 and elem(message, 0) == NotificationEvents do
+    {:halt, assign_notification_center(socket)}
+  end
+
   defp handle_notification_event(_message, socket), do: {:cont, socket}
 
   defp handle_notification_action(

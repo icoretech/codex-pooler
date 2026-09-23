@@ -177,6 +177,28 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     refute_received {:DOWN, ^page_ref, :process, _pid, _reason}
   end
 
+  # A newer release may send a notification message of a shape this one does
+  # not know during a rolling update. These pages have no catch-all
+  # `handle_info/2`, so a message the hook passed on would crash them; the hook
+  # takes every message under the tag and reloads (findings#206 row 206-302).
+  for {path, label, message} <- [
+        {"/admin/jobs", "an extra element", quote(do: {NotificationEvents, :invalidated, Ecto.UUID.generate(), %{"reason" => "future"}})},
+        {"/admin/request-logs", "an unknown verb", quote(do: {NotificationEvents, :pruned, Ecto.UUID.generate()})},
+        {"/admin/stats", "the bare tag", quote(do: {NotificationEvents})}
+      ] do
+    test "a notification message with #{label} from a newer release reloads #{path} instead of crashing it", %{conn: conn, scope: scope} do
+      pool = pool!(scope, "newer-release")
+      {:ok, view, _html} = live(conn, unquote(path))
+      trace_notification_reloads!(view)
+      page_ref = Process.monitor(view.pid)
+
+      Phoenix.PubSub.broadcast(CodexPooler.PubSub, NotificationEvents.pool_topic(pool.id), unquote(message))
+
+      assert notification_reloads(view) == 1
+      refute_received {:DOWN, ^page_ref, :process, _pid, _reason}
+    end
+  end
+
   # The alert evaluation jobs run on the worker role, which is not in the app
   # pods' PubSub cluster: an incident it records reaches the app pods' pages only
   # as a PostgreSQL notification. A separate connection commits the worker's
