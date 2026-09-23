@@ -535,23 +535,25 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
     assert attempt.response_metadata["rejection_supported_values_state"] == "present"
   end
 
-  # The provider refuses `previous_response_id` on HTTP with a detail body; it
-  # resolves the anchor only on the websocket connection that produced the
-  # response. An SDK tool loop sent over HTTP gets the parameter named, so a
-  # client can resend the complete input (findings#232 row 232-275).
-  test "POST /v1/responses relays the provider's unsupported previous_response_id on an HTTP tool-output continuation", %{conn: conn} do
-    anchor_id = "resp_v1_http_anchor_unsupported_sample"
-
+  # The Codex backend refuses a top-level parameter it does not accept on HTTP
+  # with a detail body instead of an error object, as it does for
+  # `previous_response_id` (findings#232 row 232-275). A public request reads it
+  # as `unsupported_parameter` with the parameter named. `previous_response_id`
+  # itself never reaches the provider over HTTP from `/v1`: such a request is
+  # answered before dispatch (row 232-277,
+  # `responses_previous_response_connection_test.exs`), so this pins the relay
+  # with another field.
+  test "POST /v1/responses relays a provider detail body that names an unsupported parameter", %{conn: conn} do
     upstream =
       start_upstream(
-        # provenance: observed findings#232 row 232-275 live probe (HTTP 400, `{"detail": ...}` body whose 43-byte text fingerprints to the unsupported previous_response_id message, on /v1/responses stream false and true without owner forwarding)
+        # provenance: synthetic_adversarial (the detail shape observed in the findings#232 row 232-275 live probe, with another field name)
         FakeUpstream.strict_sequence(
           for _stream <- [true, false] do
             FakeUpstream.expect_request(
               method: "POST",
               path: "/backend-api/codex/responses",
-              json: [valid: true, equals: %{"previous_response_id" => anchor_id}],
-              respond: {:json_error, 400, %{"detail" => "Unsupported parameter: previous_response_id"}}
+              json: [valid: true, equals: %{"parallel_tool_calls" => false}],
+              respond: {:json_error, 400, %{"detail" => "Unsupported parameter: parallel_tool_calls"}}
             )
           end
         )
@@ -566,17 +568,17 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
         |> auth(setup)
         |> post("/v1/responses", %{
           "model" => setup.model.exposed_model_id,
-          "previous_response_id" => anchor_id,
-          "input" => [%{"type" => "function_call_output", "call_id" => "call_v1_anchor_unsupported", "output" => @prompt_sentinel}],
+          "parallel_tool_calls" => false,
+          "input" => @prompt_sentinel,
           "stream" => stream?
         })
 
       assert json_response(response, 400) == %{
                "error" => %{
-                 "message" => "upstream rejected parameter previous_response_id (unsupported_parameter)",
+                 "message" => "upstream rejected parameter parallel_tool_calls (unsupported_parameter)",
                  "type" => "invalid_request_error",
                  "code" => "unsupported_parameter",
-                 "param" => "previous_response_id"
+                 "param" => "parallel_tool_calls"
                }
              },
              "stream #{stream?}"
@@ -588,8 +590,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
 
     for attempt <- Repo.all(from(attempt in Attempt)) do
       assert attempt.response_metadata["rejection_detail_class"] == "unsupported_parameter"
-      assert attempt.response_metadata["rejection_error_param"] == "previous_response_id"
-      refute inspect(attempt) =~ anchor_id
+      assert attempt.response_metadata["rejection_error_param"] == "parallel_tool_calls"
     end
 
     assert Repo.aggregate(Attempt, :count) == 2

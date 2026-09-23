@@ -1,15 +1,16 @@
 defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
   # `/v1/responses` admits `previous_response_id` only on a tool-output
-  # continuation, and none of its anchors is tied to an upstream connection
-  # that remembers the Full/Lite dialect of the context: plain HTTP has no
-  # connection, and the HTTP SSE bridge and the public websocket are not
-  # connection-bound continuations. Lite sends its tool manifest and
-  # instructions message only on a request that opens a context (findings#232
-  # row 232-184), so after the Pool flips the model from Full to Lite the first
-  # anchored continuation would reach the provider with no tools and no base
-  # instructions, and an SDK does not retry `previous_response_not_found`. The
-  # dialect recorded on the anchor's alias makes that continuation carry the
-  # prefix (row 232-270).
+  # continuation, and the provider resolves it only on the upstream websocket
+  # connection that produced the response: an anchored `/v1` turn reaches a
+  # context only bridged onto its session's connection or on the public
+  # websocket (findings#232 rows 232-275 and 232-277; an anchored HTTP turn is
+  # answered before dispatch). Neither is refused for the dialect of the
+  # context. Lite sends its tool manifest and instructions message only on a
+  # request that opens a context (row 232-184), so after the Pool flips the
+  # model from Full to Lite the first anchored continuation would reach the
+  # provider with no tools and no base instructions, and an SDK does not retry
+  # `previous_response_not_found`. The dialect recorded on the anchor's alias
+  # makes that continuation carry the prefix (row 232-270).
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
@@ -38,42 +39,6 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
   @tools [%{"type" => "function", "name" => "sample_lookup", "parameters" => %{"type" => "object", "properties" => %{}, "required" => []}}]
   @instructions "synthetic base instructions"
   @frame_timeout 5_000
-
-  @tag :serving_mode_flip_anchor
-  test "an HTTP tool loop anchored on a response served under Full carries the Lite prefix after a flip", %{conn: conn} do
-    upstream =
-      start_upstream(
-        # provenance: synthetic_adversarial
-        FakeUpstream.strict_sequence([
-          http_turn(completed_sse("resp_v1_http_flip_open"), forbidden: ["previous_response_id"]),
-          http_turn(completed_sse("resp_v1_http_flip_call_1"), equals: %{"previous_response_id" => "resp_v1_http_flip_open"}),
-          http_turn(completed_sse("resp_v1_http_flip_call_2"), equals: %{"previous_response_id" => "resp_v1_http_flip_call_1"})
-        ])
-      )
-
-    setup = gateway_setup(upstream)
-    scope = model_serving_scope()
-    revision = set_model_serving_mode!(scope, setup, "full")
-
-    # An SDK tool loop sends no session header: the opening turn opens no
-    # session, the first anchored continuation does, and every later anchor of
-    # the loop has an alias that records its dialect.
-    assert %{"id" => "resp_v1_http_flip_open"} = conn |> post_v1(setup, %{"input" => "anchor"}) |> json_response(200)
-
-    assert %{"id" => "resp_v1_http_flip_call_1"} =
-             conn |> post_v1(setup, %{"previous_response_id" => "resp_v1_http_flip_open", "input" => [tool_output("call_v1_http_1")]}) |> json_response(200)
-
-    _revision = set_model_serving_mode!(scope, setup, "lite", revision)
-
-    assert %{"id" => "resp_v1_http_flip_call_2"} =
-             conn |> post_v1(setup, %{"previous_response_id" => "resp_v1_http_flip_call_1", "input" => [tool_output("call_v1_http_2")]}) |> json_response(200)
-
-    assert [_open, full_continuation, lite_continuation] = FakeUpstream.requests(upstream)
-    assert [%{"type" => "function_call_output"}] = full_continuation.json["input"]
-    assert_lite_prefix!(lite_continuation.json, "call_v1_http_2")
-    assert_request_modes!(setup, ["full", "full", "lite"])
-    assert :ok = FakeUpstream.verify!(upstream)
-  end
 
   @tag :serving_mode_flip_anchor
   test "a bridged HTTP SSE continuation anchored on a response served under Full carries the Lite prefix after a flip", %{conn: conn} do
@@ -182,13 +147,6 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
 
   defp turn_body(setup, attrs), do: Map.merge(%{"model" => setup.model.exposed_model_id, "instructions" => @instructions, "tools" => @tools}, attrs)
 
-  defp post_v1(conn, setup, attrs) do
-    conn
-    |> recycle()
-    |> auth(setup)
-    |> post("/v1/responses", turn_body(setup, attrs))
-  end
-
   defp post_v1_stream(conn, setup, session, attrs) do
     conn
     |> recycle()
@@ -209,10 +167,6 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
     {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
     {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
     {conn, websocket, ref}
-  end
-
-  defp http_turn(respond, json_expectations) do
-    FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", json: expectations(json_expectations), respond: respond)
   end
 
   defp websocket_turn(respond, json_expectations) do
@@ -238,8 +192,6 @@ defmodule CodexPoolerWeb.V1.ResponsesServingModeFlipAnchorTest do
       }
     }
   end
-
-  defp completed_sse(response_id), do: FakeUpstream.sse_stream([{"response.completed", completed_event(response_id)}])
 
   defp completed_frames(response_id), do: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(completed_event(response_id))])
 

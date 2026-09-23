@@ -236,7 +236,22 @@ annotation shapes are rejected before dispatch rather than filtered.
 
 ### Continuing with `previous_response_id`
 
-Codex Pooler forces `store: false` upstream, and the upstream provider resolves `previous_response_id` only on the websocket connection that produced the response. Over HTTP it rejects the parameter with a `400` (`Unsupported parameter: previous_response_id`). On `/v1/responses` an anchored request therefore reaches the earlier context in two cases: on the Responses websocket route, or as a `stream: true` HTTP request on a deployment with websocket owner forwarding (see the [websocket replica caveat](/deployment/helm/#websocket-replica-caveat)) when every request of the chain, the first one included, sends the same session header, such as `session-id`. Codex Pooler then sends those requests over its session's upstream websocket. A non-streaming request, a chain without a session header, and every HTTP request on a deployment without owner forwarding cannot reach that context and receive a `400` `invalid_request_error`; a request sent over HTTP receives it with code `unsupported_parameter` and `param` `previous_response_id`. In those cases, send the complete input without `previous_response_id`.
+Codex Pooler forces `store: false` upstream, and the upstream provider resolves `previous_response_id` only on the websocket connection that produced the response. Over HTTP it rejects the parameter, and on any other websocket connection, a new one included, it rejects the anchor. On `/v1/responses` an anchored request therefore reaches the earlier context in two cases: on the Responses websocket route, or as a `stream: true` HTTP request on a deployment with websocket owner forwarding (see the [websocket replica caveat](/deployment/helm/#websocket-replica-caveat)) when every request of the chain, the first one included, sends the same session header, such as `session-id`. Codex Pooler then sends those requests over its session's upstream websocket.
+
+Every other anchored request is answered with a `400` before it reaches the provider:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "previous_response_not_found",
+    "param": "previous_response_id",
+    "message": "Previous response not found on this request's upstream connection: ..."
+  }
+}
+```
+
+This covers a non-streaming request, every HTTP request on a deployment without owner forwarding, and a streaming request whose session has no upstream connection that produced the anchor, such as a chain without a session header or a session whose connection was closed. The message states the requirement above. When you receive this error, send the complete input again without `previous_response_id`; clients that recognize the `previous_response_not_found` code as a stale chain do this on their own.
 
 ### Output budgets and local usage
 

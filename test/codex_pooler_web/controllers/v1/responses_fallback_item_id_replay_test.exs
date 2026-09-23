@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.V1.ResponsesFallbackItemIdReplayTest do
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.FakeUpstream
+  alias CodexPoolerWeb.Runtime.V1BridgedAnchorSupport, as: BridgedAnchor
 
   @response_id "resp_fallback_item_id_fixture"
   @marker "synthetic fallback id marker"
@@ -57,25 +58,26 @@ defmodule CodexPoolerWeb.V1.ResponsesFallbackItemIdReplayTest do
     assert [%{"type" => "output_text", "text" => @marker}] = replayed_message["content"]
   end
 
-  test "a reasoning item carrying encrypted content replays without its fallback id on a tool continuation" do
-    upstream = start_upstream(FakeUpstream.sse_stream([completed([message("msg_after_reasoning", @marker)])]))
+  # An anchored `/v1` tool continuation reaches the provider only bridged onto
+  # the upstream websocket connection that produced its anchor (findings#232
+  # rows 232-275 and 232-277), so the replay is certified on that path.
+  test "a reasoning item carrying encrypted content replays without its fallback id on a tool continuation", %{conn: conn} do
+    BridgedAnchor.enable_bridge!()
+    upstream = start_upstream(BridgedAnchor.upstream_mode("resp_fallback_item_previous", BridgedAnchor.completed_frames(%{"id" => "resp_fallback_after_reasoning", "output" => [message("msg_after_reasoning", @marker)]})))
     setup = gateway_setup(upstream)
 
     reasoning = %{"id" => "reasoning_0", "type" => "reasoning", "summary" => [], "encrypted_content" => @reasoning_content}
 
-    status =
-      setup
-      |> post_responses(%{
-        "model" => setup.model.exposed_model_id,
-        "stream" => true,
-        "store" => false,
-        "previous_response_id" => "resp_fallback_item_previous",
-        "input" => [reasoning, %{"type" => "function_call_output", "call_id" => "call_fallback_fixture", "output" => "synthetic tool output"}]
-      })
-      |> Map.fetch!(:status)
+    conn
+    |> BridgedAnchor.post_anchored(setup, %{
+      "model" => setup.model.exposed_model_id,
+      "store" => false,
+      "previous_response_id" => "resp_fallback_item_previous",
+      "input" => [reasoning, %{"type" => "function_call_output", "call_id" => "call_fallback_fixture", "output" => "synthetic tool output"}]
+    })
+    |> BridgedAnchor.assert_completed!("resp_fallback_after_reasoning")
 
-    assert status == 200
-    assert [captured] = FakeUpstream.requests(upstream)
+    captured = BridgedAnchor.anchored_request!(upstream)
     assert [replayed_reasoning, _tool_output] = captured.json["input"]
     assert replayed_reasoning == Map.delete(reasoning, "id")
   end

@@ -36,6 +36,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   """
 
   alias CodexPooler.Gateway.ErrorClassification
+  alias CodexPooler.Gateway.OpenAICompatibility.Error, as: OpenAICompatibilityError
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
 
@@ -57,6 +58,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   @rejection_status 400
   @relayed_code_by_type %{"invalid_request_error" => "invalid_request"}
   @invalid_request_code "invalid_request"
+  @previous_response_not_found_code "previous_response_not_found"
+  @previous_response_param "previous_response_id"
   @body_max_bytes 65_536
   @message_max_bytes 2_048
   @supported_values_max 12
@@ -82,10 +85,36 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
 
   @spec fetch(Req.Response.t(), RequestOptions.t() | term()) :: rejection() | nil
   def fetch(%Req.Response{} = response, %RequestOptions{} = request_options) do
-    if Metadata.ordinary_responses_route?(request_options), do: fetch_ordinary_route(response)
+    cond do
+      bridged_public_anchor_miss?(response, request_options) -> previous_response_not_found()
+      Metadata.ordinary_responses_route?(request_options) -> fetch_ordinary_route(response)
+      true -> nil
+    end
   end
 
   def fetch(_response, _request_options), do: nil
+
+  # A public `/v1` turn bridged onto its session's upstream websocket and
+  # anchored on `previous_response_id` whose anchor the connection cannot
+  # resolve: the provider's codeless `Invalid previous_response_id` refusal
+  # (a reused connection that did not produce the response) or the local
+  # `previous_response_not_found` refusal of a fresh connection. Both answer
+  # the typed error a public request anchored over HTTP receives before
+  # dispatch, so SDK fallbacks resend the complete input (findings#232 row
+  # 232-277).
+  defp bridged_public_anchor_miss?(%Req.Response{status: @rejection_status} = response, %RequestOptions{
+         continuity: %{upstream_previous_response_id?: true},
+         transport: %{upstream_websocket_bridge?: true},
+         openai_compatibility: %{source_endpoint: source_endpoint}
+       })
+       when is_binary(source_endpoint),
+       do: Metadata.previous_response_miss?(response)
+
+  defp bridged_public_anchor_miss?(_response, _request_options), do: false
+
+  defp previous_response_not_found do
+    %{code: @previous_response_not_found_code, param: @previous_response_param, supported_values: nil, supported_values_state: nil}
+  end
 
   @doc """
   `fetch/2` for a response already known to answer an ordinary Responses
@@ -350,6 +379,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   defp message(code, param, supported_values) do
     base_message(code, param) <> supported_values_suffix(supported_values)
   end
+
+  defp base_message(@previous_response_not_found_code, _param),
+    do: OpenAICompatibilityError.previous_response_not_found().message
 
   defp base_message(code, nil), do: "upstream rejected the request (#{code})"
   defp base_message(code, param), do: "upstream rejected parameter #{param} (#{code})"

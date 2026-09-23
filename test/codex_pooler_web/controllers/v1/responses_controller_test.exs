@@ -385,6 +385,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPoolerWeb.PublicGatewayResult
+  alias CodexPoolerWeb.Runtime.V1BridgedAnchorSupport, as: BridgedAnchor
   alias Ecto.Adapters.SQL.Sandbox
 
   @websocket_frame_timeout 1_000
@@ -3219,7 +3220,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   } do
     for stream? <- [false, true] do
       response_id = "resp_v1_compaction_trigger_#{stream?}"
-      previous_response_id = "resp_v1_compaction_previous_#{stream?}"
 
       upstream =
         start_upstream(
@@ -3251,8 +3251,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         |> recycle()
         |> auth(setup)
         |> post("/v1/responses", %{
+          # Unanchored: the provider refuses `previous_response_id` over HTTP
+          # and an anchored `/v1` request is answered before dispatch
+          # (findings#232 rows 232-275 and 232-277).
           "model" => setup.model.exposed_model_id,
-          "previous_response_id" => previous_response_id,
           "input" => public_tool_output_compaction_trigger_input("synthetic public compact #{stream?}"),
           "stream" => stream?,
           "include" => ["reasoning.encrypted_content"],
@@ -3335,7 +3337,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert captured.json["store"] == false
       refute Map.has_key?(captured.json, "prompt_cache_options")
       assert captured.json["prompt_cache_key"] == "public-compaction-cache-#{stream?}"
-      assert captured.json["previous_response_id"] == previous_response_id
+      refute Map.has_key?(captured.json, "previous_response_id")
 
       assert Enum.map(captured.json["input"], & &1["type"]) == [
                "function_call_output",
@@ -5460,64 +5462,65 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
   @tag :custom_tool_replay
   @tag :tool_result_previous_response
+  # An anchored `/v1` turn reaches the provider only bridged onto the upstream
+  # websocket connection that produced its anchor (findings#232 rows 232-275
+  # and 232-277), so the replay shape is certified on that path.
   test "POST /v1/responses forwards namespaced custom tool replay without metadata leakage", %{
     conn: conn
   } do
+    BridgedAnchor.enable_bridge!()
+
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_v1_custom_tool_replay",
-          "object" => "response",
-          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-        })
+        BridgedAnchor.upstream_mode(
+          "resp_v1_custom_tool_previous",
+          BridgedAnchor.completed_frames(%{
+            "id" => "resp_v1_custom_tool_replay",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
       )
 
     setup = gateway_setup(upstream)
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "previous_response_id" => "resp_v1_custom_tool_previous",
-        "store" => false,
-        "input" => [
-          %{
-            "type" => "custom_tool_call",
-            "id" => "ctc_v1_http_call",
-            "call_id" => "call_v1_custom_namespaced",
-            "namespace" => "browser.search",
-            "name" => "lookup",
-            "input" => "{}",
-            "status" => "completed",
-            "metadata" => %{"turn_id" => "turn_v1_custom_call_legacy"},
-            "internal_chat_message_metadata_passthrough" => %{
-              "turn_id" => "turn_v1_custom_call",
-              "replay_context" => "custom-call-context"
-            }
-          },
-          %{
-            "type" => "custom_tool_call_output",
-            "id" => "ctco_v1_http_call",
-            "call_id" => "call_v1_custom_namespaced",
-            "name" => "lookup",
-            "output" => "synthetic custom output",
-            "metadata" => %{"turn_id" => "turn_v1_custom_output_legacy"},
-            "internal_chat_message_metadata_passthrough" => %{
-              "turn_id" => "turn_v1_custom_output"
-            }
+    conn
+    |> BridgedAnchor.post_anchored(setup, %{
+      "model" => setup.model.exposed_model_id,
+      "previous_response_id" => "resp_v1_custom_tool_previous",
+      "store" => false,
+      "input" => [
+        %{
+          "type" => "custom_tool_call",
+          "id" => "ctc_v1_http_call",
+          "call_id" => "call_v1_custom_namespaced",
+          "namespace" => "browser.search",
+          "name" => "lookup",
+          "input" => "{}",
+          "status" => "completed",
+          "metadata" => %{"turn_id" => "turn_v1_custom_call_legacy"},
+          "internal_chat_message_metadata_passthrough" => %{
+            "turn_id" => "turn_v1_custom_call",
+            "replay_context" => "custom-call-context"
           }
-        ]
-      })
+        },
+        %{
+          "type" => "custom_tool_call_output",
+          "id" => "ctco_v1_http_call",
+          "call_id" => "call_v1_custom_namespaced",
+          "name" => "lookup",
+          "output" => "synthetic custom output",
+          "metadata" => %{"turn_id" => "turn_v1_custom_output_legacy"},
+          "internal_chat_message_metadata_passthrough" => %{
+            "turn_id" => "turn_v1_custom_output"
+          }
+        }
+      ]
+    })
+    |> BridgedAnchor.assert_completed!("resp_v1_custom_tool_replay")
 
-    assert %{"id" => "resp_v1_custom_tool_replay", "object" => "response"} =
-             json_response(conn, 200)
-
-    assert FakeUpstream.count(upstream) == 1
-    assert [captured] = FakeUpstream.requests(upstream)
+    captured = BridgedAnchor.anchored_request!(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["previous_response_id"] == "resp_v1_custom_tool_previous"
-    assert captured.json["stream"] == true
     assert captured.json["store"] == false
 
     assert [custom_call, custom_output] = captured.json["input"]
@@ -5542,7 +5545,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "turn_id" => "turn_v1_custom_output"
            }
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [_opener, request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.status == "succeeded"
 
@@ -6194,53 +6197,55 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :tool_result_previous_response
+  # The anchored shape is certified on the bridged path, the only one on which
+  # the provider serves an anchored `/v1` turn (findings#232 rows 232-275 and
+  # 232-277).
   test "POST /v1/responses forwards safe continuation shape and rejects malformed item references without echoing payloads",
        %{
          conn: conn
        } do
-    upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_v1_http_safe_continuation",
-          "object" => "response",
-          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-        })
-      )
-
-    setup = gateway_setup(upstream)
+    BridgedAnchor.enable_bridge!()
     previous_response_id = "resp_v1_http_safe_previous_#{System.unique_integer([:positive])}"
     tool_call_id = "call_v1_http_safe_#{System.unique_integer([:positive])}"
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "previous_response_id" => previous_response_id,
-        "store" => false,
-        "input" => [
-          %{"type" => "item_reference", "id" => "msg_v1_http_safe_reference"},
-          %{
-            "type" => "function_call_output",
-            "call_id" => tool_call_id,
-            "name" => "lookup",
-            "namespace" => "browser.search",
-            "output" => "{\"ok\":true}"
-          },
-          %{
-            "role" => "user",
-            "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
-          }
-        ]
-      })
+    upstream =
+      start_upstream(
+        BridgedAnchor.upstream_mode(
+          previous_response_id,
+          BridgedAnchor.completed_frames(%{
+            "id" => "resp_v1_http_safe_continuation",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+      )
 
-    assert %{"id" => "resp_v1_http_safe_continuation", "object" => "response"} =
-             json_response(conn, 200)
+    setup = gateway_setup(upstream)
 
-    assert [captured] = FakeUpstream.requests(upstream)
+    conn
+    |> BridgedAnchor.post_anchored(setup, %{
+      "model" => setup.model.exposed_model_id,
+      "previous_response_id" => previous_response_id,
+      "store" => false,
+      "input" => [
+        %{"type" => "item_reference", "id" => "msg_v1_http_safe_reference"},
+        %{
+          "type" => "function_call_output",
+          "call_id" => tool_call_id,
+          "name" => "lookup",
+          "namespace" => "browser.search",
+          "output" => "{\"ok\":true}"
+        },
+        %{
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+        }
+      ]
+    })
+    |> BridgedAnchor.assert_completed!("resp_v1_http_safe_continuation")
+
+    captured = BridgedAnchor.anchored_request!(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["previous_response_id"] == previous_response_id
-    assert captured.json["stream"] == true
     assert captured.json["store"] == false
 
     assert Enum.map(captured.json["input"], & &1["type"]) == [
@@ -6255,7 +6260,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert Enum.at(captured.json["input"], 1)["namespace"] == "browser.search"
     assert Enum.at(captured.json["input"], 2)["role"] == "user"
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [_opener, request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.status == "succeeded"
 
@@ -6291,54 +6296,54 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute invalid_text =~ "unsafe-inline-leak"
     refute invalid_text =~ "msg_v1_http_unsafe_reference"
 
-    assert FakeUpstream.count(upstream) == 1
-    assert Repo.aggregate(Request, :count) == 1
-    assert Repo.aggregate(Attempt, :count) == 1
+    assert FakeUpstream.count(upstream) == 2
+    assert Repo.aggregate(Request, :count) == 2
+    assert Repo.aggregate(Attempt, :count) == 2
   end
 
   @tag :structured_tool_result_pass_through
   test "POST /v1/responses forwards structured tool output unchanged and keeps projections shape-only",
        %{conn: conn} do
     setup_runtime_ingress_override(%OperationalSettings{gateway_debug?: true})
-
-    upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_v1_http_structured_tool_result",
-          "object" => "response",
-          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-        })
-      )
-
-    setup = gateway_setup(upstream)
+    # Bridged: the only path on which the provider serves an anchored `/v1`
+    # turn (findings#232 rows 232-275 and 232-277).
+    BridgedAnchor.enable_bridge!()
     previous_response_id = "resp_v1_http_structured_previous"
     tool_call_id = "call_v1_http_structured_tool"
     structured_output = structured_tool_result_output()
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "previous_response_id" => previous_response_id,
-        "store" => false,
-        "input" => [
-          %{"type" => "item_reference", "id" => "msg_v1_http_structured_reference"},
-          %{
-            "type" => "function_call_output",
-            "call_id" => tool_call_id,
-            "output" => structured_output
-          }
-        ]
-      })
+    upstream =
+      start_upstream(
+        BridgedAnchor.upstream_mode(
+          previous_response_id,
+          BridgedAnchor.completed_frames(%{
+            "id" => "resp_v1_http_structured_tool_result",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+      )
 
-    assert %{"id" => "resp_v1_http_structured_tool_result", "object" => "response"} =
-             json_response(conn, 200)
+    setup = gateway_setup(upstream)
 
-    assert [captured] = FakeUpstream.requests(upstream)
+    conn
+    |> BridgedAnchor.post_anchored(setup, %{
+      "model" => setup.model.exposed_model_id,
+      "previous_response_id" => previous_response_id,
+      "store" => false,
+      "input" => [
+        %{"type" => "item_reference", "id" => "msg_v1_http_structured_reference"},
+        %{
+          "type" => "function_call_output",
+          "call_id" => tool_call_id,
+          "output" => structured_output
+        }
+      ]
+    })
+    |> BridgedAnchor.assert_completed!("resp_v1_http_structured_tool_result")
+
+    captured = BridgedAnchor.anchored_request!(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["previous_response_id"] == previous_response_id
-    assert captured.json["stream"] == true
     assert captured.json["store"] == false
 
     assert Enum.map(captured.json["input"], & &1["type"]) == [
@@ -6354,7 +6359,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       "structured function_call_output output was not forwarded unchanged"
     )
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [_opener, request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
     assert request.status == "succeeded"
     assert request.endpoint == "/backend-api/codex/responses"
 
@@ -6383,72 +6388,68 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute projection_text =~ tool_call_id
   end
 
+  # Bridged: the only path on which the provider serves an anchored `/v1`
+  # turn (findings#232 rows 232-275 and 232-277).
   @tag :tool_result_previous_response
   test "POST /v1/responses keeps store false replay item ids at the raw Responses boundary", %{
     conn: conn
   } do
+    BridgedAnchor.enable_bridge!()
+
     upstream =
       start_upstream(
-        FakeUpstream.sse_stream([
-          {"response.completed",
-           %{
-             "type" => "response.completed",
-             "response" => %{
-               "id" => "resp_v1_http_store_false_replay_ids",
-               "status" => "completed",
-               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-             }
-           }}
-        ])
+        BridgedAnchor.upstream_mode(
+          "resp_v1_http_store_false_previous",
+          BridgedAnchor.completed_frames(%{
+            "id" => "resp_v1_http_store_false_replay_ids",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
       )
 
     setup = gateway_setup(upstream)
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "previous_response_id" => "resp_v1_http_store_false_previous",
-        "store" => false,
-        "input" => [
-          %{
-            "type" => "reasoning",
-            "id" => "rs_v1_http_store_false_replay",
-            "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
-            "content" => [
-              %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
-            ],
-            "encrypted_content" => "synthetic-encrypted-reasoning"
-          },
-          %{
-            "type" => "message",
-            "role" => "assistant",
-            "id" => "msg_v1_http_store_false_replay",
-            "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
-          },
-          %{
-            "type" => "function_call",
-            "id" => "fc_v1_http_store_false_replay",
-            "call_id" => "call_v1_http_store_false_replay",
-            "name" => "lookup_fixture",
-            "namespace" => "fixture_namespace",
-            "arguments" => "{}"
-          },
-          %{
-            "type" => "function_call_output",
-            "id" => "fco_v1_http_store_false_replay",
-            "call_id" => "call_v1_http_store_false_replay",
-            "output" => "synthetic tool output"
-          },
-          %{"type" => "item_reference", "id" => "msg_v1_http_store_false_reference"}
-        ]
-      })
+    conn
+    |> BridgedAnchor.post_anchored(setup, %{
+      "model" => setup.model.exposed_model_id,
+      "previous_response_id" => "resp_v1_http_store_false_previous",
+      "store" => false,
+      "input" => [
+        %{
+          "type" => "reasoning",
+          "id" => "rs_v1_http_store_false_replay",
+          "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+          "content" => [
+            %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
+          ],
+          "encrypted_content" => "synthetic-encrypted-reasoning"
+        },
+        %{
+          "type" => "message",
+          "role" => "assistant",
+          "id" => "msg_v1_http_store_false_replay",
+          "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
+        },
+        %{
+          "type" => "function_call",
+          "id" => "fc_v1_http_store_false_replay",
+          "call_id" => "call_v1_http_store_false_replay",
+          "name" => "lookup_fixture",
+          "namespace" => "fixture_namespace",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
+          "id" => "fco_v1_http_store_false_replay",
+          "call_id" => "call_v1_http_store_false_replay",
+          "output" => "synthetic tool output"
+        },
+        %{"type" => "item_reference", "id" => "msg_v1_http_store_false_reference"}
+      ]
+    })
+    |> BridgedAnchor.assert_completed!("resp_v1_http_store_false_replay_ids")
 
-    assert %{"id" => "resp_v1_http_store_false_replay_ids", "object" => "response"} =
-             json_response(conn, 200)
-
-    assert [captured] = FakeUpstream.requests(upstream)
+    captured = BridgedAnchor.anchored_request!(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["store"] == false
     assert captured.json["previous_response_id"] == "resp_v1_http_store_false_previous"
@@ -6468,7 +6469,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
            ]
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [_opener, request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
     metadata = inspect(request.request_metadata)
     refute metadata =~ "synthetic summary"
     refute metadata =~ "synthetic reasoning replay"

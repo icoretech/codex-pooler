@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
@@ -21,6 +22,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   @unsupported_parameter_detail_prefix "Unsupported parameter: "
   @unsupported_parameter_code "unsupported_parameter"
   @invalid_request_error_type "invalid_request_error"
+  @previous_response_not_found_code "previous_response_not_found"
+  @invalid_previous_response_id_message ErrorCodes.invalid_previous_response_id_message()
+  @rejection_message_classes %{@invalid_previous_response_id_message => "invalid_previous_response_id"}
   @rejection_param_max_bytes 160
   @rejection_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
   @upstream_websocket_connection_atom_keys [
@@ -147,6 +151,33 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   def upstream_status_error_code(_status, _request_options), do: "upstream_status"
 
+  @doc """
+  True for a refusal that says the provider cannot resolve the request's
+  `previous_response_id` on this connection: the Codex backend's codeless
+  `invalid_request_error` whose message is exactly
+  `Invalid \`previous_response_id\`.` (a websocket connection that did not
+  produce the response, a fresh one included; findings#232 row 232-277, live
+  probe 2026-09-23, and the same refusal `UpstreamWebsocketSession` answers
+  locally for a fresh connection), or an explicit `previous_response_not_found`
+  code. Only that fixed text is compared; no provider text is kept.
+  """
+  @spec previous_response_miss?(Req.Response.t()) :: boolean()
+  def previous_response_miss?(%Req.Response{} = response) do
+    with body when is_binary(body) and byte_size(body) <= @rejection_body_max_bytes <- rejection_body(response),
+         {:ok, %{"error" => %{"type" => @invalid_request_error_type} = error}} <- CodexPooler.JSON.decode(body) do
+      previous_response_miss_error?(error)
+    else
+      _other -> false
+    end
+  end
+
+  defp previous_response_miss_error?(%{"code" => @previous_response_not_found_code}), do: true
+
+  defp previous_response_miss_error?(%{"message" => @invalid_previous_response_id_message} = error),
+    do: is_nil(Map.get(error, "code"))
+
+  defp previous_response_miss_error?(_error), do: false
+
   @spec rejection_error(Req.Response.t()) :: map()
   def rejection_error(%Req.Response{} = response) do
     response
@@ -214,6 +245,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
           valid_rejection_param(error["param"])
         )
         |> put_rejection_message_metadata(error["message"])
+        |> maybe_put_rejection_value("rejection_message_class", Map.get(@rejection_message_classes, error["message"]))
 
       {:ok, %{"detail" => detail}} ->
         detail_rejection_metadata(detail)

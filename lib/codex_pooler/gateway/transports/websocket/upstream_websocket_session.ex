@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -935,14 +936,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   # reach the provider with no tools and no base instructions (row 232-210).
   # The client answers `previous_response_not_found` with a full request
   # without the anchor, which opens a Lite context with the prefix.
+  #
+  # A public `/v1` bridged anchor has no client that retries
+  # `previous_response_not_found`; it gets the refusal the provider sends for
+  # the same request on a connection that did not produce the anchor (a
+  # codeless 400 `invalid_request_error`, findings#232 row 232-277, live probe
+  # 2026-09-23), which the bridge answers like the provider's own refusal.
   defp guard_connection_bound_continuation(state, receive_state, connection_usage, reason \\ :previous_response_generation_mismatch) do
-    terminal =
-      StreamProtocol.canonicalize_native_codex_responses_json_message(~s({"type":"error","error":{"code":"previous_response_not_found"}}))
-
-    decoded = decode_text_frame(terminal)
+    {terminal, decoded, mapped, mapped_decoded} = connection_bound_miss_frame(receive_state.message_mapper)
 
     {:halt, {:terminal, state, receive_state, "error"}} =
-      handle_text_frame(state, receive_state, terminal, decoded, terminal, decoded)
+      handle_text_frame(state, receive_state, terminal, decoded, mapped, mapped_decoded)
 
     {{:ok, result}, state} =
       finish_receive_result({:terminal, state, receive_state, "error"})
@@ -961,6 +965,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {:ok, put_result_connection_metadata({:ok, result}, state, connection_usage), state}
   end
 
+  defp connection_bound_miss_frame(mapper) do
+    if public_openai_responses_mapper?(mapper) do
+      terminal =
+        CodexPooler.JSON.encode!(%{
+          "type" => "error",
+          "status" => 400,
+          "error" => %{"type" => "invalid_request_error", "message" => ErrorCodes.invalid_previous_response_id_message()}
+        })
+
+      decoded = decode_text_frame(terminal)
+      {mapped, mapped_decoded} = map_message(terminal, decoded, mapper)
+      {terminal, decoded, mapped, mapped_decoded}
+    else
+      terminal =
+        StreamProtocol.canonicalize_native_codex_responses_json_message(~s({"type":"error","error":{"code":"previous_response_not_found"}}))
+
+      decoded = decode_text_frame(terminal)
+      {terminal, decoded, terminal, decoded}
+    end
+  end
+
+  defp public_openai_responses_mapper?(mapper),
+    do: mapper == (&StreamProtocol.normalize_public_openai_responses_json_message/1)
+
   # Only a Lite anchor on a context opened under Full lacks anything: the Full
   # context holds no tool manifest and no instructions message, and the Lite
   # anchored request carries neither. The reverse flip is sent: a Full anchored
@@ -970,8 +998,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   # The mode is known only for a context whose last response on this connection
   # completed (`maybe_record_successful_serving_mode/3`); without one the plain
   # reuse rule applies.
-  defp lite_anchor_on_full_context?(state, %Request{effective_serving_mode: "lite"}),
-    do: Map.get(state, :last_successful_effective_serving_mode) == "full"
+  #
+  # A public `/v1` bridged anchor is bound to its connection too (findings#232
+  # row 232-277) but is never refused for the mode: it carries the declared
+  # Lite prefix, which gives the Full context what it lacks
+  # (`PayloadNormalizer.responses_lite_prefix/6`, row 232-270), while an anchor
+  # off its connection has no such remedy.
+  defp lite_anchor_on_full_context?(state, %Request{effective_serving_mode: "lite", message_mapper: mapper}),
+    do: not public_openai_responses_mapper?(mapper) and Map.get(state, :last_successful_effective_serving_mode) == "full"
 
   defp lite_anchor_on_full_context?(_state, %Request{}), do: false
 

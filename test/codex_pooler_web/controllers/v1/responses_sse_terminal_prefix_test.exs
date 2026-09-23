@@ -372,7 +372,9 @@ defmodule CodexPoolerWeb.V1.ResponsesSSETerminalPrefixTest do
       "model" => setup.model.exposed_model_id,
       "stream" => true,
       "store" => false,
-      "previous_response_id" => "resp_terminal_prefix_previous",
+      # Unanchored: the provider refuses `previous_response_id` over HTTP and
+      # an anchored `/v1` request is answered before dispatch (findings#232
+      # rows 232-275 and 232-277).
       "input" => [
         %{"type" => "function_call_output", "call_id" => "call_compaction_fixture", "output" => "synthetic tool output"},
         %{"type" => "compaction_trigger"}

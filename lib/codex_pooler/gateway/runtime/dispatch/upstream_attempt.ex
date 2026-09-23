@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   @moduledoc false
 
   alias CodexPooler.Gateway.Admission
+  alias CodexPooler.Gateway.OpenAICompatibility.Error, as: OpenAICompatibilityError
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -49,12 +50,44 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
         fail_closed_websocket_transport(prepared_context)
 
       :http ->
-        if WebsocketBridge.eligible?(prepared_context) do
-          dispatch_websocket_bridge(prepared_context, callbacks)
-        else
-          dispatch_http(prepared_context, callbacks)
+        cond do
+          WebsocketBridge.eligible?(prepared_context) ->
+            dispatch_websocket_bridge(prepared_context, callbacks)
+
+          public_anchor_over_http?(context.request_options) ->
+            refuse_public_anchor_over_http(prepared_context)
+
+          true ->
+            dispatch_http(prepared_context, callbacks)
         end
     end
+  end
+
+  # The provider resolves `previous_response_id` only on the websocket
+  # connection that produced the response and refuses it over HTTP
+  # (findings#232 rows 232-275 and 232-277). A public `/v1` request anchored on
+  # it that is not bridged onto its session's upstream websocket (no session
+  # header, not streaming, owner forwarding off, or a session pinned to another
+  # assignment) can only fail at the provider, so it is answered here, before
+  # any upstream call, with the typed error SDK fallbacks recognise.
+  @spec public_anchor_over_http?(RequestOptions.t()) :: boolean()
+  def public_anchor_over_http?(%RequestOptions{
+        continuity: %{upstream_previous_response_id?: true},
+        openai_compatibility: %{source_endpoint: source_endpoint}
+      })
+      when is_binary(source_endpoint),
+      do: true
+
+  def public_anchor_over_http?(%RequestOptions{}), do: false
+
+  defp refuse_public_anchor_over_http(%PreparedContext{context: context}) do
+    Finalization.Websocket.finalize_failed(context, %{
+      reason: :previous_response_connection_required,
+      error: OpenAICompatibilityError.previous_response_not_found(),
+      body: "",
+      headers: [],
+      started: context.started
+    })
   end
 
   @doc """

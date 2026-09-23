@@ -411,6 +411,14 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "answers the public client with the same HTTP status and OpenAI error body as the HTTP path and records the same rejection fields on the websocket attempt, without HTTP resubmission"
     end
 
+    test "states that an anchored public turn is served only on the connection that produced its anchor" do
+      feature = CompatibilityMatrix.by_slug!(:upstream_websocket_bridge)
+
+      assert feature.contract =~ "a turn anchored on previous_response_id is bound to its owner connection"
+      assert feature.contract =~ "answers the public client 400 previous_response_not_found with param previous_response_id"
+      assert feature.contract =~ "is answered with the same error before any upstream call"
+    end
+
     test "states that the public SSE relays only the public Responses stream vocabulary" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
 

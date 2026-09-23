@@ -1118,13 +1118,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     end
   end
 
-  # A websocket turn with no websocket upstream path never dispatched: settle it
-  # once with the fixed Pooler error, without retry or route-health evidence.
+  # A websocket turn with no websocket upstream path, and a public `/v1` request
+  # anchored on `previous_response_id` that cannot reach the connection that
+  # produced it, never dispatched: settle it once with the fixed Pooler error,
+  # without retry or route-health evidence.
   def finalize_failed(
         context,
-        %{reason: :websocket_transport_required, error: %{status: status, code: code} = failure} =
-          finalization
-      ) do
+        %{reason: reason, error: %{status: status, code: code} = failure} = finalization
+      )
+      when reason in [:websocket_transport_required, :previous_response_connection_required] do
     %{headers: headers, started: started} = finalization
     %{reserved: reserved, attempt: attempt, request_options: request_options} = context
     transports = resolved_transports(context)
@@ -1146,7 +1148,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
-        {:error, error(status, code, failure.message)}
+        {:error, error(status, code, failure.message, Map.get(failure, :param))}
 
       {:error, gateway_error} = error ->
         emit_settlement_failure(error, transports)

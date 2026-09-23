@@ -15,6 +15,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "previous_response_not_found",
     "invalid_previous_response_id"
   ]
+  # The Codex backend's websocket refusal of an anchor the connection cannot
+  # resolve (a connection that did not produce the response, a fresh one
+  # included): a codeless 400 `invalid_request_error` with exactly this message
+  # (findings#232 row 232-277, live probe 2026-09-23).
+  @invalid_previous_response_id_message "Invalid `previous_response_id`."
   @stream_incomplete_code "stream_incomplete"
   @previous_response_not_found_code "previous_response_not_found"
   @server_error_code "server_error"
@@ -150,6 +155,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
 
   @spec known_error_codes() :: [String.t()]
   def known_error_codes, do: @known_error_codes
+
+  @spec invalid_previous_response_id_message() :: String.t()
+  def invalid_previous_response_id_message, do: @invalid_previous_response_id_message
 
   @spec upstream_unauthorized_code() :: String.t()
   def upstream_unauthorized_code, do: @upstream_unauthorized_code
