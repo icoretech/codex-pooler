@@ -1514,33 +1514,38 @@ defmodule CodexPooler.Accounting.ClientRetry do
   # response, so the client's byte-identical resend is admitted as one
   # successor instead of meeting `duplicate_turn` for the whole user turn. The
   # vocabulary is the retryable first-event set (server errors and overload),
-  # never policy, quota, or auth codes that a resend would only repeat.
-  defp verified_provider_terminal_failure?(
-         %CodexTurn{
-           status: "failed",
-           error_code: code,
-           final_attempt_id: attempt_id,
-           transport_kind: "websocket",
-           completed_at: %DateTime{}
-         },
-         %Request{
-           status: "failed",
-           last_error_code: code,
-           completed_at: %DateTime{}
-         },
-         %Attempt{
-           id: attempt_id,
-           status: "failed",
-           network_error_code: code,
-           transport: "websocket",
-           replay_generation: 0,
-           completed_at: %DateTime{}
-         }
-       )
-       when is_binary(attempt_id) and is_binary(code),
-       do: ErrorCodes.retryable_first_event_code?(code)
+  # never policy, quota, or auth codes that a resend would only repeat. The
+  # owner's client-retry preflight asks it, and so does the turn-claim resend
+  # path with owner forwarding off (`FailedPredecessorResend`, findings#121
+  # variant B, findings#232 row 232-280).
+  @doc false
+  @spec verified_provider_terminal_failure?(term(), term(), term()) :: boolean()
+  def verified_provider_terminal_failure?(
+        %CodexTurn{
+          status: "failed",
+          error_code: code,
+          final_attempt_id: attempt_id,
+          transport_kind: "websocket",
+          completed_at: %DateTime{}
+        },
+        %Request{
+          status: "failed",
+          last_error_code: code,
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          id: attempt_id,
+          status: "failed",
+          network_error_code: code,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{}
+        }
+      )
+      when is_binary(attempt_id) and is_binary(code),
+      do: ErrorCodes.retryable_first_event_code?(code)
 
-  defp verified_provider_terminal_failure?(_turn, _request, _attempt), do: false
+  def verified_provider_terminal_failure?(_turn, _request, _attempt), do: false
 
   @doc false
   @spec verified_quota_rejection?(term(), term(), term()) :: boolean()
