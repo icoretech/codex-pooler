@@ -72,10 +72,43 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerRecoveryDrainTest do
     assert_receive {:socket_terminating, socket}, @detection_timeout_ms
     assert socket == scenario.socket
 
+    # The replacement owner is registered but still starting (its upstream
+    # start is held), so the socket's early owner call waits in its mailbox.
+    # Released before that call is queued, the recovery can attach the
+    # socket's downstream first; the early call then finds an idle attached
+    # downstream, fences it (findings#232 rows 232-171/232-175) and the
+    # re-submit is refused before any upstream send (Drone 1512). Release only
+    # once the call is queued, so the owner answers it before the attach and the
+    # socket learns about the replacement from the recovery notification.
+    await_queued_early_owner_call!(recovery_start_pid)
     send(recovery_start_pid, {:release_recovery_start, release_ref})
     assert_receive {:recovery_submit_started, _recovery_worker}, @detection_timeout_ms
 
     assert_socket_drained_on_signal(scenario)
+  end
+
+  defp await_queued_early_owner_call!(owner) do
+    deadline_ms = System.monotonic_time(:millisecond) + @detection_timeout_ms
+    await_queued_early_owner_call!(owner, deadline_ms)
+  end
+
+  # Nothing but the socket's early owner call sends to the replacement owner
+  # while its init holds the upstream start: the recovery waits for that init
+  # to return before it attaches and re-submits. `:messages` can still read an
+  # in-transit call as an empty queue; `:message_queue_len` counts it.
+  defp await_queued_early_owner_call!(owner, deadline_ms) do
+    case Process.info(owner, :message_queue_len) do
+      {:message_queue_len, queued} when queued > 0 ->
+        :ok
+
+      info ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          flunk("the closing socket's early owner call never reached the starting replacement owner: #{inspect(info)}")
+        else
+          Process.sleep(5)
+          await_queued_early_owner_call!(owner, deadline_ms)
+        end
+    end
   end
 
   defp assert_socket_drained_on_signal(scenario) do
