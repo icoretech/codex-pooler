@@ -13,6 +13,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
   alias CodexPooler.Dev.CodexCompactionSmokeFixture.Journal
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexTurn, SessionContinuity}
+  alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Jobs.AccountReconciliationWorker
@@ -150,6 +152,44 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert model["context_window"] == 128_000
     assert model["auto_compact_token_limit"] == 200
 
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+  end
+
+  # The service tier the released Codex client sends for the fixture model when
+  # nothing configures one: `default_service_tier` of `gpt-6-sol` in the
+  # client's bundled `codex-rs/models-manager/models.json` (0.156.1). The
+  # Pooler's runtime filter refuses a non-default tier the assignment's model
+  # metadata does not declare, so a fixture without it answers `503
+  # no_compatible_backend` to every such turn (findings#203/#206, after the
+  # e4ac10ffb move from gpt-5.5, whose bundled entry has no default tier).
+  @bundled_client_default_service_tier "priority"
+
+  @tag :unix_integration
+  test "the fixture model admits the service tier the released client sends by default", context do
+    options = fixture_options(context)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    assert {:ok, secret} = Journal.read_secret(Journal.paths(context.root, context.run_id), context.run_id)
+
+    model = Repo.get_by!(Model, pool_id: secret["pool_id"])
+    assignment = Repo.get!(PoolUpstreamAssignment, acquired.assignment_id)
+    identity = Repo.get!(UpstreamIdentity, acquired.identity_id)
+    source_model = get_in(model.metadata, ["source_assignment_models", assignment.id])
+
+    payload = %{"model" => model.exposed_model_id, "service_tier" => @bundled_client_default_service_tier}
+    request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+    assert {:ok, [{%PoolUpstreamAssignment{id: assignment_id}, _identity}]} =
+             FilterInput.new(%{
+               model: model,
+               endpoint: "/backend-api/codex/responses",
+               payload: payload,
+               request_options: request_options,
+               candidates: [{assignment, identity}]
+             })
+             |> CandidateEligibility.filter_runtime_compatible_candidates()
+
+    assert assignment_id == assignment.id
+    assert Enum.map(source_model["service_tiers"], & &1["id"]) == [@bundled_client_default_service_tier]
     assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
   end
 

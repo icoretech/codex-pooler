@@ -226,6 +226,14 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
             "use_responses_lite" => use_responses_lite,
             "input_modalities" => ["text", "image"],
             "supports_image_detail_original" => true,
+            # The tiers the provider's catalog declares for this model, as the
+            # upstream sync stores them. The released client sends its bundled
+            # default tier (`priority` for gpt-6-sol) when nothing configures
+            # one, and the runtime filter refuses a non-default tier the
+            # assignment does not declare (`503 no_compatible_backend`).
+            "service_tiers" => [%{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"}],
+            "default_service_tier" => nil,
+            "additional_speed_tiers" => ["fast"],
             "supported_reasoning_levels" => [%{"effort" => "low", "description" => "Low reasoning effort"}],
             "default_reasoning_level" => "low",
             "context_window" => 128_000,
