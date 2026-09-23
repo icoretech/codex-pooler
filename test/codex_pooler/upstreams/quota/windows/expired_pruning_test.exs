@@ -214,8 +214,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruningTest do
         Repo.query!("SELECT wait_event, pg_blocking_pids(pid) FROM pg_stat_activity WHERE pid = $1", [backend_pid])
       end)
 
+    # A waiter joins the lock queue, which `pg_blocking_pids/1` reports, before
+    # it reports the wait itself, so one sample can pair the holder with a nil
+    # `wait_event` (Drone 1527, findings#206 row 206-344). That sample is "not
+    # yet observed", never the answer.
     case rows do
-      [[wait_event, [^holder_pid]]] ->
+      [[wait_event, [^holder_pid]]] when is_binary(wait_event) ->
         {wait_event, [holder_pid]}
 
       other ->
