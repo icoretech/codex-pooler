@@ -28,9 +28,9 @@ Merge this native v2 configuration into `~/.config/opencode/opencode.jsonc`. The
 ```jsonc title="~/.config/opencode/opencode.jsonc" frame="code"
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "codex-pooler/gpt-5.6-terra",
+  "model": "codex-pooler/gpt-6-sol",
   "agents": {
-    "title": { "model": "codex-pooler/gpt-5.6-luna" }
+    "title": { "model": "codex-pooler/gpt-6-luna" }
   },
   "compaction": {
     "auto": true,
@@ -47,23 +47,16 @@ Merge this native v2 configuration into `~/.config/opencode/opencode.jsonc`. The
         "compaction": { "type": "summary" }
       },
       "models": {
-        "gpt-5.6-luna": {
-          "modelID": "gpt-5.6-luna",
-          "name": "GPT-5.6 Luna",
+        "gpt-6-luna": {
+          "modelID": "gpt-6-luna",
+          "name": "GPT-6 Luna",
           "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
           "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
         },
-        "gpt-5.6-terra": {
-          "modelID": "gpt-5.6-terra",
-          "name": "GPT-5.6 Terra",
-          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
-          "limit": { "context": 828400, "input": 828400, "output": 32000 },
-          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
-        },
-        "gpt-5.6-sol": {
-          "modelID": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol",
+        "gpt-6-sol": {
+          "modelID": "gpt-6-sol",
+          "name": "GPT-6 Sol",
           "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
           "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
@@ -92,7 +85,7 @@ curl -fsS https://codex-pooler.example.com/v1/models \
   -H "Authorization: Bearer $CODEX_POOLER_API_KEY"
 ```
 
-Luna, Terra, Sol and Astra are example model IDs, not an availability guarantee. Use the exact `data[].id` served by your Pool and its `context_length` for both `limit.context` and `limit.input`. A long account profile can expose **828,400** tokens; a smaller profile can expose **258,400** for the same model. V2 does not automatically replace a manually configured model limit with Pooler's catalog value.
+Luna, Sol and Astra are example model IDs, not an availability guarantee. Use the exact `data[].id` served by your Pool and its `context_length` for both `limit.context` and `limit.input`. A long account profile can expose **828,400** tokens; a smaller profile can expose **258,400** for the same model. V2 does not automatically replace a manually configured model limit with Pooler's catalog value.
 
 `limit.output` is the configured output allowance, not extra input capacity. The example uses a conservative 32,000-token budget; `/v1/models.context_length` does not advertise an output-token maximum. Raise the allowance only when the selected upstream supports it. Reasoning effort goes under model `settings`, not the ignored v1 model boolean `reasoning`. Optional priority processing uses `settings.serviceTier: "priority"` when your Pool supports it and you accept the additional cost.
 
@@ -101,7 +94,7 @@ Luna, Terra, Sol and Astra are example model IDs, not an availability guarantee.
 Start a standalone conversation with your configured model:
 
 ```bash
-opencode run --standalone --model codex-pooler/gpt-5.6-terra "Reply with a short greeting"
+opencode run --standalone --model codex-pooler/gpt-6-sol "Reply with a short greeting"
 ```
 
 Resume a conversation with `opencode run --standalone --session <session-id>`. Pooler's request logs show the model, time and final status of each request.

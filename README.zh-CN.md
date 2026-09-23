@@ -157,8 +157,8 @@ OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本�
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "codex-pooler/gpt-5.6-terra",
-  "agents": { "title": { "model": "codex-pooler/gpt-5.6-luna" } },
+  "model": "codex-pooler/gpt-6-sol",
+  "agents": { "title": { "model": "codex-pooler/gpt-6-luna" } },
   "compaction": {
     "auto": true,
     "keep": { "tokens": 15000 },
@@ -174,14 +174,14 @@ OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本�
         "compaction": { "type": "summary" }
       },
       "models": {
-        "gpt-5.6-luna": {
-          "modelID": "gpt-5.6-luna",
+        "gpt-6-luna": {
+          "modelID": "gpt-6-luna",
           "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
           "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
         },
-        "gpt-5.6-terra": {
-          "modelID": "gpt-5.6-terra",
+        "gpt-6-sol": {
+          "modelID": "gpt-6-sol",
           "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
           "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
@@ -195,12 +195,12 @@ OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本�
 使用你的部署 `/v1` 地址，并只配置 Pool 可用的模型。以上上下文数值是长上下文
 profile 的示例：将每个模型实际的 `/v1/models.context_length` 填入
 `limit.context` 和 `limit.input`。[v2 指南](https://docs.codex-pooler.com/clients/opencode-v2/)
-包含 Sol/Astra、上下文计算、压缩方式、协议和图片限制。
+包含 Astra、上下文计算、压缩方式、协议和图片限制。
 
 此配置使用 HTTP SSE 和本地摘要 checkpoint。可通过 provider settings 选择
 Websocket 传输和原生 provider checkpoint；两种压缩模式的配置见 v2 指南。本地工具及图片输入不代表
 已启用图片生成工具。使用
-`opencode run --standalone --model codex-pooler/gpt-5.6-terra` 启动独立客户端
+`opencode run --standalone --model codex-pooler/gpt-6-sol` 启动独立客户端
 会话；普通启动会使用共享后台服务。
 
 V2 使用 `providers`、`modelID`、`settings` 和 `capabilities`；旧版模型的
@@ -224,7 +224,7 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "small_model": "openai/gpt-5.6-luna",
+  "small_model": "openai/gpt-6-luna",
   "compaction": {
     "auto": true,
     "reserved": 41420
@@ -238,9 +238,9 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
         "apiKey": "{env:CODEX_POOLER_API_KEY}"
       },
       "models": {
-        "gpt-5.6-luna": {
-          "id": "gpt-5.6-luna",
-          "name": "GPT-5.6 Luna",
+        "gpt-6-luna": {
+          "id": "gpt-6-luna",
+          "name": "GPT-6 Luna",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -264,35 +264,9 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
             "output": 64000
           }
         },
-        "gpt-5.6-terra": {
-          "id": "gpt-5.6-terra",
-          "name": "GPT-5.6 Terra",
-          "family": "gpt",
-          "attachment": true,
-          "reasoning": true,
-          "tool_call": true,
-          "temperature": false,
-          "options": {
-            "reasoningEffort": "high",
-            "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // 可选：priority processing 的费用可能高于默认层级。
-            // "serviceTier": "priority"
-          },
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
-        },
-        "gpt-5.6-sol": {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol",
+        "gpt-6-sol": {
+          "id": "gpt-6-sol",
+          "name": "GPT-6 Sol",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -393,9 +367,9 @@ OpenCode 会先从 `limit.input` 减去自己的压缩预留，再判断对话�
 
 | 主模型层级 | Agent 和 category | Fallback |
 |---|---|---|
-| `gpt-5.6-luna` | `librarian`、`explore`、`quick`、`unspecified-low` | 使用相同 reasoning variant 的 `gpt-5.6-terra` |
-| `gpt-5.6-terra` | `sisyphus`、`multimodal-looker`、`atlas`、`sisyphus-junior`、`visual-engineering`、`unspecified-high`、`writing` | 使用相同 reasoning variant 的 `gpt-5.6-sol` |
-| `gpt-5.6-sol` | `hephaestus`、`oracle`、`prometheus`、`metis`、`momus`、`ultrabrain`、`deep`、`artistry` | 使用相同 reasoning variant 的 `gpt-5.6-terra` |
+| `gpt-6-luna` | `librarian`、`explore`、`quick`、`unspecified-low` | 使用相同 reasoning variant 的 `gpt-6-sol` |
+| `gpt-6-sol` | `sisyphus`、`multimodal-looker`、`atlas`、`sisyphus-junior`、`visual-engineering`、`unspecified-high`、`writing` | 使用相同 reasoning variant 的 `gpt-6-astra` |
+| `gpt-6-astra` | `hephaestus`、`oracle`、`prometheus`、`metis`、`momus`、`ultrabrain`、`deep`、`artistry` | 使用相同 reasoning variant 的 `gpt-6-sol` |
 
 显式设置 `fallback_models` 可以让 OMO 重试始终使用分配给 Pool 的模型 id，
 而不是退回较旧的内置模型链。[OpenCode 客户端指南](https://docs.codex-pooler.com/clients/opencode/#oh-my-openagent-omo-routing)
@@ -583,11 +557,11 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
   agents: {
     defaults: {
       model: {
-        primary: "openai/gpt-5.6-terra",
+        primary: "openai/gpt-6-sol",
         list: [
           {
             id: "background",
-            model: "openai/gpt-5.6-luna",
+            model: "openai/gpt-6-luna",
           },
         ],
       },
@@ -605,8 +579,8 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
         timeoutSeconds: 300,
         models: [
           {
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna via Codex Pooler",
+            id: "gpt-6-luna",
+            name: "GPT-6 Luna via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 828400,
@@ -614,17 +588,8 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
             maxTokens: 128000,
           },
           {
-            id: "gpt-5.6-terra",
-            name: "GPT-5.6 Terra via Codex Pooler",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 828400,
-            contextTokens: 828400,
-            maxTokens: 128000,
-          },
-          {
-            id: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol via Codex Pooler",
+            id: "gpt-6-sol",
+            name: "GPT-6 Sol via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 828400,
@@ -668,11 +633,11 @@ OpenClaw 把 `contextWindow` 作为配置的 provider metadata，把 `contextTok
 account 可能暂时报告不同上限，选中的 272000-token profile 会公布 `258400`。两个字段
 都应使用各模型的 `/v1/models.context_length`。在 long-profile 示例中，
 128000-token compaction reserve 会明确保留输出预算，并在 700400 tokens 时开始本地
-压缩。用 `gpt-5.6-luna` 跑后台路由，`gpt-5.6-terra` 作为主模型，只在重推理会话中
-切到 `gpt-5.6-sol`。
+压缩。用 `gpt-6-luna` 跑后台路由，`gpt-6-sol` 作为主模型，只在重推理会话中
+切到 `gpt-6-astra`。
 
 如果你更希望把 Codex Pooler 与 OpenClaw 内置 OpenAI provider 行为分开，可以
-改用自定义 provider id，例如 `codex-pooler/gpt-5.6-terra`。这会遵循 OpenClaw 的
+改用自定义 provider id，例如 `codex-pooler/gpt-6-sol`。这会遵循 OpenClaw 的
 通用自定义 provider 结构，但专门查找 `openai/gpt-*` model refs 的工具不会
 把它识别为规范 OpenAI。
 
@@ -702,7 +667,7 @@ CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 
 ```yaml
 model:
-  default: gpt-5.6-terra
+  default: gpt-6-sol
   provider: openai-api
   base_url: http://localhost:4000/v1
   api_mode: codex_responses
@@ -801,7 +766,7 @@ CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 
 ```yaml
 model:
-  default: gpt-5.6-terra
+  default: gpt-6-sol
   provider: openai-codex
   base_url: http://localhost:4000/v1
   context_length: 828400
@@ -885,8 +850,8 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
       "authHeader": true,
       "models": [
         {
-          "id": "gpt-5.6-luna",
-          "name": "GPT-5.6 Luna via Codex Pooler",
+          "id": "gpt-6-luna",
+          "name": "GPT-6 Luna via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -896,19 +861,8 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
           "maxTokens": 128000
         },
         {
-          "id": "gpt-5.6-terra",
-          "name": "GPT-5.6 Terra via Codex Pooler",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
-          "input": ["text", "image"],
-          "contextWindow": 828400,
-          "maxTokens": 128000
-        },
-        {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol via Codex Pooler",
+          "id": "gpt-6-sol",
+          "name": "GPT-6 Sol via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -953,12 +907,11 @@ Pi 接受自定义模型的 `contextWindow` 和 `maxTokens`；它没有 `context
 ```json
 {
   "defaultProvider": "codex-pooler",
-  "defaultModel": "gpt-5.6-terra",
+  "defaultModel": "gpt-6-sol",
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
-    "codex-pooler/gpt-5.6-luna",
-    "codex-pooler/gpt-5.6-terra",
-    "codex-pooler/gpt-5.6-sol",
+    "codex-pooler/gpt-6-luna",
+    "codex-pooler/gpt-6-sol",
     "codex-pooler/gpt-6-astra"
   ],
   "compaction": {
@@ -972,7 +925,7 @@ Pi 接受自定义模型的 `contextWindow` 和 `maxTokens`；它没有 `context
 ```bash
 export CODEX_POOLER_API_KEY=<pool-api-key>
 pi --provider codex-pooler \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --no-session \
   --no-context-files \
   --tools bash \
@@ -1013,8 +966,8 @@ providers:
       v2StreamingEnabled: true
       v2Endpoint: http://localhost:4000/backend-api/codex/responses
     models:
-      - id: gpt-5.6-terra
-        name: GPT-5.6 Terra via Codex Pooler
+      - id: gpt-6-sol
+        name: GPT-6 Sol via Codex Pooler
         reasoning: true
         input:
           - text
@@ -1023,18 +976,8 @@ providers:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
-      - id: gpt-5.6-luna
-        name: GPT-5.6 Luna via Codex Pooler
-        reasoning: true
-        input:
-          - text
-          - image
-        compat:
-          streamIdleTimeoutMs: 300000
-        contextWindow: 828400
-        maxTokens: 128000
-      - id: gpt-5.6-sol
-        name: GPT-5.6 Sol via Codex Pooler
+      - id: gpt-6-luna
+        name: GPT-6 Luna via Codex Pooler
         reasoning: true
         input:
           - text
@@ -1110,23 +1053,22 @@ startup:
   setupWizard: false
 defaultThinkingLevel: xhigh
 enabledModels:
-  - codex-pooler/gpt-5.6-luna
-  - codex-pooler/gpt-5.6-terra
-  - codex-pooler/gpt-5.6-sol
+  - codex-pooler/gpt-6-luna
+  - codex-pooler/gpt-6-sol
   - codex-pooler/gpt-6-astra
 modelProviderOrder:
   - codex-pooler
 modelRoles:
-  default: codex-pooler/gpt-5.6-terra:xhigh
-  smol: codex-pooler/gpt-5.6-luna:low
-  tiny: codex-pooler/gpt-5.6-luna:minimal
-  slow: codex-pooler/gpt-5.6-sol:xhigh
-  plan: codex-pooler/gpt-5.6-sol:xhigh
-  task: codex-pooler/gpt-5.6-terra:high
-  vision: codex-pooler/gpt-5.6-terra:high
-  advisor: codex-pooler/gpt-5.6-terra:medium
-  commit: codex-pooler/gpt-5.6-luna:minimal
-  designer: codex-pooler/gpt-5.6-sol:high
+  default: codex-pooler/gpt-6-sol:xhigh
+  smol: codex-pooler/gpt-6-luna:low
+  tiny: codex-pooler/gpt-6-luna:minimal
+  slow: codex-pooler/gpt-6-astra:xhigh
+  plan: codex-pooler/gpt-6-astra:xhigh
+  task: codex-pooler/gpt-6-sol:high
+  vision: codex-pooler/gpt-6-sol:high
+  advisor: codex-pooler/gpt-6-sol:medium
+  commit: codex-pooler/gpt-6-luna:minimal
+  designer: codex-pooler/gpt-6-astra:high
 compaction:
   thresholdPercent: 95
   reserveTokens: 128000
@@ -1140,7 +1082,7 @@ compaction:
 
 ```bash
 export CODEX_POOLER_API_KEY=<pool-api-key>
-omp --model codex-pooler/gpt-5.6-terra:xhigh \
+omp --model codex-pooler/gpt-6-sol:xhigh \
   --no-session \
   --tools bash \
   -p 'Reply with exactly: omp ok'
@@ -1160,7 +1102,7 @@ Pooler 可选的运营者 MCP 端点，请把 `/mcp` 运营者令牌与用于 `/
 在 Cursor 中启用 **OpenAI API Key** 和 **Override OpenAI Base URL** 两个开关。
 使用 Pool API key、公开可访问的 HTTPS base URL（例如
 `https://codex-pooler.example.com/v1`），并在新聊天中明确选择
-`gpt-5.6-luna` 等模型。
+`gpt-6-luna` 等模型。
 
 Cursor BYOK 需要有效的 **Pro 或更高订阅**。请求会经过 Cursor 的服务器，
 因此 **localhost 和私有局域网地址不可用**。Auto 模式不能证明请求使用了 Pooler。
@@ -1188,7 +1130,7 @@ npm install -g @kilocode/cli@latest
 ```jsonc
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "codex-pooler/gpt-5.6-terra",
+  "model": "codex-pooler/gpt-6-sol",
   "enabled_providers": ["codex-pooler"],
   "provider": {
     "codex-pooler": {
@@ -1197,8 +1139,8 @@ npm install -g @kilocode/cli@latest
         "baseURL": "http://localhost:4000/v1"
       },
       "models": {
-        "gpt-5.6-luna": {
-          "name": "GPT-5.6 Luna via Codex Pooler",
+        "gpt-6-luna": {
+          "name": "GPT-6 Luna via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -1213,24 +1155,8 @@ npm install -g @kilocode/cli@latest
             "output": 64000
           }
         },
-        "gpt-5.6-terra": {
-          "name": "GPT-5.6 Terra via Codex Pooler",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": false,
-          "attachment": true,
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
-        },
-        "gpt-5.6-sol": {
-          "name": "GPT-5.6 Sol via Codex Pooler",
+        "gpt-6-sol": {
+          "name": "GPT-6 Sol via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -1294,7 +1220,7 @@ cd /tmp/codex-pooler-kilo-check
 
 export CODEX_POOLER_API_KEY=<pool-api-key>
 kilo run \
-  --model codex-pooler/gpt-5.6-terra \
+  --model codex-pooler/gpt-6-sol \
   --pure \
   --auto \
   --format json \
@@ -1339,11 +1265,11 @@ Full URL 关闭时，Trae 会追加 `/chat/completions`。不要让自定义请�
 | API format | OpenAI Chat Completions |
 | Custom Request URL | `https://codex-pooler.example.com/v1` |
 | Full URL | Off |
-| Model ID | `gpt-5.6-terra` 或分配到的 Pool 可服务的另一个模型 id |
+| Model ID | `gpt-6-sol` 或分配到的 Pool 可服务的另一个模型 id |
 | Multimodal | 当 Pool 模型支持图片输入时开启 |
 | API key | Pool API 密钥 |
 | Model Series | Default |
-| Display Name | `GPT-5.6 Terra via Codex Pooler` |
+| Display Name | `GPT-6 Sol via Codex Pooler` |
 | Context Window input | `184000` |
 | Context Window output | `16000` |
 | Tool Call Rounds | `200` |
@@ -1359,7 +1285,7 @@ curl -sS -X POST \
   -H "Authorization: Bearer $CODEX_POOLER_API_KEY" \
   -H "Content-Type: application/json" \
   --data '{
-    "model": "gpt-5.6-terra",
+    "model": "gpt-6-sol",
     "messages": [
       { "role": "user", "content": "Reply with exactly: trae ok" }
     ],
@@ -1391,18 +1317,18 @@ Aider 使用带 `openai/` 模型前缀的 OpenAI 兼容路由。把稳定路由�
 
 ```yaml
 # ~/.aider.conf.yml or <repo>/.aider.conf.yml
-model: openai/gpt-5.6-terra
+model: openai/gpt-6-sol
 openai-api-base: http://localhost:4000/v1
 ```
 
 `.aider.conf.yml` 只保存 Aider 路由设置，不保存上下文或输出限制。如果当前
-Aider 版本不识别 `gpt-5.6-terra`，请用 Aider 独立的模型 metadata JSON 文件定义
+Aider 版本不识别 `gpt-6-sol`，请用 Aider 独立的模型 metadata JSON 文件定义
 模型行为和限制，不要把不支持的上下文字段加到主配置中。
 
 ```jsonc
 // .aider.model.metadata.json
 {
-  "openai/gpt-5.6-luna": {
+  "openai/gpt-6-luna": {
     "max_tokens": 828400,
     "max_input_tokens": 700400,
     "max_output_tokens": 128000,
@@ -1412,17 +1338,7 @@ Aider 版本不识别 `gpt-5.6-terra`，请用 Aider 独立的模型 metadata JS
     "supports_vision": true,
     "supports_reasoning": true
   },
-  "openai/gpt-5.6-terra": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-5.6-sol": {
+  "openai/gpt-6-sol": {
     "max_tokens": 828400,
     "max_input_tokens": 700400,
     "max_output_tokens": 128000,
@@ -1499,9 +1415,9 @@ version: 1.0.0
 schema: v1
 
 models:
-  - name: GPT-5.6 Terra via Codex Pooler
+  - name: GPT-6 Sol via Codex Pooler
     provider: openai
-    model: gpt-5.6-terra
+    model: gpt-6-sol
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -1515,9 +1431,9 @@ models:
     capabilities:
       - tool_use
       - image_input
-  - name: GPT-5.6 Luna via Codex Pooler
+  - name: GPT-6 Luna via Codex Pooler
     provider: openai
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -1531,9 +1447,9 @@ models:
     capabilities:
       - tool_use
       - image_input
-  - name: GPT-5.6 Sol via Codex Pooler
+  - name: GPT-6 Astra via Codex Pooler
     provider: openai
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -1575,7 +1491,7 @@ mcpServers:
         Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
 ```
 
-此配置在 Continue 的模型选择器中定义 Terra、Luna、Sol 和 Astra。只保留 Pool 可用的模型，并分别确认每个模型的上下文限制。
+此配置在 Continue 的模型选择器中定义 Sol、Luna 和 Astra。只保留 Pool 可用的模型，并分别确认每个模型的上下文限制。
 
 对于已部署实例，把每个模型的 `apiBase` 改为 `https://codex-pooler.example.com/v1`；如果
 保留可选的运营者 MCP 附加项，把 MCP `url` 改为
@@ -1616,7 +1532,7 @@ cline auth \
   --provider openai \
   --apikey "$CODEX_POOLER_API_KEY" \
   --baseurl http://localhost:4000/v1 \
-  --modelid gpt-5.6-terra
+  --modelid gpt-6-sol
 ```
 
 Cline 的模型元数据名是 `contextWindow`、`maxInputTokens` 和 `maxTokens`。这里的
@@ -1629,7 +1545,7 @@ raw ceiling。在 long-profile 示例中，Cline 会把固定的 90% 压缩比�
 
 ```bash
 cline --provider openai \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --json \
   --auto-approve false \
   'Reply with exactly: cline ok'
@@ -1682,7 +1598,7 @@ provider。把 Pool API 密钥放在 `OPENAI_API_KEY` 或 Goose 的密钥存储�
 
 ```yaml
 GOOSE_PROVIDER: openai
-GOOSE_MODEL: gpt-5.6-terra
+GOOSE_MODEL: gpt-6-sol
 OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_CONTEXT_LIMIT: 828400
@@ -1703,7 +1619,7 @@ export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
 goose run \
   --no-session \
   --provider openai \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --with-builtin developer \
   --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
@@ -1771,16 +1687,15 @@ providers:
   customai:
     resource_path: u/<owner>/codex_pooler_windmill_codegen
     models:
-      - gpt-5.6-luna
-      - gpt-5.6-terra
-      - gpt-5.6-sol
+      - gpt-6-luna
+      - gpt-6-sol
       - gpt-6-astra
 default_model:
   provider: customai
-  model: gpt-5.6-terra
+  model: gpt-6-sol
 metadata_model:
   provider: customai
-  model: gpt-5.6-terra
+  model: gpt-6-sol
 ```
 
 Windmill 的 agent 请求字段是 `max_completion_tokens`；provider adapter 会按
@@ -1819,7 +1734,7 @@ OpenHands CLI 把本地状态存在 `~/.openhands/`，首次运行时创建。�
 ```bash
 export LLM_API_KEY=<pool-api-key>
 export LLM_BASE_URL=http://localhost:4000/v1
-export LLM_MODEL=openai/gpt-5.6-terra
+export LLM_MODEL=openai/gpt-6-sol
 
 uvx --python 3.12 --from openhands openhands \
   --headless \
@@ -1828,7 +1743,7 @@ uvx --python 3.12 --from openhands openhands \
 ```
 
 对于已部署实例，把 `LLM_BASE_URL` 改为 `https://codex-pooler.example.com/v1`。
-模型名应保持为 `openai/gpt-5.6-terra`，这样 OpenHands 会选择它的 OpenAI 兼容
+模型名应保持为 `openai/gpt-6-sol`，这样 OpenHands 会选择它的 OpenAI 兼容
 provider 路径，而 Codex Pooler 会通过分配到的 Pool 路由请求。
 
 </details>
@@ -1850,7 +1765,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="gpt-5.6-terra",
+    model="gpt-6-sol",
     input="Write a one-sentence status update.",
 )
 
@@ -1876,7 +1791,7 @@ const client = new OpenAI({
 });
 
 const response = await client.responses.create({
-  model: "gpt-5.6-terra",
+  model: "gpt-6-sol",
   input: "Write a one-sentence status update.",
 });
 
@@ -1904,7 +1819,7 @@ const pooler = createOpenAI({
 });
 
 const { text } = await generateText({
-  model: pooler.responses("gpt-5.6-terra"),
+  model: pooler.responses("gpt-6-sol"),
   prompt: "Write a one-sentence status update.",
 });
 

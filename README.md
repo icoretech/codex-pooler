@@ -168,8 +168,8 @@ local tool execution and same-session resume. Set
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "codex-pooler/gpt-5.6-terra",
-  "agents": { "title": { "model": "codex-pooler/gpt-5.6-luna" } },
+  "model": "codex-pooler/gpt-6-sol",
+  "agents": { "title": { "model": "codex-pooler/gpt-6-luna" } },
   "compaction": {
     "auto": true,
     "keep": { "tokens": 15000 },
@@ -185,14 +185,14 @@ local tool execution and same-session resume. Set
         "compaction": { "type": "summary" }
       },
       "models": {
-        "gpt-5.6-luna": {
-          "modelID": "gpt-5.6-luna",
+        "gpt-6-luna": {
+          "modelID": "gpt-6-luna",
           "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
           "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
         },
-        "gpt-5.6-terra": {
-          "modelID": "gpt-5.6-terra",
+        "gpt-6-sol": {
+          "modelID": "gpt-6-sol",
           "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
           "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
@@ -206,14 +206,14 @@ local tool execution and same-session resume. Set
 Use your deployed `/v1` URL and only models assigned to your Pool. The context
 values are long-profile examples: copy each model's actual
 `/v1/models.context_length` into `limit.context` and `limit.input`. The
-[v2 guide](https://docs.codex-pooler.com/clients/opencode-v2/) includes Sol/Astra,
+[v2 guide](https://docs.codex-pooler.com/clients/opencode-v2/) includes Astra,
 context calculations, compaction choices, protocols and image limits.
 
 This configuration uses HTTP SSE and local summary checkpoints. Websocket
 transport and native provider checkpoints are available through provider
 settings; see the v2 guide for both compaction modes. Local tools
 and image input do not imply an enabled image-generation tool. Use
-`opencode run --standalone --model codex-pooler/gpt-5.6-terra` for an isolated
+`opencode run --standalone --model codex-pooler/gpt-6-sol` for an isolated
 client session; normal startup uses a shared background service.
 
 V2 uses `providers`, `modelID`, `settings` and `capabilities`; legacy model
@@ -240,7 +240,7 @@ OpenAI Realtime SDK compatibility.
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "small_model": "openai/gpt-5.6-luna",
+  "small_model": "openai/gpt-6-luna",
   "compaction": {
     "auto": true,
     "reserved": 41420
@@ -254,9 +254,9 @@ OpenAI Realtime SDK compatibility.
         "apiKey": "{env:CODEX_POOLER_API_KEY}"
       },
       "models": {
-        "gpt-5.6-luna": {
-          "id": "gpt-5.6-luna",
-          "name": "GPT-5.6 Luna",
+        "gpt-6-luna": {
+          "id": "gpt-6-luna",
+          "name": "GPT-6 Luna",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -280,35 +280,9 @@ OpenAI Realtime SDK compatibility.
             "output": 64000
           }
         },
-        "gpt-5.6-terra": {
-          "id": "gpt-5.6-terra",
-          "name": "GPT-5.6 Terra",
-          "family": "gpt",
-          "attachment": true,
-          "reasoning": true,
-          "tool_call": true,
-          "temperature": false,
-          "options": {
-            "reasoningEffort": "high",
-            "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority"
-          },
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
-        },
-        "gpt-5.6-sol": {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol",
+        "gpt-6-sol": {
+          "id": "gpt-6-sol",
+          "name": "GPT-6 Sol",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -415,9 +389,9 @@ above and add agent/category overrides in
 
 | Primary tier | Agents and categories | Fallback |
 |---|---|---|
-| `gpt-5.6-luna` | `librarian`, `explore`, `quick`, `unspecified-low` | `gpt-5.6-terra` with the same reasoning variant |
-| `gpt-5.6-terra` | `sisyphus`, `multimodal-looker`, `atlas`, `sisyphus-junior`, `visual-engineering`, `unspecified-high`, `writing` | `gpt-5.6-sol` with the same reasoning variant |
-| `gpt-5.6-sol` | `hephaestus`, `oracle`, `prometheus`, `metis`, `momus`, `ultrabrain`, `deep`, `artistry` | `gpt-5.6-terra` with the same reasoning variant |
+| `gpt-6-luna` | `librarian`, `explore`, `quick`, `unspecified-low` | `gpt-6-sol` with the same reasoning variant |
+| `gpt-6-sol` | `sisyphus`, `multimodal-looker`, `atlas`, `sisyphus-junior`, `visual-engineering`, `unspecified-high`, `writing` | `gpt-6-astra` with the same reasoning variant |
+| `gpt-6-astra` | `hephaestus`, `oracle`, `prometheus`, `metis`, `momus`, `ultrabrain`, `deep`, `artistry` | `gpt-6-sol` with the same reasoning variant |
 
 Explicit `fallback_models` keep OMO retries inside the model ids served by the
 assigned Pool instead of falling through to older built-in model chains. The
@@ -632,11 +606,11 @@ point the OpenAI provider at Codex Pooler and use the current OpenClaw runtime i
   agents: {
     defaults: {
       model: {
-        primary: "openai/gpt-5.6-terra",
+        primary: "openai/gpt-6-sol",
         list: [
           {
             id: "background",
-            model: "openai/gpt-5.6-luna",
+            model: "openai/gpt-6-luna",
           },
         ],
       },
@@ -654,8 +628,8 @@ point the OpenAI provider at Codex Pooler and use the current OpenClaw runtime i
         timeoutSeconds: 300,
         models: [
           {
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna via Codex Pooler",
+            id: "gpt-6-luna",
+            name: "GPT-6 Luna via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 828400,
@@ -663,17 +637,8 @@ point the OpenAI provider at Codex Pooler and use the current OpenClaw runtime i
             maxTokens: 128000,
           },
           {
-            id: "gpt-5.6-terra",
-            name: "GPT-5.6 Terra via Codex Pooler",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 828400,
-            contextTokens: 828400,
-            maxTokens: 128000,
-          },
-          {
-            id: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol via Codex Pooler",
+            id: "gpt-6-sol",
+            name: "GPT-6 Sol via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 828400,
@@ -719,12 +684,12 @@ long-profile examples for models whose selected Pool catalog source reports an
 ceilings for the same model; a selected 272000-token profile exposes `258400`
 instead. Use each model's `/v1/models.context_length` for both fields. For the
 long-profile example, the 128000-token compaction reserve starts local
-compaction at 700400 tokens. Use `gpt-5.6-luna` for
-background routing, keep `gpt-5.6-terra` as the primary model, and switch a
-session to `gpt-5.6-sol` only for heavy reasoning.
+compaction at 700400 tokens. Use `gpt-6-luna` for
+background routing, keep `gpt-6-sol` as the primary model, and switch a
+session to `gpt-6-astra` only for heavy reasoning.
 
 If you prefer to keep Codex Pooler separate from OpenClaw's built-in OpenAI
-provider behavior, use a custom provider id such as `codex-pooler/gpt-5.6-terra`
+provider behavior, use a custom provider id such as `codex-pooler/gpt-6-sol`
 instead. That follows OpenClaw's generic custom-provider shape, but tools that
 look specifically for `openai/gpt-*` model refs will not see it as canonical
 OpenAI.
@@ -755,7 +720,7 @@ CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 
 ```yaml
 model:
-  default: gpt-5.6-terra
+  default: gpt-6-sol
   provider: openai-api
   base_url: http://localhost:4000/v1
   api_mode: codex_responses
@@ -879,7 +844,7 @@ CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 
 ```yaml
 model:
-  default: gpt-5.6-terra
+  default: gpt-6-sol
   provider: openai-codex
   base_url: http://localhost:4000/v1
   context_length: 828400
@@ -963,8 +928,8 @@ Then add a provider to `~/.pi/agent/models.json`:
       "authHeader": true,
       "models": [
         {
-          "id": "gpt-5.6-luna",
-          "name": "GPT-5.6 Luna via Codex Pooler",
+          "id": "gpt-6-luna",
+          "name": "GPT-6 Luna via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -974,19 +939,8 @@ Then add a provider to `~/.pi/agent/models.json`:
           "maxTokens": 128000
         },
         {
-          "id": "gpt-5.6-terra",
-          "name": "GPT-5.6 Terra via Codex Pooler",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
-          "input": ["text", "image"],
-          "contextWindow": 828400,
-          "maxTokens": 128000
-        },
-        {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol via Codex Pooler",
+          "id": "gpt-6-sol",
+          "name": "GPT-6 Sol via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -1036,12 +990,11 @@ Optionally set Codex Pooler as the default Pi model in
 ```json
 {
   "defaultProvider": "codex-pooler",
-  "defaultModel": "gpt-5.6-terra",
+  "defaultModel": "gpt-6-sol",
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
-    "codex-pooler/gpt-5.6-luna",
-    "codex-pooler/gpt-5.6-terra",
-    "codex-pooler/gpt-5.6-sol",
+    "codex-pooler/gpt-6-luna",
+    "codex-pooler/gpt-6-sol",
     "codex-pooler/gpt-6-astra"
   ],
   "compaction": {
@@ -1055,7 +1008,7 @@ Check the non-interactive path from a repository:
 ```bash
 export CODEX_POOLER_API_KEY=<pool-api-key>
 pi --provider codex-pooler \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --no-session \
   --no-context-files \
   --tools bash \
@@ -1097,8 +1050,8 @@ providers:
       v2StreamingEnabled: true
       v2Endpoint: http://localhost:4000/backend-api/codex/responses
     models:
-      - id: gpt-5.6-terra
-        name: GPT-5.6 Terra via Codex Pooler
+      - id: gpt-6-sol
+        name: GPT-6 Sol via Codex Pooler
         reasoning: true
         input:
           - text
@@ -1107,18 +1060,8 @@ providers:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
-      - id: gpt-5.6-luna
-        name: GPT-5.6 Luna via Codex Pooler
-        reasoning: true
-        input:
-          - text
-          - image
-        compat:
-          streamIdleTimeoutMs: 300000
-        contextWindow: 828400
-        maxTokens: 128000
-      - id: gpt-5.6-sol
-        name: GPT-5.6 Sol via Codex Pooler
+      - id: gpt-6-luna
+        name: GPT-6 Luna via Codex Pooler
         reasoning: true
         input:
           - text
@@ -1205,23 +1148,22 @@ startup:
   setupWizard: false
 defaultThinkingLevel: xhigh
 enabledModels:
-  - codex-pooler/gpt-5.6-luna
-  - codex-pooler/gpt-5.6-terra
-  - codex-pooler/gpt-5.6-sol
+  - codex-pooler/gpt-6-luna
+  - codex-pooler/gpt-6-sol
   - codex-pooler/gpt-6-astra
 modelProviderOrder:
   - codex-pooler
 modelRoles:
-  default: codex-pooler/gpt-5.6-terra:xhigh
-  smol: codex-pooler/gpt-5.6-luna:low
-  tiny: codex-pooler/gpt-5.6-luna:minimal
-  slow: codex-pooler/gpt-5.6-sol:xhigh
-  plan: codex-pooler/gpt-5.6-sol:xhigh
-  task: codex-pooler/gpt-5.6-terra:high
-  vision: codex-pooler/gpt-5.6-terra:high
-  advisor: codex-pooler/gpt-5.6-terra:medium
-  commit: codex-pooler/gpt-5.6-luna:minimal
-  designer: codex-pooler/gpt-5.6-sol:high
+  default: codex-pooler/gpt-6-sol:xhigh
+  smol: codex-pooler/gpt-6-luna:low
+  tiny: codex-pooler/gpt-6-luna:minimal
+  slow: codex-pooler/gpt-6-astra:xhigh
+  plan: codex-pooler/gpt-6-astra:xhigh
+  task: codex-pooler/gpt-6-sol:high
+  vision: codex-pooler/gpt-6-sol:high
+  advisor: codex-pooler/gpt-6-sol:medium
+  commit: codex-pooler/gpt-6-luna:minimal
+  designer: codex-pooler/gpt-6-astra:high
 compaction:
   thresholdPercent: 95
   reserveTokens: 128000
@@ -1235,7 +1177,7 @@ Check the non-interactive path from a repository:
 
 ```bash
 export CODEX_POOLER_API_KEY=<pool-api-key>
-omp --model codex-pooler/gpt-5.6-terra:xhigh \
+omp --model codex-pooler/gpt-6-sol:xhigh \
   --no-session \
   --tools bash \
   -p 'Reply with exactly: omp ok'
@@ -1255,7 +1197,7 @@ operator token separate from the Pool API key used for `/v1`.
 Connect Cursor through **OpenAI API Key** and **Override OpenAI Base URL**,
 with both switches enabled. Use your Pool API key, a public HTTPS base URL
 such as `https://codex-pooler.example.com/v1`, and an explicit model such as
-`gpt-5.6-luna` in a new chat.
+`gpt-6-luna` in a new chat.
 
 Cursor BYOK requires an active **Pro or higher** subscription. Requests pass
 through Cursor's servers, so **localhost and private LAN URLs do not work**.
@@ -1284,7 +1226,7 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
 ```jsonc
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "codex-pooler/gpt-5.6-terra",
+  "model": "codex-pooler/gpt-6-sol",
   "enabled_providers": ["codex-pooler"],
   "provider": {
     "codex-pooler": {
@@ -1293,8 +1235,8 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
         "baseURL": "http://localhost:4000/v1"
       },
       "models": {
-        "gpt-5.6-luna": {
-          "name": "GPT-5.6 Luna via Codex Pooler",
+        "gpt-6-luna": {
+          "name": "GPT-6 Luna via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -1309,24 +1251,8 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
             "output": 64000
           }
         },
-        "gpt-5.6-terra": {
-          "name": "GPT-5.6 Terra via Codex Pooler",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": false,
-          "attachment": true,
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
-        },
-        "gpt-5.6-sol": {
-          "name": "GPT-5.6 Sol via Codex Pooler",
+        "gpt-6-sol": {
+          "name": "GPT-6 Sol via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -1395,7 +1321,7 @@ cd "$validation_dir"
 
 export CODEX_POOLER_API_KEY=<pool-api-key>
 kilo run \
-  --model codex-pooler/gpt-5.6-terra \
+  --model codex-pooler/gpt-6-sol \
   --pure \
   --auto \
   --format json \
@@ -1442,11 +1368,11 @@ In Trae, open Settings -> Models, add a custom model, and use these values:
 | API format | OpenAI Chat Completions |
 | Custom Request URL | `https://codex-pooler.example.com/v1` |
 | Full URL | Off |
-| Model ID | `gpt-5.6-terra` or another model id served by the assigned Pool |
+| Model ID | `gpt-6-sol` or another model id served by the assigned Pool |
 | Multimodal | On when the Pool model supports image input |
 | API key | Pool API key |
 | Model Series | Default |
-| Display Name | `GPT-5.6 Terra via Codex Pooler` |
+| Display Name | `GPT-6 Sol via Codex Pooler` |
 | Context Window input | `184000` |
 | Context Window output | `16000` |
 | Tool Call Rounds | `200` |
@@ -1464,7 +1390,7 @@ curl -sS -X POST \
   -H "Authorization: Bearer $CODEX_POOLER_API_KEY" \
   -H "Content-Type: application/json" \
   --data '{
-    "model": "gpt-5.6-terra",
+    "model": "gpt-6-sol",
     "messages": [
       { "role": "user", "content": "Reply with exactly: trae ok" }
     ],
@@ -1499,16 +1425,16 @@ taking priority.
 
 ```yaml
 # ~/.aider.conf.yml or <repo>/.aider.conf.yml
-model: openai/gpt-5.6-terra
+model: openai/gpt-6-sol
 openai-api-base: http://localhost:4000/v1
 ```
 
-Aider's `.aider.conf.yml` route settings do not carry context or output limits. If your installed Aider version does not recognize `gpt-5.6-terra`, use Aider's separate model metadata JSON file for model behavior and limits instead of adding unsupported context fields to the main config.
+Aider's `.aider.conf.yml` route settings do not carry context or output limits. If your installed Aider version does not recognize `gpt-6-sol`, use Aider's separate model metadata JSON file for model behavior and limits instead of adding unsupported context fields to the main config.
 
 ```jsonc
 // .aider.model.metadata.json
 {
-  "openai/gpt-5.6-luna": {
+  "openai/gpt-6-luna": {
     "max_tokens": 828400,
     "max_input_tokens": 700400,
     "max_output_tokens": 128000,
@@ -1518,17 +1444,7 @@ Aider's `.aider.conf.yml` route settings do not carry context or output limits. 
     "supports_vision": true,
     "supports_reasoning": true
   },
-  "openai/gpt-5.6-terra": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-5.6-sol": {
+  "openai/gpt-6-sol": {
     "max_tokens": 828400,
     "max_input_tokens": 700400,
     "max_output_tokens": 128000,
@@ -1610,9 +1526,9 @@ version: 1.0.0
 schema: v1
 
 models:
-  - name: GPT-5.6 Terra via Codex Pooler
+  - name: GPT-6 Sol via Codex Pooler
     provider: openai
-    model: gpt-5.6-terra
+    model: gpt-6-sol
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -1626,9 +1542,9 @@ models:
     capabilities:
       - tool_use
       - image_input
-  - name: GPT-5.6 Luna via Codex Pooler
+  - name: GPT-6 Luna via Codex Pooler
     provider: openai
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -1642,9 +1558,9 @@ models:
     capabilities:
       - tool_use
       - image_input
-  - name: GPT-5.6 Sol via Codex Pooler
+  - name: GPT-6 Astra via Codex Pooler
     provider: openai
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -1686,7 +1602,7 @@ mcpServers:
         Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
 ```
 
-The configuration defines Terra, Luna, Sol, and Astra in Continue's model selector. Keep only models available to your Pool and check each model's context limit independently.
+The configuration defines Sol, Luna, and Astra in Continue's model selector. Keep only models available to your Pool and check each model's context limit independently.
 
 For deployed instances, change every model's `apiBase` to `https://codex-pooler.example.com/v1`;
 if you keep the optional operator MCP add-on, change the MCP `url` to
@@ -1729,7 +1645,7 @@ cline auth \
   --provider openai \
   --apikey "$CODEX_POOLER_API_KEY" \
   --baseurl http://localhost:4000/v1 \
-  --modelid gpt-5.6-terra
+  --modelid gpt-6-sol
 ```
 
 Cline's model metadata names are `contextWindow`, `maxInputTokens`, and
@@ -1746,7 +1662,7 @@ Check the headless CLI path after saving auth:
 
 ```bash
 cline --provider openai \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --json \
   --auto-approve false \
   'Reply with exactly: cline ok'
@@ -1802,7 +1718,7 @@ than the config file, so `OPENAI_API_KEY` can stay outside YAML.
 
 ```yaml
 GOOSE_PROVIDER: openai
-GOOSE_MODEL: gpt-5.6-terra
+GOOSE_MODEL: gpt-6-sol
 OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_CONTEXT_LIMIT: 828400
@@ -1824,7 +1740,7 @@ export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
 goose run \
   --no-session \
   --provider openai \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --with-builtin developer \
   --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
@@ -1893,16 +1809,15 @@ providers:
   customai:
     resource_path: u/<owner>/codex_pooler_windmill_codegen
     models:
-      - gpt-5.6-luna
-      - gpt-5.6-terra
-      - gpt-5.6-sol
+      - gpt-6-luna
+      - gpt-6-sol
       - gpt-6-astra
 default_model:
   provider: customai
-  model: gpt-5.6-terra
+  model: gpt-6-sol
 metadata_model:
   provider: customai
-  model: gpt-5.6-terra
+  model: gpt-6-sol
 ```
 
 Windmill's agent request field is `max_completion_tokens`; provider adapters map
@@ -1943,7 +1858,7 @@ in the WSL user's home directory.
 ```bash
 export LLM_API_KEY=<pool-api-key>
 export LLM_BASE_URL=http://localhost:4000/v1
-export LLM_MODEL=openai/gpt-5.6-terra
+export LLM_MODEL=openai/gpt-6-sol
 
 uvx --python 3.12 --from openhands openhands \
   --headless \
@@ -1953,7 +1868,7 @@ uvx --python 3.12 --from openhands openhands \
 
 For deployed instances, change `LLM_BASE_URL` to
 `https://codex-pooler.example.com/v1`. The model name should stay
-`openai/gpt-5.6-terra` so OpenHands selects its OpenAI-compatible provider path while
+`openai/gpt-6-sol` so OpenHands selects its OpenAI-compatible provider path while
 Codex Pooler routes the request through the assigned Pool.
 
 </details>
@@ -1976,7 +1891,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="gpt-5.6-terra",
+    model="gpt-6-sol",
     input="Write a one-sentence status update.",
 )
 
@@ -2003,7 +1918,7 @@ const client = new OpenAI({
 });
 
 const response = await client.responses.create({
-  model: "gpt-5.6-terra",
+  model: "gpt-6-sol",
   input: "Write a one-sentence status update.",
 });
 
@@ -2032,7 +1947,7 @@ const pooler = createOpenAI({
 });
 
 const { text } = await generateText({
-  model: pooler.responses("gpt-5.6-terra"),
+  model: pooler.responses("gpt-6-sol"),
   prompt: "Write a one-sentence status update.",
 });
 

@@ -26,7 +26,7 @@ cline auth \
   --provider openai \
   --apikey "$CODEX_POOLER_API_KEY" \
   --baseurl https://codex-pooler.example.com/v1 \
-  --modelid gpt-5.6-terra
+  --modelid gpt-6-sol
 ```
 
 For local setup, change `--baseurl` to `http://localhost:4000/v1`.
@@ -43,7 +43,7 @@ Check the headless CLI path after saving auth:
 
 ```bash
 cline --provider openai \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --json \
   --auto-approve false \
   'Reply with exactly: cline ok'

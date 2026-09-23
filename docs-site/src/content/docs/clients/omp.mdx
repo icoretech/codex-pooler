@@ -52,8 +52,8 @@ providers:
       v2StreamingEnabled: true
       v2Endpoint: https://codex-pooler.example.com/backend-api/codex/responses
     models:
-      - id: gpt-5.6-terra
-        name: GPT-5.6 Terra via Codex Pooler
+      - id: gpt-6-sol
+        name: GPT-6 Sol via Codex Pooler
         reasoning: true
         input:
           - text
@@ -62,18 +62,8 @@ providers:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
-      - id: gpt-5.6-luna
-        name: GPT-5.6 Luna via Codex Pooler
-        reasoning: true
-        input:
-          - text
-          - image
-        compat:
-          streamIdleTimeoutMs: 300000
-        contextWindow: 828400
-        maxTokens: 128000
-      - id: gpt-5.6-sol
-        name: GPT-5.6 Sol via Codex Pooler
+      - id: gpt-6-luna
+        name: GPT-6 Luna via Codex Pooler
         reasoning: true
         input:
           - text
@@ -113,23 +103,22 @@ startup:
   setupWizard: false
 defaultThinkingLevel: xhigh
 enabledModels:
-  - codex-pooler/gpt-5.6-luna
-  - codex-pooler/gpt-5.6-terra
-  - codex-pooler/gpt-5.6-sol
+  - codex-pooler/gpt-6-luna
+  - codex-pooler/gpt-6-sol
   - codex-pooler/gpt-6-astra
 modelProviderOrder:
   - codex-pooler
 modelRoles:
-  default: codex-pooler/gpt-5.6-terra:xhigh
-  smol: codex-pooler/gpt-5.6-luna:low
-  tiny: codex-pooler/gpt-5.6-luna:minimal
-  slow: codex-pooler/gpt-5.6-sol:xhigh
-  plan: codex-pooler/gpt-5.6-sol:xhigh
-  task: codex-pooler/gpt-5.6-terra:high
-  vision: codex-pooler/gpt-5.6-terra:high
-  advisor: codex-pooler/gpt-5.6-terra:medium
-  commit: codex-pooler/gpt-5.6-luna:minimal
-  designer: codex-pooler/gpt-5.6-sol:high
+  default: codex-pooler/gpt-6-sol:xhigh
+  smol: codex-pooler/gpt-6-luna:low
+  tiny: codex-pooler/gpt-6-luna:minimal
+  slow: codex-pooler/gpt-6-astra:xhigh
+  plan: codex-pooler/gpt-6-astra:xhigh
+  task: codex-pooler/gpt-6-sol:high
+  vision: codex-pooler/gpt-6-sol:high
+  advisor: codex-pooler/gpt-6-sol:medium
+  commit: codex-pooler/gpt-6-luna:minimal
+  designer: codex-pooler/gpt-6-astra:high
 compaction:
   thresholdPercent: 95
   reserveTokens: 128000
@@ -148,7 +137,7 @@ compaction:
 Run a one-shot prompt from the repository you want OMP to inspect:
 
 ```bash
-omp --model codex-pooler/gpt-5.6-terra:xhigh \
+omp --model codex-pooler/gpt-6-sol:xhigh \
   --no-session \
   --tools bash \
   -p 'Reply with exactly: omp ok'

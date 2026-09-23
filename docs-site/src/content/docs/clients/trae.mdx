@@ -52,11 +52,11 @@ configuration path.
 | API format | OpenAI Chat Completions |
 | Custom Request URL | `https://codex-pooler.example.com/v1` |
 | Full URL | Off |
-| Model ID | `gpt-5.6-terra` or another model id served by the assigned Pool |
+| Model ID | `gpt-6-sol` or another model id served by the assigned Pool |
 | Multimodal | On when the Pool model supports image input |
 | API key | Pool API key |
 | Model Series | Default |
-| Display Name | `GPT-5.6 Terra via Codex Pooler` |
+| Display Name | `GPT-6 Sol via Codex Pooler` |
 | Context Window input | `184000` |
 | Context Window output | `16000` |
 | Tool Call Rounds | `200` |
@@ -75,10 +75,10 @@ field values are the same:
 | API 格式 | OpenAI Chat Completions |
 | 自定义请求地址 | `https://codex-pooler.example.com/v1` |
 | 完整 URL | Off |
-| 模型 ID | `gpt-5.6-terra` or another model id served by the assigned Pool |
+| 模型 ID | `gpt-6-sol` or another model id served by the assigned Pool |
 | API 密钥 | Pool API key |
 | 模型系列 | Default |
-| 显示名称 | `GPT-5.6 Terra via Codex Pooler` |
+| 显示名称 | `GPT-6 Sol via Codex Pooler` |
 | 上下文窗口 input | `184000` |
 | 上下文窗口 output | `16000` |
 | Tool Call Rounds | `200` |
@@ -112,7 +112,7 @@ curl -sS -X POST \
   -H "Authorization: Bearer $CODEX_POOLER_API_KEY" \
   -H "Content-Type: application/json" \
   --data '{
-    "model": "gpt-5.6-terra",
+    "model": "gpt-6-sol",
     "messages": [
       { "role": "user", "content": "Reply with exactly: trae ok" }
     ],

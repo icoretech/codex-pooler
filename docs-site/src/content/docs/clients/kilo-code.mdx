@@ -42,7 +42,7 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
 ```jsonc title="~/.config/kilo/kilo.jsonc" frame="code"
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "codex-pooler/gpt-5.6-terra",
+  "model": "codex-pooler/gpt-6-sol",
   "enabled_providers": ["codex-pooler"],
   "provider": {
     "codex-pooler": {
@@ -51,8 +51,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
         "baseURL": "https://codex-pooler.example.com/v1"
       },
       "models": {
-        "gpt-5.6-luna": {
-          "name": "GPT-5.6 Luna via Codex Pooler",
+        "gpt-6-luna": {
+          "name": "GPT-6 Luna via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -67,24 +67,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
             "output": 64000
           }
         },
-        "gpt-5.6-terra": {
-          "name": "GPT-5.6 Terra via Codex Pooler",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": false,
-          "attachment": true,
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
-        },
-        "gpt-5.6-sol": {
-          "name": "GPT-5.6 Sol via Codex Pooler",
+        "gpt-6-sol": {
+          "name": "GPT-6 Sol via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -148,7 +132,7 @@ validation_dir="$(mktemp -d)"
 cd "$validation_dir"
 
 kilo run \
-  --model codex-pooler/gpt-5.6-terra \
+  --model codex-pooler/gpt-6-sol \
   --pure \
   --auto \
   --format json \

@@ -64,8 +64,8 @@ For a deployed instance, add:
       "authHeader": true,
       "models": [
         {
-          "id": "gpt-5.6-luna",
-          "name": "GPT-5.6 Luna via Codex Pooler",
+          "id": "gpt-6-luna",
+          "name": "GPT-6 Luna via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -75,19 +75,8 @@ For a deployed instance, add:
           "maxTokens": 128000
         },
         {
-          "id": "gpt-5.6-terra",
-          "name": "GPT-5.6 Terra via Codex Pooler",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
-          "input": ["text", "image"],
-          "contextWindow": 828400,
-          "maxTokens": 128000
-        },
-        {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol via Codex Pooler",
+          "id": "gpt-6-sol",
+          "name": "GPT-6 Sol via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -130,12 +119,11 @@ If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults
 ```json title="~/.pi/agent/settings.json" frame="code"
 {
   "defaultProvider": "codex-pooler",
-  "defaultModel": "gpt-5.6-terra",
+  "defaultModel": "gpt-6-sol",
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
-    "codex-pooler/gpt-5.6-luna",
-    "codex-pooler/gpt-5.6-terra",
-    "codex-pooler/gpt-5.6-sol",
+    "codex-pooler/gpt-6-luna",
+    "codex-pooler/gpt-6-sol",
     "codex-pooler/gpt-6-astra"
   ],
   "compaction": {
@@ -152,7 +140,7 @@ Run a one-shot prompt from the repository you want Pi to inspect:
 
 ```bash
 pi --provider codex-pooler \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --no-session \
   --no-context-files \
   --tools bash \

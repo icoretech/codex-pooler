@@ -43,7 +43,7 @@ Add the provider settings to `config.yaml`:
 
 ```yaml title="config.yaml" frame="code"
 GOOSE_PROVIDER: openai
-GOOSE_MODEL: gpt-5.6-terra
+GOOSE_MODEL: gpt-6-sol
 OPENAI_HOST: https://codex-pooler.example.com
 OPENAI_BASE_PATH: v1/responses
 GOOSE_CONTEXT_LIMIT: 828400
@@ -68,7 +68,7 @@ export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
 goose run \
   --no-session \
   --provider openai \
-  --model gpt-5.6-terra \
+  --model gpt-6-sol \
   --with-builtin developer \
   --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
