@@ -221,6 +221,7 @@ defmodule CodexPooler.Pools do
           record_pool_audit_event(scope, "pool.create", pool)
 
           maybe_broadcast_pool_change(opts, pool, "pool_created")
+          maybe_invalidate_notifications_after_status_change(opts, nil, pool)
 
         _result ->
           :ok
@@ -346,8 +347,10 @@ defmodule CodexPooler.Pools do
   Invalidates the notification centers after a committed Pool status change,
   and does nothing when the status did not change: a notification center shows
   only active Pools' incidents, so a status change changes which ones a viewer
-  sees (findings#206 row 206-308). A workflow that updates a Pool with
-  `broadcast?: false` inside its transaction calls this after the commit.
+  sees (findings#206 row 206-308). A created Pool had no status (`nil`): its
+  operators' open pages subscribe to it, or its first incident would miss them.
+  A workflow that creates or updates a Pool with `broadcast?: false` inside
+  its transaction calls this after the commit.
   """
   @spec invalidate_notifications_after_status_change(String.t() | nil, Pool.t()) :: :ok
   def invalidate_notifications_after_status_change(status, %Pool{status: status}), do: :ok

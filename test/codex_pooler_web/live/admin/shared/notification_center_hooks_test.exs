@@ -282,6 +282,32 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     assert %{badge_count: 0} = notification_center(unrelated_view)
   end
 
+  # A Pool created while a page is open is one more Pool its owner can see; the
+  # page subscribed once at mount, so the new Pool's first incident never
+  # reached it. The owners' pages reload once and listen to it; an assigned
+  # admin's page hears nothing.
+  test "creating a Pool reloads the owners' notification centers once and they hear its incidents", %{conn: owner_conn, scope: owner_scope} do
+    assigned_pool = pool!(owner_scope, "assigned")
+    [owner_view, admin_view] = views = open_notification_centers!(owner_conn, owner_scope, [assigned_pool])
+
+    assert {:ok, created} = PoolWorkflow.create_pool_with_related_settings(owner_scope, %{"name" => "Notification created #{unique_suffix()}"})
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 0]
+
+    direct = pool!(owner_scope, "created-direct")
+
+    assert Enum.map(views, &notification_reloads/1) == [1, 0]
+
+    for pool <- [created, direct] do
+      incident_id = record_bell_incident!(pool).id
+
+      assert Enum.map(views, &notification_reloads/1) == [1, 0]
+      assert Enum.any?(notification_center(owner_view).rows, &(&1.id == incident_id))
+    end
+
+    assert %{badge_count: 0} = notification_center(admin_view)
+  end
+
   # The Pool editor changes the status inside a transaction with the rest of
   # the Pool's settings, so the notification centers hear of it after the
   # commit, and an edit that keeps the status reloads nobody. Archiving revokes

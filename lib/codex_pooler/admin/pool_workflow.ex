@@ -43,6 +43,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
       end
     end)
     |> normalize_transaction_result()
+    |> invalidate_notifications_after_create()
     |> maybe_broadcast_pool_workflow("pool_created")
     |> maybe_enqueue_assignment_catalog_sync(attrs)
   end
@@ -227,6 +228,13 @@ defmodule CodexPooler.Admin.PoolWorkflow do
   end
 
   defp invalidate_notifications_after_status_change({:error, _reason} = error), do: error
+
+  defp invalidate_notifications_after_create({:ok, %Pool{} = pool} = created) do
+    :ok = Pools.invalidate_notifications_after_status_change(nil, pool)
+    created
+  end
+
+  defp invalidate_notifications_after_create({:error, _reason} = error), do: error
 
   defp normalize_transaction_result({:ok, result}), do: {:ok, result}
   defp normalize_transaction_result({:error, reason}), do: {:error, reason}
