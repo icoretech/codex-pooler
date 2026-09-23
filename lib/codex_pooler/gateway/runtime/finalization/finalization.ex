@@ -355,7 +355,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:error, gateway_error} -> {:error, gateway_error}
       end
     else
-      finalize_upstream_status_failure(response, context, body, attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed"))
+      # The last candidate and the compact route (which never moves to another
+      # candidate) record the same route failure the retry branch records: the
+      # upstream answered 5xx or 429, so a half-open probe it answered is
+      # resolved and the failure counts toward opening the circuit. Without it
+      # the probe stayed counted in flight and blocked the assignment until
+      # its lease ran out, and a single-assignment Pool never opened its
+      # circuit on HTTP (findings#254 row 254-50).
+      finalize_upstream_status_failure(response, context, body,
+        attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed"),
+        before_finalize: fn -> record_status_route_failure(context, status) end
+      )
     end
   end
 
