@@ -1165,6 +1165,17 @@ defmodule CodexPooler.Gateway.Websocket do
     end
   end
 
+  # The remote owner runs the same `detach_downstream` call a local detach
+  # makes, under the same owner call budget, and for a pre-visible turn that
+  # call arms the replay in a database transaction (a lock wait or a
+  # connection-checkout queue on the owner node counts against it). The caller
+  # waits as long as the owner may take: with the one-second downstream send
+  # budget the closing socket read `owner_forward_timeout` while a slower arm
+  # was still running, and its owner-lost recovery interrupted the turn
+  # `owner_unavailable` under it, so the arm failed and the resend had nothing
+  # to redeem (findings#206 row 206-212). This
+  # detach runs in the socket's deferred cleanup task, so the longer wait does
+  # not hold the closing socket.
   defp detach_owner({:remote, node, _owner_instance_id}, codex_session_id, downstream, opts) do
     WebsocketOwnerForwarder.call_remote(
       node,
@@ -1172,7 +1183,7 @@ defmodule CodexPooler.Gateway.Websocket do
       [codex_session_id, downstream],
       opts
       |> owner_forwarder_opts()
-      |> Keyword.put_new(:timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+      |> Keyword.put_new(:timeout, WebsocketOwnerContract.default_owner_call_timeout_ms())
     )
   end
 
