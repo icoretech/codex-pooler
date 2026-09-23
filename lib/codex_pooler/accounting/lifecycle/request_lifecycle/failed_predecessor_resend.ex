@@ -184,7 +184,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # partial reasoning, both verified on the final attempt) is the other shape
   # the released client resends: with owner forwarding on the client-retry
   # preflight already admitted it, with forwarding off every resend of an
-  # opening request was refused and the turn failed (row 232-174).
+  # opening request was refused and the turn failed (row 232-174). An anchored
+  # request refused because its connection cannot resolve the anchor is
+  # resent in full the same way: with forwarding off the released client met
+  # `409 duplicate_turn` on every resend and finished the turn over HTTPS
+  # (row 232-278).
   defp validate_semantic_retry(request, shape, %{semantic_claim?: true} = scope) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
@@ -203,6 +207,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          true <-
            ClientRetry.verified_dead_execution?(turn, request, attempt) or
              ClientRetry.verified_quota_rejection?(turn, request, attempt) or
+             ClientRetry.verified_previous_response_miss?(turn, request, attempt) or
              shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion, :undelivered_partial_output, :completed_item_resend] do
       :ok
     else

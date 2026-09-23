@@ -1580,6 +1580,40 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   def verified_quota_rejection?(_turn, _request, _attempt), do: false
 
+  @doc """
+  A native websocket turn whose anchored request was refused because its
+  connection cannot resolve `previous_response_id` (the provider's refusal, or
+  the Pooler's connection-bound guard), which the attempt records as
+  `upstream_error_code` `previous_response_not_found` and the client read as
+  its signal to resend the full request without the anchor. The refusal is the
+  only frame its socket pushed (`downstream_delivery`: one frame, the
+  terminal), so nothing was generated or shown, and that resend is admitted as
+  one successor. `FailedPredecessorResend` refuses an anchored resend before
+  this is asked. Only the ordinary Responses route, generation zero
+  (findings#232 row 232-278).
+  """
+  @spec verified_previous_response_miss?(term(), term(), term()) :: boolean()
+  def verified_previous_response_miss?(
+        %CodexTurn{status: "failed", error_code: code, final_attempt_id: attempt_id, transport_kind: "websocket", completed_at: %DateTime{}},
+        %Request{status: "failed", last_error_code: code, transport: "websocket", endpoint: "/backend-api/codex/responses", completed_at: %DateTime{}},
+        %Attempt{
+          id: attempt_id,
+          status: "failed",
+          network_error_code: code,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata: %{
+            "upstream_error_code" => "previous_response_not_found",
+            "downstream_delivery" => %{"outcome" => "delivered", "terminal_class" => "error", "highest_frame_class" => "terminal", "frames_after_visible" => 1}
+          }
+        }
+      )
+      when is_binary(attempt_id) and code == "stream_incomplete",
+      do: true
+
+  def verified_previous_response_miss?(_turn, _request, _attempt), do: false
+
   # A websocket turn whose client left before any output reached it and that
   # the owner never armed for replay (the entitlement check around this
   # predicate refuses an armed one). Owner forwarding produces it when the

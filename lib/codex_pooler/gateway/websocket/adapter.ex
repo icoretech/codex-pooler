@@ -264,6 +264,12 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
       classified_or_retryable_code?(error["code"]) ->
         :none
 
+      # The provider's codeless refusal of an anchor the connection could not
+      # resolve went out as the `previous_response_not_found` retry event, not
+      # as a final refusal (findings#232 row 232-278).
+      metadata["rejection_message_class"] == "invalid_previous_response_id" ->
+        :none
+
       true ->
         ValidationRejection.refusal_error(provider_rejection_error(status, error))
     end

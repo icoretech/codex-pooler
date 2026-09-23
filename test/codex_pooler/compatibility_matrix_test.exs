@@ -1433,7 +1433,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                  full_after_lite: "sent",
                  unknown_mode: "reuse_rule_only",
                  reason: "previous_response_serving_mode_mismatch"
-               }
+               },
+               provider_refusal: %{
+                 upstream_message_class: "invalid_previous_response_id",
+                 client_error_code: "previous_response_not_found",
+                 attempt_rejection_error_code: "absent"
+               },
+               full_resend: "one_linked_successor_with_or_without_owner_forwarding"
              }
     end
 

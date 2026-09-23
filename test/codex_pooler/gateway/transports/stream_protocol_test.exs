@@ -882,6 +882,39 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       refute adapted =~ "synthetic upstream detail"
     end
 
+    # The provider's codeless websocket refusal of an anchor its connection did
+    # not produce gets the `previous_response_not_found` code with its fixed
+    # message on the upstream pass, and becomes the guard's own retry event on
+    # the socket's pass (findings#232 row 232-278).
+    test "gives the provider's codeless anchor refusal the previous_response_not_found code" do
+      refusal = ~s({"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid `previous_response_id`."}})
+
+      coded = %{
+        "type" => "error",
+        "status" => 400,
+        "error" => %{"type" => "invalid_request_error", "code" => "previous_response_not_found", "message" => "Invalid `previous_response_id`."}
+      }
+
+      upstream_pass = StreamProtocol.canonicalize_native_codex_responses_json_message(refusal)
+      assert CodexPooler.JSON.decode!(upstream_pass) == coded
+      assert {^upstream_pass, ^coded} = StreamProtocol.canonicalize_native_codex_responses_json_message(refusal, CodexPooler.JSON.decode!(refusal))
+
+      assert %{"type" => "error", "status" => 400, "error" => %{"code" => "previous_response_not_found", "message" => "Previous response was not found. Retrying the full request."}} =
+               upstream_pass
+               |> StreamProtocol.canonicalize_native_codex_responses_json_message()
+               |> CodexPooler.JSON.decode!()
+
+      for near_miss <- [
+            ~s({"type":"error","status":400,"error":{"type":"invalid_request_error","code":"invalid_request","message":"Invalid `previous_response_id`."}}),
+            ~s({"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid `previous_response_id`. Extra."}}),
+            ~s({"type":"error","status":404,"error":{"type":"invalid_request_error","message":"Invalid `previous_response_id`."}}),
+            ~s({"type":"error","error":{"type":"invalid_request_error","message":"Invalid `previous_response_id`."}}),
+            ~s({"type":"error","status":400,"error":{"type":"server_error","message":"Invalid `previous_response_id`."}})
+          ] do
+        refute StreamProtocol.canonicalize_native_codex_responses_json_message(near_miss) =~ "previous_response_not_found", near_miss
+      end
+    end
+
     test "delegates native retry near-misses to existing canonicalization" do
       invalid_previous_response_id = %{
         "type" => "error",

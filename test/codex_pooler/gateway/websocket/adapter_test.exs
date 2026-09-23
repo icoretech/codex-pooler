@@ -229,6 +229,9 @@ defmodule CodexPooler.Gateway.Websocket.AdapterTest do
             %{"rejection_upstream_status" => 401, "rejection_error_type" => "invalid_request_error"},
             %{"rejection_upstream_status" => 404, "rejection_error_code" => "invalid_prompt", "rejection_error_type" => "invalid_request_error"},
             %{"rejection_upstream_status" => 400, "rejection_error_code" => "context_length_exceeded", "rejection_error_type" => "invalid_request_error"},
+            # The provider's codeless anchor refusal went out as the
+            # `previous_response_not_found` retry event (findings#232 row 232-278).
+            %{"rejection_upstream_status" => 400, "rejection_error_type" => "invalid_request_error", "rejection_message_class" => "invalid_previous_response_id"},
             %{"rejection_error_type" => "invalid_request_error"},
             %{}
           ] do

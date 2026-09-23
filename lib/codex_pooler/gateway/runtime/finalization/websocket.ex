@@ -788,12 +788,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   # an error the provider sent without one (its `type`, or the
   # `upstream_terminal_failure` fallback); that code is the Pooler's
   # derivation, not the provider's, so it is left out as the HTTP path leaves
-  # out the absent code of the same refusal (findings#254 row 254-60).
+  # out the absent code of the same refusal (findings#254 row 254-60). The
+  # same holds for the `previous_response_not_found` code the native
+  # canonicalization gives the provider's codeless `Invalid previous_response_id`
+  # refusal, whose fixed message the attempt records as its class (findings#232
+  # row 232-278).
   defp provider_rejection_metadata(body, request_options) do
     with {:ok, %{"type" => type, "error" => %{} = error} = frame} when type in ["error", "response.failed"] <- last_terminal_frame(body),
          status = Map.get(frame, "status", Map.get(frame, "status_code")),
          true <- Metadata.rejection_metadata_status?(status) do
-      error = if type == "response.failed", do: drop_derived_code(error), else: error
+      error = if type == "response.failed", do: drop_derived_code(error), else: drop_previous_response_miss_code(error)
       response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
 
       response
@@ -835,6 +839,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   defp drop_derived_code(%{"code" => code, "type" => code} = error), do: Map.delete(error, "code")
   defp drop_derived_code(%{"code" => "upstream_terminal_failure"} = error), do: Map.delete(error, "code")
   defp drop_derived_code(error), do: error
+
+  defp drop_previous_response_miss_code(%{"code" => "previous_response_not_found", "message" => message} = error) do
+    if message == ErrorCodes.invalid_previous_response_id_message(), do: Map.delete(error, "code"), else: error
+  end
+
+  defp drop_previous_response_miss_code(error), do: error
 
   defp last_terminal_frame(body) when is_binary(body) do
     case StreamProtocol.complete_sse_blocks(body, bounded?: false) do

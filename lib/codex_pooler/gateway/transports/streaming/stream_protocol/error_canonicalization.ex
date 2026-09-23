@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
   @synthetic_public_openai_responses_failure_message "upstream request failed: stream interrupted before terminal response event"
   @native_previous_response_not_found_message "Previous response was not found. Retrying the full request."
+  @provider_previous_response_refusal_status 400
 
   @type event_summary :: EventSummary.t()
 
@@ -131,6 +132,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
        }} ->
         CodexPooler.JSON.encode!(native_previous_response_not_found_event())
 
+      {:ok, %{} = decoded} ->
+        if provider_previous_response_refusal?(decoded),
+          do: CodexPooler.JSON.encode!(provider_previous_response_miss_event()),
+          else: canonicalize_codex_responses_json_message(data)
+
       _other ->
         canonicalize_codex_responses_json_message(data)
     end
@@ -148,8 +154,48 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
         {CodexPooler.JSON.encode!(canonical), canonical}
 
       _other ->
-        canonicalize_codex_responses_json_message(data, decoded)
+        if provider_previous_response_refusal?(decoded) do
+          canonical = provider_previous_response_miss_event()
+          {CodexPooler.JSON.encode!(canonical), canonical}
+        else
+          canonicalize_codex_responses_json_message(data, decoded)
+        end
     end
+  end
+
+  # The Codex backend refuses an anchor the websocket connection cannot resolve
+  # (a connection that did not produce the response) with a codeless wrapped
+  # 400 whose message is exactly `ErrorCodes.invalid_previous_response_id_message/0`
+  # (findings#232 row 232-277, live probe 2026-09-23). It is given the
+  # `previous_response_not_found` code the Pooler's own connection-bound guard
+  # sends (row 232-278): the refusal's meaning, the released client's
+  # designated signal to resend the full request (rust-v0.156.1
+  # `responses_websocket.rs`) and the stale-chain code other native clients
+  # recover on. Before, it became the canonical `response.failed`
+  # `stream_incomplete`, a generic retryable stream error. The provider's fixed
+  # message is kept on this first pass, which the upstream websocket session
+  # applies and the attempt settles on, so the attempt records the provider's
+  # message class and not a code the provider never sent
+  # (`Finalization.Websocket.provider_rejection_metadata/2`). The native socket
+  # applies this canonicalization again to every frame it pushes, where the
+  # coded frame becomes the guard's own retry event.
+  defp provider_previous_response_refusal?(%{"type" => "error", "error" => %{"type" => "invalid_request_error", "message" => message} = error} = decoded) do
+    message == ErrorCodes.invalid_previous_response_id_message() and is_nil(Map.get(error, "code")) and
+      Map.get(decoded, "status") == @provider_previous_response_refusal_status
+  end
+
+  defp provider_previous_response_refusal?(_decoded), do: false
+
+  defp provider_previous_response_miss_event do
+    %{
+      "type" => "error",
+      "status" => @provider_previous_response_refusal_status,
+      "error" => %{
+        "type" => "invalid_request_error",
+        "code" => "previous_response_not_found",
+        "message" => ErrorCodes.invalid_previous_response_id_message()
+      }
+    }
   end
 
   @spec terminal_error_code(binary(), String.t() | nil) :: String.t()
