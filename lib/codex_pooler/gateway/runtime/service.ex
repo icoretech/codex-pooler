@@ -2279,13 +2279,19 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     # retryable 503, not the 500 an escaping exception renders (findings#206 row
     # 206-358). A statement that outlived its timeout during COMMIT may still have
     # committed on the server; that orphan was left behind by the 500 as well.
+    # The 503 returns to `handle_session_routable_result/2`, which clears the
+    # admitted compaction like every other refusal; clearing it here as well made
+    # that second clear find no admission and log a false cleanup failure
+    # (`reason_code=capability_mismatch`, findings#206 row 206-388).
     error in [DBConnection.ConnectionError, Postgrex.Error] ->
-      clear_native_compaction_admission(request_options)
       cancel_compaction_retry_hold(request_options)
 
-      if TransientDatabaseError.transient?(error),
-        do: database_unavailable("reservation", error),
-        else: reraise(error, __STACKTRACE__)
+      if TransientDatabaseError.transient?(error) do
+        database_unavailable("reservation", error)
+      else
+        clear_native_compaction_admission(request_options)
+        reraise(error, __STACKTRACE__)
+      end
 
     error ->
       clear_native_compaction_admission(request_options)

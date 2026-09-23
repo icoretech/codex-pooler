@@ -313,6 +313,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
       assert logs =~
                if(scenario == :rollback, do: "reason_class=postgres_admin_shutdown", else: "native")
 
+      # The rolled-back reservation clears the admitted compaction exactly once. A
+      # second clear finds no admission and used to log a false cleanup failure
+      # (`reason_code=capability_mismatch`, findings#206 row 206-388).
+      refute logs =~ "native compaction reservation cleanup failed"
+
       state
     end
   end
