@@ -5186,6 +5186,44 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     refute_received {:websocket_owner_frame, "handoff-b", 2, {:data, "stale-frame"}}
   end
 
+  # The handoff soft timeout invalidates the upstream connection behind a
+  # predecessor it stops (findings#206 row 206-327). The upstream session
+  # serves one call at a time and holds a request's call until its turn
+  # settles, ending it at once when the caller dies. An invalidation sent while
+  # the predecessor's task still held the session waited out its one-second
+  # call bound with the owner blocked, answered a timeout, and ran only after
+  # the task was gone anyway; the task goes first now, and the invalidation is
+  # served. The session below keeps that contract and the owner calls it
+  # through the production `invalidate_connection/1`.
+  test "a handoff soft timeout stops the predecessor holding the upstream session before invalidating it", context do
+    %{owner: owner, task_pid: task_pid, pending: pending, submitter: submitter} = start_held_session_handoff(context, "held-session", :hold_session)
+
+    send(owner, {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token})
+
+    assert_receive {:held_session_invalidate, predecessor_alive?, result}, @detection_timeout_ms
+    refute predecessor_alive?
+    assert result == :ok
+    assert_received {:held_session_request_ended, ^task_pid}
+    assert_received :held_session_invalidated
+    refute Process.alive?(task_pid)
+    send(submitter, :release_held_session_submitter)
+  end
+
+  # The other direction: a predecessor that holds no session call is stopped
+  # the same way, and the invalidation still reaches the idle session.
+  test "a handoff soft timeout still invalidates an idle upstream session after stopping the predecessor", context do
+    %{owner: owner, task_pid: task_pid, pending: pending, submitter: submitter} = start_held_session_handoff(context, "idle-session", :outside_session)
+
+    send(owner, {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token})
+
+    assert_receive {:held_session_invalidate, predecessor_alive?, :ok}, @detection_timeout_ms
+    refute predecessor_alive?
+    assert_received :held_session_invalidated
+    refute_received {:held_session_request_ended, _task_pid}
+    refute Process.alive?(task_pid)
+    send(submitter, :release_held_session_submitter)
+  end
+
   test "absolute reconnect handoff deadline fails once and retires without replacement work",
        context do
     parent = self()
@@ -6993,6 +7031,117 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         :ok
       end
     }
+  end
+
+  defmodule HeldUpstreamSession do
+    @moduledoc false
+    # Serves one call at a time, as UpstreamWebsocketSession does: a request
+    # call is held until its caller dies (the session ends such a request at
+    # once), and an invalidation is answered in its turn.
+    use GenServer
+
+    def start(parent), do: GenServer.start(__MODULE__, parent)
+
+    @impl true
+    def init(parent), do: {:ok, parent}
+
+    @impl true
+    def handle_call({:hold_request, caller}, _from, parent) do
+      monitor = Process.monitor(caller)
+      send(parent, {:held_session_request, caller})
+
+      receive do
+        {:DOWN, ^monitor, :process, ^caller, _reason} -> send(parent, {:held_session_request_ended, caller})
+      end
+
+      {:reply, :ok, parent}
+    end
+
+    def handle_call(:invalidate_connection, _from, parent) do
+      send(parent, :held_session_invalidated)
+      {:reply, :ok, parent}
+    end
+
+    @impl true
+    def handle_info(:stop, parent), do: {:stop, :normal, parent}
+  end
+
+  # A waiting replacement handoff whose predecessor's task either holds the
+  # upstream session in a request call (`:hold_session`) or waits outside it
+  # (`:outside_session`). The owner's invalidation reports whether the
+  # predecessor was still alive when it was sent and what the production
+  # `invalidate_connection/1` answered.
+  defp start_held_session_handoff(context, label, mode) do
+    parent = self()
+    {:ok, predecessor} = Agent.start_link(fn -> nil end)
+
+    upstream = %{
+      start: fn -> HeldUpstreamSession.start(parent) end,
+      send: fn session, _request, _writer ->
+        # The detach of the first downstream cancels the task with a shutdown
+        # it outlives, as a predecessor still streaming would, so the owner
+        # keeps the turn and the replacement waits behind it.
+        Process.flag(:trap_exit, true)
+        task_pid = self()
+        Agent.update(predecessor, fn _pid -> task_pid end)
+
+        case mode do
+          :hold_session ->
+            GenServer.call(session, {:hold_request, self()}, :infinity)
+
+          :outside_session ->
+            send(parent, {:held_session_outside, self()})
+
+            receive do
+              :never -> :ok
+            end
+        end
+      end,
+      invalidate: fn session ->
+        task_pid = Agent.get(predecessor, & &1)
+        predecessor_alive? = is_pid(task_pid) and Process.alive?(task_pid)
+        result = UpstreamWebsocketSession.invalidate_connection(session)
+        send(parent, {:held_session_invalidate, predecessor_alive?, result})
+        result
+      end,
+      close: fn session ->
+        send(session, :stop)
+        :ok
+      end
+    }
+
+    # The test sends the soft timeout itself; the real handoff timers lie
+    # beyond the detection budget so they cannot race it.
+    {:ok, owner} = start_owner(context, upstream: upstream, handoff_soft_timeout_ms: 30_000, handoff_absolute_timeout_ms: 60_000)
+
+    {:ok, first_downstream} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("#{label}-a"))
+
+    submitter =
+      spawn(fn ->
+        _result = WebsocketOwnerSession.submit_request(owner, first_downstream, native_websocket_request("#{label}-turn-a"))
+
+        receive do
+          :release_held_session_submitter -> :ok
+        end
+      end)
+
+    task_pid =
+      receive do
+        {:held_session_request, task_pid} -> task_pid
+        {:held_session_outside, task_pid} -> task_pid
+      after
+        @detection_timeout_ms -> flunk("expected the predecessor turn to reach the upstream session")
+      end
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, first_downstream)
+    {:ok, replacement} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("#{label}-b"))
+    ref = make_ref()
+
+    assert {:ok, :replacement_handoff, ^ref} =
+             WebsocketOwnerSession.preflight_reconnect(owner, replacement, semantic_turn_key(context.codex_session_id, "#{label}-turn-b"), ref)
+
+    %{pending_handoff: %{status: :waiting} = pending} = :sys.get_state(owner)
+    %{owner: owner, task_pid: task_pid, pending: pending, submitter: submitter}
   end
 
   defp start_waiting_handoff(context, label, owner_opts \\ []) do

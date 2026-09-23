@@ -2378,8 +2378,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         } = state
       ) do
     pending = %{state.pending_handoff | soft_timer_ref: nil, soft_token: nil}
+    # The predecessor's task goes first (findings#206 row 206-327). The upstream
+    # session serves one call at a time and holds the task's request call until
+    # its turn settles, so an invalidation sent while the task still ran waited
+    # out the session's one-second call bound with this owner blocked, and ran
+    # only after the task was gone anyway. The session ends a request whose
+    # caller died at once, so after the task's exit the invalidation is served
+    # right away.
+    :ok = terminate_predecessor_task_and_await(state.active_turn)
     _result = invalidate_upstream(state)
-    terminate_predecessor_task(state.active_turn)
 
     {:noreply,
      state
@@ -3521,6 +3528,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp terminate_predecessor_task(_active_turn), do: :ok
+
+  # A killed process cannot trap the exit, so its DOWN follows at once; the
+  # bound only keeps a lost signal from wedging the owner.
+  @predecessor_exit_budget_ms 5_000
+
+  defp terminate_predecessor_task_and_await(%{task_pid: task_pid}) when is_pid(task_pid) do
+    monitor = Process.monitor(task_pid)
+    Process.exit(task_pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^task_pid, _reason} -> :ok
+    after
+      @predecessor_exit_budget_ms ->
+        Process.demonitor(monitor, [:flush])
+        :ok
+    end
+  end
+
+  defp terminate_predecessor_task_and_await(_active_turn), do: :ok
 
   defp active_turn_owner_turn_id(%{task_pid: task_pid}) when is_pid(task_pid), do: task_pid
 
