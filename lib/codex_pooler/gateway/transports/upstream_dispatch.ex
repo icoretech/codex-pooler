@@ -743,19 +743,32 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp connection_bound_continuation?(%RequestOptions{}), do: false
 
-  defp owner_request_forwarder_opts(forwarder_opts, %RequestOptions{} = request_options) do
+  # A remote turn waits a finite total budget (findings#206 rows 206-305,
+  # 206-317): a local submission waits `:infinity` on the owner process, but a
+  # remote owner that stalls is noticed only when this budget expires, and the
+  # turn abandon (and the client's error) hang on that. An override must be a
+  # positive integer too; `:infinity` is refused here, before any owner call,
+  # instead of failing the erpc client's guard and reading as a lost owner.
+  @doc false
+  @spec owner_request_forwarder_opts(keyword(), RequestOptions.t()) :: keyword()
+  def owner_request_forwarder_opts(forwarder_opts, %RequestOptions{} = request_options) do
     derived_timeout =
       max(
         request_options.timeout_config.receive_timeout_ms + 1_000,
         OperationalSettings.current().websocket_idle_timeout_ms + 1_000
       )
 
-    request_timeout = Keyword.get(forwarder_opts, :request_timeout, derived_timeout)
+    request_timeout = forwarder_opts |> Keyword.get(:request_timeout, derived_timeout) |> finite_remote_turn_budget!()
 
     forwarder_opts
     |> Keyword.delete(:request_timeout)
     |> Keyword.put(:timeout, request_timeout)
   end
+
+  defp finite_remote_turn_budget!(timeout) when is_integer(timeout) and timeout > 0, do: timeout
+
+  defp finite_remote_turn_budget!(timeout),
+    do: raise(ArgumentError, "a remote owner turn needs a positive integer request_timeout, got: #{inspect(timeout)}")
 
   @spec direct_websocket_request_data(
           websocket_request_data(),

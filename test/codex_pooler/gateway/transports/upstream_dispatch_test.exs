@@ -338,6 +338,27 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  # A remote turn's forward budget is finite (findings#206 rows 206-305,
+  # 206-317): derived from the larger of the receive and websocket idle
+  # timeouts plus one second, and an override must be a positive integer. A
+  # `:infinity` override is refused before any owner call instead of failing
+  # the erpc client's positive-integer guard as a lost owner.
+  test "a remote turn gets a finite forward budget and an :infinity override is refused" do
+    request_options = struct(RequestOptions, timeout_config: RequestOptions.timeout_config(%{}))
+    derived = max(@receive_timeout_ms, @websocket_idle_timeout_ms) + 1_000
+
+    assert [timeout: ^derived, node_client: OwnerEnvelopeNodeClient] =
+             UpstreamDispatch.owner_request_forwarder_opts([node_client: OwnerEnvelopeNodeClient], request_options)
+
+    assert [timeout: 300] = UpstreamDispatch.owner_request_forwarder_opts([request_timeout: 300], request_options)
+
+    for invalid <- [:infinity, 0, -1, nil] do
+      assert_raise ArgumentError, ~r/positive integer request_timeout/, fn ->
+        UpstreamDispatch.owner_request_forwarder_opts([request_timeout: invalid], request_options)
+      end
+    end
+  end
+
   test "remote owner dispatch sends only a validated v1 envelope and keeps submission observer local",
        %{auth: auth} do
     remote_node = :"codex_pooler@data-only-owner.example"
