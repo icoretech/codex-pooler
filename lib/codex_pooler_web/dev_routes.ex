@@ -11,22 +11,29 @@ defmodule CodexPoolerWeb.DevRoutes do
     end
   end
 
-  defp dashboard_routes do
-    if @dev_routes and Code.ensure_loaded?(Phoenix.LiveDashboard.Router) do
-      quote do
-        import Phoenix.LiveDashboard.Router
+  # Branch on the compile-time flag outside the function body, like the observer
+  # routes below: `@dev_routes and ...` inside it compiles to a `case` on a literal,
+  # and Dialyzer in the dev environment (flag `true`) reports its `false` clause.
+  if @dev_routes do
+    defp dashboard_routes do
+      if Code.ensure_loaded?(Phoenix.LiveDashboard.Router) do
+        quote do
+          import Phoenix.LiveDashboard.Router
 
-        scope "/dev" do
-          pipe_through :browser
+          scope "/dev" do
+            pipe_through :browser
 
-          live_dashboard "/dashboard", metrics: CodexPoolerWeb.Telemetry
-          live "/component-showcase/:theme", CodexPoolerWeb.Dev.ComponentShowcaseLive, :index
-          forward "/mailbox", Plug.Swoosh.MailboxPreview
+            live_dashboard "/dashboard", metrics: CodexPoolerWeb.Telemetry
+            live "/component-showcase/:theme", CodexPoolerWeb.Dev.ComponentShowcaseLive, :index
+            forward "/mailbox", Plug.Swoosh.MailboxPreview
+          end
         end
+      else
+        quote(do: :ok)
       end
-    else
-      quote(do: :ok)
     end
+  else
+    defp dashboard_routes, do: quote(do: :ok)
   end
 
   if @observer_routes do
