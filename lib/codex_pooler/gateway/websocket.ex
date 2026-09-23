@@ -821,6 +821,15 @@ defmodule CodexPooler.Gateway.Websocket do
   owner has accepted nothing of it yet, detaches and fences it (`:detached`,
   rows 232-171 and 232-175); answers `:not_previsible` for every other shape,
   which the ordinary detach handles.
+
+  It reads nothing from the database before reaching the owner. The owner
+  matches the closing downstream's exact pid, epoch and correlation, and arming
+  the replay locks and checks the active owner lease inside its own transaction.
+  A lease read in front of that call waited out a database stall while the
+  provider's first output reached the owner, which then committed it as
+  visible for a client that was already gone: the turn settled
+  `client_disconnected` post-visible and every resend was refused (findings#232
+  row 232-202, production, a remote owner during a connection-checkout stall).
   """
   @spec detach_previsible_websocket_owner_downstream(
           CodexSession.t() | nil,
@@ -837,8 +846,7 @@ defmodule CodexPooler.Gateway.Websocket do
       when is_binary(owner_lease_token) and is_map(downstream) do
     opts = websocket_request_options(opts)
 
-    with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
-         {:ok, owner} <- WebsocketOwnerForwarder.resolve_owner(session, owner_forwarder_opts(opts)),
+    with {:ok, owner} <- WebsocketOwnerForwarder.resolve_owner(session, owner_forwarder_opts(opts)),
          outcome when outcome in [:suspended, :detached] <- detach_previsible_owner(owner, session.id, downstream, opts) do
       outcome
     else

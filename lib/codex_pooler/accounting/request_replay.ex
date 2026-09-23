@@ -44,6 +44,11 @@ defmodule CodexPooler.Accounting.RequestReplay do
   rescue
     Ecto.ConstraintError -> {:error, :already_armed}
     Ecto.NoResultsError -> {:error, :ineligible}
+    # The owner session arms inside its own GenServer call; a connection that
+    # cannot be checked out (a stall) must fail the suspension, which the owner
+    # already answers by keeping the turn attached for the ordinary detach, not
+    # crash the owner and every turn it holds (findings#232 row 232-202).
+    DBConnection.ConnectionError -> {:error, :database_unavailable}
   end
 
   def arm(_input), do: {:error, :invalid_input}
