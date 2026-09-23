@@ -20,6 +20,7 @@ defmodule CodexPooler.DataCase do
   alias CodexPooler.CommittedWriteGuard
   alias CodexPooler.InstanceSettings
   alias CodexPooler.Repo
+  alias CodexPooler.RollupCoverageFence
   alias Ecto.Adapters.SQL.Sandbox
 
   using do
@@ -65,6 +66,10 @@ defmodule CodexPooler.DataCase do
     # all of them: after the sandbox owner stops and after each cleanup the test
     # registers. The owner's own sandbox calls above belong to the harness.
     :ok = CommittedWriteGuard.register_verify!(guard)
+
+    # Registered before the owner's stop, so it runs after the owner stopped and before the guard
+    # verifies: the coverage rows a commit across 00:00 UTC makes the database write go back.
+    :ok = RollupCoverageFence.fence_test!(tags)
 
     settings_cache = InstanceSettings.snapshot_cache_for_test()
 

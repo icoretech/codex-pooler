@@ -57,7 +57,10 @@ defmodule CodexPooler.CommittedWriteGuard do
   `CodexPooler.DataCase.setup_sandbox/1`, and through it `CodexPoolerWeb.ConnCase`, guards every
   sync test. A module on plain `ExUnit.Case` that commits outside the sandbox puts
   `use CodexPooler.CommittedWriteGuard` directly below `use ExUnit.Case`: the guard registers its
-  `on_exit` before any other callback so that it runs after all of them, cleanups included.
+  `on_exit` before any other callback so that it runs after all of them, cleanups included. Both
+  paths also fence the test with `CodexPooler.RollupCoverageFence`, which puts back, just before
+  the guard verifies, the `daily_rollup_coverages` rows PostgreSQL writes when a test's commits
+  straddle 00:00 UTC; the guard still compares that table like every other.
 
   A sync module also gets a window, from a `setup_all` the case template or `__using__/1` injects
   before the module's own. Rows the module commits in `setup_all` belong to it: its first test
@@ -152,7 +155,8 @@ defmodule CodexPooler.CommittedWriteGuard do
       end
 
       setup context do
-        CodexPooler.CommittedWriteGuard.guard_test!(context)
+        :ok = CodexPooler.CommittedWriteGuard.guard_test!(context)
+        CodexPooler.RollupCoverageFence.fence_test!(context)
       end
     end
   end
@@ -160,6 +164,15 @@ defmodule CodexPooler.CommittedWriteGuard do
   @doc "The calls through which a test commits outside the sandbox that the guard can see."
   @spec entry_points() :: [mfa()]
   def entry_points, do: @entry_points
+
+  @doc """
+  The guard's counters for `entry_points/0` now, or `nil` when the guard is not running. Two equal
+  readings mean no call the guard counts was made in between.
+  """
+  @spec counters() :: counts() | nil
+  def counters do
+    if running?(), do: @table |> :ets.lookup_element(:session, 2) |> read_counts()
+  end
 
   @doc """
   Starts the guard for this `mix test` invocation. Call it once from `test/test_helper.exs`, after

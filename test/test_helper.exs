@@ -54,6 +54,10 @@ settings = CodexPooler.InstanceSettings.ensure_singleton!()
 :ok =
   CodexPooler.InstanceSettings.Cache.restore_for_test(CodexPooler.InstanceSettings.Cache.snapshot_for_test())
 
+# Puts back the coverage rows the database writes when a sync test's commits straddle 00:00 UTC.
+# Connected before the guard starts counting, so its connection is not a call the guard sees.
+:ok = CodexPooler.RollupCoverageFence.start!()
+
 # Fails any guarded test that leaves committed rows behind. Started after the harness's own
 # committed row above, so that row is part of the baseline every test is compared with.
 :ok = CodexPooler.CommittedWriteGuard.start!()
