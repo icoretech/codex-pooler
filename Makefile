@@ -199,6 +199,15 @@ test-fast:
 	duration_locations() { \
 		cat "$$@" 2>/dev/null | cut -f1 | sort -u; \
 	}; \
+	duration_report() { \
+		local total; \
+		total=$$(awk '/^test duration report: [0-9]+ tests / { sum += $$4 } END { print sum + 0 }' "$$@" 2>/dev/null); \
+		[ "$${total:-0}" -eq 0 ] && return 0; \
+		echo "test-fast: duration report: $$total tests over the normal limit without @tag slow beside the other partitions (not a failure), longest first:"; \
+		awk '/^test duration report: / { block = 1; next } block && /^  [0-9]+\.[0-9]ms / { print; next } { block = 0 }' "$$@" 2>/dev/null | sort -rn | head -n 20; \
+		if [ "$$total" -gt 20 ]; then echo "  ... and $$((total - 20)) more"; fi; \
+		return 0; \
+	}; \
 	confirm_durations() { \
 		local round rc total locations; \
 		locations=($$(duration_locations "$$log_dir"/duration-*.tsv)); \
@@ -250,6 +259,7 @@ test-fast:
 		pids[$$partition]=""; \
 	done; \
 	if [ "$$failures" -eq 0 ]; then \
+		duration_report "$${logs[@]}"; \
 		confirm_durations || exit 1; \
 		echo "test-fast: PASS ($$partitions/$$partitions partitions)"; \
 		exit 0; \

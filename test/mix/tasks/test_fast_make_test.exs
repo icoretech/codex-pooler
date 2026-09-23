@@ -160,6 +160,24 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
     refute output =~ "test-fast: PASS"
   end
 
+  test "the partitions' normal-limit reports merge longest first, capped at 20 lines, and never fail the run" do
+    fixture = start_fixture!()
+
+    assert {output, 0} = run_make(fixture, 2, TEST_FAST_RELEASE: "1", TEST_FAST_REPORT_COUNT: "12")
+
+    assert [_before, report] = String.split(output, "test-fast: duration report: 24 tests over the normal limit without @tag slow beside the other partitions (not a failure), longest first:\n")
+    lines = report |> String.split("\n") |> Enum.take(21)
+
+    assert Enum.take(lines, 20) ==
+             Enum.map(12..1//-1, &"  #{200 + &1}.5ms test/p2_test.exs:#{&1} ProbeTest test #{&1}") ++
+               Enum.map(12..5//-1, &"  #{100 + &1}.5ms test/p1_test.exs:#{&1} ProbeTest test #{&1}")
+
+    assert List.last(lines) == "  ... and 4 more"
+    refute output =~ "outside the report block"
+    assert output =~ "test-fast: PASS (2/2 partitions)"
+    refute Enum.any?(File.ls!(fixture.directory), &String.starts_with?(&1, "confirm-"))
+  end
+
   for {signal, make_exit} <- [{"INT", 130}, {"TERM", 143}] do
     test "#{signal} stops children and cleans only the interrupted invocation databases" do
       fixture = start_fixture!()
@@ -233,6 +251,18 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
 
     if [ -n "${TEST_FAST_CANDIDATES:-}" ] && [ "${TEST_FAST_CANDIDATE_PARTITION:-}" = "$partition" ]; then
       printf '%s\tsynthetic candidate\n' $TEST_FAST_CANDIDATES > "$CODEX_POOLER_TEST_DURATION_CANDIDATES"
+    fi
+
+    # The guard's report block as TestDurationGuard prints it, after other output.
+    if [ -n "${TEST_FAST_REPORT_COUNT:-}" ]; then
+      echo "Finished in 1.0 seconds"
+      echo "test duration report: ${TEST_FAST_REPORT_COUNT} tests over 1000.0ms without @tag slow (not a failure)" >&2
+      for index in $(seq 1 "$TEST_FAST_REPORT_COUNT"); do
+        echo "  $((partition * 100 + index)).5ms test/p${partition}_test.exs:${index} ProbeTest test ${index}" >&2
+      done
+      # Once a line leaves the block, a later indented timing is not part of it.
+      echo "Randomized with seed 1" >&2
+      echo "  999.5ms outside the report block" >&2
     fi
 
     if [ "${TEST_FAST_REQUIRE_EPMD:-}" = "1" ] && ! epmd -names >/dev/null 2>&1; then
