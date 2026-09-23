@@ -17,7 +17,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPoolerWeb.CodexResponsesSocket
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
 
   for shape <- native_turn_failure_shapes() do
     @tag :single_turn_terminal
@@ -356,7 +358,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
                           "status" => "failed"
                         }
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       neutral = Repo.reload!(circuit)
       assert neutral.status == "half_open"
@@ -404,14 +406,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
                           "status" => "succeeded"
                         }
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       assert_receive {:native_policy_circuit_closed,
                       %{
                         pool_upstream_assignment_id: assignment_id,
                         route_class: "proxy_websocket"
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       assert assignment_id == setup.assignment.id
 

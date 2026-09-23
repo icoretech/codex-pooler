@@ -576,7 +576,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     decoded["id"] || get_in(decoded, ["response", "id"])
   end
 
-  def assert_remote_submit_request_v1!(state, remote_node, mode \\ nil, timeout \\ 100) do
+  def assert_remote_submit_request_v1!(state, remote_node, mode \\ nil, timeout \\ @handoff_detection_timeout_ms) do
     codex_session_id = state.codex_session.id
     downstream = state.websocket_owner_downstream
 

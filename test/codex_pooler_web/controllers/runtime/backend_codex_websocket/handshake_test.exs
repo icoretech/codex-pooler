@@ -17,7 +17,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
   alias CodexPooler.Upstreams
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
   @connection_shutdown_timeout_ms 15_000
@@ -425,7 +428,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
                         reason: "request_finalized",
                         payload: %{"status" => "succeeded"}
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.endpoint == "/backend-api/codex/responses"
@@ -541,7 +544,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
     {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
 
     try do
-      assert_receive {:tiny_timeout_terminated, :timeout}, 1_000
+      assert_receive {:tiny_timeout_terminated, :timeout}, @detection_timeout_ms
       {conn, _websocket, code, reason} = public_websocket_receive_close!(conn, websocket, ref)
 
       assert code == 1002
@@ -591,7 +594,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
                         reason: "request_finalized",
                         payload: %{"request_id" => request_id, "status" => "succeeded"}
                       }},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       request = Repo.get!(Request, request_id)
       assert request.endpoint == "/backend-api/codex/responses"

@@ -14,6 +14,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   defmodule ClosedChunkAdapter do
     def chunk(_payload, _chunk), do: {:error, :closed}
   end
@@ -100,7 +104,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
         conn = post_reset_probe(conn, fixture.setup)
 
         assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                       1_000
+                       @detection_timeout_ms
 
         send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
         conn
@@ -138,7 +142,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
       conn = post_reset_probe(conn, fixture.setup)
 
       assert_receive {:fake_upstream_timeout_barrier, unquote(stage), upstream_pid, ^release_ref},
-                     1_000
+                     @detection_timeout_ms
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
       assert conn.status == 200
@@ -234,7 +238,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
     task = Task.async(fn -> post_reset_probe(conn, fixture.setup) end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     expire_reset_probe!(fixture.identity)
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})

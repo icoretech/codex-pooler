@@ -12,7 +12,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
   alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @large_websocket_frame_timeout 5_000
   @websocket_transport_barrier_payload "codex-pooler-test-barrier"
   @model_serving_websocket_routes [
@@ -143,7 +146,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
         })
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, first_payload)
-      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, @detection_timeout_ms
 
       queued_payload =
         CodexPooler.JSON.encode!(%{
@@ -248,7 +251,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
     try do
       assert_receive {:DOWN, ^peer_monitor, :process, peer_pid, _reason},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
 
       assert peer_pid == peer.pid
       refute peer.node in Node.list(:connected)
@@ -293,7 +296,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
       assert :ok = :erpc.call(peer.node, Cache, :broadcast_update, [denied_version_2])
 
-      assert_receive {Cache, {:applied, 2}}, @websocket_frame_timeout
+      assert_receive {Cache, {:applied, 2}}, @detection_timeout_ms
       assert InstanceSettings.current().lock_version == 2
 
       {_conn, _websocket, code, reason} =
@@ -370,7 +373,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       {Cache, {:applied, ^expected_version}} -> :ok
       {Cache, {:applied, _other_version}} -> assert_cache_applied!(expected_version)
     after
-      @websocket_frame_timeout ->
+      @detection_timeout_ms ->
         flunk("timed out waiting for instance settings cache version #{expected_version}")
     end
   end
@@ -439,7 +442,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       :peer.stop(peer_pid)
 
       assert_receive {:DOWN, ^peer_monitor, :process, ^peer_pid, _reason},
-                     @websocket_frame_timeout
+                     @detection_timeout_ms
     end
 
     refute peer_node in Node.list(:connected)

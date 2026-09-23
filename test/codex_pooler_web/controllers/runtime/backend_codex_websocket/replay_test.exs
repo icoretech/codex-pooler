@@ -20,7 +20,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
   @large_websocket_frame_timeout 5_000
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
@@ -917,7 +919,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     # The admitted continuation uses the upstream websocket on a fresh
     # connection, so it receives the exact client retry signal before its
     # payload is sent: only the anchor reaches the upstream.
-    assert_receive {:websocket_frame, _label, frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, _label, frame}, @detection_timeout_ms
     refute_received {:websocket_frame, _label, _frame}
 
     assert %{"type" => "error", "error" => %{"code" => "previous_response_not_found"}} =

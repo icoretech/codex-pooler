@@ -17,7 +17,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @detection_timeout_ms 15_000
-  @websocket_frame_timeout 1_000
 
   test "successful websocket response confirms the guarded reset probe" do
     fixture = reset_probe_fixture(completed_stream("resp_ws_reset_probe_confirmed"))
@@ -107,7 +106,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     assert {:error, %{code: "upstream_request_failed", status: 502}} =
              Task.await(task, @detection_timeout_ms)
@@ -123,7 +122,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       0
     )
 
-    assert_receive {:DOWN, ^upstream_ref, :process, ^upstream_pid, _reason}, 1_000
+    assert_receive {:DOWN, ^upstream_ref, :process, ^upstream_pid, _reason}, @detection_timeout_ms
   end
 
   test "upstream websocket close leaves the guarded reset probe claimed" do
@@ -275,7 +274,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
                state
              )
 
-    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, @detection_timeout_ms
     assert [response_task_pid] = MapSet.to_list(state.tasks)
     response_task_monitor = Process.monitor(response_task_pid)
 
@@ -288,7 +287,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
 
     Process.exit(response_task_pid, :kill)
 
-    assert_receive {:DOWN, ^response_task_monitor, :process, ^response_task_pid, :killed}, 1_000
+    assert_receive {:DOWN, ^response_task_monitor, :process, ^response_task_pid, :killed}, @detection_timeout_ms
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
 
@@ -387,7 +386,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     expire_reset_probe!(fixture.identity)
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
@@ -482,7 +481,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   end
 
   defp receive_provider_websocket_frame! do
-    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, frame}, @detection_timeout_ms
 
     if StreamProtocol.internal_control_event?(frame) do
       receive_provider_websocket_frame!()

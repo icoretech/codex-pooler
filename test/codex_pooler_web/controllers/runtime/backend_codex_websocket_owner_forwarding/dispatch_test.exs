@@ -495,7 +495,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DispatchTe
       assert remote_state.codex_session.owner_instance_id == Atom.to_string(remote_node)
 
       assert_receive {:runtime_authorization_barrier, ^barrier_ref, :reserve, :before, task_pid},
-                     1_000
+                     @handoff_detection_timeout_ms
 
       assert task_pid == task.pid
       assert request_logs(setup.pool.id) == []

@@ -272,7 +272,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
           end)
 
         assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                       1_000
+                       @detection_timeout_ms
 
         response = Task.await(task, @detection_timeout_ms)
         send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
@@ -320,7 +320,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     claimed_redemption = redemption(fixture.identity)
     claimed_probe = claimed_redemption["probe"]

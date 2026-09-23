@@ -593,10 +593,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RoutingTes
           )
         end)
 
-      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
+      assert_remote_submit_request_v1!(remote_state, remote_node)
 
       assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref, :remote_submit_request_v1},
-                     1_000
+                     @handoff_detection_timeout_ms
 
       try do
         _revision = set_model_serving_mode!(scope, setup, "full", revision)
@@ -630,7 +630,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RoutingTes
                  end
                )
 
-      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
+      assert_remote_submit_request_v1!(remote_state, remote_node)
 
       assert {:push, {:text, full_frame}, remote_state} =
                receive_owner_socket_push(remote_state)

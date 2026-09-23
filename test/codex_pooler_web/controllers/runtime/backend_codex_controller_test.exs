@@ -5779,7 +5779,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -5993,7 +5993,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         refute inspect(public_payload) =~ "invalid_content_length_header"
       end)
 
-    assert_receive {^served_ref, :served}, 1_000
+    assert_receive {^served_ref, :served}, @detection_timeout_ms
 
     assert logs =~ "gateway upstream transport failed"
     assert logs =~ "endpoint=/backend-api/codex/responses"
@@ -6184,7 +6184,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -6293,7 +6293,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute stream_conn.resp_body =~ "resp_silent_fallback_should_not_run"
 
     assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -6377,7 +6377,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute stream_conn.resp_body =~ "resp_partial_fallback_should_not_run"
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -9446,7 +9446,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert stream_conn.resp_body =~ ~s("delta":"partial")
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -9539,7 +9539,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert stream_conn.resp_body =~ ": keepalive\n\n"
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
@@ -15357,8 +15357,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     Sandbox.allow(Repo, parent, task.pid)
     send(task.pid, :sandbox_allowed)
 
-    assert_receive {:fake_upstream_chunk_barrier, _index, upstream_pid, ^release_ref}, 1_000
-    assert_receive {:stream_keepalive_written, ^release_ref}, 1_000
+    assert_receive {:fake_upstream_chunk_barrier, _index, upstream_pid, ^release_ref}, @detection_timeout_ms
+    assert_receive {:stream_keepalive_written, ^release_ref}, @detection_timeout_ms
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
 
     Task.await(task, 2_000)

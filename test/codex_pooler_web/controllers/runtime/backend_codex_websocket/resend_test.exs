@@ -28,7 +28,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
   @large_websocket_frame_timeout 5_000
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
@@ -872,7 +874,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
                       reason: "request_finalized",
                       payload: %{"request_id" => ^resend_id, "status" => "succeeded"}
                     }},
-                   @websocket_frame_timeout
+                   @detection_timeout_ms
 
     assert Repo.get!(Request, resend.id).status == "succeeded"
 
@@ -1477,7 +1479,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     {conn, websocket, _types, completed_a} = receive_public_websocket_until_terminal(conn, websocket, ref, [])
     assert %{"type" => "response.completed"} = completed_a
 
-    assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @websocket_frame_timeout
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @detection_timeout_ms
 
     anchored_b = turn.("incremental-cut-b", [item_b], %{"previous_response_id" => "resp_incremental_cut_turn_a"})
     {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, anchored_b)
@@ -1486,7 +1488,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert ["response.created", "response.in_progress" | _rest] = seen_types
 
     assert_receive {Events, %{reason: "request_finalized", payload: %{"request_id" => failed_request_id, "status" => "failed"}}},
-                   @websocket_frame_timeout
+                   @detection_timeout_ms
 
     turn_b = await_turn_completed!(failed_request_id)
     assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn_b.codex_session_id)
@@ -1998,7 +2000,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
                       reason: "request_finalized",
                       payload: %{"request_id" => failed_request_id, "status" => "failed"}
                     }},
-                   @websocket_frame_timeout
+                   @detection_timeout_ms
 
     request = Repo.get!(Request, failed_request_id)
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
@@ -2084,7 +2086,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
                       reason: "request_finalized",
                       payload: %{"request_id" => ^resend_id, "status" => "succeeded"}
                     }},
-                   @websocket_frame_timeout
+                   @detection_timeout_ms
 
     resend = Repo.get!(Request, resend_id)
     assert resend.status == "succeeded"
@@ -2207,7 +2209,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
                             reason: "request_finalized",
                             payload: %{"request_id" => ^resend_id, "status" => "succeeded"}
                           }},
-                         @websocket_frame_timeout
+                         @detection_timeout_ms
 
           assert Repo.aggregate(
                    from(t in CodexTurn, where: t.codex_session_id == ^turn.codex_session_id),
@@ -2258,7 +2260,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
                       reason: "request_finalized",
                       payload: %{"request_id" => failed_request_id, "status" => "failed"}
                     }},
-                   @websocket_frame_timeout
+                   @detection_timeout_ms
 
     request = Repo.get!(Request, failed_request_id)
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))

@@ -33,6 +33,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @large_websocket_frame_timeout 5_000
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
@@ -1047,7 +1051,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
         send(parent, {:codex_response_done, self(), :ok})
       end)
 
-    assert_receive {:task_drain_ready, ^pid}, 1_000
+    assert_receive {:task_drain_ready, ^pid}, @detection_timeout_ms
 
     terminator =
       Task.async(fn ->
@@ -1067,7 +1071,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
 
     send(pid, {:finish_during_task_drain, release_ref})
 
-    assert_receive {:task_drain_finalized, ^pid}, 1_000
+    assert_receive {:task_drain_finalized, ^pid}, @detection_timeout_ms
     assert :ok = Task.await(terminator, @connection_shutdown_timeout_ms)
 
     assert Repo.get!(CodexTurn, turn.id).status == "succeeded"
@@ -1150,7 +1154,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     upstream_session_monitor = Process.monitor(upstream_websocket_session)
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_socket_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     assert FakeUpstream.await_websocket_connection_count(upstream, 1, 1_000) == 1
     upstream_socket_monitor = Process.monitor(upstream_socket_pid)
@@ -1170,13 +1174,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
       end)
 
     assert_receive {:DOWN, ^task_monitor, :process, ^task, {:shutdown, :websocket_terminated}},
-                   1_000
+                   @detection_timeout_ms
 
     assert_receive {:DOWN, ^upstream_session_monitor, :process, ^upstream_websocket_session, :normal},
-                   1_000
+                   @detection_timeout_ms
 
     assert_receive {:DOWN, ^upstream_socket_monitor, :process, ^upstream_socket_pid, _reason},
-                   1_000
+                   @detection_timeout_ms
 
     assert :ok = Task.await(terminator, @connection_shutdown_timeout_ms)
 

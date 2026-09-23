@@ -21,6 +21,10 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.CodexClientIdentity
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
     CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
@@ -924,7 +928,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
   end
 
   defp assert_upload_put(file_id, path, body, content_type) do
-    assert_receive {:upload_put, ^file_id, "PUT", ^path, ^body, headers}, 1_000
+    assert_receive {:upload_put, ^file_id, "PUT", ^path, ^body, headers}, @detection_timeout_ms
     assert header!(headers, "content-type") == content_type
     assert header!(headers, "x-ms-blob-type") == "BlockBlob"
 

@@ -16,7 +16,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
 
   test "fresh websocket upgrade timeout before visible output tries the next eligible assignment" do
     release_ref = make_ref()
@@ -75,7 +77,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     try do
       assert :ok = Task.await(task, 2_000)
@@ -572,7 +574,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     frames =
       receive_websocket_frames_by_type(
         ["response.output_text.delta", "response.failed"],
-        @websocket_frame_timeout
+        @detection_timeout_ms
       )
 
     assert frames["response.output_text.delta"]["delta"] == "visible"
@@ -1018,7 +1020,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     frames =
       receive_websocket_frames_by_type(
         ["codex.response.metadata", "codex.rate_limits"],
-        @websocket_frame_timeout
+        @detection_timeout_ms
       )
 
     assert %{"type" => "codex.response.metadata"} = frames["codex.response.metadata"]

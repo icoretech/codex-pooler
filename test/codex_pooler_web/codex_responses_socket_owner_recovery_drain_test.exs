@@ -179,7 +179,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerRecoveryDrainTest do
 
     # A drain that ran to its timer would have reaped the task with the
     # post-drain shutdown exit; the signal path lets it finish normally.
-    assert_receive {:DOWN, ^task_monitor, :process, ^task, task_exit_reason}, 100
+    assert_receive {:DOWN, ^task_monitor, :process, ^task, task_exit_reason}, @detection_timeout_ms
     assert task_exit_reason == :normal
     assert elapsed_ms < @drain_budget_ms
 

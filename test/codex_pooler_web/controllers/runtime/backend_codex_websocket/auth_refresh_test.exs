@@ -27,6 +27,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @large_websocket_frame_timeout 5_000
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
@@ -469,7 +473,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
       end)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     metadata = active_token_refresh_metadata()
 
@@ -486,7 +490,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
     # the fake connection can retire cleanly after the failure has been
     # observed.
     assert_receive {:fake_upstream_websocket_barrier, :before_close, ^upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
 
@@ -656,7 +660,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
              )
 
     assert_receive {:fake_upstream_timeout_barrier, :before_headers, refresh_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     log =
       capture_log(fn ->
