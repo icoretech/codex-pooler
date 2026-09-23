@@ -346,41 +346,13 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
   } do
     raw_key = "sk-test-#{random_hex(8)}"
 
-    advertised =
-      ~w(gpt-6 gpt-6-sol gpt-6-astra gpt-6-luna gpt-60 gpt-6sol gpt-5.5 gpt-5.6-sol gpt-6-sol-context)
-
-    {:ok, pid} =
-      Bandit.start_link(
-        plug: fn conn, _opts ->
-          authorized? = Plug.Conn.get_req_header(conn, "authorization") == ["Bearer #{raw_key}"]
-
-          if conn.request_path == "/v1/models" and authorized? do
-            body = CodexPooler.JSON.encode!(%{"data" => Enum.map(advertised, &%{"id" => &1})})
-
-            conn
-            |> Plug.Conn.put_resp_content_type("application/json")
-            |> Plug.Conn.send_resp(200, body)
-          else
-            Plug.Conn.send_resp(conn, 401, "{}")
-          end
-        end,
-        port: 0,
-        ip: {127, 0, 0, 1}
+    port =
+      start_models_endpoint(
+        raw_key,
+        ~w(gpt-6 gpt-6-sol gpt-6-astra gpt-6-luna gpt-60 gpt-6sol gpt-5.5 gpt-5.6-sol gpt-6-sol-context)
       )
 
-    Process.unlink(pid)
-    on_exit(fn -> Supervisor.stop(pid) end)
-    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
-
-    model = fn id, attrs ->
-      struct!(
-        CodexPooler.Catalog.Model,
-        Map.merge(
-          %{exposed_model_id: id, upstream_model_id: id, metadata: %{}, supports_responses: true, supports_streaming: true, supports_tools: true},
-          attrs
-        )
-      )
-    end
+    model = &certification_candidate/2
 
     models = [
       model.("gpt-6", %{}),
@@ -412,6 +384,33 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     results = Process.get(:responses_tool_candidate_capability_results)
     assert Enum.map(results, & &1.model) == ~w(gpt-6 gpt-6-astra gpt-6-sol)
     assert Enum.all?(results, &(&1.status == "profile_setup_failed"))
+  end
+
+  # findings#206 206-258: the default matrix runner certifies gpt-6-sol whenever
+  # the Pool stores and advertises it with tools, ahead of every other exact
+  # gpt-6 model that sorts before it; otherwise the first qualifying id.
+  test "certification selection prefers a qualifying gpt-6-sol over earlier ids" do
+    raw_key = "sk-test-#{random_hex(8)}"
+    base_url = URI.parse("http://127.0.0.1:#{start_models_endpoint(raw_key, ~w(gpt-6 gpt-6-astra gpt-6-luna gpt-6-sol))}")
+    select = fn models -> Smoke.select_certification_model(base_url, %{raw_key: raw_key, models: models}) end
+    ids = fn models -> Enum.map(models, &certification_candidate(&1, %{})) end
+
+    assert {:ok, %{exposed_model_id: "gpt-6-sol"}} = select.(ids.(~w(gpt-6 gpt-6-astra gpt-6-sol gpt-6-luna)))
+
+    # Without a qualifying gpt-6-sol the first exact family id wins.
+    assert {:ok, %{exposed_model_id: "gpt-6"}} = select.(ids.(~w(gpt-6-luna gpt-6-astra gpt-6)))
+    assert {:ok, %{exposed_model_id: "gpt-6-astra"}} = select.(ids.(~w(gpt-6-luna gpt-6-astra)))
+
+    no_tools = certification_candidate("gpt-6-sol", %{supports_tools: false})
+    assert {:ok, %{exposed_model_id: "gpt-6-astra"}} = select.([no_tools | ids.(~w(gpt-6-astra gpt-6-luna))])
+
+    not_advertised_port = start_models_endpoint(raw_key, ~w(gpt-6-astra gpt-6-luna))
+
+    assert {:ok, %{exposed_model_id: "gpt-6-astra"}} =
+             Smoke.select_certification_model(
+               URI.parse("http://127.0.0.1:#{not_advertised_port}"),
+               %{raw_key: raw_key, models: ids.(~w(gpt-6-sol gpt-6-astra gpt-6-luna))}
+             )
   end
 
   test "candidate probe classification sanitizes binary and non-binary failures" do
@@ -879,6 +878,43 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
       metadata: %{}
     }
     |> Repo.insert!()
+  end
+
+  # A loopback `/v1/models` that advertises exactly `advertised` to `raw_key`.
+  defp start_models_endpoint(raw_key, advertised) do
+    {:ok, pid} =
+      Bandit.start_link(
+        plug: fn conn, _opts ->
+          authorized? = Plug.Conn.get_req_header(conn, "authorization") == ["Bearer #{raw_key}"]
+
+          if conn.request_path == "/v1/models" and authorized? do
+            body = CodexPooler.JSON.encode!(%{"data" => Enum.map(advertised, &%{"id" => &1})})
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(200, body)
+          else
+            Plug.Conn.send_resp(conn, 401, "{}")
+          end
+        end,
+        port: 0,
+        ip: {127, 0, 0, 1}
+      )
+
+    Process.unlink(pid)
+    on_exit(fn -> Supervisor.stop(pid) end)
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+    port
+  end
+
+  defp certification_candidate(id, attrs) do
+    struct!(
+      CodexPooler.Catalog.Model,
+      Map.merge(
+        %{exposed_model_id: id, upstream_model_id: id, metadata: %{}, supports_responses: true, supports_streaming: true, supports_tools: true},
+        attrs
+      )
+    )
   end
 
   defp random_hex(bytes), do: :crypto.strong_rand_bytes(bytes) |> Base.encode16(case: :lower)

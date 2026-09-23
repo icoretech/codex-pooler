@@ -815,7 +815,11 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   defp aggregate_probe_status([status]), do: status
   defp aggregate_probe_status(statuses), do: statuses |> Enum.sort() |> Enum.join("+")
 
-  defp select_certification_model(base_url, fixture) do
+  # The certified model is the one the Pool both stores and advertises among the
+  # exact gpt-6 family: gpt-6-sol when it qualifies, otherwise the first by id.
+  @doc false
+  @spec select_certification_model(URI.t(), map()) :: {:ok, Model.t()} | {:error, String.t()}
+  def select_certification_model(base_url, fixture) do
     with {:ok, candidates} <- certification_models(base_url, fixture) do
       selected =
         Enum.min_by(candidates, fn model ->
