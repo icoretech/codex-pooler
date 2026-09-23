@@ -14,6 +14,10 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   describe "record_complete_events/2" do
     test "records a whole event payload without exposing streaming state" do
       identity = %UpstreamIdentity{id: Ecto.UUID.generate()}
@@ -385,7 +389,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
         assert :ok = observe.(identity)
 
         assert_receive {^handler_id, %{count: 1}, %{source: ^source, outcome: "confirmed_by_quota"}},
-                       1_000
+                       @detection_timeout_ms
 
         redemption = persisted_redemption(identity)
         assert redemption["convergence_source"] == source
@@ -691,7 +695,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       end
 
     for _index <- 1..count do
-      assert_receive {:rate_limit_event_task_blocked, _pid}, 1_000
+      assert_receive {:rate_limit_event_task_blocked, _pid}, @detection_timeout_ms
     end
 
     blocker_pids
@@ -1096,7 +1100,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       task_pid = await_identity_quota_write(handler_id, identity_id)
       await_task_commit(handler_id, task_pid)
       monitor_ref = Process.monitor(task_pid)
-      assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :normal}, 1_000
+      assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :normal}, @detection_timeout_ms
       result
     after
       :telemetry.detach(handler_id)

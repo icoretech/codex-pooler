@@ -20,6 +20,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   # Two independent clocks run in most tests here: the drain's own `timeout_ms`,
   # which is the budget under test, and the test's wait for the result. When they
   # are set to the same value the wait has no headroom, and a loaded machine turns
@@ -759,7 +763,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert :ok = VirtualDeadline.advance(deadline, 10)
     assert_receive {:slow_final_owner_status_started, ^owner_key}
     Process.send_after(owner, {:release_slow_final_owner_status, owner_key}, 10)
-    assert_receive {:slow_final_owner_drain_started, ^owner_key}, 1_000
+    assert_receive {:slow_final_owner_drain_started, ^owner_key}, @detection_timeout_ms
     Process.send_after(owner, {:release_slow_final_owner_drain, owner_key}, 80)
 
     assert %{

@@ -23,6 +23,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedFrameCapabilityLifeti
 
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capability
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   # Absence of a process exit; the exit itself is immediate when it happens.
   @absence_budget_ms 100
 
@@ -34,7 +38,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedFrameCapabilityLifeti
     monitor = Process.monitor(capability.server)
     send(capability.server, :timeout)
 
-    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, @detection_timeout_ms
     assert {:error, :invalid} = Capability.validate(capability, token)
   end
 
@@ -80,12 +84,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedFrameCapabilityLifeti
         end
       end)
 
-    assert_receive {:sealed, capability, token}, 1_000
+    assert_receive {:sealed, capability, token}, @detection_timeout_ms
     monitor = Process.monitor(capability.server)
 
     send(sealer, :stop)
 
-    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, @detection_timeout_ms
     assert {:error, :invalid} = Capability.validate(capability, token)
   end
 
@@ -100,7 +104,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedFrameCapabilityLifeti
     monitor = Process.monitor(capability.server)
     assert :ok = Capability.release(capability)
 
-    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, @detection_timeout_ms
 
     # Indistinguishable from the timeout reclaim above, which is what keeps a
     # late dispatch a retryable owner condition rather than a forged frame.
@@ -130,7 +134,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedFrameCapabilityLifeti
     assert {:ok, nil} = Capability.consume_for_dispatch(capability, token)
     monitor = Process.monitor(capability.server)
     assert {:error, :consumed} = Capability.validate(capability, token)
-    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, @detection_timeout_ms
     assert {:error, :invalid} = Capability.validate(capability, token)
     assert {:error, :invalid} = Capability.consume(capability, token)
   end

@@ -33,6 +33,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @receive_timeout_ms 25
   @websocket_idle_timeout_ms 1_000
 
@@ -122,7 +126,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              "#{case_name} mapper changed retained websocket response bytes"
 
       assert_receive {:direct_mapper_output, ^expected_output},
-                     100,
+                     @detection_timeout_ms,
                      "#{case_name} mapper changed direct writer bytes"
 
       assert :ok = FakeUpstream.verify!(upstream)

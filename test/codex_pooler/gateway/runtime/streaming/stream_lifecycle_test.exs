@@ -38,6 +38,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @endpoint_path "/backend-api/codex/responses"
   @public_responses_endpoint "/v1/responses"
 
@@ -329,7 +333,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                    finalization_callbacks()
                  )
 
-        assert_receive {:stream_finalization, %{upstream_transport: ^expected_transport}}, 1_000
+        assert_receive {:stream_finalization, %{upstream_transport: ^expected_transport}}, @detection_timeout_ms
       end
     end)
   end
@@ -1965,7 +1969,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       end)
 
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     log =
       capture_log(fn ->
@@ -3234,7 +3238,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert {:ok, stream_conn} = stream.(stream_conn)
 
     if Keyword.get(opts, :wait_for_barrier?, true) do
-      assert_receive {:fake_upstream_timeout_barrier, _stage, upstream_pid, ^release_ref}, 1_000
+      assert_receive {:fake_upstream_timeout_barrier, _stage, upstream_pid, ^release_ref}, @detection_timeout_ms
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
     end
 

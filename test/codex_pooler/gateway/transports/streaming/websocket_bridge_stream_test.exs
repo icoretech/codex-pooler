@@ -160,7 +160,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   test "an unresolved preflight timeout fails the websocket stream and kills its submit task" do
-    stream = start_armed(registered_submit(self()), preflight_timeout_ms: 25)
+    # The settle fallback that would also kill the task outlasts the detection
+    # budget, so only the preflight-timeout kill can satisfy the DOWN below.
+    stream = start_armed(registered_submit(self()), preflight_timeout_ms: 25, settle_timeout_ms: @submit_hold_timeout_ms)
     ref = stream.ref
 
     assert_receive {:submit_task, task_pid}, @detection_timeout_ms
@@ -168,18 +170,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
 
     assert_receive {^ref, {:preflight, :stream}}, @detection_timeout_ms
     assert_receive {^ref, {:bridge_error, :bridge_preflight_timeout}}, @detection_timeout_ms
-    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}, 500
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}, @detection_timeout_ms
   end
 
   test "a terminal that loses the preflight deadline race cannot reopen the failed stream" do
-    stream = start_armed(registered_submit(self()), preflight_timeout_ms: 25)
+    stream = start_armed(registered_submit(self()), preflight_timeout_ms: 25, settle_timeout_ms: @submit_hold_timeout_ms)
     ref = stream.ref
 
     assert_receive {:submit_task, task_pid}, @detection_timeout_ms
     task_monitor = Process.monitor(task_pid)
     assert_receive {^ref, {:preflight, :stream}}, @detection_timeout_ms
     assert_receive {^ref, {:bridge_error, :bridge_preflight_timeout}}, @detection_timeout_ms
-    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}, 500
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}, @detection_timeout_ms
 
     owner_frame(stream, {:data, ~s({"type":"response.completed","response":{"id":"late"}})})
     owner_frame(stream, :complete)
@@ -190,7 +192,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   test "committed cancellation kills the submit proxy without waiting for settlement" do
-    stream = start_armed(registered_submit(self()), settle_timeout_ms: 5_000)
+    # A kill that waited for settlement would arrive only after the settle
+    # timeout, which outlasts the detection budget of the DOWN below.
+    stream = start_armed(registered_submit(self()), settle_timeout_ms: @submit_hold_timeout_ms)
     ref = stream.ref
 
     assert_receive {:submit_task, task_pid}, @detection_timeout_ms
@@ -201,7 +205,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     assert_receive {^ref, {:data, _data}}, @detection_timeout_ms
 
     assert :ok = WebsocketBridgeStream.cancel(stream)
-    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}, 500
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}, @detection_timeout_ms
   end
 
   test "queued data and completion deliver the preflight commit and every part in order" do

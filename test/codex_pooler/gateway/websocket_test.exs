@@ -24,7 +24,9 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
 
-  @websocket_frame_timeout 1_000
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
   @supported_compression_model "gpt-4o"
 
   defmodule StaleOwnerAttachmentNodeClient do
@@ -1009,7 +1011,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                  fn frame -> send(self(), {:websocket_frame, frame}) end
                )
 
-      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      assert_receive {:websocket_frame, frame}, @detection_timeout_ms
       assert %{"id" => "resp_ws_public_compressed"} = CodexPooler.JSON.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
@@ -1295,7 +1297,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   end
 
   defp receive_provider_websocket_frame! do
-    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert_receive {:websocket_frame, frame}, @detection_timeout_ms
 
     if StreamProtocol.internal_control_event?(frame) do
       receive_provider_websocket_frame!()
@@ -1305,7 +1307,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   end
 
   defp receive_prepared_provider_frame! do
-    assert_receive {:prepared_native_frame, frame}, @websocket_frame_timeout
+    assert_receive {:prepared_native_frame, frame}, @detection_timeout_ms
 
     if StreamProtocol.internal_control_event?(frame) do
       receive_prepared_provider_frame!()
