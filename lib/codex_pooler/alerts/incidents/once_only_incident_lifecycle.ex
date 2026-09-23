@@ -10,9 +10,12 @@ defmodule CodexPooler.Alerts.Incidents.OnceOnlyIncidentLifecycle do
     OnceOnlyIncidentTargets
   }
 
-  alias CodexPooler.Alerts.Schemas.AlertIncident
+  alias CodexPooler.Alerts.Schemas.{AlertIncident, AlertIncidentTarget}
 
   alias CodexPooler.Repo
+
+  @latest_first_seen_key "latest_reset_first_seen_at"
+  @superseded_reason "newer_saved_reset_first_seen"
 
   @type match_attrs :: IncidentMatchInput.match_attrs()
   @type lifecycle_error :: IncidentMatchInput.lifecycle_error()
@@ -48,15 +51,72 @@ defmodule CodexPooler.Alerts.Incidents.OnceOnlyIncidentLifecycle do
     Repo.transaction(fn -> record_incident_once_in_transaction(match) end)
   end
 
+  # The dedupe key names the upstream identity, not a grant, so the incident
+  # history of the key is the record of which grants already alerted. A match
+  # whose newest first-seen time is later than the newest incident's is a grant
+  # nobody was told about: it opens a new incident (superseding an unresolved
+  # one) and becomes due on every linked channel. Anything else is the same
+  # grant again, whatever happened to the incident, and never delivers twice
+  # (findings#260 row 260-30).
   defp record_incident_once_in_transaction(match) do
     :ok = advisory_lock_once_event(match.dedupe_key)
 
-    incident = all_state_incident_for_update(match.dedupe_key)
+    incident = latest_incident_for_update(match.dedupe_key)
 
     incident
-    |> record_once(match)
+    |> record_once_or_new_grant(match)
     |> OnceOnlyIncidentDelivery.put_due_metadata()
     |> rollback_on_error()
+  end
+
+  defp record_once_or_new_grant(nil, match), do: record_once(nil, match)
+
+  defp record_once_or_new_grant(%AlertIncident{} = incident, match) do
+    if newer_grant?(match, incident) do
+      with {:ok, _superseded} <- supersede_unresolved(incident, match.matched_at) do
+        record_once(nil, match)
+      end
+    else
+      record_once(incident, match)
+    end
+  end
+
+  defp newer_grant?(match, %AlertIncident{} = incident) do
+    with {:ok, matched} <- latest_first_seen_at(match.safe_evidence_snapshot),
+         {:ok, alerted} <- latest_first_seen_at(incident.safe_evidence_snapshot) do
+      DateTime.compare(matched, alerted) == :gt
+    else
+      :error -> false
+    end
+  end
+
+  defp latest_first_seen_at(%{} = evidence) do
+    with value when is_binary(value) <- Map.get(evidence, @latest_first_seen_key),
+         {:ok, datetime, _offset} <- DateTime.from_iso8601(value) do
+      {:ok, datetime}
+    else
+      _missing_or_malformed -> :error
+    end
+  end
+
+  defp latest_first_seen_at(_evidence), do: :error
+
+  defp supersede_unresolved(%AlertIncident{state: "resolved"} = incident, _timestamp), do: {:ok, incident}
+
+  defp supersede_unresolved(%AlertIncident{} = incident, timestamp) do
+    {_count, _rows} =
+      AlertIncidentTarget
+      |> where([target], target.incident_id == ^incident.id and is_nil(target.resolved_at))
+      |> Repo.update_all(set: [resolved_at: timestamp, updated_at: timestamp])
+
+    incident
+    |> AlertIncident.changeset(%{
+      state: AlertIncident.resolved_state(),
+      resolved_at: timestamp,
+      suppression_metadata: Map.put(incident.suppression_metadata || %{}, "superseded_reason", @superseded_reason),
+      updated_at: timestamp
+    })
+    |> Repo.update()
   end
 
   defp rollback_on_error({:ok, result}), do: result
@@ -108,11 +168,15 @@ defmodule CodexPooler.Alerts.Incidents.OnceOnlyIncidentLifecycle do
     |> Repo.insert()
   end
 
-  defp all_state_incident_for_update(dedupe_key) do
+  defp latest_incident_for_update(dedupe_key) do
     Repo.one(
       from incident in AlertIncident,
         where: incident.dedupe_key == ^dedupe_key,
-        order_by: [asc: incident.first_seen_at, asc: incident.id],
+        order_by: [
+          asc: fragment("CASE WHEN ? = 'resolved' THEN 1 ELSE 0 END", incident.state),
+          desc: incident.first_seen_at,
+          desc: incident.id
+        ],
         limit: 1,
         lock: "FOR UPDATE"
     )
