@@ -6,7 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
   alias CodexPooler.Repo
@@ -28,7 +28,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
   # the anchor, is served on the websocket (findings#232 row 232-278). With
   # owner forwarding off the released client met `409 duplicate_turn` on every
   # resend and finished the turn over HTTPS. Frames carry the released client's
-  # turn metadata, so the resend is judged on its turn claim.
+  # turn metadata, so the resend is judged on its turn claim. The resend here
+  # arrives on a new socket, as the released client sends it; the guard arm
+  # below resends on the same socket.
   for forwarding? <- [false, true] do
     test "the provider's codeless anchor refusal reaches the native client as previous_response_not_found and the full resend completes (owner forwarding #{forwarding?})" do
       CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
@@ -81,7 +83,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
         assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @settlement_detection_timeout_ms
 
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame.(next_input, second_turn_id, %{"previous_response_id" => "resp_ws_invalid_anchor_opener"}))
-        {conn, websocket, refusal_frame} = public_websocket_receive_text!(conn, websocket, ref)
+        {conn, _websocket, refusal_frame} = public_websocket_receive_text!(conn, websocket, ref)
         assert CodexPooler.JSON.decode!(refusal_frame) == native_previous_response_retry_event()
         assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "failed"}}}, @settlement_detection_timeout_ms
 
@@ -89,6 +91,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
         # upstream once.
         assert [_opener, _anchored] = FakeUpstream.requests(upstream)
 
+        # The released client closes its socket after the refusal and resends
+        # the turn on a new one (its refused turn's delivery receipt reads
+        # `aborted`, isolated-runtime lane of row 232-278).
+        Mint.HTTP.close(conn)
+        {conn, websocket, ref} = public_websocket_connect!(port, setup, thread)
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame.(first_input ++ [@answer] ++ next_input, second_turn_id, %{}))
         {conn, _websocket, resend_terminal} = receive_until_terminal(conn, websocket, ref)
         assert %{"type" => "response.completed", "response" => %{"id" => "resp_ws_invalid_anchor_resend"}} = resend_terminal
@@ -99,7 +106,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
 
         assert [_opener_row, refused, resend] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id, order_by: [asc: request.admitted_at]))
         assert {refused.status, refused.last_error_code, resend.status} == {"failed", "stream_incomplete", "succeeded"}
-        assert resend.request_metadata["client_resend"]["predecessor_request_id"] == refused.id
+        assert linked_successor?(refused, resend)
         assert [refused_attempt] = Repo.all(from(attempt in Attempt, where: attempt.request_id == ^refused.id))
 
         # The attempt keeps the provider's refusal: its fixed message class and
@@ -191,7 +198,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
 
         assert [_opener_row, refused, resend] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id, order_by: [asc: request.admitted_at]))
         assert {refused.status, resend.status} == {"failed", "succeeded"}
-        assert resend.request_metadata["client_resend"]["predecessor_request_id"] == refused.id
+        assert linked_successor?(refused, resend)
         assert :ok = FakeUpstream.verify!(upstream)
         conn
       after
@@ -218,6 +225,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
       |> Map.merge(extra)
       |> CodexPooler.JSON.encode!()
     end
+  end
+
+  # The resend is admitted as the refused request's one successor: through the
+  # owner's client-retry preflight (a retry link) or on its turn claim (the
+  # predecessor recorded on the resend).
+  defp linked_successor?(%Request{id: refused_id}, %Request{id: resend_id} = resend) do
+    resend.request_metadata["client_resend"]["predecessor_request_id"] == refused_id or
+      Repo.exists?(from(link in RequestClientRetryLink, where: link.predecessor_request_id == ^refused_id and link.successor_request_id == ^resend_id))
   end
 
   defp completed_response_frames(response_id, output, input_tokens, output_tokens) do

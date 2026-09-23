@@ -1587,8 +1587,9 @@ defmodule CodexPooler.Accounting.ClientRetry do
   `upstream_error_code` `previous_response_not_found` and the client read as
   its signal to resend the full request without the anchor. The refusal is the
   only frame its socket pushed (`downstream_delivery`: one frame, the
-  terminal), so nothing was generated or shown, and that resend is admitted as
-  one successor. `FailedPredecessorResend` refuses an anchored resend before
+  terminal; `aborted` when the client closed the socket right after it, as the
+  released client does before it resends), so nothing was generated or shown,
+  and that resend is admitted as one successor. `FailedPredecessorResend` refuses an anchored resend before
   this is asked. Only the ordinary Responses route, generation zero
   (findings#232 row 232-278).
   """
@@ -1605,11 +1606,11 @@ defmodule CodexPooler.Accounting.ClientRetry do
           completed_at: %DateTime{},
           response_metadata: %{
             "upstream_error_code" => "previous_response_not_found",
-            "downstream_delivery" => %{"outcome" => "delivered", "terminal_class" => "error", "highest_frame_class" => "terminal", "frames_after_visible" => 1}
+            "downstream_delivery" => %{"outcome" => outcome, "terminal_class" => "error", "highest_frame_class" => "terminal", "frames_after_visible" => 1}
           }
         }
       )
-      when is_binary(attempt_id) and code == "stream_incomplete",
+      when is_binary(attempt_id) and code == "stream_incomplete" and outcome in ["delivered", "aborted"],
       do: true
 
   def verified_previous_response_miss?(_turn, _request, _attempt), do: false
