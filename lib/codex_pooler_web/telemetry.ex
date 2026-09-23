@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Telemetry do
   alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObservation
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
+  alias CodexPooler.Jobs.FailureLog
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
@@ -126,6 +127,9 @@ defmodule CodexPoolerWeb.Telemetry do
   @impl true
   def init(_arg) do
     CodexPoolerWeb.RequestLogger.attach()
+    # Every role attaches it: the job roles run no Prometheus reporter, and a
+    # failed job's row is pruned after a day (findings#206 row 206-90).
+    FailureLog.attach()
 
     children =
       [

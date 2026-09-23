@@ -270,6 +270,16 @@ The drawer contains:
 
 The drawer is read-only. Use it to understand what happened before deciding whether to rerun a worker group, inspect the affected Pool or upstream, or check Request logs and Audit logs around the same time.
 
+## Failures older than a day
+
+Finished job rows, failed and discarded ones included, are pruned after one day, so this page cannot show an older failure. Every job that fails or is discarded also writes one warning line on the node that ran it, for example:
+
+```text
+[warning] oban job failed worker=CodexPooler.Jobs.AccountReconciliationWorker queue=jobs job_id=4711 attempt=1 max_attempts=3 kind=error error=Oban.PerformError reason=upstream_unavailable duration_ms=812
+```
+
+`oban job failed` means Oban will retry the job; `oban job discarded` means it will not, either because the last attempt failed or because the worker discarded it. `error` is the class of the failure, and `reason` appears only when the worker returned a short identifier. The line never carries job arguments, error messages, returned text, or stack traces. Keep these lines in your log store for as long as you want to be able to explain a missed job. Job failures are not exported as a metric: jobs run on the worker role, and on a deployment with separate roles only the app role runs the metrics reporter.
+
 ## Operational Checklist
 
 When background work looks unhealthy, check jobs in this order:
