@@ -48,7 +48,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPreAttemptDrainResendTest do
   # reason `owner_drained` rather than `client_disconnected`.
   test "a downstream socket rollout shutdown writes the marker and release a client resend needs" do
     assert_pre_attempt_drain_admits_resend(fn _setup, state ->
+      cleanup_finished = attach_cleanup_finished()
       assert :ok = CodexResponsesSocket.terminate(:shutdown, state)
+      # `terminate/2` waits 100 ms for the session cleanup that writes the drain; under load that
+      # cleanup outlives the wait (`cleanup_deferred`) and finishes after terminate returned.
+      assert_receive {^cleanup_finished, :cleanup_finished}, @budget
     end)
   end
 
@@ -204,6 +208,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPreAttemptDrainResendTest do
       )
 
     on_exit(fn -> :telemetry.detach(barrier) end)
+  end
+
+  # Signals when the session cleanup this test process started as the terminating socket has
+  # finished, deferred or not.
+  defp attach_cleanup_finished do
+    caller = self()
+    handler = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+        fn
+          _event, _measurements, %{caller: ^caller}, _config -> send(caller, {handler, :cleanup_finished})
+          _event, _measurements, _metadata, _config -> :ok
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    handler
   end
 
   defp payload(setup) do
