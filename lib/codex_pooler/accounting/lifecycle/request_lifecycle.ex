@@ -1039,7 +1039,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           latency_ms: Map.get(attrs, :latency_ms),
           usage_status: usage.status,
           served_model: usage.served_model,
-          response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :attempt_metadata, %{}))
+          response_metadata:
+            attrs
+            |> Map.get(:attempt_metadata, %{})
+            |> Metadata.sanitize_metadata()
+            |> keep_downstream_delivery_receipt(attempt.id)
         }
       end
 
@@ -1050,6 +1054,35 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
     attempt
   end
+
+  # A websocket socket merges its delivery receipt into the attempt row with its
+  # own statement (`Gateway.Websocket.DeliveryReceipt.persist/2`), normally
+  # after the gateway finalized the attempt. A socket that closes while its
+  # turn is still settling can record it first; the finalization then used to
+  # replace the whole metadata map and drop the receipt, and the resend
+  # admission that reads it refused the released client's identical resend
+  # (findings#232, measured with the released client: one forwarding-on run
+  # of five). The row is locked and its recorded receipt kept, so either order
+  # ends with the receipt; a receipt the finalization itself carries wins.
+  @downstream_delivery_key "downstream_delivery"
+
+  defp keep_downstream_delivery_receipt(metadata, attempt_id) when is_binary(attempt_id) do
+    recorded =
+      Repo.one(
+        from(a in Attempt,
+          where: a.id == ^attempt_id,
+          lock: "FOR UPDATE",
+          select: fragment("?->?", a.response_metadata, ^@downstream_delivery_key)
+        )
+      )
+
+    case recorded do
+      %{} = receipt -> Map.put_new(metadata, @downstream_delivery_key, receipt)
+      _none -> metadata
+    end
+  end
+
+  defp keep_downstream_delivery_receipt(metadata, _attempt_id), do: metadata
 
   defp persist_final_request(request, usage, pricing, finalization, replay_entitlement) do
     request_attrs =
