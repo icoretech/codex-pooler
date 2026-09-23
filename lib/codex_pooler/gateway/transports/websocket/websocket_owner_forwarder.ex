@@ -1259,10 +1259,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     stop_remote_cancellation_watcher(cancellation_watcher, submitter)
 
     # The owner still takes a client-retry turn after its budget expired, as
-    # any turn (findings#206 row 206-306), but an owner node that predates the
-    # abandon keeps the previous release's behaviour for it: no call at all.
+    # any turn (findings#206 rows 206-306, 206-315).
     if result == {:error, :owner_forward_timeout} do
-      best_effort_abandon_client_retry_turn(node, codex_session_id, downstream, opts)
+      best_effort_abandon_turn(node, codex_session_id, downstream, opts)
     end
 
     result
@@ -2007,14 +2006,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   # the turn this per-call downstream submitted and keeps the downstream, where
   # the detach a closing socket sends also cleared it and every later turn on
   # the socket was refused `stale_owner`. Same one-second, ignored-answer
-  # budget as the detach it replaces. An owner node that predates the call, or
-  # a downstream that names no turn, gets that detach, as before.
+  # budget as the detach it replaces. A downstream that names no turn gets that
+  # detach, as before.
   defp best_effort_abandon_turn(node, codex_session_id, %{owner_turn_id: owner_turn_id} = downstream, opts)
        when is_pid(owner_turn_id) do
     budget_opts = Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
 
     case call_remote_abandon_turn(node, [codex_session_id, downstream], budget_opts) do
-      {:error, :remote_abandon_v1_unsupported} -> best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      {:error, :remote_abandon_v1_unsupported} -> stop_turn_without_abandon(node, codex_session_id, downstream, budget_opts)
       _result -> :ok
     end
   end
@@ -2022,20 +2021,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp best_effort_abandon_turn(node, codex_session_id, downstream, opts),
     do: best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
 
-  # The closing-socket detach is no fallback for a client-retry turn: after
-  # it the timed-out response task ended as a success, no error frame reached
-  # the still connected client and the task's delivery never completed, so the
-  # client would wait on a turn that already failed. Before the abandon
-  # existed nothing was sent here, and an owner node from that release keeps
-  # that behaviour (findings#206 row 206-306).
-  defp best_effort_abandon_client_retry_turn(node, codex_session_id, %{owner_turn_id: owner_turn_id} = downstream, opts)
-       when is_pid(owner_turn_id) do
-    budget_opts = Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
-    _result = call_remote_abandon_turn(node, [codex_session_id, downstream], budget_opts)
-    :ok
+  # An owner node that predates the abandon (findings#206 row 206-315). The
+  # closing-socket detach is no way to stop the turn there: for a turn that
+  # can be replayed (the released client's turns) and has shown nothing yet,
+  # it arms a pre-visible replay, which makes the timed-out task's failure
+  # settlement a stale generation, so the task ended as a success, no error
+  # frame reached the still connected client and its delivery never completed
+  # (every submission version alike; the client-retry one was only the first
+  # seen). The per-call cancel of the rollout drain, which every release
+  # without the abandon has, stops exactly that turn without a replay (the
+  # owner records its cancel as `owner_drained` internally; the proxy's own
+  # settlement keeps `owner_forward_timeout`). When it finds no turn of this
+  # downstream, the submission has not reached the owner yet, and the detach
+  # then clears the downstream so that late submission is refused, as before.
+  # Both calls clear the owner's downstream, so later turns on the socket get
+  # `stale_owner` until the client reconnects, as they did before the abandon.
+  defp stop_turn_without_abandon(node, codex_session_id, downstream, budget_opts) do
+    case cancel_remote_downstream(node, codex_session_id, downstream, :owner_drained, budget_opts) do
+      :ok -> :ok
+      _no_turn_of_this_downstream -> best_effort_cancel_downstream(node, codex_session_id, downstream, budget_opts)
+    end
   end
-
-  defp best_effort_abandon_client_retry_turn(_node, _codex_session_id, _downstream, _opts), do: :ok
 
   defp call_remote_abandon_turn(node, args, opts) do
     opts

@@ -17,11 +17,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
 
   @moduletag capture_log: true
 
+  import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3]
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   alias CodexPooler.Access
+  alias CodexPooler.Accounting.Attempt
+  alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.RequestReplayEntitlement
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
@@ -89,6 +93,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
         end
 
       send(notify, {:short_turn_remote_call, remote_node, function, budget})
+      if function == :remote_cancel_downstream_v1, do: send(notify, {:short_turn_remote_cancel_reason, remote_node, List.last(args)})
 
       result =
         if function == :remote_abandon_turn_v1 and config().old_release?,
@@ -114,7 +119,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.ReplayRemoteNodeClient
 
     def arm, do: Application.put_env(:codex_pooler, __MODULE__, :armed)
-    def reset, do: Application.delete_env(:codex_pooler, __MODULE__)
+
+    # An owner node without `remote_abandon_turn_v1/2`, as erpc reports it.
+    def emulate_old_release, do: Application.put_env(:codex_pooler, Module.concat(__MODULE__, OldRelease), true)
+
+    def reset do
+      Application.delete_env(:codex_pooler, __MODULE__)
+      Application.delete_env(:codex_pooler, Module.concat(__MODULE__, OldRelease))
+    end
 
     @impl true
     defdelegate connected_app_nodes, to: ReplayRemoteNodeClient
@@ -127,7 +139,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
       notify = :persistent_term.get({ReplayRemoteNodeClient, :state}).notify
 
       if Application.get_env(:codex_pooler, __MODULE__) == :armed do
-        reset()
+        Application.delete_env(:codex_pooler, __MODULE__)
 
         late =
           spawn(fn ->
@@ -143,11 +155,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
       end
     end
 
+    def call_owner(remote_node, module, :remote_abandon_turn_v1 = function, args, timeout) do
+      notify = :persistent_term.get({ReplayRemoteNodeClient, :state}).notify
+
+      if Application.get_env(:codex_pooler, Module.concat(__MODULE__, OldRelease)) do
+        result = {:error, {:exception, :undef, [{module, function, args, []}]}}
+        send(notify, {:late_client_result, remote_node, function, result})
+        result
+      else
+        forward(notify, remote_node, module, function, args, timeout)
+      end
+    end
+
     def call_owner(remote_node, module, function, args, timeout),
       do: forward(:persistent_term.get({ReplayRemoteNodeClient, :state}).notify, remote_node, module, function, args, timeout)
 
     defp forward(notify, remote_node, module, function, args, timeout) do
       result = ERPCNodeClient.call_owner(node(), module, function, args, timeout)
+      if function == :remote_cancel_downstream_v1, do: send(notify, {:late_client_cancel_reason, remote_node, List.last(args)})
       send(notify, {:late_client_result, remote_node, function, result})
       result
     end
@@ -241,9 +266,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
   end
 
   # During a rolling deploy the owner node can predate the call: the forwarder
-  # then sends the detach it always sent, which still stops the turn (and, as
-  # before, leaves the socket to reconnect).
-  test "an owner node without the turn abandon still gets the detach after a turn forward timeout" do
+  # then sends the per-call cancel every such release has, which stops exactly
+  # the timed-out turn (and, as the detach did before, clears the downstream,
+  # so the socket reconnects for its next turn). No detach follows it.
+  test "an owner node without the turn abandon gets the per-call cancel after a turn forward timeout" do
     %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node} = remote_socket_after_first_turn("full")
     ShortTurnBudgetNodeClient.emulate_old_release()
     {pushes, second_task, _state} = time_out_second_turn(setup, state, owner_pid, remote_node)
@@ -251,11 +277,91 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     assert %{"type" => "error"} = CodexPooler.JSON.decode!(error_frame)
 
     assert_received {:short_turn_remote_call, ^remote_node, :remote_abandon_turn_v1, 1_000}
+    assert_received {:short_turn_remote_cancel_reason, ^remote_node, :owner_drained}
     assert_received {:short_turn_remote_result, ^remote_node, :remote_cancel_downstream_v1, :ok}
+    refute_received {:short_turn_remote_cancel_reason, ^remote_node, :client_disconnected}
     assert %{downstream: nil, active_turn: second_turn} = :sys.get_state(owner_pid)
     await_turn_settled(owner_pid, second_turn)
     assert %{downstream: nil, active_turn: nil} = :sys.get_state(owner_pid)
     refute_received {:websocket_owner_frame, _correlation, _epoch, ^second_task, _payload}
+  end
+
+  # The released client's turns can be replayed, and one that timed out before
+  # its first output is still pre-visible when the owner takes it. The
+  # closing-socket detach an owner node without the abandon used to get armed
+  # that turn's pre-visible replay for a client that was still connected: the
+  # timed-out task's failure settlement then met a newer replay generation, the
+  # task ended as a success with no error frame, its delivery never completed,
+  # and the request stayed in progress behind the armed replay (findings#206
+  # row 206-315; first seen on the client-retry submission, the same for every
+  # submission version). The per-call cancel stops the turn without a replay.
+  for submit_function <- [:remote_submit_request_v1, :remote_submit_request_v5] do
+    test "an owner node without the turn abandon stops a released-client turn after its forward timeout and the client gets the error (#{submit_function})" do
+      %{state: state, owner_pid: owner_pid, remote_node: remote_node, frame: frame} = released_client_socket(unquote(submit_function))
+      ShortTurnBudgetNodeClient.emulate_old_release()
+      {pushes, task, _state} = time_out_turn(frame, state, owner_pid, remote_node, unquote(submit_function))
+      assert [error_frame] = pushes
+      assert %{"type" => "error"} = CodexPooler.JSON.decode!(error_frame)
+
+      assert_received {:short_turn_remote_cancel_reason, ^remote_node, :owner_drained}
+      assert_received {:short_turn_remote_result, ^remote_node, :remote_cancel_downstream_v1, :ok}
+      refute_received {:short_turn_remote_cancel_reason, ^remote_node, :client_disconnected}
+      assert %{downstream: nil, active_turn: turn} = :sys.get_state(owner_pid)
+      await_turn_settled(owner_pid, turn)
+      assert %{active_turn: nil, suspended_replay: nil} = :sys.get_state(owner_pid)
+      refute_received {:websocket_owner_frame, _correlation, _epoch, ^task, _payload}
+      assert_timed_out_request_failed_without_replay!()
+    end
+  end
+
+  # With the abandon (current owners) a released-client turn that times out is
+  # stopped the same way, and the socket keeps its downstream.
+  test "a released-client turn the remote owner takes after its forward budget is stopped without a replay" do
+    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node, attached: attached, frame: frame} = released_client_socket(:remote_submit_request_v1)
+    {pushes, task, state} = time_out_turn(frame, state, owner_pid, remote_node, :remote_submit_request_v1)
+    assert [error_frame] = pushes
+    assert %{"type" => "error"} = CodexPooler.JSON.decode!(error_frame)
+
+    assert_received {:short_turn_remote_result, ^remote_node, :remote_abandon_turn_v1, :ok}
+    refute_received {:short_turn_remote_call, ^remote_node, :remote_cancel_downstream_v1, _budget}
+    assert %{downstream: ^attached, active_turn: turn} = :sys.get_state(owner_pid)
+    await_turn_settled(owner_pid, turn)
+    assert %{downstream: ^attached, active_turn: nil, suspended_replay: nil} = :sys.get_state(owner_pid)
+    refute_received {:websocket_owner_frame, _correlation, _epoch, ^task, _payload}
+    assert_timed_out_request_failed_without_replay!()
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({websocket_payload(setup, "released turn timeout next"), [opcode: :text]}, state)
+    {pushes, _next_task, state} = drive_until_done(state)
+    refute Enum.any?(pushes, &(CodexPooler.JSON.decode!(&1)["type"] == "error"))
+    terminate_and_await_cleanup(state)
+  end
+
+  # The other direction of the old-release fallback: when the per-call cancel
+  # finds no turn, the submission has not reached the owner yet, and the detach
+  # that follows clears the downstream, so the late submission is refused
+  # before dispatch, as it was when the detach was the only call.
+  test "an owner node without the turn abandon refuses a timed-out submission that arrives after the cancel" do
+    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node, upstream: upstream} = remote_socket_after_first_turn("full")
+    state = remote_owner_state(state, remote_node, node_client: LateSubmissionNodeClient)
+    upstream_requests = FakeUpstream.count(upstream)
+
+    LateSubmissionNodeClient.emulate_old_release()
+    LateSubmissionNodeClient.arm()
+    assert {:ok, state} = CodexResponsesSocket.handle_in({websocket_payload(setup, "late old-release second"), [opcode: :text]}, state)
+    assert_receive {:late_submission_held, late}, @detection_timeout_ms
+    {pushes, late_task, _state} = drive_until_done(state)
+    assert [error_frame] = pushes
+    assert %{"type" => "error"} = CodexPooler.JSON.decode!(error_frame)
+    assert_received {:late_client_cancel_reason, ^remote_node, :owner_drained}
+    assert_received {:late_client_result, ^remote_node, :remote_cancel_downstream_v1, {:error, :stale_downstream}}
+    assert_received {:late_client_cancel_reason, ^remote_node, :client_disconnected}
+    assert_received {:late_client_result, ^remote_node, :remote_cancel_downstream_v1, :ok}
+
+    send(late, :reach_owner)
+    assert_receive {:late_submission_result, {:error, :stale_downstream}}, @detection_timeout_ms
+    assert %{downstream: nil, active_turn: nil} = :sys.get_state(owner_pid)
+    assert FakeUpstream.count(upstream) == upstream_requests
+    refute_received {:websocket_owner_frame, _correlation, _epoch, ^late_task, _payload}
   end
 
   # The client-retry submission (owner request v5): the released client resends
@@ -292,22 +398,74 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     end
   end
 
-  # An owner node that predates the abandon gets no detach after a client-retry
-  # turn times out, as before the abandon existed: with the detach the
-  # timed-out task ended as a success and the client never got the turn's
-  # error.
-  test "an owner node without the turn abandon keeps the connected socket after a client-retry turn forward timeout" do
-    %{state: state, owner_pid: owner_pid, remote_node: remote_node, attached: attached, frame: frame} = remote_socket_after_failed_turn("full")
-    ShortTurnBudgetNodeClient.emulate_old_release()
-    {pushes, _retry_task, _state} = time_out_turn(frame, state, owner_pid, remote_node, :remote_submit_request_v5)
-    assert [error_frame] = pushes
-    assert %{"type" => "error"} = CodexPooler.JSON.decode!(error_frame)
+  # No timeout involved (findings#206 row 206-315, the other half): a socket
+  # that closes while a remote client-retry turn has shown nothing yet arms
+  # that turn's pre-visible replay, the task's settlement there ends without
+  # an error frame because no client is left to read one, and the released
+  # client's resend on a new socket redeems the replay: one terminal, one
+  # provider request more, one settled request.
+  test "an ordinary close during a remote client-retry turn arms its replay and the resend is served once" do
+    release_ref = make_ref()
 
-    assert_received {:short_turn_remote_call, ^remote_node, :remote_abandon_turn_v1, 1_000}
-    refute_received {:short_turn_remote_call, ^remote_node, :remote_cancel_downstream_v1, _budget}
-    assert %{downstream: ^attached, active_turn: retry_turn} = :sys.get_state(owner_pid)
-    await_turn_settled(owner_pid, retry_turn)
-    assert %{downstream: ^attached} = :sys.get_state(owner_pid)
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.websocket_terminal_failure("server_error"),
+          FakeUpstream.websocket_close_without_terminal_barrier(notify: self(), release_ref: release_ref, code: 1001, reason: "synthetic held client-retry turn"),
+          FakeUpstream.json_response(%{"id" => "resp_remote_retry_close", "object" => "response", "usage" => %{"input_tokens" => 2, "output_tokens" => 2, "total_tokens" => 4}})
+        ])
+      )
+
+    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node, auth: auth, turn_state: turn_state} = remote_socket(upstream, "full")
+    thread = "ws-remote-retry-close-#{System.unique_integer([:positive])}"
+    frame = released_client_frame(setup, thread, Ecto.UUID.generate(), "remote retry close")
+    assert {:ok, state} = CodexResponsesSocket.handle_in({frame, [opcode: :text]}, state)
+    {pushes, _first_task, state} = drive_until_done(state)
+    assert Enum.any?(pushes, &match?(%{"type" => "response.failed"}, CodexPooler.JSON.decode!(&1)))
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({frame, [opcode: :text]}, state)
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref}, @detection_timeout_ms
+    assert_received {:short_turn_remote_call, ^remote_node, :remote_submit_request_v5, _budget}
+    [retry_task] = MapSet.to_list(state.tasks)
+    monitor = Process.monitor(retry_task)
+
+    terminate_and_await_cleanup(state)
+    assert_receive {:DOWN, ^monitor, :process, ^retry_task, _reason}, @detection_timeout_ms
+    assert %{downstream: nil, active_turn: nil, suspended_replay: %{provisional_status: :armed}} = :sys.get_state(owner_pid)
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+    assert [%RequestReplayEntitlement{status: "armed", request_id: retry_request_id}] = Repo.all(RequestReplayEntitlement)
+
+    {:ok, resend_state} = owner_socket(auth, "ws-remote-turn-timeout-resend", turn_state, websocket_owner_forwarder_opts: [node_client: ShortTurnBudgetNodeClient])
+    assert {:ok, resend_state} = CodexResponsesSocket.handle_in({frame, [opcode: :text]}, resend_state)
+    {pushes, _resend_task, resend_state} = drive_until_done(resend_state)
+    assert Enum.count(pushes, &(CodexPooler.JSON.decode!(&1)["id"] == "resp_remote_retry_close")) == 1
+    refute Enum.any?(pushes, &(CodexPooler.JSON.decode!(&1)["type"] == "error"))
+    assert_received {:short_turn_remote_call, ^remote_node, :remote_submit_request_v4, _budget}
+
+    assert %Request{status: "succeeded"} = Repo.get!(Request, retry_request_id)
+    assert [{0, "retryable_failed"}, {1, "succeeded"}] = Repo.all(from(attempt in Attempt, where: attempt.request_id == ^retry_request_id, order_by: [asc: attempt.attempt_number], select: {attempt.replay_generation, attempt.status}))
+    assert [%RequestReplayEntitlement{status: "consumed"}] = Repo.all(RequestReplayEntitlement)
+    assert FakeUpstream.count(upstream) == 3
+    assert :ok = FakeUpstream.verify!(upstream)
+    terminate_and_await_cleanup(resend_state)
+  end
+
+  # A socket whose next frame is a released-client turn that times out: a
+  # fresh turn after a completed one (owner request v1), or the resend of a
+  # turn the provider failed (owner request v5, the client-retry submission).
+  defp released_client_socket(:remote_submit_request_v5), do: remote_socket_after_failed_turn("full")
+
+  defp released_client_socket(:remote_submit_request_v1) do
+    %{setup: setup} = context = remote_socket_after_first_turn("full")
+    thread = "ws-remote-released-timeout-#{System.unique_integer([:positive])}"
+    Map.put(context, :frame, released_client_frame(setup, thread, Ecto.UUID.generate(), "remote released turn timeout"))
+  end
+
+  # The timed-out request settled as the forward timeout the client was sent,
+  # and no replay was armed for it.
+  defp assert_timed_out_request_failed_without_replay! do
+    assert [%Request{status: "failed", response_status_code: 504}] = Repo.all(from(request in Request, where: request.last_error_code == "owner_forward_timeout"))
+    assert Repo.aggregate(RequestReplayEntitlement, :count) == 0
   end
 
   defp remote_socket_after_failed_turn(mode) do
@@ -390,7 +548,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     setup = gateway_setup(upstream)
     _revision = set_model_serving_mode!(model_serving_scope(), setup, mode)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    {:ok, state} = owner_socket(auth, "ws-remote-turn-timeout", Ecto.UUID.generate())
+    turn_state = Ecto.UUID.generate()
+    {:ok, state} = owner_socket(auth, "ws-remote-turn-timeout", turn_state)
     {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
     remote_node = :"codex_pooler@remote-turn-timeout.example"
     ReplayRemoteNodeClient.configure(remote_node, self())
@@ -407,7 +566,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
 
     :sys.replace_state(owner_pid, fn owner_state -> %{owner_state | owner_instance_id: Atom.to_string(remote_node)} end)
     state = state |> remote_owner_state(remote_node, node_client: ShortTurnBudgetNodeClient) |> Map.put(:codex_session, session)
-    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node}
+    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node, auth: auth, turn_state: turn_state}
   end
 
   # The owner stalls past the second turn's forward budget. Both the
