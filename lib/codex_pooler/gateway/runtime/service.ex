@@ -431,12 +431,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
             })
 
           {:error, %{code: :duplicate_request} = reason} ->
-            log_duplicate_turn(prepared.request_options, :reservation_duplicate,
-              stage: "websocket_turn_claim",
-              extra: [resend_disposition: Map.get(reason, :resend_disposition)]
-            )
-
-            {:error, duplicate_turn_error()}
+            websocket_turn_claim_duplicate(prepared.request_options, reason)
 
           {:error, reason} ->
             {:error, reason}
@@ -1076,6 +1071,42 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:error, reason} -> reject_replay_intent(context, session, reason)
     end
   end
+
+  # Owner forwarding off: the resend meets the turn claim instead of the owner
+  # replay preflight, with the same rule (findings#254 row 254-100).
+  defp websocket_turn_claim_duplicate(%RequestOptions{} = request_options, reason) do
+    with :terminal_predecessor <- Map.get(reason, :resend_disposition),
+         {:ok, session, input} <- turn_claim_refusal_input(request_options),
+         {:ok, metadata} <- Accounting.final_refusal_predecessor(session, input),
+         {:ok, %{"code" => code, "message" => message} = refusal} <- Adapter.recorded_final_refusal_error(metadata) do
+      public_error = error(400, code, message, Map.get(refusal, "param"))
+      log_pre_classification_refusal(request_options, session, :final_refusal_predecessor, public_error)
+      {:error, public_error}
+    else
+      _no_recorded_refusal ->
+        log_duplicate_turn(request_options, :reservation_duplicate,
+          stage: "websocket_turn_claim",
+          extra: [resend_disposition: Map.get(reason, :resend_disposition)]
+        )
+
+        {:error, duplicate_turn_error()}
+    end
+  end
+
+  defp turn_claim_refusal_input(%RequestOptions{
+         continuity: %{codex_session: %CodexSession{} = session, semantic_turn_key: semantic_turn_digest},
+         native_client_retry_witness: %{digest: digest, auth_epoch: auth_epoch} = witness
+       }),
+       do:
+         {:ok, session,
+          %{
+            semantic_turn_digest: semantic_turn_digest,
+            replay_claim_digest: digest,
+            replay_claim_alternates: witness_alternates(witness),
+            runtime_revocation_epoch: auth_epoch
+          }}
+
+  defp turn_claim_refusal_input(_request_options), do: :none
 
   # A turn whose provider refusal went out as the final wrapped 400 is never
   # served again, and its resend is answered with that same refusal rather than
