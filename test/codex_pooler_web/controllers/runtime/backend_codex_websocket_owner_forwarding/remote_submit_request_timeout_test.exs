@@ -100,12 +100,66 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
     end
   end
 
+  defmodule LateSubmissionNodeClient do
+    @moduledoc false
+    # Every remote owner call runs through the production erpc client against
+    # the local node. Once armed, the next turn submission reaches the owner
+    # only when the test says so: the proxy gets its budget's timeout at once,
+    # and the owner-node process carrying the submission is held before its
+    # owner call, as one still recovering the owner would be. The abandon the
+    # forwarder then sends reaches the owner first.
+    @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
+
+    alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.ERPCNodeClient
+    alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.ReplayRemoteNodeClient
+
+    def arm, do: Application.put_env(:codex_pooler, __MODULE__, :armed)
+    def reset, do: Application.delete_env(:codex_pooler, __MODULE__)
+
+    @impl true
+    defdelegate connected_app_nodes, to: ReplayRemoteNodeClient
+
+    @impl true
+    defdelegate app_node?(node), to: ReplayRemoteNodeClient
+
+    @impl true
+    def call_owner(remote_node, module, :remote_submit_request_v1 = function, args, timeout) do
+      notify = :persistent_term.get({ReplayRemoteNodeClient, :state}).notify
+
+      if Application.get_env(:codex_pooler, __MODULE__) == :armed do
+        reset()
+
+        late =
+          spawn(fn ->
+            receive do
+              :reach_owner -> send(notify, {:late_submission_result, ERPCNodeClient.call_owner(node(), module, function, args, timeout)})
+            end
+          end)
+
+        send(notify, {:late_submission_held, late})
+        {:error, :owner_forward_timeout}
+      else
+        forward(notify, remote_node, module, function, args, timeout)
+      end
+    end
+
+    def call_owner(remote_node, module, function, args, timeout),
+      do: forward(:persistent_term.get({ReplayRemoteNodeClient, :state}).notify, remote_node, module, function, args, timeout)
+
+    defp forward(notify, remote_node, module, function, args, timeout) do
+      result = ERPCNodeClient.call_owner(node(), module, function, args, timeout)
+      send(notify, {:late_client_result, remote_node, function, result})
+      result
+    end
+  end
+
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
       ShortTurnBudgetNodeClient.reset()
+      LateSubmissionNodeClient.reset()
       cleanup_local_owner_sessions()
       ReplayRemoteNodeClient.reset()
 
@@ -150,6 +204,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RemoteSubm
       terminate_and_await_cleanup(state)
       assert %{downstream: nil} = :sys.get_state(owner_pid)
     end
+  end
+
+  # The abandon can reach the owner before the submission it abandons, when
+  # the owner-node process carrying the submission is still before its owner
+  # call as the budget expires. The abandon then finds no turn to stop, and the
+  # owner refuses that exact submission when it arrives instead of sending it
+  # upstream for a client that already got its error (findings#206 row
+  # 206-307). The next turn on the same socket is served.
+  test "a timed-out turn submission that reaches the owner after its abandon is refused before dispatch" do
+    %{setup: setup, state: state, owner_pid: owner_pid, remote_node: remote_node, attached: attached, upstream: upstream} = remote_socket_after_first_turn("full")
+    state = remote_owner_state(state, remote_node, node_client: LateSubmissionNodeClient)
+    upstream_requests = FakeUpstream.count(upstream)
+
+    LateSubmissionNodeClient.arm()
+    assert {:ok, state} = CodexResponsesSocket.handle_in({websocket_payload(setup, "late submission second"), [opcode: :text]}, state)
+    assert_receive {:late_submission_held, late}, @detection_timeout_ms
+    {pushes, late_task, state} = drive_until_done(state)
+    assert [error_frame] = pushes
+    assert %{"type" => "error"} = CodexPooler.JSON.decode!(error_frame)
+    assert_received {:late_client_result, ^remote_node, :remote_abandon_turn_v1, {:error, :stale_downstream}}
+
+    send(late, :reach_owner)
+    assert_receive {:late_submission_result, {:error, :stale_downstream}}, @detection_timeout_ms
+    # Ordered behind the refused submission.
+    assert %{downstream: ^attached, active_turn: nil, abandoned_submissions: []} = :sys.get_state(owner_pid)
+    assert FakeUpstream.count(upstream) == upstream_requests
+    refute_received {:websocket_owner_frame, _correlation, _epoch, ^late_task, _payload}
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({websocket_payload(setup, "late submission third"), [opcode: :text]}, state)
+    {pushes, _third_task, state} = drive_until_done(state)
+    assert Enum.any?(pushes, &(CodexPooler.JSON.decode!(&1)["id"] == "resp_remote_turn_timeout"))
+    refute Enum.any?(pushes, &(CodexPooler.JSON.decode!(&1)["type"] == "error"))
+    assert FakeUpstream.count(upstream) == upstream_requests + 1
+    terminate_and_await_cleanup(state)
   end
 
   # During a rolling deploy the owner node can predate the call: the forwarder

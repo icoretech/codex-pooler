@@ -105,7 +105,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     terminal_delivery_timeout_ms: @terminal_delivery_timeout_ms,
     provisional_issuances: [],
     pending_admissions: %{},
-    pending_admission_monitors: %{}
+    pending_admission_monitors: %{},
+    abandoned_submissions: []
   ]
 
   @type downstream :: %{
@@ -1752,7 +1753,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         reply_or_retire(state, :ok)
 
       {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        {:reply, {:error, reason}, remember_abandoned_submission(state, downstream)}
     end
   end
 
@@ -2021,7 +2022,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
-  defp accept_or_consume_upstream_submission(
+  # An abandon can reach the owner before the submission it abandons: the
+  # owner-node process that carries a remote submission may still be before
+  # its owner call (recovering the owner, restoring the downstream) when the
+  # proxy's budget expires, and the abandon then finds no turn to stop
+  # (findings#206 row 206-307). It leaves the exact per-call downstream it
+  # named here, and that submission is refused before any dispatch when it
+  # arrives. The turn id is the proxy's response task, so a later turn, even on
+  # the same socket, never matches. The list is bounded: an abandoned
+  # submission that never arrives is forgotten after the newer ones.
+  @abandoned_submission_limit 16
+
+  defp remember_abandoned_submission(state, downstream) do
+    abandoned = [abandoned_submission_key(downstream) | state.abandoned_submissions]
+    %{state | abandoned_submissions: Enum.take(Enum.uniq(abandoned), @abandoned_submission_limit)}
+  end
+
+  defp abandoned_submission_key(%{pid: pid, epoch: epoch, correlation_id: correlation_id, owner_turn_id: owner_turn_id})
+       when is_pid(owner_turn_id),
+       do: {pid, epoch, correlation_id, owner_turn_id}
+
+  defp abandoned_submission_key(_downstream), do: nil
+
+  defp accept_or_consume_upstream_submission(state, from, downstream, upstream_payload, submission_notification?) do
+    key = abandoned_submission_key(downstream)
+
+    if is_tuple(key) and key in state.abandoned_submissions do
+      {:reply, {:error, :stale_downstream}, %{state | abandoned_submissions: List.delete(state.abandoned_submissions, key)}}
+    else
+      accept_or_consume_live_submission(state, from, downstream, upstream_payload, submission_notification?)
+    end
+  end
+
+  defp accept_or_consume_live_submission(
          %{pending_handoff: %{status: :ready} = pending} = state,
          from,
          downstream,
@@ -2049,7 +2082,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
-  defp accept_or_consume_upstream_submission(
+  defp accept_or_consume_live_submission(
          state,
          from,
          downstream,
