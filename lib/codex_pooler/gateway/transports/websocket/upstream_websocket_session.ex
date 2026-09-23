@@ -31,6 +31,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Gateway.Transports.Websocket.OrdinarySuccessResult
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.CloseDiagnostics
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState.Delivery
@@ -623,8 +624,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   def handle_call({:send_text, payload}, _from, %{conn: _conn} = state) do
     case send_text(state, payload) do
-      {:ok, state} -> {:reply, {:ok, :sent}, maybe_schedule_keepalive(state)}
-      {:error, reason, state} -> {:reply, {:error, reason}, close_state(state)}
+      {:ok, state} ->
+        {:reply, {:ok, :sent}, maybe_schedule_keepalive(state)}
+
+      {:error, reason, state} ->
+        {:reply, {:error, reason}, close_between_requests(state, :send_failed, transport_reason: reason)}
     end
   end
 
@@ -632,6 +636,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: {:reply, {:error, :upstream_websocket_not_connected}, state}
 
   def handle_call(:invalidate_connection, _from, %{conn: _conn} = state) do
+    :ok = CloseDiagnostics.log_close(state, :invalidated)
     {:reply, :ok, invalidate_state(state)}
   end
 
@@ -653,11 +658,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       case send_frame(state, {:ping, payload}) do
         {:ok, state} ->
           state
+          |> mark_ping_sent()
           |> schedule_pong_deadline(payload)
           |> schedule_keepalive()
 
-        {:error, _reason, state} ->
-          close_state(state)
+        {:error, reason, state} ->
+          close_between_requests(state, :ping_send_failed, transport_reason: reason)
       end
 
     {:noreply, state}
@@ -669,7 +675,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         {:upstream_websocket_pong_deadline, token},
         %{keepalive_pong_token: token} = state
       ) do
-    {:noreply, close_state(state)}
+    {:noreply, close_between_requests(state, :pong_deadline)}
   end
 
   def handle_info({:upstream_websocket_pong_deadline, _token}, state), do: {:noreply, state}
@@ -711,8 +717,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         state = %{state | conn: conn}
         {:noreply, handle_async_parts(state, responses)}
 
-      {:error, conn, _reason, _responses} ->
-        {:noreply, close_state(%{state | conn: conn})}
+      {:error, conn, reason, _responses} ->
+        state = %{state | conn: conn}
+        {:noreply, close_between_requests(state, idle_transport_cause(reason), transport_reason: reason)}
 
       :unknown ->
         {:noreply, state}
@@ -738,7 +745,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
        do: {:ok, state}
 
   defp ensure_connection(state, key, url, headers, timeouts, request_caller) do
-    state = close_state(state)
+    state = close_replaced_connection(state, key)
 
     ConnectionUpgrade.connect_state(state, key, url, headers, timeouts, request_caller)
   end
@@ -1561,7 +1568,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp send_in_flight_keepalive(state, %ReceiveState{} = receive_state) do
     case send_frame(state, {:ping, unique_keepalive_payload()}) do
       {:ok, state} ->
-        receive_events(schedule_keepalive(state), receive_state)
+        receive_events(state |> mark_ping_sent() |> schedule_keepalive(), receive_state)
 
       {:error, reason, state} ->
         receive_state = %{receive_state | termination_source: :websocket_control_send_error}
@@ -1789,7 +1796,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp drain_trailing_frames(state, trailing_frames, halt) when halt in [:terminal, :retryable_first_frame] do
     lifecycle = connection_lifecycle_state(state)
-    drained = handle_async_frames(state, trailing_frames)
+    drained = handle_async_frames(state, trailing_frames, :trailing)
 
     case Enum.find(trailing_frames, &match?({:close, _code, _reason}, &1)) do
       {:close, code, _reason} ->
@@ -1873,33 +1880,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         case Mint.WebSocket.decode(websocket, data) do
           {:ok, websocket, frames} ->
             state = %{state | websocket: websocket}
-            {:cont, handle_async_frames(state, frames)}
+            {:cont, handle_async_frames(state, frames, :idle)}
 
-          {:error, _websocket, _reason} ->
-            {:halt, close_state(state)}
+          {:error, websocket, reason} ->
+            state = %{state | websocket: websocket}
+            {:halt, close_between_requests(state, :decode_error, transport_reason: reason)}
         end
 
       {:done, _ref}, state ->
-        {:halt, close_state(state)}
+        {:halt, close_between_requests(state, :transport_closed, transport_reason: :closed)}
 
       _part, state ->
         {:cont, state}
     end)
   end
 
-  defp handle_async_frames(state, frames) do
+  # `context` is `:idle` for a read the session takes between requests and
+  # `:trailing` for frames decoded behind a halting frame of a request, whose
+  # peer Close `drain_trailing_frames/3` already reports.
+  defp handle_async_frames(state, frames, context) do
     Enum.reduce_while(frames, state, fn
       {:ping, payload}, state ->
         case send_frame(state, {:pong, payload}) do
           {:ok, state} -> {:cont, state}
-          {:error, _reason, state} -> {:halt, close_state(state)}
+          {:error, reason, state} -> {:halt, close_async(state, context, :pong_send_failed, transport_reason: reason)}
         end
 
       {:pong, payload}, state ->
         {:cont, clear_matching_pong(state, payload)}
 
-      {:close, _code, _reason}, state ->
-        {:halt, close_state(state)}
+      {:close, code, reason}, state ->
+        {:halt, close_async(state, context, :peer_close_frame, close_code: code, close_reason: reason)}
 
       {:text, _text}, state ->
         {:cont, state}
@@ -1907,10 +1918,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:binary, _data}, state ->
         {:cont, state}
 
-      {:error, _reason}, state ->
-        {:halt, close_state(state)}
+      {:error, reason}, state ->
+        {:halt, close_async(state, context, :frame_error, transport_reason: reason)}
     end)
   end
+
+  defp close_async(state, :idle, cause, details), do: close_between_requests(state, cause, details)
+  defp close_async(state, :trailing, _cause, _details), do: close_state(state)
+
+  # Every close of a live connection outside a request leaves one bounded
+  # diagnostic line before the connection state is dropped (findings#206 row
+  # 206-356); a close inside a request is recorded on the attempt instead.
+  defp close_between_requests(state, cause, details \\ []) do
+    :ok = CloseDiagnostics.log_close(state, cause, details)
+    close_state(state)
+  end
+
+  defp close_replaced_connection(%{conn: _conn, key: old_key} = state, key) do
+    close_between_requests(state, :request_key_changed, key_change: {old_key, key})
+  end
+
+  defp close_replaced_connection(state, _key), do: close_state(state)
+
+  defp idle_transport_cause(%Mint.TransportError{reason: :closed}), do: :transport_closed
+  defp idle_transport_cause(_reason), do: :transport_error
+
+  defp mark_ping_sent(state), do: Map.put(state, :last_ping_sent_at_monotonic_ms, System.monotonic_time(:millisecond))
 
   defp handle_frames(state, frames, %ReceiveState{} = receive_state) do
     reduce_frames(frames, {:continue, state, receive_state})

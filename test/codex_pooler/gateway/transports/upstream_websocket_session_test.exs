@@ -3970,6 +3970,220 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert connection_count == 2
   end
 
+  # Every close of a live upstream connection outside a request leaves one
+  # bounded info line naming the cause, who closed, the close code and reason
+  # class, the idle and connection ages, the connection's request count and
+  # the lifecycle it retired; the next request's fresh connection carries the
+  # same lifecycle at the next generation (findings#206 row 206-356). The
+  # peer writes each close on the established connection itself, so no timer
+  # decides when it arrives.
+  for {reason_label, close_reason, expected_reason} <- [
+        {"an allowlisted identifier", "idle-timeout", "idle-timeout"},
+        {"free text", "going away now", :fingerprint}
+      ] do
+    @close_reason close_reason
+    @expected_reason expected_reason
+
+    test "an idle peer Close with #{reason_label} as its reason logs one bounded close line" do
+      peer = start_raw_websocket_peer()
+      {:ok, session} = UpstreamWebsocketSession.start_link([])
+      on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+      request = raw_websocket_request(peer.url, self())
+      initial_lifecycle = lifecycle_state(session)
+
+      assert {:ok, first_result} = UpstreamWebsocketSession.request(session, request)
+      established_lifecycle = %{initial_lifecycle | generation: 1}
+      assert_connection_metadata(first_result, established_lifecycle, false, false)
+
+      log =
+        close_idle_connection_from_peer!(peer, session, fn server_socket ->
+          :ok = :gen_tcp.send(server_socket, raw_websocket_server_close_frame(4001, @close_reason))
+        end)
+
+      assert_disconnected_lifecycle(session, established_lifecycle)
+
+      expected_reason =
+        case @expected_reason do
+          :fingerprint -> "sha256_" <> String.slice(Base.encode16(:crypto.hash(:sha256, @close_reason), case: :lower), 0, 12)
+          reason -> reason
+        end
+
+      assert_single_close_line!(log,
+        reason_code: "peer_close_frame",
+        closed_by: "peer",
+        close_code: "4001",
+        close_reason: expected_reason,
+        transport_reason: "none",
+        connection_requests: "1",
+        pong_pending: "false",
+        ping_age_ms: "none",
+        lifecycle: established_lifecycle
+      )
+
+      refute log =~ "going away now"
+      refute log =~ "synthetic-upstream-token"
+
+      assert {:ok, second_result} = UpstreamWebsocketSession.request(session, request)
+      assert_connection_metadata(second_result, %{initial_lifecycle | generation: 2}, false, false)
+      assert raw_websocket_peer_connection_count(peer) == 2
+    end
+  end
+
+  test "an idle transport close without a Close frame logs transport_closed" do
+    peer = start_raw_websocket_peer()
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = raw_websocket_request(peer.url, self())
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:ok, _result} = UpstreamWebsocketSession.request(session, request)
+    established_lifecycle = %{initial_lifecycle | generation: 1}
+
+    log =
+      close_idle_connection_from_peer!(peer, session, fn server_socket ->
+        :ok = :gen_tcp.shutdown(server_socket, :write)
+      end)
+
+    assert_disconnected_lifecycle(session, established_lifecycle)
+
+    assert_single_close_line!(log,
+      reason_code: "transport_closed",
+      closed_by: "peer",
+      close_code: "none",
+      close_reason: "none",
+      transport_reason: "closed",
+      connection_requests: "1",
+      pong_pending: "false",
+      ping_age_ms: "none",
+      lifecycle: established_lifecycle
+    )
+
+    assert {:ok, second_result} = UpstreamWebsocketSession.request(session, request)
+    assert_connection_metadata(second_result, %{initial_lifecycle | generation: 2}, false, false)
+  end
+
+  @tag :upstream_websocket_pong_liveness
+  test "a missed idle pong deadline logs the Pooler's own close with the pending ping" do
+    with_held_keepalive(keepalive_pong_timeout_ms: @held_pong_timeout_ms)
+
+    peer = start_raw_websocket_peer()
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = raw_websocket_request(peer.url, self())
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:ok, _result} = UpstreamWebsocketSession.request(session, request)
+    established_lifecycle = %{initial_lifecycle | generation: 1}
+    assert_receive {:raw_upstream_websocket_connection, 1}, @detection_timeout_ms
+
+    fire_keepalive!(session)
+    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, @detection_timeout_ms
+    assert_pong_deadline_armed!(session, @held_pong_timeout_ms)
+
+    {:closed, log} =
+      with_info_log(fn ->
+        fire_pong_deadline!(session)
+        wait_for_raw_websocket_connection_closed(1, @detection_timeout_ms)
+      end)
+
+    assert_disconnected_lifecycle(session, established_lifecycle)
+
+    assert_single_close_line!(log,
+      reason_code: "pong_deadline",
+      closed_by: "pooler",
+      close_code: "none",
+      close_reason: "none",
+      transport_reason: "none",
+      connection_requests: "1",
+      pong_pending: "true",
+      ping_age_ms: :integer,
+      lifecycle: established_lifecycle
+    )
+  end
+
+  test "a request under another reuse key logs the replaced connection with header names only" do
+    peer = start_raw_websocket_peer()
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = raw_websocket_request(peer.url, self())
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:ok, _result} = UpstreamWebsocketSession.request(session, request)
+
+    rotated = %{
+      request
+      | headers: [{"authorization", "Bearer rotated-upstream-token"}, {"session-id", "rotated-session-value"}]
+    }
+
+    {result, log} = with_info_log(fn -> UpstreamWebsocketSession.request(session, rotated) end)
+    assert {:ok, second_result} = result
+    assert_connection_metadata(second_result, %{initial_lifecycle | generation: 2}, false, false)
+
+    assert_single_close_line!(log,
+      reason_code: "request_key_changed",
+      closed_by: "pooler",
+      close_code: "none",
+      close_reason: "none",
+      transport_reason: "none",
+      connection_requests: "1",
+      pong_pending: "false",
+      ping_age_ms: "none",
+      lifecycle: %{initial_lifecycle | generation: 1}
+    )
+
+    assert log =~ "key_change=headers changed_headers=credential,session-id "
+    refute log =~ "authorization"
+    refute log =~ "synthetic-upstream-token"
+    refute log =~ "rotated-upstream-token"
+    refute log =~ "rotated-session-value"
+  end
+
+  test "an explicit invalidation logs the invalidated connection" do
+    peer = start_raw_websocket_peer()
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = raw_websocket_request(peer.url, self())
+    initial_lifecycle = lifecycle_state(session)
+    assert {:ok, _result} = UpstreamWebsocketSession.request(session, request)
+
+    {:ok, log} = with_info_log(fn -> UpstreamWebsocketSession.invalidate_connection(session) end)
+
+    assert_single_close_line!(log,
+      reason_code: "invalidated",
+      closed_by: "pooler",
+      close_code: "none",
+      close_reason: "none",
+      transport_reason: "none",
+      connection_requests: "1",
+      pong_pending: "false",
+      ping_age_ms: "none",
+      lifecycle: %{initial_lifecycle | generation: 1}
+    )
+  end
+
+  test "a peer close inside a request is recorded on the request and logs no between-requests line" do
+    peer = start_raw_websocket_peer(response_mode: :peer_close)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = raw_websocket_request(peer.url, self())
+
+    {result, log} =
+      with_info_log(fn ->
+        result = UpstreamWebsocketSession.request(session, request)
+        _state = :sys.get_state(session)
+        result
+      end)
+
+    assert {:error, %{reason: :upstream_websocket_closed_before_terminal}} = result
+    refute log =~ "closed between requests"
+  end
+
   @tag :upstream_websocket_pong_liveness
   test "active receive loop fails promptly when pong deadline fires during an in-flight request" do
     with_held_keepalive(keepalive_pong_timeout_ms: @held_pong_timeout_ms)
@@ -5778,6 +5992,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
       assert log =~ expected
       assert length(String.split(log, "coalesced close drained")) == 2
+      # The drain's own line reports this close; the between-requests line is
+      # for a Close read on its own (findings#206 row 206-356).
+      refute log =~ "closed between requests"
       refute log =~ "synthetic-upstream-token"
     else
       refute log =~ "coalesced close drained"
@@ -6434,6 +6651,46 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp raw_websocket_server_pong_frame(payload) when byte_size(payload) < 126 do
     <<0x8A, byte_size(payload), payload::binary>>
+  end
+
+  defp raw_websocket_server_close_frame(code, reason) when is_integer(code) and byte_size(reason) <= 123 do
+    <<0x88, byte_size(reason) + 2, code::16, reason::binary>>
+  end
+
+  # Runs `close` against the raw peer's socket of the one established
+  # connection while the session is idle, and returns the info log captured
+  # until the session has closed that connection and handled every message.
+  defp close_idle_connection_from_peer!(peer, session, close) do
+    assert [server_socket] = Agent.get(peer.state, &MapSet.to_list(&1.client_sockets))
+
+    {:closed, log} =
+      with_info_log(fn ->
+        close.(server_socket)
+        closed = wait_for_raw_websocket_connection_closed(1, @message_detection_timeout_ms)
+        _state = :sys.get_state(session)
+        closed
+      end)
+
+    log
+  end
+
+  defp assert_single_close_line!(log, expected) do
+    assert [_before, line_and_rest] = String.split(log, "upstream websocket connection closed between requests", parts: 2)
+    refute line_and_rest =~ "upstream websocket connection closed between requests"
+    [line | _rest] = String.split(line_and_rest, "\n", parts: 2)
+    lifecycle = Keyword.fetch!(expected, :lifecycle)
+
+    for key <- [:reason_code, :closed_by, :close_code, :close_reason, :transport_reason, :connection_requests, :pong_pending] do
+      assert line =~ " #{key}=#{Keyword.fetch!(expected, key)} "
+    end
+
+    case Keyword.fetch!(expected, :ping_age_ms) do
+      :integer -> assert line =~ ~r/ ping_age_ms=\d+ /
+      value -> assert line =~ " ping_age_ms=#{value} "
+    end
+
+    assert line =~ ~r/ idle_ms=\d+ connection_age_ms=\d+ /
+    assert line =~ " lifecycle_id=#{lifecycle.lifecycle_id} generation=#{lifecycle.generation}"
   end
 
   defp raw_websocket_server_close_frame(code) when is_integer(code) do
