@@ -49,6 +49,12 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   # `completed_items` keeps the exact count, so a longer run is visibly
   # truncated and keeps the fence.
   @completed_item_digest_limit 8
+  # Why a receipt is not `delivered` although the socket pushed more: the class
+  # of the first failed write of the connection (`timeout` for a client that
+  # stopped reading, `closed` for a connection already gone, `other`), written
+  # by the native and `/v1` websockets (findings#232 row 232-256). Everything
+  # the receipt counts was written before it.
+  @write_failures ~w(timeout closed other)
 
   @type outcome :: String.t()
   @type terminal_class :: String.t() | nil
@@ -104,6 +110,10 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
 
   def frame_class(_data), do: "other"
 
+  @doc "Every value `build/1` can persist under `write_failure`."
+  @spec write_failures() :: [String.t()]
+  def write_failures, do: @write_failures
+
   @doc "How many completed-item digests a receipt carries at most."
   @spec completed_item_digest_limit() :: pos_integer()
   def completed_item_digest_limit, do: @completed_item_digest_limit
@@ -153,7 +163,15 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
     }
     |> maybe_put_highest_frame_class(fields)
     |> maybe_put_completed_items(fields)
+    |> maybe_put_write_failure(fields)
   end
+
+  # Only a receipt whose connection failed a write before the turn's terminal
+  # was written carries the field.
+  defp maybe_put_write_failure(receipt, %{write_failure: failure}) when not is_nil(failure),
+    do: Map.put(receipt, "write_failure", vocabulary(failure, @write_failures, "other"))
+
+  defp maybe_put_write_failure(receipt, _fields), do: receipt
 
   # Written with the class by the transport that classifies what it pushed:
   # the digests of the completed items in push order, at most
@@ -264,7 +282,8 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
         "codex_session_id=#{session_id} " <>
         "outcome=#{receipt["outcome"]} " <>
         "terminal_class=#{receipt["terminal_class"]} " <>
-        "frames_after_visible=#{receipt["frames_after_visible"]}"
+        "frames_after_visible=#{receipt["frames_after_visible"]}" <>
+        write_failure_field(receipt)
     )
 
     case Map.get(context, :attempt_id) do
@@ -311,6 +330,9 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
       {0, _returned} -> {:error, :attempt_not_found}
     end
   end
+
+  defp write_failure_field(%{"write_failure" => failure}) when is_binary(failure), do: " write_failure=#{failure}"
+  defp write_failure_field(_receipt), do: ""
 
   defp log_persist_failure(:ok, _transport, _request_id, _session_id), do: :ok
 

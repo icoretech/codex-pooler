@@ -160,6 +160,24 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptTest do
     refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", highest_frame_class: "delta"}), "completed_item_digests")
   end
 
+  # A receipt whose connection failed a write before the turn's terminal was
+  # written names the failure's class (findings#232 row 232-256); anything
+  # outside the vocabulary is `other`, and a receipt without a failure has no
+  # field.
+  test "the receipt names a failed write only by its fixed class" do
+    assert %{"outcome" => "aborted", "write_failure" => "timeout"} = DeliveryReceipt.build(%{outcome: "aborted", write_failure: "timeout"})
+    assert %{"write_failure" => "closed"} = DeliveryReceipt.build(%{outcome: "aborted", write_failure: :closed})
+    assert %{"write_failure" => "other"} = DeliveryReceipt.build(%{outcome: "aborted", write_failure: "synthetic frame bytes"})
+    refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", write_failure: nil}), "write_failure")
+    refute Map.has_key?(DeliveryReceipt.build(%{outcome: "delivered", terminal_class: "response.completed"}), "write_failure")
+    assert DeliveryReceipt.write_failures() == ~w(timeout closed other)
+
+    %{attempt: attempt, request: request} = fixture()
+    receipt = DeliveryReceipt.build(%{outcome: "aborted", frames_after_visible: 4, write_failure: "timeout"})
+    logs = with_info_log(fn -> assert :ok = DeliveryReceipt.record(%{attempt_id: attempt.id, request_id: request.id}, receipt) end)
+    assert logs =~ "outcome=aborted terminal_class=none frames_after_visible=4 write_failure=timeout"
+  end
+
   test "terminal_class maps provider terminal outcomes onto the fixed vocabulary" do
     completed = ~s({"type":"response.completed","response":{"id":"resp_class_completed"}})
     legacy = ~s({"id":"resp_class_legacy","object":"response"})

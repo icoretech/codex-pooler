@@ -127,6 +127,9 @@ defmodule CodexPoolerWeb.Telemetry do
   @impl true
   def init(_arg) do
     CodexPoolerWeb.RequestLogger.attach()
+    # Websocket delivery receipts read their connection's failed writes from it
+    # (findings#232 row 232-256), on every role that serves sockets.
+    CodexPoolerWeb.WebsocketDownstreamWriteWatch.attach()
     # Every role attaches it: the job roles run no Prometheus reporter, and a
     # failed job's row is pruned after a day (findings#206 row 206-90).
     FailureLog.attach()

@@ -37,6 +37,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
   alias CodexPoolerWeb.WebsocketConnectionLogger
   alias CodexPoolerWeb.WebsocketControlPath
+  alias CodexPoolerWeb.WebsocketDownstreamWriteWatch
   alias CodexPoolerWeb.WebsocketResponseTaskFailureDiagnostics
 
   require Logger
@@ -52,6 +53,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @impl WebSock
   def init(state) do
+    :ok = WebsocketDownstreamWriteWatch.watch()
+
     case WebsocketControlPath.run(:init, fn -> initialize_socket(state) end) do
       {:ok, result} -> mark_stopped(result)
       {:error, _reason} -> mark_stopped({:stop, :normal, {1011, "websocket initialization unavailable"}, state})
@@ -99,6 +102,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def handle_in(_frame, %{socket_stopped?: true} = state), do: {:ok, state}
 
   def handle_in(frame, state) do
+    :ok = confirm_written_delivery_evidence(state)
+
     case WebsocketControlPath.run(:serve, fn -> handle_socket_frame(frame, state) end) do
       {:ok, result} -> mark_stopped(result)
       {:error, _reason} -> mark_stopped({:stop, :normal, {1011, "websocket control unavailable"}, state})
@@ -143,6 +148,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def handle_info(_message, %{socket_stopped?: true} = state), do: {:ok, state}
 
   def handle_info(message, state) do
+    :ok = confirm_written_delivery_evidence(state)
+
     case WebsocketControlPath.run(:serve, fn -> handle_socket_info(message, state) end) do
       {:ok, result} -> mark_stopped(result)
       {:error, _reason} -> mark_stopped({:stop, :normal, {1011, "websocket control unavailable"}, state})
@@ -3804,11 +3811,43 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.get(:direct_cleanup_receipts, %{})
     |> Map.get(pid)
     |> record_downstream_delivery_receipt(
-      downstream_delivery_evidence(state, pid),
+      written_delivery_evidence(pid, downstream_delivery_evidence(state, pid)),
       state,
       ack_outcome
     )
   end
+
+  # Every WebSock callback starts after Bandit wrote what the previous one
+  # pushed, so while no write has failed the evidence at a callback's entry is
+  # evidence of frames that reached the connection
+  # (`WebsocketDownstreamWriteWatch`, findings#232 row 232-256).
+  defp confirm_written_delivery_evidence(state),
+    do: WebsocketDownstreamWriteWatch.confirm(Map.get(state, :downstream_delivery_evidence, %{}))
+
+  # Once a write failed, a receipt records what was written before it: the
+  # task's evidence as last confirmed, with the failure's class unless that
+  # evidence already holds a terminal it pushed (then the client was written
+  # the whole turn before the failure). Bandit discards the result of every
+  # pushed frame's write, so without this a client that stopped reading got
+  # `delivered` with every frame counted and its resend was refused.
+  defp written_delivery_evidence(pid, evidence) do
+    case WebsocketDownstreamWriteWatch.failure() do
+      nil ->
+        evidence
+
+      failure ->
+        written =
+          case WebsocketDownstreamWriteWatch.confirmed() do
+            %{^pid => written} -> written
+            _none -> new_downstream_delivery_evidence()
+          end
+
+        if pushed_terminal_evidence?(written), do: written, else: Map.put(written, :write_failure, failure)
+    end
+  end
+
+  defp pushed_terminal_evidence?(%{terminal_class: class} = evidence) when is_binary(class), do: Map.get(evidence, :skipped?) != true
+  defp pushed_terminal_evidence?(_evidence), do: false
 
   defp record_downstream_delivery_receipt(
          %{request_id: request_id} = cleanup,
@@ -3830,6 +3869,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         highest_frame_class: highest_pushed_frame_class(evidence)
       }
       |> Map.merge(pushed_completed_items(evidence))
+      |> Map.merge(Map.take(evidence, [:write_failure]))
       |> DeliveryReceipt.build()
     )
   end
@@ -3855,6 +3895,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp highest_pushed_frame_class(evidence), do: Map.get(evidence, :highest_class)
 
   defp downstream_delivery_outcome(:aborted, _evidence), do: "aborted"
+  defp downstream_delivery_outcome(_ack, %{write_failure: _failure}), do: "aborted"
   defp downstream_delivery_outcome(_ack, %{skipped?: true}), do: "skipped"
 
   defp downstream_delivery_outcome(_ack, %{terminal_class: class}) when is_binary(class),
@@ -3893,6 +3934,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         if pushed_error_frame? and is_nil(evidence.terminal_class),
           do: %{evidence | terminal_class: "error", pushed_at: DateTime.utc_now()},
           else: evidence
+
+      evidence = written_delivery_evidence(pid, evidence)
 
       :ok = record_downstream_delivery_receipt(cleanup, evidence, state, :completed)
       clear_downstream_delivery_evidence(state, pid)
