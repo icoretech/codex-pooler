@@ -3992,6 +3992,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     Map.update(state, :terminate_acknowledged_tasks, MapSet.new([pid]), &MapSet.put(&1, pid))
   end
 
+  defp receipt_recorded_at_termination?(state, pid) do
+    MapSet.member?(Map.get(state, :terminate_pending_receipts, MapSet.new()), pid) or
+      MapSet.member?(Map.get(state, :terminate_acknowledged_tasks, MapSet.new()), pid)
+  end
+
   defp put_termination_receipt_pending(state, pid),
     do: Map.update(state, :terminate_pending_receipts, MapSet.new([pid]), &MapSet.put(&1, pid))
 
@@ -4890,6 +4895,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       cancel_pending_owner_admission(state, task_pid, interrupt_reason)
     end)
 
+    # A task whose turn's terminal this socket already pushed only has its own
+    # settlement left: the owner's detach leaves that turn to it (findings#254
+    # row 254-110), so the cleanup must not interrupt it either; it is
+    # interrupted only if the task had to be killed
+    # (`interrupt_killed_terminal_pushed_tasks/2`, row 254-140).
+    state = Map.put(state, :websocket_owner_defer_turn_interrupt?, terminal_pushed_tasks(state) != [])
+
     # The owner already detached this downstream when it armed the replay, or
     # when it detached it before the drain with nothing of it accepted.
     cond do
@@ -4955,14 +4967,36 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       not Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid)
   end
 
-  defp interrupt_killed_terminal_pushed_tasks(state, killed_tasks) do
-    unless owner_forwarded_socket?(state) do
-      contexts = Map.get(state, :direct_cleanup_contexts, %{})
+  defp terminal_pushed_tasks(state),
+    do: state |> Map.get(:tasks, MapSet.new()) |> Enum.filter(&terminal_pushed_direct_task?(state, &1))
 
-      for pid <- killed_tasks, terminal_pushed_direct_task?(state, pid), context = Map.get(contexts, pid), do: interrupt_killed_direct_task(state, pid, context)
-    end
+  # With owner forwarding on the cleanup deferred the turn interrupt for such a
+  # task (`cleanup_websocket_session/2`); one that never reported is
+  # interrupted here, once it was killed, through the same post-detach cleanup
+  # (findings#254 row 254-140).
+  defp interrupt_killed_terminal_pushed_tasks(state, killed_tasks) do
+    if owner_forwarded_socket?(state),
+      do: interrupt_killed_terminal_pushed_owner_tasks(state, killed_tasks),
+      else: interrupt_killed_terminal_pushed_direct_tasks(state, killed_tasks)
 
     :ok
+  end
+
+  defp interrupt_killed_terminal_pushed_owner_tasks(state, killed_tasks) do
+    killed = Enum.filter(killed_tasks, &terminal_pushed_direct_task?(state, &1))
+
+    # Such a task never handed its result to a drain and was never pending a
+    # termination receipt, so its single aborted receipt is recorded here.
+    for pid <- killed, not receipt_recorded_at_termination?(state, pid), do: record_downstream_delivery_receipt(state, pid, :aborted)
+
+    if killed != [] and not Map.get(state, :websocket_owner_replay_armed_before_drain?, false),
+      do: WebsocketControlPath.run(:terminate, fn -> Adapter.cleanup_detached_owner_session(state) end)
+  end
+
+  defp interrupt_killed_terminal_pushed_direct_tasks(state, killed_tasks) do
+    contexts = Map.get(state, :direct_cleanup_contexts, %{})
+
+    for pid <- killed_tasks, terminal_pushed_direct_task?(state, pid), context = Map.get(contexts, pid), do: interrupt_killed_direct_task(state, pid, context)
   end
 
   defp interrupt_killed_direct_task(state, pid, context) do

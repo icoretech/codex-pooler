@@ -98,6 +98,28 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
     assert_lease_preserved!(fixture)
   end
 
+  # The socket already pushed this turn's terminal (a provider refusal the
+  # client displayed; Codex closes the connection right after it) and its task
+  # only has the settlement left. The owner's detach leaves the turn to that
+  # task (findings#254 row 254-110); the post-detach interrupt used to settle it
+  # `499 client_disconnected` first whenever the settlement was slow, dropping
+  # the refusal's fields (row 254-140, measured through the listener with the
+  # settlement delayed 800 ms: 3/3 before, 0/3 after). The socket defers the
+  # interrupt and runs it only for a task it had to kill.
+  test "a detach whose socket already pushed its task's terminal leaves the turn to that task", fixture do
+    turn = active_turn_fixture(fixture, "websocket")
+
+    assert :ok = DownstreamSession.cleanup(Map.put(turn.state, :websocket_owner_defer_turn_interrupt?, true))
+
+    assert %Request{status: "in_progress"} = Repo.get!(Request, turn.request.id)
+    assert %CodexTurn{status: "in_progress"} = Repo.get!(CodexTurn, turn.turn.id)
+
+    # The task was killed without settling: the deferred interrupt runs.
+    assert :ok = DownstreamSession.cleanup_detached(turn.state)
+    assert %Request{status: "failed", last_error_code: "client_disconnected"} = Repo.get!(Request, turn.request.id)
+    assert %CodexTurn{status: "interrupted"} = Repo.get!(CodexTurn, turn.turn.id)
+  end
+
   test "explicit cancellation with no matching request leaves the active request and session untouched",
        fixture do
     turn = active_turn_fixture(fixture, "websocket")

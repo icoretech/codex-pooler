@@ -625,11 +625,17 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     end
   end
 
+  # A socket that already pushed its task's terminal defers the turn interrupt
+  # (`websocket_owner_defer_turn_interrupt?`): the task settles that turn itself,
+  # and interrupting it first recorded a refusal the client had displayed as
+  # `499 client_disconnected` whenever the settlement was slow (findings#254
+  # row 254-140). The socket runs `cleanup_detached/1` again without the flag
+  # only for such a task it had to kill.
   defp after_detach(result, state) do
     recovery_result = recover_leftovers(result, state)
 
     _interrupt_result =
-      if result in [:reattachable, :suspended],
+      if result in [:reattachable, :suspended] or Map.get(state, :websocket_owner_defer_turn_interrupt?, false) == true,
         do: :ok,
         else: interrupt_downstream_turn(result, state)
 
