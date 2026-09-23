@@ -822,6 +822,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   end
 
   describe "wrapped websocket/direct JSON terminal error frames" do
+    # A provider 429 frame is masked into the public `response.failed` by the
+    # owner mapper and normalized again by the public websocket; both passes
+    # type its redacted error `rate_limit_error` like the `/v1` HTTP answer of
+    # the same throttle, and a 5xx stays `server_error` (findings#254 row
+    # 254-82).
+    for {status, type} <- [{429, "rate_limit_error"}, {503, "server_error"}] do
+      @tag provider_status: status, masked_type: type
+      test "the public owner mapper types a masked provider #{status} frame #{type}, stable on a second pass", %{provider_status: status, masked_type: type} do
+        frame = CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => %{"type" => "server_error", "code" => "synthetic_#{status}", "message" => "synthetic provider detail"}})
+        expected_error = %{"code" => "synthetic_#{status}", "message" => "upstream request failed", "type" => type}
+
+        first = StreamProtocol.normalize_public_openai_responses_json_message(frame)
+        assert %{"type" => "response.failed", "response" => %{"error" => ^expected_error}} = first_decoded = CodexPooler.JSON.decode!(first)
+        assert Map.get(first_decoded, "error", expected_error) == expected_error
+        refute first =~ "synthetic provider detail"
+
+        second = StreamProtocol.normalize_public_openai_responses_json_message(first)
+        assert CodexPooler.JSON.decode!(second) == first_decoded
+      end
+    end
+
     test "emits the exact native previous-response retry event at the downstream adapter" do
       frame =
         CodexPooler.JSON.encode!(%{

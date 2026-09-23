@@ -700,9 +700,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         _value -> %{}
       end
 
+    status = wrapped_throttle_status(decoded)
+
     event = %{
       "type" => "response.failed",
-      "response" => project_failed_response(response)
+      "response" => project_failed_response(response, status)
     }
 
     event =
@@ -711,7 +713,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         :error -> event
       end
 
-    maybe_put_failed_top_level_error(event, decoded)
+    maybe_put_failed_top_level_error(event, decoded, status)
   end
 
   def normalize_terminal_errors(type, %{} = decoded)
@@ -841,8 +843,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp normalize_response_error(decoded), do: decoded
 
+  # A provider 429 the upstream websocket sent as its wrapped error frame is
+  # canonicalized to a `response.failed` that keeps the integer `status`; its
+  # masked error is typed from that status like the `/v1` HTTP answer of the
+  # same throttle, `rate_limit_error`, instead of `server_error` (findings#254
+  # row 254-82; HTTP since row 254-72). The masked frame drops the status, and
+  # the public websocket normalizes the owner's frame a second time, so a
+  # redacted throttle error keeps its type there (`PublicResponse.redacted_throttle_error?/1`).
+  defp wrapped_throttle_status(decoded) do
+    if Map.get(decoded, "status", Map.get(decoded, "status_code")) == 429, do: 429
+  end
+
+  defp normalize_terminal_error(error, 429) when is_map(error), do: PublicResponse.normalize_error(error, status: 429)
+  defp normalize_terminal_error(error, _status), do: normalize_terminal_error(error)
+
   defp normalize_terminal_error(%{} = error) do
-    PublicResponse.normalize_error(error, status: PublicResponse.terminal_error_status(error))
+    if PublicResponse.redacted_throttle_error?(error),
+      do: PublicResponse.normalize_error(error, status: 429),
+      else: PublicResponse.normalize_error(error, status: PublicResponse.terminal_error_status(error))
   end
 
   defp normalize_terminal_error(error), do: PublicResponse.normalize_error(error, status: 502)
@@ -853,12 +871,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {change, normalized}
   end
 
-  defp project_failed_response(response) do
+  defp project_failed_response(response, status) do
     %{
       "id" => safe_failed_response_id(Map.get(response, "id")),
       "created_at" => 0,
       "status" => "failed",
-      "error" => normalize_terminal_error(Map.get(response, "error")),
+      "error" => normalize_terminal_error(Map.get(response, "error"), status),
       "incomplete_details" => project_failed_incomplete_details(Map.get(response, "incomplete_details")),
       "model" => "unknown",
       "object" => "response",
@@ -935,9 +953,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp bounded_usage_integer(_value), do: 0
 
-  defp maybe_put_failed_top_level_error(event, source) do
+  defp maybe_put_failed_top_level_error(event, source, status) do
     case Map.fetch(source, "error") do
-      {:ok, error} -> Map.put(event, "error", normalize_terminal_error(error))
+      {:ok, error} -> Map.put(event, "error", normalize_terminal_error(error, status))
       :error -> event
     end
   end

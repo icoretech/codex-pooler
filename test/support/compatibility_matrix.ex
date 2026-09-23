@@ -3496,6 +3496,10 @@ defmodule CodexPooler.CompatibilityMatrix do
           invalid_error_code: "upstream_error",
           error_message: "upstream request failed",
           error_type: "server_error",
+          # findings#254 row 254-82: the masked failure of a provider 429 the
+          # upstream websocket sent as its wrapped frame, typed like the `/v1`
+          # HTTP answer of the same throttle.
+          wrapped_429_error_type: "rate_limit_error",
           id: "validated_resp_identifier_or_resp_failed",
           usage: "bounded_named_field_projection_or_nil",
           content_fields: %{

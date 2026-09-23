@@ -18,6 +18,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
   @public_recovery_error_tokens ~w(pinned_continuation_reauth_required pinned_continuation_unavailable)
   @server_error_tokens ~w(internal_error server_error upstream_error server_is_overloaded)
+  @redacted_message "upstream request failed"
+  @rate_limit_error_type "rate_limit_error"
   @overload_code "server_is_overloaded"
   @overload_message "gateway route class is temporarily overloaded"
   @bulkhead_reasons ~w(bulkhead_rejected bulkhead_queue_timeout)
@@ -123,6 +125,20 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     end
   end
 
+  @doc """
+  True for the redacted error this module renders for an upstream 429
+  (`upstream request failed`, `rate_limit_error`). A public terminal that is
+  normalized a second time (the owner's masked frame on the public websocket)
+  keeps that type instead of the terminal projection's `server_error`
+  (findings#254 row 254-82). Only the type survives: the code is sanitized
+  again and the message is the Pooler's.
+  """
+  @spec redacted_throttle_error?(term()) :: boolean()
+  def redacted_throttle_error?(%{} = error),
+    do: field(error, "message") == @redacted_message and field(error, "type") == @rate_limit_error_type
+
+  def redacted_throttle_error?(_error), do: false
+
   @spec redacted_gateway_error?(term()) :: boolean()
   def redacted_gateway_error?(%{public_compaction_error?: true}), do: false
 
@@ -196,7 +212,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     code = safe_source_code(opts) || safe_error_code(error) || "upstream_error"
 
     %{
-      "message" => "upstream request failed",
+      "message" => @redacted_message,
       "type" => redacted_error_type(code, error_status(error, opts)),
       "code" => code
     }

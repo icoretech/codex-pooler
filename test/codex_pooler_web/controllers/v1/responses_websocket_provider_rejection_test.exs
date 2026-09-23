@@ -140,10 +140,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
         provider_error = %{"type" => "server_error", "code" => "synthetic_#{status}", "message" => "synthetic #{@provider_sentinel}"}
         {[text], request, attempt} = public_websocket_turn!(topology, provider_frame(status, provider_error))
 
-        assert %{"type" => "response.failed", "response" => %{"status" => "failed"}} = CodexPooler.JSON.decode!(text)
+        event = CodexPooler.JSON.decode!(text)
+        assert %{"type" => "response.failed", "response" => %{"status" => "failed"}} = event
         refute text =~ @provider_sentinel
         assert request.status == "failed"
         refute Map.has_key?(attempt.response_metadata, "rejection_error_code")
+
+        # The masked error is typed from the status like the `/v1` HTTP answer
+        # of the same failure: a throttle is `rate_limit_error` (findings#254
+        # row 254-82), a 5xx stays `server_error`.
+        expected_error = %{"code" => "synthetic_#{status}", "message" => "upstream request failed", "type" => masked_error_type(status)}
+        assert event["response"]["error"] == expected_error
+        assert Map.get(event, "error", expected_error) == expected_error
       end
     end
   end
@@ -183,6 +191,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
       Mint.HTTP.close(conn)
     end
   end
+
+  defp masked_error_type(429), do: "rate_limit_error"
+  defp masked_error_type(_status), do: "server_error"
 
   defp provider_frame(status, error), do: CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => error})
 

@@ -703,7 +703,10 @@ answered with: `invalid_request_error` for a refused `4xx` such as `400` or
 `422`, `rate_limit_error` for a `429` (OpenAI's type for a throttle; SDKs retry
 it on the status alone), and `server_error` for an upstream `401` or `403` (the
 upstream account's credentials or standing, not the request), a `5xx`, and an
-upstream `404`, which `/v1` answers as `502`.
+upstream `404`, which `/v1` answers as `502`. A `429` or a `5xx` the upstream
+websocket sends reaches a `GET /v1/responses` websocket client as the masked
+`response.failed` event rather than an `error` event; its error is typed the
+same way, `rate_limit_error` for the `429` and `server_error` for the `5xx`.
 
 ### Unsupported `/v1` Responses request shapes
 

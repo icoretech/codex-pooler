@@ -101,6 +101,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
                "type" => "rate_limit_error"
              }
 
+      # Only that rendered throttle keeps its type on a second terminal
+      # normalization (findings#254 row 254-82).
+      assert PublicResponse.redacted_throttle_error?(PublicResponse.normalize_error(generic_error, status: 429))
+      refute PublicResponse.redacted_throttle_error?(PublicResponse.normalize_error(generic_error, status: 500))
+      refute PublicResponse.redacted_throttle_error?(%{generic_error | "type" => "rate_limit_error"})
+
       # A refused 4xx outside the gateway failure statuses is the client's
       # error class, whatever type the provider wrote (findings#254 row
       # 254-51).
