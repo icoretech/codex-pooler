@@ -659,9 +659,17 @@ attempt reached the provider again. The message names the provider status, for
 example `upstream rejected the request (invalid_request); upstream status 404`.
 The same code exceptions apply. A `401`, a `408` and a `429` keep their
 `response.failed` event, and so does a `403` whose code makes Codex Pooler
-demote the account: the Codex client's HTTPS fallback is then routed to another
-account of the Pool first. A `403` that demotes nothing would only reach the
-same account again and is final like the others.
+demote the account (a code it knows as an account failure, such as a
+credential code): the Codex client's HTTPS fallback is then routed to another
+account of the Pool first. A `403` that demotes nothing, with no code or an
+unknown one, would only reach the same account again and is final like the
+others.
+
+A websocket refusal with any `4xx` status other than `401` and `429` and a code
+Codex Pooler does not know leaves route health alone, as the HTTP answer of the
+same refusal does: it does not demote the account or count a circuit failure.
+A code it knows keeps its own classification, so a quota or credential code
+still demotes the account.
 
 A native HTTP `POST /backend-api/codex/responses` answers a `400` refusal
 outside the relayed validation codes (no code, an unknown code, another error

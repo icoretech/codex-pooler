@@ -243,6 +243,34 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   def health_neutral_error_code?(code) when code in @health_neutral_error_codes, do: true
   def health_neutral_error_code?(_code), do: false
 
+  @doc """
+  True for a provider refusal the upstream websocket sent as its wrapped error
+  frame (`{"type": "error", "status": 4xx, ...}`, whose integer `status` the
+  canonical `response.failed` keeps) with a status HTTP completes neutrally
+  (every 4xx but 401 and 429) and a code this module does not know. The HTTP
+  answer of the same refusal leaves route health alone whatever its code
+  (findings#254 row 254-32), while the websocket terminal demoted the
+  assignment and counted a `proxy_websocket` circuit failure for any code
+  outside the health-neutral list (row 254-81). A known code keeps its own
+  classification: a quota or credential code still demotes.
+  """
+  @spec unknown_provider_refusal?(term(), String.t() | nil) :: boolean()
+  def unknown_provider_refusal?(status, code) when is_integer(status) and status in 400..499 and status not in [401, 429],
+    do: code not in @known_error_codes
+
+  def unknown_provider_refusal?(_status, _code), do: false
+
+  @doc """
+  True when a wrapped provider 4xx refusal leaves route health alone on the
+  websocket: its code is health-neutral, or it is an unknown refusal
+  (`unknown_provider_refusal?/2`). The native websocket projection reads it to
+  decide whether a 403 refusal demotes the account (findings#254 rows 254-71
+  and 254-81).
+  """
+  @spec provider_refusal_health_neutral?(term(), String.t() | nil) :: boolean()
+  def provider_refusal_health_neutral?(status, code),
+    do: health_neutral_error_code?(code) or unknown_provider_refusal?(status, code)
+
   @spec provider_overload_error_code?(String.t() | nil) :: boolean()
   def provider_overload_error_code?(code) when code in @provider_overload_error_codes, do: true
   def provider_overload_error_code?(_code), do: false

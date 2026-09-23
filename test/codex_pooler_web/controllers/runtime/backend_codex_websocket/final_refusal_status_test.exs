@@ -10,10 +10,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
   # request, with the Pooler-authored error naming the provider status.
   #
   # A 403 stays retryable when the Pooler marks the account unhealthy for it
-  # (a code outside the health-neutral set demotes the assignment, and the
-  # client's HTTPS fallback is then routed to another assignment first); a
-  # health-neutral 403, which demotes nothing, would only reach the same
-  # account again and is final like the others. 401 and 408 are unchanged.
+  # (a known code outside the health-neutral set demotes the assignment, and
+  # the client's HTTPS fallback is then routed to another assignment first); a
+  # 403 that demotes nothing (codeless, a health-neutral code, or an unknown
+  # code since findings#254 row 254-81) would only reach the same account
+  # again and is final like the others. 401 and 408 are unchanged.
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
@@ -86,11 +87,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
   end
 
   test "native websocket provider 403 whose code demotes the account stays retryable" do
-    {frames, _request, _attempt} = native_refusal_turn!("ws-final-refusal-demoting-403", 403, provider_error("account_deactivated", nil))
+    {frames, _request, _attempt} = native_refusal_turn!("ws-final-refusal-demoting-403", 403, provider_error("unauthorized", nil))
 
     terminal = assert_single_native_turn_terminal!(frames, "response.failed")
-    assert %{"status" => 403, "response" => %{"status" => "failed", "error" => %{"code" => "account_deactivated"}}} = terminal
-    assert Repo.all(from(demotion in BridgeDemotion, select: demotion.reason_code)) == ["account_deactivated"]
+    assert %{"status" => 403, "response" => %{"status" => "failed", "error" => %{"code" => "unauthorized"}}} = terminal
+    assert Repo.all(from(demotion in BridgeDemotion, select: demotion.reason_code)) == ["unauthorized"]
+  end
+
+  # An unknown code demotes nothing since row 254-81, as the HTTP answer of the
+  # same refusal never did, so its retry would reach the same account: final.
+  test "native websocket unknown-code provider 403 is final: it demotes nothing" do
+    {frames, _request, _attempt} = native_refusal_turn!("ws-final-refusal-unknown-403", 403, provider_error("account_deactivated", nil))
+
+    assert %{"type" => "error", "status" => 400, "error" => %{"code" => "account_deactivated", "message" => "upstream rejected the request (account_deactivated); upstream status 403"}} =
+             assert_single_native_turn_terminal!(frames, "error")
+
+    assert Repo.all(from(demotion in BridgeDemotion, select: demotion.reason_code)) == []
   end
 
   for status <- [401, 408] do

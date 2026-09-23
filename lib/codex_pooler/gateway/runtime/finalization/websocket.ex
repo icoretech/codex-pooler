@@ -741,10 +741,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         StreamProtocol.terminal_error_code(body, terminal)
 
     health_code =
-      if Streaming.health_neutral_terminal_failure?(upstream_code, headers) do
-        upstream_code
-      else
-        StreamProtocol.terminal_error_code(body, terminal)
+      cond do
+        ErrorCodes.unknown_provider_refusal?(provider_refusal_status(body), upstream_code) -> :neutral
+        Streaming.health_neutral_terminal_failure?(upstream_code, headers) -> upstream_code
+        true -> StreamProtocol.terminal_error_code(body, terminal)
       end
 
     code = StreamProtocol.client_visible_error_code(upstream_code)
@@ -802,6 +802,23 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       )
     else
       _other -> %{}
+    end
+  end
+
+  # The integer status of the provider refusal the upstream websocket sent as
+  # its wrapped error frame (public turns retain that frame, native turns the
+  # canonical `response.failed` that keeps its status); nil for any other
+  # terminal, a provider `response.failed` included.
+  defp provider_refusal_status(body) do
+    case last_terminal_frame(body) do
+      {:ok, %{"type" => type} = frame} when type in ["error", "response.failed"] ->
+        case Map.get(frame, "status", Map.get(frame, "status_code")) do
+          status when is_integer(status) -> status
+          _other -> nil
+        end
+
+      _other ->
+        nil
     end
   end
 
@@ -912,12 +929,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              :before_finalize,
              fn ->
                SideEffects.observe_websocket_response(context, finalization)
-
-               Streaming.record_terminal_health_failure(
-                 upstream_code,
-                 metadata_headers,
-                 context
-               )
+               record_terminal_health(upstream_code, metadata_headers, context)
              end
            ),
            context.request_options.runtime.session_owner_witness
@@ -934,6 +946,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         {:error, gateway_error}
     end
   end
+
+  # An unknown provider 4xx refusal completes the route neutrally, as the HTTP
+  # answer of the same refusal does (findings#254 row 254-81).
+  defp record_terminal_health(:neutral, _headers, context), do: DispatchLifecycle.neutral_completion(context)
+  defp record_terminal_health(code, headers, context), do: Streaming.record_terminal_health_failure(code, headers, context)
 
   defp websocket_terminal_outcome("response.completed", _body), do: {:ok, %{kind: :completed}}
   defp websocket_terminal_outcome(_terminal, body), do: StreamProtocol.terminal_outcome(body)

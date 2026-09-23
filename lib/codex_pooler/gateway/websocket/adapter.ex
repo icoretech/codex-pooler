@@ -154,10 +154,12 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   # before, four websocket resends refused 409 and then six HTTPS requests that
   # all reached the provider; after, one final failure). The same exceptions
   # keep the canonical frame, and so do 401 and 408 (credentials the Pooler
-  # refreshes, a timeout) and a 403 whose code is not health-neutral: that
-  # refusal demotes the assignment, so the client's HTTPS fallback is routed
-  # to another assignment first and its retry can succeed, while a
-  # health-neutral 403 demotes nothing and would reach the same account again.
+  # refreshes, a timeout) and a 403 that demotes the assignment (a known code
+  # outside the health-neutral set, `ErrorCodes.provider_refusal_health_neutral?/2`):
+  # the client's HTTPS fallback is then routed to another assignment first and
+  # its retry can succeed, while a 403 that demotes nothing (codeless, a
+  # health-neutral code, or an unknown code since row 254-81) would reach the
+  # same account again.
   #
   # Provider message text never travels: it can quote Pooler-rewritten request
   # fields. The socket holds no per-turn input index map, so an `input[N]`
@@ -193,7 +195,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     cond do
       not final_refusal_status?(status) -> canonical
       classified_or_retryable_code?(code) -> canonical
-      status == 403 and not ErrorCodes.health_neutral_error_code?(code) -> canonical
+      status == 403 and not ErrorCodes.provider_refusal_health_neutral?(status, code) -> canonical
       true -> wrapped_refusal(400, ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status))
     end
   end
