@@ -10,15 +10,22 @@ defmodule CodexPooler.Events.PostgresBridge do
   require Logger
 
   @notifications CodexPooler.Events.PostgresNotifications
+  @relisten_initial_interval_ms 100
+  @relisten_max_interval_ms 5_000
 
   @type state :: %{
+          required(:notifications) => GenServer.server(),
           required(:listen_ref) => reference() | nil,
-          required(:status_listen_ref) => reference() | nil
+          required(:status_listen_ref) => reference() | nil,
+          required(:notifications_monitor) => reference() | nil,
+          required(:relisten_token) => reference() | nil,
+          required(:relisten_attempt) => non_neg_integer()
         }
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    opts = if Keyword.keyword?(opts), do: opts, else: []
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @spec relay_payload(String.t()) :: :ok | {:error, term()}
@@ -29,18 +36,17 @@ defmodule CodexPooler.Events.PostgresBridge do
   end
 
   @impl true
-  def init(_opts) do
-    listen_ref =
-      @notifications
-      |> Postgrex.Notifications.listen(Events.postgres_channel())
-      |> listen_ref!()
+  def init(opts) do
+    state = %{
+      notifications: Keyword.get(opts, :notifications, @notifications),
+      listen_ref: nil,
+      status_listen_ref: nil,
+      notifications_monitor: nil,
+      relisten_token: nil,
+      relisten_attempt: 0
+    }
 
-    status_listen_ref =
-      @notifications
-      |> Postgrex.Notifications.listen(StatusEvents.postgres_channel())
-      |> listen_ref!()
-
-    {:ok, %{listen_ref: listen_ref, status_listen_ref: status_listen_ref}}
+    {:ok, listen(state)}
   end
 
   @impl true
@@ -74,6 +80,21 @@ defmodule CodexPooler.Events.PostgresBridge do
     end
 
     {:noreply, state}
+  end
+
+  # The notifications process sent every notification it relayed before it
+  # exited, so they are already handled by the clauses above when this arrives.
+  # Its supervisor restarts it under the same name with no listeners, and
+  # nothing tells a listener, so the bridge listens again itself; a restarted
+  # process that is not registered yet is retried with a capped backoff.
+  def handle_info({:DOWN, monitor_ref, :process, _pid, reason}, %{notifications_monitor: monitor_ref} = state) do
+    Logger.warning("postgres event relay lost its notifications listener; listening again reason=#{exit_reason_label(reason)}")
+
+    {:noreply, relisten(%{state | listen_ref: nil, status_listen_ref: nil, notifications_monitor: nil})}
+  end
+
+  def handle_info({__MODULE__, :relisten, token}, %{relisten_token: token, notifications_monitor: nil} = state) do
+    {:noreply, relisten(%{state | relisten_token: nil})}
   end
 
   def handle_info(_message, state), do: {:noreply, state}
@@ -148,6 +169,77 @@ defmodule CodexPooler.Events.PostgresBridge do
   defp decode_version(version) when is_integer(version) and version > 0, do: {:ok, version}
   defp decode_version(_version), do: {:error, :invalid_version}
 
-  defp listen_ref!({:ok, listen_ref}), do: listen_ref
-  defp listen_ref!({:eventually, listen_ref}), do: listen_ref
+  defp relisten(state) do
+    case listen(state) do
+      %{notifications_monitor: monitor_ref} = listening when is_reference(monitor_ref) ->
+        Logger.info("postgres event relay listening again retries=#{state.relisten_attempt}")
+        listening
+
+      waiting ->
+        waiting
+    end
+  end
+
+  # One registration per channel on the current notifications process: the
+  # state keeps only the refs of the last successful listen, and a listen runs
+  # only while none is held, so a relayed notification is never delivered twice.
+  defp listen(%{notifications_monitor: nil} = state) do
+    case GenServer.whereis(state.notifications) do
+      pid when is_pid(pid) -> listen_on(state, pid)
+      _unavailable -> schedule_relisten(state)
+    end
+  end
+
+  defp listen_on(state, pid) do
+    monitor_ref = Process.monitor(pid)
+
+    with {:ok, listen_ref} <- listen_channel(pid, Events.postgres_channel()),
+         {:ok, status_listen_ref} <- listen_channel(pid, StatusEvents.postgres_channel(), listen_ref) do
+      %{
+        state
+        | listen_ref: listen_ref,
+          status_listen_ref: status_listen_ref,
+          notifications_monitor: monitor_ref,
+          relisten_token: nil,
+          relisten_attempt: 0
+      }
+    else
+      :error ->
+        Process.demonitor(monitor_ref, [:flush])
+        schedule_relisten(state)
+    end
+  end
+
+  defp listen_channel(pid, channel, previous_ref \\ nil) do
+    case Postgrex.Notifications.listen(pid, channel) do
+      {:ok, listen_ref} -> {:ok, listen_ref}
+      {:eventually, listen_ref} -> {:ok, listen_ref}
+    end
+  catch
+    :exit, _reason ->
+      _ = unlisten(pid, previous_ref)
+      :error
+  end
+
+  # A listen that failed after an earlier channel succeeded drops that
+  # registration, so the retry does not leave a second one behind.
+  defp unlisten(_pid, nil), do: :ok
+
+  defp unlisten(pid, listen_ref) do
+    Postgrex.Notifications.unlisten(pid, listen_ref)
+  catch
+    :exit, _reason -> :error
+  end
+
+  defp schedule_relisten(state) do
+    attempt = state.relisten_attempt + 1
+    delay_ms = min(@relisten_initial_interval_ms * Integer.pow(2, min(attempt - 1, 10)), @relisten_max_interval_ms)
+    token = make_ref()
+    Process.send_after(self(), {__MODULE__, :relisten, token}, delay_ms)
+    %{state | relisten_token: token, relisten_attempt: attempt}
+  end
+
+  defp exit_reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp exit_reason_label({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
+  defp exit_reason_label(_reason), do: "other"
 end
