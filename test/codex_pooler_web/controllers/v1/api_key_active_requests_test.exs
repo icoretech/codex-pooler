@@ -346,8 +346,14 @@ defmodule CodexPoolerWeb.V1.APIKeyActiveRequestsTest do
 
       assert conn.status == 429
 
-      assert %{"error" => %{"message" => "upstream request failed", "type" => "server_error"}} =
+      # The upstream 429 keeps the redaction: never the trusted cap denial's
+      # code or message, typed as the throttle it is (`rate_limit_error`, like
+      # every redacted `/v1` 429 since findings#254 row 254-72).
+      assert %{"error" => %{"message" => "upstream request failed", "type" => "rate_limit_error", "code" => code}} =
                json_response(conn, 429)
+
+      refute code == "api_key_concurrency_limit_exceeded"
+      refute conn.resp_body =~ "synthetic untrusted instruction"
 
       assert get_resp_header(conn, "retry-after") == []
       assert length(FakeUpstream.requests(upstream)) == 1
