@@ -14,7 +14,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
   # the client's HTTPS fallback is then routed to another assignment first); a
   # 403 that demotes nothing (codeless, a health-neutral code, or an unknown
   # code since findings#254 row 254-81) would only reach the same account
-  # again and is final like the others. 401 and 408 are unchanged.
+  # again and is final like the others. 401, 408 and 429 keep the canonical
+  # frame; a 401 and a demoting 403 carry the Pooler message naming the status
+  # instead of the provider's (row 254-91).
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
@@ -105,12 +107,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalStatusTest do
     assert Repo.all(from(demotion in BridgeDemotion, select: demotion.reason_code)) == []
   end
 
-  for status <- [401, 408] do
-    @tag provider_status: status
-    test "native websocket provider #{status} keeps the canonical response.failed", %{provider_status: status} do
-      {frames, _request, _attempt} = native_refusal_turn!("ws-final-refusal-kept-#{status}", status, provider_error(nil, nil))
+  # A 401 and a demoting 403 keep the retryable `response.failed`, but they are
+  # about the Pooler's upstream account, not the client's request, so the
+  # provider's text is replaced by the Pooler-written message naming the
+  # status; the code and the status stay (findings#254 row 254-91).
+  for topology <- [:direct, :local_owner], {status, code, relayed} <- [{401, nil, "invalid_request"}, {403, "unauthorized", "unauthorized"}] do
+    @tag topology: topology, provider_status: status, provider_code: code, relayed_code: relayed
+    test "native websocket #{topology} provider #{status} keeps the retryable response.failed with the Pooler message naming the status",
+         %{topology: topology, provider_status: status, provider_code: code, relayed_code: relayed} do
+      if topology == :local_owner, do: enable_owner_forwarding!()
 
-      assert %{"status" => ^status, "response" => %{"status" => "failed"}} = assert_single_native_turn_terminal!(frames, "response.failed")
+      {frames, _request, attempt} = native_refusal_turn!("ws-final-refusal-account-#{topology}-#{status}", status, provider_error(code, nil))
+      message = "upstream rejected the request (#{relayed}); upstream status #{status}"
+
+      assert %{"status" => ^status, "error" => %{"message" => ^message}, "response" => %{"status" => "failed", "error" => %{"message" => ^message}}} =
+               assert_single_native_turn_terminal!(frames, "response.failed")
+
+      refute CodexPooler.JSON.encode!(frames) =~ @provider_sentinel
+      refute inspect(attempt) =~ @provider_sentinel
+    end
+  end
+
+  # A timeout and a throttle keep the provider's message: its retry or limit
+  # detail is what the client acts on (relayed to the requesting client only,
+  # never persisted).
+  for status <- [408, 429] do
+    @tag provider_status: status
+    test "native websocket provider #{status} keeps the canonical response.failed and the provider message", %{provider_status: status} do
+      {frames, _request, attempt} = native_refusal_turn!("ws-final-refusal-kept-#{status}", status, provider_error(nil, nil))
+
+      assert %{"status" => ^status, "response" => %{"status" => "failed", "error" => %{"message" => message}}} = assert_single_native_turn_terminal!(frames, "response.failed")
+      assert message =~ @provider_sentinel
+      refute inspect(attempt) =~ @provider_sentinel
     end
   end
 

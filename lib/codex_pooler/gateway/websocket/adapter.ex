@@ -161,14 +161,15 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   # health-neutral code, or an unknown code since row 254-81) would reach the
   # same account again.
   #
-  # Provider message text never travels: it can quote Pooler-rewritten request
-  # fields. The socket holds no per-turn input index map, so an `input[N]`
+  # Provider message text never travels in a wrapped refusal: it can quote
+  # Pooler-rewritten request fields. A kept 401 or demoting 403 carries the
+  # Pooler message naming the status instead (row 254-91). The socket holds no per-turn input index map, so an `input[N]`
   # param loses its index rather than name a position a Lite rewrite moved
   # (row 254-61). Every other frame passes unchanged.
   defp native_refusal_frame(canonical, %{"type" => "response.failed", "error" => %{} = error} = canonical_decoded) do
     case wrapped_status(canonical_decoded) do
       400 = status -> native_400_refusal_frame(canonical, status, error)
-      status when is_integer(status) -> native_final_refusal_frame(canonical, status, error)
+      status when is_integer(status) -> native_final_refusal_frame(canonical, canonical_decoded, status, error)
       _other -> canonical
     end
   end
@@ -189,15 +190,44 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     end
   end
 
-  defp native_final_refusal_frame(canonical, status, error) do
+  defp native_final_refusal_frame(canonical, canonical_decoded, status, error) do
     code = Map.get(error, "code")
 
     cond do
-      not ValidationRejection.final_refusal_status?(status) -> canonical
-      classified_or_retryable_code?(code) -> canonical
-      status == 403 and not ErrorCodes.provider_refusal_health_neutral?(status, code) -> canonical
-      true -> wrapped_refusal(400, ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status))
+      account_refusal_status?(status) and not ErrorCodes.codex_response_failed_classified_code?(code) and
+          (status == 401 or not ErrorCodes.provider_refusal_health_neutral?(status, code)) ->
+        account_refusal_frame(canonical_decoded, status, error)
+
+      not ValidationRejection.final_refusal_status?(status) ->
+        canonical
+
+      classified_or_retryable_code?(code) ->
+        canonical
+
+      true ->
+        wrapped_refusal(400, ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status))
     end
+  end
+
+  # A 401 and a 403 that demotes the account keep the retryable canonical
+  # `response.failed` (above), but they are about the Pooler's upstream account,
+  # never about the client's request, so the provider's text is replaced by the
+  # Pooler-written message naming the status; code, type and status stay.
+  # A code the client classifies keeps its provider message (row 254-83), and a
+  # 408 or 429 keeps the provider's retry or limit detail the client acts on
+  # (findings#254 row 254-91).
+  defp account_refusal_status?(status), do: status in [401, 403]
+
+  defp account_refusal_frame(canonical_decoded, status, error) do
+    %{"message" => message} = ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status)
+
+    canonical_decoded
+    |> put_in(["error", "message"], message)
+    |> Map.replace_lazy("response", fn
+      %{"error" => %{} = response_error} = response -> Map.put(response, "error", Map.put(response_error, "message", message))
+      response -> response
+    end)
+    |> CodexPooler.JSON.encode!()
   end
 
   # Only the wrapped provider frame keeps an integer `status` through the
