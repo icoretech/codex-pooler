@@ -159,6 +159,24 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     assert notification_reloads(assigned_view) == 0
   end
 
+  # During a rolling update a clustered app pod still on the previous release
+  # broadcasts the invalidation without an id. The jobs page has no catch-all
+  # `handle_info/2`, so a message the hook passed on would crash it.
+  test "an invalidation without an id from a previous release reloads the page instead of crashing it", %{
+    conn: conn,
+    scope: scope
+  } do
+    pool = pool!(scope, "previous-release")
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+    trace_notification_reloads!(view)
+    page_ref = Process.monitor(view.pid)
+
+    Phoenix.PubSub.broadcast(CodexPooler.PubSub, NotificationEvents.pool_topic(pool.id), {NotificationEvents, :invalidated})
+
+    assert notification_reloads(view) == 1
+    refute_received {:DOWN, ^page_ref, :process, _pid, _reason}
+  end
+
   # The alert evaluation jobs run on the worker role, which is not in the app
   # pods' PubSub cluster: an incident it records reaches the app pods' pages only
   # as a PostgreSQL notification. A separate connection commits the worker's

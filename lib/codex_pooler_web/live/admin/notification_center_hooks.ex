@@ -76,6 +76,13 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
     end
   end
 
+  # A clustered peer still running a release without invalidation ids sends the
+  # bare message during a rolling update; the page reloads rather than handing
+  # it to a `handle_info/2` that would crash on it.
+  defp handle_notification_event({NotificationEvents, :invalidated}, socket) do
+    {:halt, assign_notification_center(socket)}
+  end
+
   defp handle_notification_event(_message, socket), do: {:cont, socket}
 
   defp handle_notification_action(
