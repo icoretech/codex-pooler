@@ -32,6 +32,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
   alias CodexPoolerWeb.CodexResponsesSocket
 
   @timeout_ms 15_000
+  @poll_ms 100
   # provenance: observed findings#232 row 232-231 (the released client's Lite websocket frame carries the marker in client_metadata, its HTTPS fallback a header)
   @websocket_lite_marker "ws_request_header_x_openai_internal_codex_responses_lite"
   # With owner forwarding off the closing socket used to leave a direct task it
@@ -332,7 +333,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
   defp pool_requests(pool_id), do: Repo.all(from(r in Request, where: r.pool_id == ^pool_id, order_by: [asc: r.admitted_at]))
 
   # The closing socket's own cleanup can hold the shared sandbox connection
-  # longer than a checkout waits under load; a dropped checkout is retried.
+  # longer than a checkout waits under load; a dropped checkout is retried, and
+  # the polls are spaced so the test's own reads do not crowd the queue the
+  # socket, its task and the owner settle through.
   defp await_receipt!(request_id, deadline_ms) do
     case safe_all(from(a in Attempt, where: a.request_id == ^request_id)) do
       [%Attempt{response_metadata: %{"downstream_delivery" => %{} = receipt}}] ->
@@ -341,7 +344,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
       _pending ->
         if System.monotonic_time(:millisecond) >= deadline_ms,
           do: flunk("no delivery receipt for #{request_id} within the budget"),
-          else: Process.sleep(20) && await_receipt!(request_id, deadline_ms)
+          else: Process.sleep(@poll_ms) && await_receipt!(request_id, deadline_ms)
     end
   end
 
@@ -353,7 +356,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
       _pending ->
         if System.monotonic_time(:millisecond) >= deadline_ms,
           do: flunk("request never settled"),
-          else: Process.sleep(20) && await_settled!(request_id, deadline_ms)
+          else: Process.sleep(@poll_ms) && await_settled!(request_id, deadline_ms)
     end
   end
 
@@ -363,7 +366,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
     cond do
       requests != [] and Enum.all?(requests, &(&1.status != "in_progress")) -> :ok
       System.monotonic_time(:millisecond) >= deadline_ms -> flunk("requests never settled")
-      true -> Process.sleep(20) && await_all_settled!(pool_id, deadline_ms)
+      true -> Process.sleep(@poll_ms) && await_all_settled!(pool_id, deadline_ms)
     end
   end
 
