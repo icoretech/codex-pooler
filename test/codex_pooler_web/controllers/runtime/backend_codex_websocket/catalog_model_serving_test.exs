@@ -14,6 +14,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
+  # Failure-detection budget for an expected message: a green run returns as
+  # soon as the message arrives, so only a missing one spends it.
+  @detection_timeout_ms 15_000
+
   @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
   @model_serving_metadata_keys ~w(
     model_serving_mode_configured
@@ -530,7 +534,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
       end)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     try do
       _revision = set_model_serving_mode!(scope, setup, "full", revision)
@@ -571,8 +575,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
   test "cross-assignment pre-visible failover keeps Full after the Pool changes to Lite" do
     release_ref = make_ref()
 
-    timeout_upstream =
-      start_upstream(FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref))
+    # The first assignment's handshake is held at a barrier and rejected (503)
+    # only when the test releases it, so the Pool edit always lands while the
+    # first attempt is in flight and the connect-phase failover cannot run
+    # ahead of it (a real 100 ms connect timeout raced a held test, findings#206
+    # row 206-294).
+    rejected_upstream =
+      start_upstream(
+        FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "server_is_overloaded"}},
+          status: 503,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
 
     fallback_upstream =
       start_upstream(
@@ -583,7 +598,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
         })
       )
 
-    setup = gateway_setup(timeout_upstream)
+    setup = gateway_setup(rejected_upstream)
 
     fallback =
       gateway_upstream(setup.pool, fallback_upstream, "upstream-token-mode-fallback", compact?: false)
@@ -618,21 +633,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
         execute_websocket_response(
           auth,
           model_serving_websocket_payload(setup, "cross-assignment", "client-true"),
-          %{request_id: request_id, connect_timeout_ms: 100},
+          %{request_id: request_id},
           fn frame -> send(parent, {:websocket_frame, frame}) end
         )
       end)
 
-    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid, ^release_ref},
-                   1_000
+    assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
+                   @detection_timeout_ms
 
     try do
       _revision = set_model_serving_mode!(scope, setup, "lite", revision)
       assert Task.yield(task, 0) == nil
-      assert :ok = Task.await(task, 3_000)
     after
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
     end
+
+    assert :ok = Task.await(task, @detection_timeout_ms)
 
     assert_received {:websocket_frame, frame}
     assert websocket_response_id(frame) == "resp_ws_mode_cross_assignment_failover"
