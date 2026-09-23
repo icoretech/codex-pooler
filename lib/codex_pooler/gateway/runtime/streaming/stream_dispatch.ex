@@ -28,6 +28,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
 
   @sse_keepalive_frame ": keepalive\n\n"
+  # The released Codex client resets its stream idle timer only on a parsed SSE
+  # event (`eventsource-stream` drops comments) and ignores an unknown `type`,
+  # so this data event is what carries a withheld preamble's liveness to it.
+  @sse_keepalive_event ~s(event: keepalive\ndata: {"type":"keepalive"}\n\n)
   @backend_turn_state_relay_endpoints [
     "/backend-api/codex/responses",
     "/backend-api/codex/responses/compact"
@@ -427,6 +431,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   # connection until this attempt commits. A retry discards the failed
   # candidate's bytes; the successful attempt flushes its own exactly once.
   @withheld_preamble :codex_pooler_withheld_retry_preamble
+  # Set when a preamble block is withheld and cleared once a keepalive event
+  # has told the client about it (or the preamble is flushed or discarded), so
+  # the client only ever hears the provider's own liveness, at most one
+  # keepalive interval late, and never the Pooler's.
+  @withheld_preamble_unannounced :codex_pooler_withheld_preamble_unannounced
 
   defp withheld_preamble(%{target: %Plug.Conn{private: private}}),
     do: Map.get(private, @withheld_preamble, "")
@@ -434,23 +443,34 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp withhold_preamble(%{target: %Plug.Conn{} = target} = state, preamble)
        when is_binary(preamble) and preamble != "" do
     target =
-      Plug.Conn.put_private(target, @withheld_preamble, withheld_preamble(state) <> preamble)
+      target
+      |> Plug.Conn.put_private(@withheld_preamble, withheld_preamble(state) <> preamble)
+      |> Plug.Conn.put_private(@withheld_preamble_unannounced, true)
 
     %{state | target: target}
   end
 
   defp withhold_preamble(state, _preamble), do: state
 
-  defp take_withheld_preamble(%{target: %Plug.Conn{} = target} = state) do
-    {withheld_preamble(state), %{state | target: %{target | private: Map.delete(target.private, @withheld_preamble)}}}
+  defp take_withheld_preamble(%{target: %Plug.Conn{}} = state) do
+    {withheld_preamble(state), clear_withheld_preamble(state)}
   end
 
   defp take_withheld_preamble(state), do: {"", state}
 
-  defp discard_withheld_preamble(%{target: %Plug.Conn{} = target} = state),
-    do: %{state | target: %{target | private: Map.delete(target.private, @withheld_preamble)}}
-
+  defp discard_withheld_preamble(%{target: %Plug.Conn{}} = state), do: clear_withheld_preamble(state)
   defp discard_withheld_preamble(state), do: state
+
+  defp clear_withheld_preamble(%{target: %Plug.Conn{private: private} = target} = state),
+    do: %{state | target: %{target | private: Map.drop(private, [@withheld_preamble, @withheld_preamble_unannounced])}}
+
+  defp unannounced_withheld_preamble?(%{target: %Plug.Conn{private: private}}),
+    do: Map.get(private, @withheld_preamble_unannounced, false)
+
+  defp unannounced_withheld_preamble?(_state), do: false
+
+  defp announce_withheld_preamble(%{target: %Plug.Conn{} = target} = state),
+    do: %{state | target: Plug.Conn.put_private(target, @withheld_preamble_unannounced, false)}
 
   # The first-event classifier can hold a large first event until the stream
   # ends, so both finalize hooks must flush the held bytes through the normal
@@ -639,13 +659,38 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp write_sse_keepalive(conn) do
-    if keepalive_allowed?(conn) do
-      update_relay_target(conn, &Plug.Conn.chunk(&1, @sse_keepalive_frame))
-    else
-      {:ok, conn}
+  # While a candidate's preamble is withheld the client receives none of the
+  # provider's events, so an event-level idle timer (Codex's 300 s stream idle
+  # timeout) can fire although the provider is streaming. On the native Codex
+  # routes only, the next keepalive after a withheld preamble block is written
+  # as a data event instead of the comment: it carries no candidate state, so
+  # a first-event retry stays invisible. Silence after that stays comments, so
+  # the client's timer still measures the provider, as it would directly, and
+  # nothing but comments follows a terminal. The public `/v1` surfaces keep
+  # comments: their SDK idle timers are byte-level and a `keepalive` there
+  # would need the public sequence numbering.
+  defp write_sse_keepalive(state) do
+    cond do
+      not keepalive_allowed?(state) ->
+        {:ok, state}
+
+      announce_keepalive_event?(state) ->
+        state
+        |> announce_withheld_preamble()
+        |> update_relay_target(&Plug.Conn.chunk(&1, @sse_keepalive_event))
+
+      true ->
+        update_relay_target(state, &Plug.Conn.chunk(&1, @sse_keepalive_frame))
     end
   end
+
+  defp announce_keepalive_event?(state) do
+    unannounced_withheld_preamble?(state) and not public_stream_state?(state) and
+      is_nil(DownstreamStream.terminal_outcome(state))
+  end
+
+  defp public_stream_state?(state),
+    do: Map.has_key?(state, :public_openai_responses) or Map.has_key?(state, :public_openai_chat)
 
   defp keepalive_allowed?(state) do
     first_event_state(state).buffer == "" and DownstreamStream.keepalive_allowed?(state)
