@@ -48,6 +48,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   # gives up on a request that was still allowed to be in flight.
   @detection_timeout_ms 5_000
 
+  # Real keepalive and pong-deadline timers the pong-liveness tests never let
+  # fire: both stay far beyond @detection_timeout_ms, and the tests deliver the
+  # armed timer messages themselves.
+  @held_keepalive_interval_ms 60_000
+  @held_pong_timeout_ms 120_000
+
   defmodule ForwardedHandoffProbe do
     use GenServer
 
@@ -3705,9 +3711,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert raw_websocket_peer_connection_count(peer) == 1
   end
 
+  # The pong-liveness tests hold the real keepalive and pong-deadline timers
+  # far beyond the detection budget and deliver each timer message themselves,
+  # with the token the session armed (findings#206 row 206-193). Racing the real
+  # timers made them fail about once in 110-140 runs: the next request could
+  # start after a 120 ms deadline had fired, and a close observed within 150 ms
+  # of a 35 ms deadline could miss its window under load. Each test still reads
+  # the armed deadline's own timer and requires the configured pong timeout.
   @tag :upstream_websocket_pong_liveness
   test "opens a new upstream websocket connection after missing keepalive pong deadline" do
-    with_short_keepalive(keepalive_interval_ms: 80, keepalive_pong_timeout_ms: 35)
+    with_held_keepalive(keepalive_pong_timeout_ms: @held_pong_timeout_ms)
 
     peer = start_raw_websocket_peer()
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3722,10 +3735,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     established_lifecycle = %{initial_lifecycle | generation: 1}
     assert lifecycle_state(session) == established_lifecycle
-    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, 1_000
+    assert_receive {:raw_upstream_websocket_connection, 1}, @detection_timeout_ms
 
-    assert :closed = wait_for_raw_websocket_connection_closed(1, 150)
+    fire_keepalive!(session)
+    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, @detection_timeout_ms
+    assert_pong_deadline_armed!(session, @held_pong_timeout_ms)
+
+    fire_pong_deadline!(session)
+    assert :closed = wait_for_raw_websocket_connection_closed(1, @detection_timeout_ms)
     assert_disconnected_lifecycle(session, established_lifecycle)
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
@@ -3742,7 +3759,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @tag :upstream_websocket_pong_liveness
   test "does not close outstanding keepalive before a longer pong timeout expires" do
-    with_short_keepalive(keepalive_interval_ms: 25, keepalive_pong_timeout_ms: 120)
+    # The pong timeout is twice the keepalive interval: the deadline must be
+    # the pong timeout, and the keepalive tick that comes due while the pong is
+    # outstanding neither pings again nor closes the connection.
+    with_held_keepalive(keepalive_interval_ms: @held_keepalive_interval_ms, keepalive_pong_timeout_ms: 2 * @held_keepalive_interval_ms)
 
     peer = start_raw_websocket_peer()
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3754,16 +3774,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
 
-    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, 1_000
+    assert_receive {:raw_upstream_websocket_connection, 1}, @detection_timeout_ms
 
-    assert :timeout = wait_for_raw_websocket_connection_closed(1, 40)
+    fire_keepalive!(session)
+    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, @detection_timeout_ms
+    pong_token = assert_pong_deadline_armed!(session, 2 * @held_keepalive_interval_ms)
 
+    fire_keepalive!(session)
+    assert %{keepalive_pong_token: ^pong_token} = :sys.get_state(session)
+
+    # The request answers after anything the peer saw before it on the same
+    # connection, so a second ping would already have been reported.
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
 
+    refute_received {:raw_upstream_websocket_control, :ping, 1, 2, _payload_bytes}
+    refute_received {:raw_upstream_websocket_connection_closed, 1}
     assert raw_websocket_peer_connection_count(peer) == 1
-    assert :closed = wait_for_raw_websocket_connection_closed(1, 200)
+
+    fire_pong_deadline!(session)
+    assert :closed = wait_for_raw_websocket_connection_closed(1, @detection_timeout_ms)
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
@@ -3778,7 +3808,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @tag :upstream_websocket_pong_liveness
   test "keeps upstream websocket connection reusable after exact keepalive pong" do
-    with_short_keepalive()
+    with_held_keepalive(keepalive_pong_timeout_ms: @held_pong_timeout_ms)
 
     peer = start_raw_websocket_peer(pong_mode: :match_active_ping)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3790,10 +3820,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
 
-    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 2, _payload_bytes}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 3, _payload_bytes}, 1_000
+    assert_receive {:raw_upstream_websocket_connection, 1}, @detection_timeout_ms
+
+    for ping_count <- 1..3 do
+      fire_keepalive!(session)
+      assert_receive {:raw_upstream_websocket_control, :ping, 1, ^ping_count, _payload_bytes}, @detection_timeout_ms
+      await_pong_deadline_cleared!(session)
+    end
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
@@ -3808,7 +3841,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @tag :upstream_websocket_pong_liveness
   test "opens a new upstream websocket connection after mismatched keepalive pong deadline" do
-    with_short_keepalive(keepalive_interval_ms: 80, keepalive_pong_timeout_ms: 35)
+    with_held_keepalive(keepalive_pong_timeout_ms: @held_pong_timeout_ms)
 
     peer = start_raw_websocket_peer(pong_mode: :send_mismatched_pong)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3820,9 +3853,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
 
-    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, 1_000
-    assert :closed = wait_for_raw_websocket_connection_closed(1, 150)
+    assert_receive {:raw_upstream_websocket_connection, 1}, @detection_timeout_ms
+
+    fire_keepalive!(session)
+    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, @detection_timeout_ms
+    pong_token = assert_pong_deadline_armed!(session, @held_pong_timeout_ms)
+
+    # The peer wrote its mismatched pong before this request's answer, so the
+    # session has read it once the request returns; the deadline must survive.
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert %{keepalive_pong_token: ^pong_token} = :sys.get_state(session)
+
+    fire_pong_deadline!(session)
+    assert :closed = wait_for_raw_websocket_connection_closed(1, @detection_timeout_ms)
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
@@ -3837,7 +3882,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @tag :upstream_websocket_pong_liveness
   test "opens a new upstream websocket connection after stale old-payload keepalive pong deadline" do
-    with_short_keepalive(keepalive_interval_ms: 80, keepalive_pong_timeout_ms: 35)
+    with_held_keepalive(keepalive_pong_timeout_ms: @held_pong_timeout_ms)
 
     peer = start_raw_websocket_peer(pong_mode: :match_active_ping)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3849,13 +3894,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
 
-    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, 1_000
+    assert_receive {:raw_upstream_websocket_connection, 1}, @detection_timeout_ms
+
+    fire_keepalive!(session)
+    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, @detection_timeout_ms
+    await_pong_deadline_cleared!(session)
 
     set_raw_websocket_peer_pong_mode(peer, :send_first_ping_payload)
 
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 2, _payload_bytes}, 1_000
-    assert :closed = wait_for_raw_websocket_connection_closed(1, 150)
+    fire_keepalive!(session)
+    assert_receive {:raw_upstream_websocket_control, :ping, 1, 2, _payload_bytes}, @detection_timeout_ms
+    pong_token = assert_pong_deadline_armed!(session, @held_pong_timeout_ms)
+
+    # The stale pong, the first ping's payload, precedes this request's answer.
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert %{keepalive_pong_token: ^pong_token} = :sys.get_state(session)
+
+    fire_pong_deadline!(session)
+    assert :closed = wait_for_raw_websocket_connection_closed(1, @detection_timeout_ms)
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
@@ -3870,7 +3928,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @tag :upstream_websocket_pong_liveness
   test "active receive loop fails promptly when pong deadline fires during an in-flight request" do
-    with_short_keepalive(keepalive_interval_ms: 25, keepalive_pong_timeout_ms: 150)
+    with_held_keepalive(keepalive_pong_timeout_ms: @held_pong_timeout_ms)
 
     peer = start_raw_websocket_peer()
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -3882,30 +3940,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
 
-    assert_receive {:upstream_websocket_frame, terminal_frame}, 1_000
+    assert_receive {:upstream_websocket_frame, terminal_frame}, @detection_timeout_ms
     assert %{"id" => _id} = CodexPooler.JSON.decode!(terminal_frame)
 
-    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
-    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, 1_000
+    assert_receive {:raw_upstream_websocket_connection, 1}, @detection_timeout_ms
+
+    fire_keepalive!(session)
+    assert_receive {:raw_upstream_websocket_control, :ping, 1, 1, _payload_bytes}, @detection_timeout_ms
+    pong_token = assert_pong_deadline_armed!(session, @held_pong_timeout_ms)
 
     set_raw_websocket_peer_response_mode(peer, :hold_after_created)
-    started_at = System.monotonic_time(:millisecond)
     request_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
-    assert_receive {:upstream_websocket_frame, created_frame}, 1_000
+    assert_receive {:upstream_websocket_frame, created_frame}, @detection_timeout_ms
     assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
 
-    result =
-      case Task.yield(request_task, 600) do
-        {:ok, result} ->
-          result
-
-        nil ->
-          Task.shutdown(request_task, :brutal_kill)
-          :request_still_waiting
-      end
-
-    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+    # The request is in the session's receive loop; the idle-armed deadline
+    # fires there and must end it well before its 1 s receive timeout.
+    fired_at = System.monotonic_time(:millisecond)
+    send(session, {:upstream_websocket_pong_deadline, pong_token})
+    result = Task.await(request_task, @detection_timeout_ms)
+    elapsed_ms = System.monotonic_time(:millisecond) - fired_at
 
     assert {:error,
             %{
@@ -3919,10 +3974,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
               }
             }} = result
 
-    assert elapsed_ms < 600
+    assert elapsed_ms < @timeouts.receive_timeout_ms
     assert body =~ "response.created"
     assert Process.alive?(session)
-    assert :closed = wait_for_raw_websocket_connection_closed(1, 150)
+    assert :closed = wait_for_raw_websocket_connection_closed(1, @detection_timeout_ms)
 
     set_raw_websocket_peer_response_mode(peer, :terminal)
 
@@ -5502,7 +5557,57 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     upstream
   end
 
-  defp with_short_keepalive(opts \\ []) do
+  defp with_held_keepalive(opts) do
+    with_short_keepalive(Keyword.put_new(opts, :keepalive_interval_ms, @held_keepalive_interval_ms))
+  end
+
+  # Delivers the keepalive tick the session armed, as its timer would, and
+  # waits until the session handled it.
+  defp fire_keepalive!(session) do
+    assert %{keepalive_token: token} = :sys.get_state(session)
+    send(session, {:upstream_websocket_keepalive, token})
+    _state = :sys.get_state(session)
+    :ok
+  end
+
+  # The pong deadline armed by the last ping runs on the configured pong
+  # timeout; returns its token.
+  defp assert_pong_deadline_armed!(session, pong_timeout_ms) do
+    assert %{keepalive_pong_ref: ref, keepalive_pong_token: token} = :sys.get_state(session)
+    remaining_ms = Process.read_timer(ref)
+    assert is_integer(remaining_ms)
+    assert remaining_ms <= pong_timeout_ms and remaining_ms > pong_timeout_ms - @detection_timeout_ms
+    token
+  end
+
+  defp fire_pong_deadline!(session) do
+    assert %{keepalive_pong_token: token} = :sys.get_state(session)
+    send(session, {:upstream_websocket_pong_deadline, token})
+    :ok
+  end
+
+  defp await_pong_deadline_cleared!(session) do
+    deadline_ms = System.monotonic_time(:millisecond) + @detection_timeout_ms
+    await_pong_deadline_cleared!(session, deadline_ms)
+  end
+
+  defp await_pong_deadline_cleared!(session, deadline_ms) do
+    state = :sys.get_state(session)
+
+    cond do
+      not Map.has_key?(state, :keepalive_pong_ref) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline_ms ->
+        flunk("the matching pong never cleared the keepalive pong deadline")
+
+      true ->
+        Process.sleep(5)
+        await_pong_deadline_cleared!(session, deadline_ms)
+    end
+  end
+
+  defp with_short_keepalive(opts) do
     original_env = CodexPooler.TestAppEnv.restore_on_exit(UpstreamWebsocketSession)
 
     settings =
