@@ -25,12 +25,18 @@ defmodule CodexPoolerWeb.WebsocketDownstreamWriteWatch do
   # failed and the connection's driver queue is empty, when everything pushed
   # so far is in the kernel; after a failure the confirmed evidence is at most
   # what reached the connection, never more. Only the failure's class is kept,
-  # from a fixed vocabulary; the frame data in the measurements is never read.
+  # from a fixed vocabulary, with the moment the failure was reported; the
+  # frame data in the measurements is never read. That moment is when the
+  # client-retry window of a turn cut by the failure starts (findings#232 row
+  # 232-261): a client that stops reading without closing is noticed only
+  # when a write times out, 30 s later by default, so its resend always came
+  # after a window measured from the provider's completion.
 
   @event [:thousand_island, :connection, :send_error]
   @handler_id {__MODULE__, :send_error}
   @watch_key {__MODULE__, :watch}
   @failure_key {__MODULE__, :failure}
+  @failed_at_key {__MODULE__, :failed_at}
   @confirmed_key {__MODULE__, :confirmed}
   @port_key {__MODULE__, :port}
   @failures ~w(timeout closed other)
@@ -61,8 +67,10 @@ defmodule CodexPoolerWeb.WebsocketDownstreamWriteWatch do
 
   @spec handle_event([atom()], map(), map(), term()) :: :ok
   def handle_event(@event, measurements, _metadata, _config) do
-    if Process.get(@watch_key) == true and is_nil(Process.get(@failure_key)),
-      do: Process.put(@failure_key, failure_class(measurements))
+    if Process.get(@watch_key) == true and is_nil(Process.get(@failure_key)) do
+      _previous = Process.put(@failure_key, failure_class(measurements))
+      _previous = Process.put(@failed_at_key, DateTime.utc_now())
+    end
 
     :ok
   end
@@ -72,6 +80,10 @@ defmodule CodexPoolerWeb.WebsocketDownstreamWriteWatch do
   @doc "The class of the first failed write of this connection, or `nil`."
   @spec failure() :: String.t() | nil
   def failure, do: Process.get(@failure_key)
+
+  @doc "When the first failed write of this connection was reported, or `nil`."
+  @spec failed_at() :: DateTime.t() | nil
+  def failed_at, do: Process.get(@failed_at_key)
 
   @doc """
   Records `evidence` as written: called when no write has failed yet, every

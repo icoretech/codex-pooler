@@ -266,7 +266,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       is_nil(shape) -> {:error, :terminal_predecessor}
       live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
       entitlement?(request.id) -> {:error, :entitlement_present}
-      true -> with :ok <- validate_retry_window(request.completed_at, now), do: {:ok, shape}
+      true -> with :ok <- validate_retry_window(request, attempt, now), do: {:ok, shape}
     end
   end
 
@@ -298,7 +298,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp admit_predecessor(request, family, scope, now) do
     with {:ok, shape} <- predecessor_shape(request, family, scope),
-         :ok <- validate_retry_window(request.completed_at, now),
+         :ok <- validate_retry_window(request, request.id |> lock_turn() |> lock_final_attempt(request.id), now),
          do: {:ok, shape}
   end
 
@@ -546,8 +546,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     )
   end
 
-  defp validate_retry_window(%DateTime{} = completed_at, %DateTime{} = now) do
-    age = DateTime.diff(now, completed_at, :millisecond)
+  # From the predecessor's completion, or from the failed downstream write its
+  # final attempt's receipt names (`ClientRetry.retry_window_start/3`,
+  # findings#232 row 232-261).
+  defp validate_retry_window(%Request{} = request, attempt, %DateTime{} = now),
+    do: validate_retry_window(ClientRetry.retry_window_start(request, attempt, now), now)
+
+  defp validate_retry_window(%DateTime{} = started_at, %DateTime{} = now) do
+    age = DateTime.diff(now, started_at, :millisecond)
 
     if age in 0..(ClientRetry.retry_window_seconds() * 1_000),
       do: :ok,

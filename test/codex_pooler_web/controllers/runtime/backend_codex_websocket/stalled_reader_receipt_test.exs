@@ -82,6 +82,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StalledReaderReceiptTest 
       assert FakeUpstream.count(upstream) == 2
     end
 
+    # A frozen client (findings#232 row 232-261): it stops reading without
+    # closing, so the listener notices it only when a write times out, 30 s
+    # later with the default send timeout, long after the provider finished;
+    # the released client resends once its connection is gone. The window of
+    # that resend starts at the failed write the receipt names, not at the
+    # provider's completion. The stall and the send error are real (short send
+    # timeout); the provider's completion is then moved 35 s into the past,
+    # the distance a 30 s send timeout puts between it and the resend.
+    @tag forwarding: forwarding
+    test "owner forwarding #{forwarding}: a frozen client's resend is served within the window of its failed write although the provider finished longer ago", %{forwarding: forwarding} do
+      %{setup: setup, upstream: upstream, port: port, turn_state: turn_state, raw_payload: raw_payload} = scenario!(forwarding)
+      %{request_id: request_id, receipt: receipt} = stall_until_write_failure!(port, setup, turn_state, raw_payload)
+      assert %{"outcome" => "aborted", "highest_frame_class" => "delta", "write_failure" => "timeout"} = receipt
+
+      completed_at = move_completion_back!(request_id, 35)
+
+      resend = send_and_receive_terminal!(port, setup, turn_state, raw_payload)
+      await_all_settled!(setup.pool.id, System.monotonic_time(:millisecond) + @timeout_ms)
+
+      assert resend["type"] == "response.completed"
+      assert [%Request{id: ^request_id, status: "succeeded"}, %Request{id: successor_id, status: "succeeded"}] = pool_requests(setup.pool.id)
+      assert [%RequestClientRetryLink{predecessor_request_id: ^request_id, successor_request_id: ^successor_id}] = Repo.all(RequestClientRetryLink)
+      assert_one_settlement_each!([request_id, successor_id])
+      assert FakeUpstream.count(upstream) == 2
+
+      # The failure's time, to the millisecond, after the moved completion.
+      assert {:ok, failed_at, 0} = DateTime.from_iso8601(receipt["write_failed_at"])
+      assert receipt["write_failed_at"] =~ ~r/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\z/
+      assert DateTime.diff(failed_at, completed_at, :second) in 30..45
+    end
+
+    # The window from the failed write still closes after 30 s: a resend that
+    # comes later stays a duplicate.
+    @tag forwarding: forwarding
+    test "owner forwarding #{forwarding}: a frozen client's resend after the window of its failed write stays a duplicate", %{forwarding: forwarding} do
+      %{setup: setup, upstream: upstream, port: port, turn_state: turn_state, raw_payload: raw_payload} = scenario!(forwarding)
+      %{request_id: request_id, receipt: receipt} = stall_until_write_failure!(port, setup, turn_state, raw_payload)
+      assert %{"outcome" => "aborted", "write_failure" => "timeout"} = receipt
+
+      _completed_at = move_completion_back!(request_id, 70)
+      :ok = move_write_failure_back!(request_id, 35)
+
+      resend = send_and_receive_terminal!(port, setup, turn_state, raw_payload)
+      await_all_settled!(setup.pool.id, System.monotonic_time(:millisecond) + @timeout_ms)
+
+      assert %{"type" => "error", "error" => %{"code" => "duplicate_turn"}} = resend
+      assert [%Request{id: ^request_id, status: "succeeded"}] = pool_requests(setup.pool.id)
+      assert Repo.all(RequestClientRetryLink) == []
+      assert FakeUpstream.count(upstream) == 1
+    end
+
     # The production shape of the same stall: the client stops reading, the
     # listener's write blocks on the full connection (the default 30 s send
     # timeout is kept), and the connection is then reset (the client, or a
@@ -199,6 +250,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StalledReaderReceiptTest 
     :ok = WebsocketCleanupFence.install!(server: server)
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
     port
+  end
+
+  # The first test's stall: the client sends its turn and never reads again,
+  # the listener's write times out; then the client reads what was written up
+  # to the close, and the turn settles.
+  defp stall_until_write_failure!(port, setup, turn_state, raw_payload) do
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    :ok = :inet.setopts(Mint.HTTP.get_socket(conn), recbuf: @buffer_bytes)
+    {:ok, conn} = Mint.HTTP.set_mode(conn, :passive)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, raw_payload)
+
+    %Request{id: request_id} = await_request!(setup.pool.id, System.monotonic_time(:millisecond) + @timeout_ms)
+    receipt = await_receipt!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
+    {_conn, _received} = read_text_frames!(conn, websocket, ref, :close)
+    _settled = await_settled!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
+    %{request_id: request_id, receipt: receipt}
+  end
+
+  # The injected time: the predecessor completed `seconds` earlier than it did.
+  defp move_completion_back!(request_id, seconds) do
+    %Request{completed_at: %DateTime{} = completed_at} = Repo.get!(Request, request_id)
+    moved = DateTime.add(completed_at, -seconds, :second)
+    {1, _rows} = Repo.update_all(from(r in Request, where: r.id == ^request_id), set: [completed_at: moved])
+    moved
+  end
+
+  # The injected time: the receipt's write failed `seconds` earlier than it did.
+  defp move_write_failure_back!(request_id, seconds) do
+    [%Attempt{id: attempt_id, response_metadata: %{"downstream_delivery" => %{"write_failed_at" => failed_at} = receipt} = metadata}] =
+      Repo.all(from(a in Attempt, where: a.request_id == ^request_id))
+
+    {:ok, failed_at, 0} = DateTime.from_iso8601(failed_at)
+    moved = failed_at |> DateTime.add(-seconds, :second) |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
+    metadata = Map.put(metadata, "downstream_delivery", Map.put(receipt, "write_failed_at", moved))
+    {1, _rows} = Repo.update_all(from(a in Attempt, where: a.id == ^attempt_id), set: [response_metadata: metadata])
+    :ok
   end
 
   # The listener's side of this connection has data queued in its port that

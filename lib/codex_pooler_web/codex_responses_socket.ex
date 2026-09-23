@@ -3829,7 +3829,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # evidence already holds a terminal it pushed (then the client was written
   # the whole turn before the failure). Bandit discards the result of every
   # pushed frame's write, so without this a client that stopped reading got
-  # `delivered` with every frame counted and its resend was refused.
+  # `delivered` with every frame counted and its resend was refused. The moment
+  # the failure was reported goes with its class: the client-retry window of
+  # such a turn starts there (findings#232 row 232-261).
   defp written_delivery_evidence(pid, evidence) do
     case WebsocketDownstreamWriteWatch.failure() do
       nil ->
@@ -3842,7 +3844,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
             _none -> new_downstream_delivery_evidence()
           end
 
-        if pushed_terminal_evidence?(written), do: written, else: Map.put(written, :write_failure, failure)
+        if pushed_terminal_evidence?(written),
+          do: written,
+          else: Map.merge(written, %{write_failure: failure, write_failed_at: WebsocketDownstreamWriteWatch.failed_at()})
     end
   end
 
@@ -3869,7 +3873,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         highest_frame_class: highest_pushed_frame_class(evidence)
       }
       |> Map.merge(pushed_completed_items(evidence))
-      |> Map.merge(Map.take(evidence, [:write_failure]))
+      |> Map.merge(Map.take(evidence, [:write_failure, :write_failed_at]))
       |> DeliveryReceipt.build()
     )
   end

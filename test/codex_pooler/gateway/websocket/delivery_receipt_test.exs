@@ -178,6 +178,20 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptTest do
     assert logs =~ "outcome=aborted terminal_class=none frames_after_visible=4 write_failure=timeout"
   end
 
+  # When the failure was reported starts the cut turn's client-retry window
+  # (findings#232 row 232-261): a millisecond timestamp, written only with the
+  # class and only from a `DateTime`.
+  test "the receipt keeps when the failed write was reported, only with its class" do
+    failed_at = ~U[2026-09-23 10:00:30.123456Z]
+
+    assert %{"write_failure" => "timeout", "write_failed_at" => "2026-09-23T10:00:30.123Z"} =
+             DeliveryReceipt.build(%{outcome: "aborted", write_failure: "timeout", write_failed_at: failed_at})
+
+    refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", write_failure: "timeout"}), "write_failed_at")
+    refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", write_failure: "timeout", write_failed_at: "2026-09-23T10:00:30Z"}), "write_failed_at")
+    refute Map.has_key?(DeliveryReceipt.build(%{outcome: "aborted", write_failed_at: failed_at}), "write_failed_at")
+  end
+
   test "terminal_class maps provider terminal outcomes onto the fixed vocabulary" do
     completed = ~s({"type":"response.completed","response":{"id":"resp_class_completed"}})
     legacy = ~s({"id":"resp_class_legacy","object":"response"})

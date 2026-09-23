@@ -43,6 +43,31 @@ defmodule CodexPoolerWeb.WebsocketDownstreamWriteWatchTest do
            end) == "other"
   end
 
+  # The client-retry window of a turn cut by the failure starts when it was
+  # reported (findings#232 row 232-261), so a later failure must not move it.
+  test "a watched connection keeps when its first failed write was reported" do
+    {before_failure, failed_at, after_second} =
+      in_process(fn ->
+        :ok = WebsocketDownstreamWriteWatch.watch()
+        nil = WebsocketDownstreamWriteWatch.failed_at()
+        before_failure = DateTime.utc_now()
+        send_error(:timeout)
+        failed_at = WebsocketDownstreamWriteWatch.failed_at()
+        Process.sleep(2)
+        send_error(:closed)
+        {before_failure, failed_at, WebsocketDownstreamWriteWatch.failed_at()}
+      end)
+
+    assert %DateTime{} = failed_at
+    assert DateTime.compare(failed_at, before_failure) in [:eq, :gt]
+    assert after_second == failed_at
+
+    assert in_process(fn ->
+             send_error(:timeout)
+             WebsocketDownstreamWriteWatch.failed_at()
+           end) == nil
+  end
+
   test "every class it records is in the receipt's write_failure vocabulary" do
     assert WebsocketDownstreamWriteWatch.failures() == DeliveryReceipt.write_failures()
 

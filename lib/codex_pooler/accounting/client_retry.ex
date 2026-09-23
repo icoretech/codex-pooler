@@ -35,6 +35,15 @@ defmodule CodexPooler.Accounting.ClientRetry do
   # `DeliveryReceipt.resendable_frame_classes/0`, kept literal: accounting does
   # not reference the gateway receipt module at compile time.
   @resendable_frame_classes ~w(lifecycle item_added part_added delta)
+  # `DeliveryReceipt.write_failures/0`, kept literal for the same reason.
+  @write_failures ~w(timeout closed other)
+  # How long after the provider's completion a failed downstream write may
+  # still start the client-retry window (`retry_window_start/3`). A client that
+  # stops reading without closing is noticed when a write times out: 30 s after
+  # the stall with the listener's default send timeout, and the stall can come
+  # after the provider finished while the socket was still writing the turn.
+  # Four send timeouts cover that; a later failure starts the window here.
+  @write_failure_window_start_limit_seconds 120
 
   defmodule SuccessorClaim do
     @moduledoc false
@@ -265,6 +274,49 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   @spec retry_window_seconds() :: pos_integer()
   def retry_window_seconds, do: @retry_window_seconds
+
+  @doc """
+  When the client-retry window of `request` starts, given its final attempt and
+  the database's `now`: the request's `completed_at`, unless the attempt's
+  delivery receipt says the downstream connection failed a write before the
+  turn's terminal was written (`write_failure` with its `write_failed_at`).
+  Then the window starts at that failure, at the earliest at `completed_at`
+  and at the latest `#{@write_failure_window_start_limit_seconds}` s after it
+  or at `now` (findings#232 row 232-261). A client that stops reading without
+  closing is noticed only when a write times out, 30 s later with the default
+  send timeout: the provider had long finished, and the resend the released
+  client sends once its connection is gone always arrived after a window
+  measured from the completion, although the receipt proves the turn was not
+  delivered. Every other predecessor keeps the window from its completion.
+  """
+  @spec retry_window_start(Request.t(), Attempt.t() | nil, DateTime.t()) :: DateTime.t() | nil
+  def retry_window_start(%Request{completed_at: %DateTime{} = completed_at}, attempt, %DateTime{} = now) do
+    case receipt_write_failed_at(attempt) do
+      %DateTime{} = failed_at ->
+        latest = earlier(DateTime.add(completed_at, @write_failure_window_start_limit_seconds, :second), now)
+        failed_at |> earlier(latest) |> later(completed_at)
+
+      nil ->
+        completed_at
+    end
+  end
+
+  def retry_window_start(%Request{completed_at: completed_at}, _attempt, _now), do: completed_at
+
+  defp receipt_write_failed_at(%Attempt{
+         response_metadata: %{"downstream_delivery" => %{"write_failure" => failure, "write_failed_at" => failed_at}}
+       })
+       when failure in @write_failures and is_binary(failed_at) and byte_size(failed_at) <= 64 do
+    case DateTime.from_iso8601(failed_at) do
+      {:ok, datetime, 0} -> datetime
+      _invalid -> nil
+    end
+  end
+
+  defp receipt_write_failed_at(_attempt), do: nil
+
+  defp earlier(left, right), do: if(DateTime.compare(left, right) == :gt, do: right, else: left)
+  defp later(left, right), do: if(DateTime.compare(left, right) == :lt, do: right, else: left)
 
   @spec failed_predecessor_claim?(term()) :: boolean()
   def failed_predecessor_claim?(value) when is_binary(value),
@@ -1173,7 +1225,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
           do: @compaction_retry_window_seconds,
           else: @retry_window_seconds
 
-      validate_retry_window(request.completed_at, db_now, window)
+      validate_retry_window(retry_window_start(request, attempt, db_now), db_now, window)
     end
   end
 

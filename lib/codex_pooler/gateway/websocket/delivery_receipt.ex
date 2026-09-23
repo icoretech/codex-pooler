@@ -53,7 +53,10 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   # of the first failed write of the connection (`timeout` for a client that
   # stopped reading, `closed` for a connection already gone, `other`), written
   # by the native and `/v1` websockets (findings#232 row 232-256). Everything
-  # the receipt counts was written before it.
+  # the receipt counts was written before it. `write_failed_at` (millisecond
+  # ISO 8601, like `pushed_at`) is when that failure was reported, and the
+  # client-retry window of the cut turn starts there instead of at the
+  # provider's completion (row 232-261, `ClientRetry.retry_window_start/3`).
   @write_failures ~w(timeout closed other)
 
   @type outcome :: String.t()
@@ -167,11 +170,17 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   end
 
   # Only a receipt whose connection failed a write before the turn's terminal
-  # was written carries the field.
-  defp maybe_put_write_failure(receipt, %{write_failure: failure}) when not is_nil(failure),
-    do: Map.put(receipt, "write_failure", vocabulary(failure, @write_failures, "other"))
+  # was written carries the fields; the time only with the class.
+  defp maybe_put_write_failure(receipt, %{write_failure: failure} = fields) when not is_nil(failure) do
+    receipt
+    |> Map.put("write_failure", vocabulary(failure, @write_failures, "other"))
+    |> maybe_put_write_failed_at(Map.get(fields, :write_failed_at))
+  end
 
   defp maybe_put_write_failure(receipt, _fields), do: receipt
+
+  defp maybe_put_write_failed_at(receipt, %DateTime{} = failed_at), do: Map.put(receipt, "write_failed_at", iso8601(failed_at))
+  defp maybe_put_write_failed_at(receipt, _failed_at), do: receipt
 
   # Written with the class by the transport that classifies what it pushed:
   # the digests of the completed items in push order, at most
