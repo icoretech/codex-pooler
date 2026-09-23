@@ -31,6 +31,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
                                task_exception
                                lifecycle_cut
                                partial_reasoning_cut
+                               previsible_disconnect
                              )
   @handoff_outcomes ~w(
                         ready

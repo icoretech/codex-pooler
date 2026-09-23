@@ -212,6 +212,29 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
       assert String.starts_with?(resend.correlation_id, @retry_prefix)
     end
 
+    test "admits a websocket predecessor interrupted before any visible output and keeps the fence once output was visible",
+         %{setup: setup, session: session, opts: opts} do
+      opts = %{opts | correlation_id: request_claim()}
+      {:ok, %{request: predecessor}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+      interrupt_predecessor!(setup, session, predecessor, first_visible_output_at: nil)
+
+      assert {:ok, %{request: resend, client_resend: %{predecessor_request_id: predecessor_id, predecessor_shape: :previsible_disconnect}}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+
+      assert predecessor_id == predecessor.id
+      assert String.starts_with?(resend.correlation_id, @retry_prefix)
+
+      for overrides <- [[first_visible_output_at: db_now()], [replay_generation: 1], [turn_status: "failed"]] do
+        opts = %{opts | correlation_id: request_claim()}
+        {:ok, %{request: predecessor}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+        interrupt_predecessor!(setup, session, predecessor, Keyword.merge([first_visible_output_at: nil], overrides))
+
+        assert {:error, %{code: :duplicate_request, resend_disposition: :terminal_predecessor}} =
+                 Accounting.claim_websocket_turn(setup.auth, setup.model, opts),
+               "admitted a client-disconnected predecessor with #{inspect(overrides)}"
+      end
+    end
+
     test "admits an upstream stream error predecessor with verified lifecycle-cut or partial-reasoning evidence",
          %{setup: setup, session: session, opts: opts} do
       for {shape, metadata} <- [
@@ -461,6 +484,46 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
       )
 
     %{request: request, attempt: attempt, turn: turn}
+  end
+
+  # The rows a direct websocket socket leaves when its client closes during a
+  # turn: request and generation-zero attempt failed `client_disconnected`,
+  # turn interrupted, `first_visible_output_at` set only when output reached
+  # the client (findings#232 row 232-112).
+  defp interrupt_predecessor!(setup, session, request, opts) do
+    now = db_now()
+
+    attempt =
+      attempt_fixture(request, setup.assignment, %{
+        status: "failed",
+        completed_at: now,
+        network_error_code: "client_disconnected",
+        transport: "websocket",
+        usage_status: "usage_unknown",
+        response_metadata: %{"error_kind" => "client_disconnected"}
+      })
+      |> Ecto.Changeset.change(replay_generation: Keyword.get(opts, :replay_generation, 0))
+      |> Repo.update!()
+
+    sequence = Repo.one(from turn in CodexTurn, where: turn.codex_session_id == ^session.id, select: coalesce(max(turn.turn_sequence), 0)) + 1
+
+    Repo.insert!(%CodexTurn{
+      codex_session_id: session.id,
+      request_id: request.id,
+      turn_sequence: sequence,
+      transport_kind: "websocket",
+      semantic_turn_digest: :crypto.strong_rand_bytes(32),
+      status: Keyword.get(opts, :turn_status, "interrupted"),
+      error_code: "client_disconnected",
+      final_attempt_id: attempt.id,
+      first_visible_output_at: Keyword.fetch!(opts, :first_visible_output_at),
+      started_at: now,
+      completed_at: now,
+      created_at: now,
+      updated_at: now
+    })
+
+    Repo.update!(Ecto.Changeset.change(request, status: "failed", usage_status: "usage_unknown", response_status_code: 499, last_error_code: "client_disconnected", completed_at: now))
   end
 
   # The metadata a lifecycle-only cut persists (findings issue 124): only

@@ -13,7 +13,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # Every check fails closed: a live request, turn, or attempt, a succeeded or
   # otherwise non-failed predecessor, a failure outside the provider-terminal
   # and task-exception vocabulary (an owner drain or a client disconnect is not
-  # a provider verdict), a stream error whose final attempt does not carry the
+  # a provider verdict; the one client disconnect admitted is a websocket turn
+  # interrupted before any output reached the client and never armed for
+  # replay), a stream error whose final attempt does not carry the
   # verified lifecycle-only or partial-reasoning cut evidence the client retry
   # policy requires, an anchored resend (a `previous_response_id` is bound to
   # the connection that produced it; the released client drops the anchor
@@ -74,6 +76,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           | :lifecycle_cut
           | :partial_reasoning_cut
           | :advanced_http_resume
+          | :previsible_disconnect
 
   @type resolution :: %{
           claim: String.t(),
@@ -298,9 +301,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   end
 
   defp predecessor_shape(%Request{} = request, :client_disconnect, scope) do
-    if advanced_http_resume?(request, scope),
-      do: {:ok, :advanced_http_resume},
-      else: {:error, :terminal_predecessor}
+    cond do
+      advanced_http_resume?(request, scope) -> {:ok, :advanced_http_resume}
+      previsible_websocket_disconnect?(request) -> {:ok, :previsible_disconnect}
+      true -> {:error, :terminal_predecessor}
+    end
   end
 
   defp lock_turn(request_id) do
@@ -394,6 +399,26 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     else
       _unsafe -> false
     end
+  end
+
+  # A websocket turn whose client went away before any output reached it.
+  # With owner forwarding on the owner arms this cut as a replay entitlement
+  # (which `validate_predecessor/3` already refuses here); with forwarding off,
+  # or when the owner could not suspend it, nothing is armed, and the released
+  # client's byte-identical resend used to meet `duplicate_turn` on every
+  # websocket retry until it fell back to HTTPS (findings#232 row 232-112).
+  # The turn row is authoritative for visibility: the Pooler stamps
+  # `first_visible_output_at` before it writes any provider event, error
+  # events included, to the client. Only generation zero qualifies; a
+  # replayed generation keeps the fence.
+  defp previsible_websocket_disconnect?(%Request{} = request) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+
+    match?(
+      {%CodexTurn{status: "interrupted", error_code: "client_disconnected", transport_kind: "websocket", first_visible_output_at: nil, completed_at: %DateTime{}}, %Attempt{status: "failed", network_error_code: "client_disconnected", transport: "websocket", replay_generation: 0, completed_at: %DateTime{}}},
+      {turn, attempt}
+    ) and request.transport == "websocket"
   end
 
   defp validation_input_count(scope) do
