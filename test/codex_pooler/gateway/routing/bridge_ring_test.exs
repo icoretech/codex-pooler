@@ -521,7 +521,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       refute Map.has_key?(plan.request_metadata, "routing_locality_assignment_fingerprint")
     end
 
-    test "oversized prompt-cache keys are absent from locality decisions" do
+    test "oversized prompt-cache keys are refused as locality seeds and named as oversized" do
       setup = routing_setup(3)
       oversized_key = "oversized-cache-key-" <> String.duplicate("x", 257)
 
@@ -531,10 +531,28 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert plan.request_metadata["routing_locality_applied"] == false
 
       assert plan.request_metadata["routing_locality_unhonored_reason"] ==
-               "prompt_cache_key_absent"
+               "prompt_cache_key_oversized"
 
       refute Map.has_key?(plan.request_metadata, "routing_locality_seed_fingerprint")
       refute inspect(plan.request_metadata) =~ oversized_key
+    end
+
+    # A key the client sent never reads `prompt_cache_key_absent`: each refusal
+    # names its bound (findings#255 row 255-81).
+    for {label, key, reason, opts} <- [
+          {"blank", "  \t ", "prompt_cache_key_blank", []},
+          {"non-string", 42, "prompt_cache_key_invalid", []}
+        ] do
+      @tag prompt_cache_key: key, expected_reason: reason, plan_opts: opts
+      test "a #{label} prompt-cache key reads #{reason}", %{prompt_cache_key: key, expected_reason: reason, plan_opts: opts} do
+        setup = routing_setup(3)
+        plan = plan_for_prompt_cache(setup, "bridge_ring", "unusable-key-request", key, opts)
+
+        assert plan.request_metadata["routing_locality_status"] == "unavailable"
+        assert plan.request_metadata["routing_locality_applied"] == false
+        assert plan.request_metadata["routing_locality_unhonored_reason"] == reason
+        refute Map.has_key?(plan.request_metadata, "routing_locality_seed_fingerprint")
+      end
     end
 
     test "eligible-set changes deterministically reselect among remaining candidates" do

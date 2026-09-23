@@ -288,7 +288,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
           | portable_full_history?: portable_full_history?(payload)
         },
         transport: retargeted_transport(options.transport, endpoint, payload),
-        routing: Routing.update(options.routing, prompt_cache_key: nil)
+        routing: Routing.update(options.routing, prompt_cache_key: nil, prompt_cache_key_state: :absent)
     }
   end
 
@@ -979,12 +979,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   end
 
   defp routing(opts, endpoint, payload) do
+    {prompt_cache_key, prompt_cache_key_state} = prompt_cache_key(opts, endpoint, payload)
+
     %Routing{
       requested_model: Map.get(opts, :requested_model),
       effective_model: Map.get(opts, :effective_model),
       api_key_policy: Map.get(opts, :api_key_policy),
       file_affinity_assignment_id: Map.get(opts, :file_affinity_assignment_id),
-      prompt_cache_key: prompt_cache_key(opts, endpoint, payload),
+      prompt_cache_key: prompt_cache_key,
+      prompt_cache_key_state: prompt_cache_key_state,
       quota_decision: Map.get(opts, :quota_decision),
       reset_probe: reset_probe(Map.get(opts, :reset_probe)),
       reasoning_effort_decision: Map.get(opts, :reasoning_effort_decision),
@@ -1080,11 +1083,16 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp safe_client_request_id(_value), do: nil
 
+  # The routing copy is the key's digest or nil; the state keeps why it is nil,
+  # so a key the client sent is never reported as absent (findings#255 row
+  # 255-81). Only the state crosses into metadata, never the key.
   defp prompt_cache_key(opts, endpoint, payload) do
     if prompt_cache_key_route?(opts, endpoint, payload) do
       payload
       |> Map.get("prompt_cache_key")
       |> normalized_prompt_cache_key()
+    else
+      {nil, :absent}
     end
   end
 
@@ -1105,23 +1113,24 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   defp post_request?(method) when is_binary(method), do: String.upcase(method) == "POST"
   defp post_request?(_method), do: false
 
+  defp normalized_prompt_cache_key(nil), do: {nil, :absent}
+
   defp normalized_prompt_cache_key(value) when is_binary(value) do
     canonical = String.trim(value)
 
     cond do
       canonical == "" ->
-        nil
+        {nil, :blank}
 
       byte_size(canonical) > @prompt_cache_key_max_bytes ->
-        nil
+        {nil, :oversized}
 
       true ->
-        :crypto.hash(:sha256, canonical)
-        |> Base.encode16(case: :lower)
+        {:crypto.hash(:sha256, canonical) |> Base.encode16(case: :lower), :present}
     end
   end
 
-  defp normalized_prompt_cache_key(_value), do: nil
+  defp normalized_prompt_cache_key(_value), do: {nil, :invalid}
 
   defp reasoning_effort_metadata_envelope(snapshot) when is_map(snapshot) do
     snapshot =
