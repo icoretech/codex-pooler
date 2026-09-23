@@ -24,7 +24,7 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
-  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
@@ -476,9 +476,18 @@ defmodule CodexPooler.Dev.SeedsTest do
                identity.plan_label == "Sample" and
                get_in(identity.metadata, ["saved_resets", "status"]) == "reported" and
                get_in(identity.metadata, ["saved_resets", "available_count"]) == 1 and
-               match?({:ok, _}, Secrets.decrypt_active_secret(identity, "access_token")) and
-               match?({:ok, _}, Secrets.decrypt_active_secret(identity, "refresh_token"))
+               match?({:ok, _}, Secrets.decrypt_active_secret(identity, "access_token"))
            end)
+
+    # No seeded identity may hold a refresh token: a release-mode replica would
+    # send it to the real issuer.
+    assert Repo.all(
+             from secret in EncryptedSecret,
+               join: identity in UpstreamIdentity,
+               on: identity.id == secret.upstream_identity_id,
+               where: secret.secret_kind == "refresh_token" and fragment("?->>?", identity.metadata, "dev_seed") == "codex_pooler_dev_seed",
+               select: identity.account_label
+           ) == []
 
     assignments =
       Repo.all(

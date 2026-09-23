@@ -1144,17 +1144,17 @@ defmodule CodexPooler.Dev.Seeds.Full do
     }
   end
 
+  # Access token only: a release-mode VM (the kind replica) honours no local
+  # token endpoint, so a synthetic refresh token would be sent to the real
+  # issuer on the first proactive or on-demand refresh. Without one, a refresh
+  # ends in reauth_required (missing_refresh_token) with no provider request,
+  # and the expiry states the admin UI shows come from metadata alone.
   defp seed_expiry_fixture_secrets!(identities) do
     Enum.each(identities, fn identity ->
       fixture = identity.metadata["expiry_fixture"]
 
-      for {kind, plaintext} <- [
-            {"access_token", "synthetic-expiry-access-#{fixture}"},
-            {"refresh_token", "synthetic-expiry-refresh-#{fixture}"}
-          ] do
-        {:ok, _secret} =
-          Upstreams.store_encrypted_secret(identity, %{secret_kind: kind, plaintext: plaintext})
-      end
+      {:ok, _secret} =
+        Upstreams.store_encrypted_secret(identity, %{secret_kind: "access_token", plaintext: "synthetic-expiry-access-#{fixture}"})
     end)
   end
 
