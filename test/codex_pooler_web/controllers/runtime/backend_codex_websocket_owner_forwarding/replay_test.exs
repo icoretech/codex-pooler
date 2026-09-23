@@ -1522,7 +1522,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     end)
   end
 
-  # Released Codex 0.156.0 sends every turn after the first on a socket as an
+  # The released Codex client sends every turn after the first on a socket as an
   # anchored delta; after a reconnect it resends that turn as full history
   # without the anchor (measured with the released client, findings#232 row
   # 232-160). The armed replay must recognise that resend as the same request.
@@ -1538,7 +1538,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
   # to skip the owner's replay preflight: the turn ran without its replay binding,
   # a cut before any output settled it `client_disconnected` with no entitlement,
   # and the resend was never a replay (findings#232 row 232-181, measured with
-  # Codex 0.156.1 at a 0 ms gap between the two turns).
+  # the released Codex client at a 0 ms gap between the two turns).
   @tag :replay_matrix
   @tag :replay_race
   test "a pre-visible incremental turn sent the moment the previous turn completes still arms the replay its resend redeems" do
@@ -1672,7 +1672,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
   # served again; its resend used to be refused `409 duplicate_turn`, and the
   # released client's in-band compaction, which resends a refused compaction
   # frame five more times, ended showing that duplicate refusal instead of the
-  # provider's (findings#254 row 254-100, Codex 0.156.1). The resend now gets
+  # provider's (findings#254 row 254-100, released Codex client). The resend now gets
   # the same refusal back, without a dispatch, a reservation or a request row.
   for {label, provider_status, provider_error} <- [
         {"codeless 404", 404, %{"type" => "invalid_request_error", "message" => "Refused 'private-refusal-sentinel'."}},
@@ -1694,7 +1694,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
 
       upstream =
         start_upstream(
-          # provenance: observed findings#254 row 254-100 (released Codex 0.156.1 in-band compaction refused by the provider, resent five times)
+          # provenance: observed findings#254 row 254-100 (released Codex client in-band compaction refused by the provider, resent five times)
           FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([refusal]))])
         )
 
@@ -1806,7 +1806,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
 
     upstream =
       start_upstream(
-        # provenance: observed findings#232 row 232-202 (released Codex 0.156.1, production, pre-visible cut during a connection-checkout stall)
+        # provenance: observed findings#232 row 232-202 (released Codex client, production, pre-visible cut during a connection-checkout stall)
         FakeUpstream.strict_sequence([
           strict_native_request(
             1,
@@ -2121,7 +2121,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     end
   end
 
-  # The released client (Codex 0.156.0, `stream_max_retries` = 1 in the smoke
+  # The released Codex client (`stream_max_retries` = 1 in the smoke
   # lane, 5 by default) resends a native websocket request whose stream
   # disconnected before any output after about 200 ms, on a new socket. The
   # replay entitlement must already be armed then: a resend that meets the
@@ -2234,7 +2234,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
 
     upstream =
       start_upstream(
-        # provenance: observed findings#232 row 232-160 (released Codex 0.156.0 incremental turn and its full-history resend)
+        # provenance: observed findings#232 row 232-160 (released Codex client incremental turn and its full-history resend)
         FakeUpstream.strict_sequence(
           [
             strict_native_request(1, FakeUpstream.websocket_text_frames([completed_frame("resp_incremental_turn_a", [synthetic_assistant_item()])])),
