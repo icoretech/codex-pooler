@@ -784,11 +784,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   # collects the frame after its canonicalization into `response.failed`,
   # which keeps the wrapped frame's integer `status` next to the error object
   # (a provider `response.failed` carries none), so that shape records the same
-  # fields (findings#254 row 254-30).
+  # fields (findings#254 row 254-30). The canonicalization writes a code into
+  # an error the provider sent without one (its `type`, or the
+  # `upstream_terminal_failure` fallback); that code is the Pooler's
+  # derivation, not the provider's, so it is left out as the HTTP path leaves
+  # out the absent code of the same refusal (findings#254 row 254-60).
   defp provider_rejection_metadata(body, request_options) do
     with {:ok, %{"type" => type, "error" => %{} = error} = frame} when type in ["error", "response.failed"] <- last_terminal_frame(body),
          status = Map.get(frame, "status", Map.get(frame, "status_code")),
          true <- Metadata.rejection_metadata_status?(status) do
+      error = if type == "response.failed", do: drop_derived_code(error), else: error
       response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
 
       Map.merge(
@@ -799,6 +804,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       _other -> %{}
     end
   end
+
+  defp drop_derived_code(%{"code" => code, "type" => code} = error), do: Map.delete(error, "code")
+  defp drop_derived_code(%{"code" => "upstream_terminal_failure"} = error), do: Map.delete(error, "code")
+  defp drop_derived_code(error), do: error
 
   defp last_terminal_frame(body) when is_binary(body) do
     case StreamProtocol.complete_sse_blocks(body, bounded?: false) do

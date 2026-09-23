@@ -1892,7 +1892,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          %ReceiveState{body: body, collected_body: collected_body} = receive_state,
          text
        ) do
-    data = ["data: ", text, "\n\n"]
+    data = sse_data_block(text)
     telemetry_opts = buffer_telemetry_opts(receive_state)
 
     %{
@@ -1900,6 +1900,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       | body: RetainedBody.append(body, data, telemetry_opts),
         collected_body: append_collected_body(collected_body, data, telemetry_opts)
     }
+  end
+
+  # The retained and collected bodies are SSE, and the finalizer reads the
+  # turn's terminal back out of them (usage, terminal code, provider rejection
+  # fields). A frame whose text spans several lines, such as a pretty-printed
+  # provider error object, needs one `data:` line per text line; otherwise
+  # every line after the first falls outside the event and the terminal
+  # decodes to nothing (findings#254 row 254-60). A single-line frame keeps
+  # its exact bytes.
+  defp sse_data_block(text) do
+    if String.contains?(text, ["\n", "\r"]) do
+      lines = String.split(text, ["\r\n", "\r", "\n"])
+      [Enum.map_intersperse(lines, "\n", &["data: ", &1]), "\n\n"]
+    else
+      ["data: ", text, "\n\n"]
+    end
   end
 
   defp append_collected_body(collected_body, data, telemetry_opts) do

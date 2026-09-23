@@ -96,6 +96,32 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProviderRejectionTest do
       end
     end
 
+    # A provider error frame that spans several lines (a pretty-printed error
+    # object, the shape the production rows of 254-60 fit) must still record
+    # its rejection fields: the finalizer reads the terminal back out of the
+    # retained SSE body, where every line after the first used to fall outside
+    # the event (findings#254 row 254-60).
+    @tag :v1_websocket
+    @tag topology: topology
+    test "a provider 400 frame spanning several lines records its rejection fields on the #{topology} public websocket", %{conn: conn, topology: topology} do
+      provider_error = %{"type" => "invalid_request_error", "code" => nil, "message" => "Invalid '#{@param}': '#{@provider_sentinel}'.", "param" => nil}
+      http_error = http_answer!(conn, provider_error)
+      if topology == :local_owner, do: enable_owner_forwarding!()
+
+      frame = Jason.encode!(%{"type" => "error", "status" => 400, "error" => provider_error}, pretty: true)
+      assert frame =~ "\n"
+
+      {[text], request, attempt} = public_websocket_turn!(topology, frame)
+
+      assert %{"type" => "error", "status" => 400, "error" => error} = CodexPooler.JSON.decode!(text)
+      assert error == http_error.body["error"]
+      assert request.status == "failed"
+      assert rejection_fields(attempt) == rejection_fields(http_error.attempt)
+      assert rejection_fields(attempt)["rejection_error_type"] == "invalid_request_error"
+      assert rejection_fields(attempt)["rejection_message_present"] == true
+      refute inspect(attempt) =~ @provider_sentinel
+    end
+
     for status <- [429, 500] do
       @tag :v1_websocket
       @tag topology: topology, provider_status: status

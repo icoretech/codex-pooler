@@ -128,6 +128,54 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
     end
   end
 
+  # The provider's websocket refusal of an unknown input item id carries no
+  # code and no param (254-60, iCoreTech rev 23, where native attempts
+  # recorded no rejection field before 254-30). Compact and multi-line frames
+  # both record the type and message presence the HTTP path records.
+  for topology <- [:direct, :local_owner], pretty <- [false, true] do
+    @tag topology: topology, pretty: pretty
+    test "native websocket #{topology} codeless provider 400 records its rejection fields (multi-line: #{pretty})", %{topology: topology, pretty: pretty} do
+      if topology == :local_owner, do: enable_owner_forwarding!()
+
+      provider_error = %{"type" => "invalid_request_error", "code" => nil, "message" => "Invalid 'input[1].id': '#{@provider_sentinel}'.", "param" => nil}
+      frame = %{"type" => "error", "status" => 400, "error" => provider_error}
+      text = if pretty, do: Jason.encode!(frame, pretty: true), else: CodexPooler.JSON.encode!(frame)
+
+      upstream = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([text]))]))
+      setup = gateway_setup(upstream)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+      {:ok, state} =
+        CodexResponsesSocket.init(%{
+          auth: auth,
+          opts: %{request_id: "ws-codeless-rejection-#{topology}-#{pretty}", accepted_turn_state: Ecto.UUID.generate(), client_ip: "127.0.0.1"}
+        })
+
+      try do
+        payload =
+          CodexPooler.JSON.encode!(%{"type" => "response.create", "model" => setup.model.exposed_model_id, "input" => native_text_input(@prompt_sentinel), "stream" => true, "generate" => true})
+
+        assert {:ok, turn_state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+        {turn_state, frames} = collect_native_turn_frames!(turn_state)
+        assert_single_native_turn_terminal!(frames, "response.failed")
+
+        assert :ok = FakeUpstream.verify!(upstream)
+        {request, attempt} = sole_rows!(setup)
+        assert request.status == "failed"
+
+        assert Map.take(attempt.response_metadata, ["rejection_error_type", "rejection_message_present", "rejection_error_code", "rejection_error_param"]) == %{
+                 "rejection_error_type" => "invalid_request_error",
+                 "rejection_message_present" => true
+               }
+
+        refute inspect(attempt) =~ @provider_sentinel
+        assert :ok = CodexResponsesSocket.terminate(:closed, turn_state)
+      after
+        CodexResponsesSocket.terminate(:closed, state)
+      end
+    end
+  end
+
   defp pooler_error(code) do
     %{"type" => "invalid_request_error", "code" => code, "param" => @param, "message" => "upstream rejected parameter #{@param} (#{code})"}
   end
