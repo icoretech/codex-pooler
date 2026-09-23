@@ -197,22 +197,6 @@ defmodule CodexPooler.Dev.Seeds.Perf do
   defp seed_perf_models!(pool, assignments) do
     source_assignment_ids = Enum.map(assignments, & &1.id)
 
-    source_assignment_models =
-      Map.new(assignments, fn assignment ->
-        {assignment.id,
-         %{
-           "capabilities" => %{
-             "responses" => true,
-             "streaming" => true,
-             "tools" => true,
-             "reasoning" => true,
-             "image_input" => true
-           },
-           "service_tiers" => ["default", "priority"],
-           "additional_speed_tiers" => []
-         }}
-      end)
-
     @perf_model_ids
     |> Enum.map(fn model_id ->
       %Model{}
@@ -232,10 +216,31 @@ defmodule CodexPooler.Dev.Seeds.Perf do
         metadata: %{
           "dev_seed" => @perf_seed_key,
           "source_assignment_ids" => source_assignment_ids,
-          "source_assignment_models" => source_assignment_models
+          "source_assignment_models" => perf_source_models(assignments, model_id)
         }
       })
       |> Repo.insert!()
+    end)
+  end
+
+  # Canonical partition selection only routes to a source whose per-assignment
+  # metadata names the model's slug; without it the seeded Pool answers
+  # `no_eligible_backend` for every turn.
+  defp perf_source_models(assignments, model_id) do
+    Map.new(assignments, fn assignment ->
+      {assignment.id,
+       %{
+         "slug" => model_id,
+         "capabilities" => %{
+           "responses" => true,
+           "streaming" => true,
+           "tools" => true,
+           "reasoning" => true,
+           "image_input" => true
+         },
+         "service_tiers" => ["default", "priority"],
+         "additional_speed_tiers" => []
+       }}
     end)
   end
 

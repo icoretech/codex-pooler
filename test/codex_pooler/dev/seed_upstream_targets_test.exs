@@ -4,16 +4,22 @@ defmodule CodexPooler.Dev.SeedUpstreamTargetsTest do
   # identities go into their own seeded Pool, and the import task refuses a
   # Pool that serves from synthetic upstreams, so a real copy never shares a
   # model with a fake source.
-  use CodexPooler.DataCase, async: false
+  use CodexPoolerWeb.ConnCase, async: false
+
+  import Ecto.Query
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport, only: [start_upstream: 1, stream_success_sse: 0]
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Dev.{Seeds, UpstreamAccountBundle}
   alias CodexPooler.Dev.Seeds.RealTraffic
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
@@ -33,6 +39,24 @@ defmodule CodexPooler.Dev.SeedUpstreamTargetsTest do
     assert length(result.assignments) == 12
     assert resolved_base_urls(result.pool) == [@in_cluster]
     assert Enum.all?(result.assignments, &(&1.metadata["websocket_url"] == "ws://fake-upstream:4058/ws"))
+  end
+
+  test "a perf-seeded Pool serves a gateway turn from a seeded identity through the given fake", %{conn: conn} do
+    upstream = start_upstream(stream_success_sse())
+    result = Seeds.perf(upstream_base_url: FakeUpstream.url(upstream))
+    [raw_key] = for "CODEX_POOLER_PERF_API_KEY=" <> key <- String.split(File.read!("tmp/gateway-perf/bootstrap/perf.env"), "\n"), do: key
+
+    response =
+      conn
+      |> put_req_header("authorization", "Bearer " <> raw_key)
+      |> post("/backend-api/codex/responses", %{"model" => "gpt-6-luna", "input" => [%{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "seed"}]}], "stream" => true})
+
+    assert response.status == 200
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^result.pool.id))
+    assert request.status == "succeeded"
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.upstream_identity_id in Enum.map(result.upstream_identities, & &1.id)
+    assert Enum.count(FakeUpstream.requests(upstream), &(&1.path == "/backend-api/codex/responses")) == 1
   end
 
   test "full seeds every synthetic identity at the local perf fake by default, never at the provider" do
