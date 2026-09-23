@@ -500,7 +500,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     log_closed_before_request_reservation(reason, state)
 
-    state = arm_previsible_owner_replay(reason, state)
+    state = arm_previsible_owner_replay(state, reason)
 
     {remaining_tasks, state} = await_response_task_cleanup_results(state)
 
@@ -550,15 +550,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # 232-100). So the owner suspends a replay-active turn before the drain
   # below, which waits up to 250 ms for response tasks the suspension itself
   # releases; every other shape keeps the ordinary detach after the drain.
-  defp arm_previsible_owner_replay(reason, state) do
+  defp arm_previsible_owner_replay(state, reason) do
     if owner_forwarded_socket?(state) and active_response_task?(state),
       do: state |> absorb_recovered_owner_runtime() |> detach_previsible_owner_downstream(reason),
       else: state
   end
 
+  # A downstream the owner had accepted nothing of is detached and fenced right
+  # away (`:detached`): the socket's task, still reserving or on its way to
+  # submit, is then refused `client_disconnected` before any dispatch, and the
+  # client's resend is admitted as the turn's successor instead of meeting that
+  # task busy at the owner (findings#232 rows 232-171 and 232-175).
   defp detach_previsible_owner_downstream(state, reason) do
     case WebsocketControlPath.run(:terminate, fn -> Adapter.detach_previsible_owner_downstream(state, reason) end) do
       {:ok, :suspended} -> Map.put(state, :websocket_owner_replay_armed_before_drain?, true)
+      {:ok, :detached} -> Map.put(state, :websocket_owner_detached_before_drain?, true)
       _not_suspended -> state
     end
   end
@@ -4758,9 +4764,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       cancel_pending_owner_admission(state, task_pid, interrupt_reason)
     end)
 
-    # The owner already detached this downstream when it armed the replay.
-    unless Map.get(state, :websocket_owner_replay_armed_before_drain?, false),
-      do: Adapter.cleanup_owner_session(state, reason)
+    # The owner already detached this downstream when it armed the replay, or
+    # when it detached it before the drain with nothing of it accepted.
+    cond do
+      Map.get(state, :websocket_owner_replay_armed_before_drain?, false) -> :ok
+      Map.get(state, :websocket_owner_detached_before_drain?, false) -> Adapter.cleanup_detached_owner_session(state)
+      true -> Adapter.cleanup_owner_session(state, reason)
+    end
 
     :ok
   end

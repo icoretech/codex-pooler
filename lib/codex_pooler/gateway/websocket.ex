@@ -816,15 +816,17 @@ defmodule CodexPooler.Gateway.Websocket do
 
   @doc """
   Arms the replay of a pre-visible owner turn for a closing downstream before
-  the socket drains its response tasks (findings#232, 232-100); answers
-  `:not_previsible` for every other shape, which the ordinary detach handles.
+  the socket drains its response tasks (findings#232, 232-100), or, when the
+  owner has accepted nothing of it yet, detaches and fences it (`:detached`,
+  rows 232-171 and 232-175); answers `:not_previsible` for every other shape,
+  which the ordinary detach handles.
   """
   @spec detach_previsible_websocket_owner_downstream(
           CodexSession.t() | nil,
           String.t() | nil,
           WebsocketOwnerSession.downstream() | nil,
           opts()
-        ) :: :suspended | :not_previsible
+        ) :: :suspended | :detached | :not_previsible
   def detach_previsible_websocket_owner_downstream(
         %CodexSession{} = session,
         owner_lease_token,
@@ -836,8 +838,8 @@ defmodule CodexPooler.Gateway.Websocket do
 
     with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
          {:ok, owner} <- WebsocketOwnerForwarder.resolve_owner(session, owner_forwarder_opts(opts)),
-         :suspended <- detach_previsible_owner(owner, session.id, downstream, opts) do
-      :suspended
+         outcome when outcome in [:suspended, :detached] <- detach_previsible_owner(owner, session.id, downstream, opts) do
+      outcome
     else
       _not_suspended -> :not_previsible
     end

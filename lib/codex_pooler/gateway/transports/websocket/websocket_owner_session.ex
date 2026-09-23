@@ -101,6 +101,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :native_compaction_admission_downstream,
     :forwarded_send_witness,
     :compaction_retry_submit_hold,
+    :closed_downstream,
     provisional_issuances: [],
     pending_admissions: %{},
     pending_admission_monitors: %{}
@@ -320,7 +321,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   detach after the drain.
   """
   @spec detach_previsible_downstream(GenServer.server(), map()) ::
-          :suspended | :not_previsible | {:error, WebsocketOwnerContract.owner_error()}
+          :suspended | :detached | :not_previsible | {:error, WebsocketOwnerContract.owner_error()}
   def detach_previsible_downstream(owner, %{pid: pid, epoch: epoch, correlation_id: correlation_id})
       when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
     GenServer.call(
@@ -1246,6 +1247,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
+  # A submission from a downstream the owner detached while nothing of it was
+  # accepted: its client left before the turn started, so it never starts
+  # (`detach_idle_closing_downstream/2`, findings#232 rows 232-171 and 232-175);
+  # its replay-descriptor preparation, the step before, is refused the same way.
+  def handle_call(
+        {:submit_upstream, %{pid: pid, epoch: epoch, correlation_id: correlation_id}, _payload},
+        _from,
+        %{closed_downstream: %{pid: pid, epoch: epoch, correlation_id: correlation_id}} = state
+      ),
+      do: {:reply, {:error, :client_disconnected}, state}
+
+  def handle_call(
+        {:submit_upstream, %{pid: pid, epoch: epoch, correlation_id: correlation_id}, _payload, _submission_notification?},
+        _from,
+        %{closed_downstream: %{pid: pid, epoch: epoch, correlation_id: correlation_id}} = state
+      ),
+      do: {:reply, {:error, :client_disconnected}, state}
+
   def handle_call(message, _from, %{compaction_retry_submit_hold: hold} = state)
       when not is_nil(hold) and is_tuple(message) and
              elem(message, 0) in [
@@ -1468,6 +1487,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
+  def handle_call(
+        {:prepare_next_replay_descriptor, %{pid: pid, epoch: epoch, correlation_id: correlation_id}, _descriptor},
+        _from,
+        %{closed_downstream: %{pid: pid, epoch: epoch, correlation_id: correlation_id}} = state
+      ),
+      do: {:reply, {:error, :client_disconnected}, state}
+
   def handle_call({:prepare_next_replay_descriptor, downstream, descriptor}, _from, state) do
     if DownstreamState.downstream_status(state.downstream, downstream) == :active and
          valid_next_replay_descriptor?(descriptor) do
@@ -1627,7 +1653,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:reply, :not_previsible, unchanged}
 
       _not_replay_active ->
-        {:reply, :not_previsible, state}
+        if idle_closing_downstream?(state, requested_downstream),
+          do: detach_idle_closing_downstream(state, requested_downstream),
+          else: {:reply, :not_previsible, state}
     end
   end
 
@@ -4244,6 +4272,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
        do: DownstreamState.downstream_status(downstream, downstream) == :active
 
   defp replay_active?(_state, _downstream), do: false
+
+  # A closing downstream whose own turn the owner has not accepted yet: no
+  # active turn, no suspended replay, no handoff or compaction submit hold. The
+  # socket's response task may still be reserving or on its way to submit; the
+  # ordinary detach only came after the socket's 250 ms drain, so that task was
+  # accepted and dispatched to a client that was already gone, and the
+  # released client's resend, about 200 ms after the cut, met the owner busy
+  # with it (`409 duplicate_turn`) or held by the resend's own handoff, which
+  # refused the task `owner_busy` and left a failed turn the resend could not
+  # follow (findings#232 rows 232-175 and 232-171, measured at a cut 0 ms after
+  # the frame: 30 of 32 runs refused the first resend, 1 of 20 failed the turn
+  # over to HTTPS).
+  defp idle_closing_downstream?(state, requested_downstream) do
+    DownstreamState.downstream_status(state.downstream, requested_downstream) == :active and
+      is_nil(state.active_turn) and is_nil(state.suspended_replay) and is_nil(state.pending_handoff) and
+      is_nil(state.compaction_retry_submit_hold) and not state.draining?
+  end
+
+  # Detaches it now, as the ordinary detach would after the drain, and fences
+  # it: a later submission from it is refused `client_disconnected`, so the
+  # task settles a pre-dispatch client disconnect nothing reached the provider
+  # for, and the resend is admitted as that turn's successor.
+  defp detach_idle_closing_downstream(state, requested_downstream) do
+    state =
+      state
+      |> DownstreamState.demonitor_downstream()
+      |> DownstreamState.schedule_idle_shutdown()
+      |> Map.put(:downstream, nil)
+      |> Map.put(:closed_downstream, requested_downstream)
+      |> clear_native_compaction_admission(:downstream_detached)
+
+    reply_or_retire(state, :detached)
+  end
 
   defp suspend_or_detach_downstream(state) do
     if replay_active?(state, state.downstream) do

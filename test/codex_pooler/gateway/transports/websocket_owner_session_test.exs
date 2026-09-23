@@ -854,6 +854,105 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert %{active_turn: nil} = :sys.get_state(owner)
   end
 
+  # A socket that starts closing before the owner accepted any turn of it: the
+  # owner detaches and fences that downstream at once, so the socket's task can
+  # neither prepare nor submit a turn for its gone client, and a new downstream
+  # attaches normally (findings#232 rows 232-171 and 232-175).
+  test "a closing downstream with nothing accepted is detached and fenced before any submission", context do
+    parent = self()
+
+    upstream = %{
+      start: fn ->
+        {:ok, spawn(fn -> receive(do: (:stop -> :ok)) end)}
+      end,
+      send: fn _upstream_pid, request, _writer ->
+        send(parent, {:fenced_owner_upstream_send, request.payload})
+        {:ok, %{status: 200, headers: [], terminal: "response.completed", body: "completed"}}
+      end,
+      close: fn pid ->
+        send(pid, :stop)
+        :ok
+      end
+    }
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert {:ok, closing} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("fenced-closing"))
+
+    assert :detached = WebsocketOwnerSession.detach_previsible_downstream(owner, closing)
+    assert %{downstream: nil, active_turn: nil} = :sys.get_state(owner)
+
+    request = %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "fenced-request",
+      timeouts: %{},
+      writer: nil,
+      websocket_delivery_mode: :collect_compaction,
+      effective_serving_mode: "full"
+    }
+
+    assert {:error, :client_disconnected} = WebsocketOwnerSession.submit_request(owner, closing, request, false)
+    assert {:error, :client_disconnected} = WebsocketOwnerSession.prepare_next_replay_descriptor(owner, closing, %{})
+    refute_received {:fenced_owner_upstream_send, _payload}
+
+    # The fence names only the closed downstream: the client's reconnect
+    # attaches as usual and its submission is served.
+    assert {:ok, reconnect} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("fenced-reconnect"))
+    assert reconnect.epoch == closing.epoch + 1
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             WebsocketOwnerSession.submit_request(owner, reconnect, %{request | payload: "reconnect-request"}, false)
+
+    assert_receive {:fenced_owner_upstream_send, "reconnect-request"}
+  end
+
+  test "a closing downstream whose turn the owner already accepted is not fenced", context do
+    release_ref = make_ref()
+    parent = self()
+
+    upstream = %{
+      start: fn ->
+        {:ok, spawn(fn -> receive(do: (:stop -> :ok)) end)}
+      end,
+      send: fn _upstream_pid, _request, _writer ->
+        send(parent, {:accepted_owner_upstream_send, self()})
+
+        receive do
+          {:release_accepted_owner_upstream, ^release_ref} -> :ok
+        end
+
+        {:ok, %{status: 200, headers: [], terminal: "response.completed", body: "completed"}}
+      end,
+      close: fn pid ->
+        send(pid, :stop)
+        :ok
+      end
+    }
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert {:ok, downstream} = WebsocketOwnerSession.attach_downstream(owner, downstream_target("accepted-closing"))
+
+    request = %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "accepted-request",
+      timeouts: %{},
+      writer: nil,
+      websocket_delivery_mode: :collect_compaction,
+      effective_serving_mode: "full"
+    }
+
+    submitter = Task.async(fn -> WebsocketOwnerSession.submit_request(owner, downstream, request, false) end)
+    assert_receive {:accepted_owner_upstream_send, upstream_task}
+
+    assert :not_previsible = WebsocketOwnerSession.detach_previsible_downstream(owner, downstream)
+    assert %{downstream: %{epoch: epoch}, closed_downstream: nil} = :sys.get_state(owner)
+    assert epoch == downstream.epoch
+
+    send(upstream_task, {:release_accepted_owner_upstream, release_ref})
+    assert {:ok, %{terminal: "response.completed"}} = Task.await(submitter)
+  end
+
   test "replaces a stale registered owner that retires after reporting its status", context do
     context = %{context | codex_session_id: Ecto.UUID.generate()}
     on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)

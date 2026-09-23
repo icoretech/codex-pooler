@@ -1197,30 +1197,13 @@ defmodule CodexPooler.Accounting.ClientRetry do
     do: {:error, :terminal_predecessor}
 
   defp validate_retry_lifecycle(turn, request, %Attempt{} = attempt) do
-    cond do
-      verified_task_exception?(turn, request, attempt) ->
-        :ok
-
-      verified_dead_execution?(turn, request, attempt) ->
-        :ok
-
-      verified_proven_owner_crash?(turn, request, attempt) ->
-        :ok
-
-      verified_provider_terminal_failure?(turn, request, attempt) ->
-        :ok
-
-      verified_quota_rejection?(turn, request, attempt) and latest_attempt?(attempt) ->
-        :ok
-
-      verified_lifecycle_cut?(turn, request, attempt) ->
-        :ok
-
-      true ->
-        with :ok <- validate_terminal_lifecycle(turn, request, attempt),
-             :ok <- validate_observation(attempt.response_metadata) do
-          validate_close_evidence(attempt.response_metadata)
-        end
+    if verified_retry_shape?(turn, request, attempt) do
+      :ok
+    else
+      with :ok <- validate_terminal_lifecycle(turn, request, attempt),
+           :ok <- validate_observation(attempt.response_metadata) do
+        validate_close_evidence(attempt.response_metadata)
+      end
     end
   end
 
@@ -1244,6 +1227,25 @@ defmodule CodexPooler.Accounting.ClientRetry do
       {:error, :terminal_predecessor}
     end
   end
+
+  # Each predicate matches exactly one settled shape its own finalization writes.
+  defp verified_retry_shape?(turn, request, attempt) do
+    Enum.any?(
+      [
+        &verified_task_exception?/3,
+        &verified_dead_execution?/3,
+        &verified_proven_owner_crash?/3,
+        &verified_provider_terminal_failure?/3,
+        &verified_latest_quota_rejection?/3,
+        &verified_lifecycle_cut?/3,
+        &verified_previsible_disconnect?/3
+      ],
+      & &1.(turn, request, attempt)
+    )
+  end
+
+  defp verified_latest_quota_rejection?(turn, request, attempt),
+    do: verified_quota_rejection?(turn, request, attempt) and latest_attempt?(attempt)
 
   # Only the response task's own exception finalization writes this exact
   # shape (turn, request, and attempt failed together with the health-neutral
@@ -1424,6 +1426,48 @@ defmodule CodexPooler.Accounting.ClientRetry do
       do: true
 
   def verified_quota_rejection?(_turn, _request, _attempt), do: false
+
+  # A websocket turn whose client left before any output reached it and that
+  # the owner never armed for replay (the entitlement check around this
+  # predicate refuses an armed one). Owner forwarding produces it when the
+  # owner had accepted nothing of the closing downstream and refused its task's
+  # later submission `client_disconnected` before any dispatch, or when a
+  # pre-visible suspension could not arm; the resend is the same request the
+  # provider never answered, so it is admitted as one successor, the rule
+  # `FailedPredecessorResend` applies to the same shape with forwarding off
+  # (findings#232 rows 232-112, 232-171 and 232-175). The turn row is
+  # authoritative for visibility: the Pooler stamps `first_visible_output_at`
+  # before it writes any provider event to the client. Only the ordinary
+  # Responses route: a native compaction keeps its own retry policy.
+  defp verified_previsible_disconnect?(
+         %CodexTurn{
+           status: "interrupted",
+           error_code: "client_disconnected",
+           final_attempt_id: attempt_id,
+           transport_kind: "websocket",
+           first_visible_output_at: nil,
+           completed_at: %DateTime{}
+         },
+         %Request{
+           status: "failed",
+           last_error_code: "client_disconnected",
+           transport: "websocket",
+           endpoint: "/backend-api/codex/responses",
+           completed_at: %DateTime{}
+         },
+         %Attempt{
+           id: attempt_id,
+           status: "failed",
+           network_error_code: "client_disconnected",
+           transport: "websocket",
+           replay_generation: 0,
+           completed_at: %DateTime{}
+         }
+       )
+       when is_binary(attempt_id),
+       do: true
+
+  defp verified_previsible_disconnect?(_turn, _request, _attempt), do: false
 
   defp latest_attempt?(%Attempt{} = attempt) do
     not Repo.exists?(

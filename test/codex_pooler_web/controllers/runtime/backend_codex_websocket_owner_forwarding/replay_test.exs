@@ -1654,6 +1654,104 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     _websocket = retry_websocket
   end
 
+  # Cut within milliseconds of the frame (measured with the released client at a
+  # 0 ms cut: 30 of 32 runs had their first resend refused, 1 of 20 failed the
+  # turn over to HTTPS), the socket starts closing before the owner has accepted
+  # anything of the turn, so no replay can be armed. The task used to go on and
+  # dispatch it for the gone client during the socket's 250 ms drain, and the
+  # resend, about 200 ms after the cut, met the owner busy with it (`409
+  # duplicate_turn`). The owner now detaches and fences that downstream when the
+  # socket starts closing: the task's submission is refused `client_disconnected`
+  # before any dispatch, and the resend is served as the turn's one successor
+  # (findings#232 rows 232-171 and 232-175).
+  @tag :replay_matrix
+  @tag :replay_race
+  test "a turn cut before the owner accepted it never reaches the provider and its resend is served" do
+    upstream =
+      start_upstream(
+        # provenance: observed findings#232 rows 232-171/232-175 (released Codex client, cut 0 ms after the frame, owner forwarding on)
+        FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([completed_frame("resp_unaccepted_cut")]))])
+      )
+
+    setup = gateway_setup(upstream)
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, "lite")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = Ecto.UUID.generate()
+    raw_payload = CodexPooler.JSON.encode!(native_turn_payload(Ecto.UUID.generate(), setup.model.exposed_model_id, "unaccepted-cut-turn", 100, [synthetic_user_item("unaccepted cut")]))
+    test_pid = self()
+    port = start_public_endpoint!()
+
+    {:ok, state} = owner_socket(auth, "ws-unaccepted-cut", turn_state)
+
+    # The response task stops at its dispatch readiness until the socket has
+    # started closing, which is where a 0 ms cut finds it. Readiness is also
+    # re-asserted once the dispatch returns; only the first one waits.
+    state =
+      Map.put(state, :response_task_start_options,
+        before_direct_cleanup_ready: fn ->
+          unless Process.get(:unaccepted_cut_task_resumed?) do
+            send(test_pid, {:unaccepted_cut_task_ready, self()})
+
+            receive do
+              :resume_unaccepted_cut_task -> Process.put(:unaccepted_cut_task_resumed?, true)
+            after
+              @handoff_detection_timeout_ms -> :ok
+            end
+          end
+        end
+      )
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({raw_payload, [opcode: :text]}, state)
+    assert_receive {:unaccepted_cut_task_ready, task_pid}, @handoff_detection_timeout_ms
+    assert [%Request{id: request_id, status: "in_progress"}] = request_logs(setup.pool.id)
+    owner_pid = state.websocket_owner_pid
+
+    # The client side: once the closing socket has made its early owner call
+    # (or after 100 ms, when there is none to observe), the task resumes, and the
+    # released client's resend follows about 200 ms after the cut.
+    spawn(fn ->
+      _fenced = await_owner_downstream_detached(owner_pid, System.monotonic_time(:millisecond) + 100)
+      send(task_pid, :resume_unaccepted_cut_task)
+      Process.sleep(released_client_stream_retry_ms())
+      {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+      {retry_conn, retry_websocket} = public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, raw_payload)
+      {retry_conn, _retry_websocket, retry_result} = receive_until_terminal!(retry_conn, retry_websocket, retry_ref)
+      _result = Mint.HTTP.close(retry_conn)
+      send(test_pid, {:unaccepted_cut_resend, retry_result})
+    end)
+
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    assert_receive {:unaccepted_cut_resend, retry_result}, @handoff_detection_timeout_ms
+
+    assert {retry_result["type"], get_in(retry_result, ["error", "code"])} == {"response.completed", nil}
+
+    assert_request_settled!(request_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
+    assert %Request{status: "failed", last_error_code: "client_disconnected", response_status_code: 499} = Repo.get!(Request, request_id)
+    assert %CodexTurn{status: "interrupted", first_visible_output_at: nil} = Repo.get_by!(CodexTurn, request_id: request_id)
+    assert [%Attempt{replay_generation: 0, status: "failed", network_error_code: "client_disconnected"}] = Repo.all(from(a in Attempt, where: a.request_id == ^request_id))
+
+    assert [%Request{id: ^request_id}, %Request{id: successor_id, status: "succeeded"}] = request_logs(setup.pool.id)
+    assert Repo.exists?(from(link in RequestClientRetryLink, where: link.predecessor_request_id == ^request_id and link.successor_request_id == ^successor_id))
+    assert Repo.get_by(RequestReplayEntitlement, request_id: request_id) == nil
+
+    for id <- [request_id, successor_id] do
+      assert Repo.all(from(l in LedgerEntry, where: l.request_id == ^id and l.amount_status == "recorded", select: l.entry_kind)) |> Enum.frequencies() ==
+               %{"reservation" => 1, "settlement" => 1, "release" => 1}
+    end
+
+    # Nothing of the cut turn reached the provider: its one dispatch is the resend.
+    assert FakeUpstream.count(upstream) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  defp await_owner_downstream_detached(owner_pid, deadline_ms) do
+    cond do
+      match?(%{downstream: nil}, :sys.get_state(owner_pid)) -> :detached
+      System.monotonic_time(:millisecond) >= deadline_ms -> :attached
+      true -> Process.sleep(2) && await_owner_downstream_detached(owner_pid, deadline_ms)
+    end
+  end
+
   defmodule PrevisibleArmUnsupportedNodeClient do
     @moduledoc false
     # An owner node from a release that predates

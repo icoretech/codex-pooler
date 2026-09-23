@@ -102,9 +102,12 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   @spec cleanup_owner_session(socket_state(), term()) :: :ok
   def cleanup_owner_session(state, reason), do: DownstreamSession.cleanup(state, reason)
 
-  @spec detach_previsible_owner_downstream(socket_state(), term()) :: :suspended | :not_previsible
+  @spec detach_previsible_owner_downstream(socket_state(), term()) :: :suspended | :detached | :not_previsible
   def detach_previsible_owner_downstream(state, reason),
     do: DownstreamSession.detach_previsible(state, reason)
+
+  @spec cleanup_detached_owner_session(socket_state()) :: :ok
+  def cleanup_detached_owner_session(state), do: DownstreamSession.cleanup_detached(state)
 
   @spec cancel_owner_turn(socket_state(), pid(), :owner_drained) :: :ok
   def cancel_owner_turn(state, owner_turn_id, reason) do
