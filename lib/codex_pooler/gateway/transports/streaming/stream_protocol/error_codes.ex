@@ -40,7 +40,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "invalid_api_key",
     "invalid_authentication",
     "context_length_exceeded",
+    # The three spend/credit codes are the final quota error `insufficient_quota`
+    # is (rust-v0.156.0 `QuotaExceeded`): a `response.incomplete` naming one is
+    # a failed turn, not an ordinary incomplete. Like `insufficient_quota` they
+    # stay out of the health-neutral list, so the account that cannot serve is
+    # demoted (findings#258 row 258-24).
     "insufficient_quota",
+    "credit_balance_exhausted",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
     "usage_not_included",
     "invalid_previous_response_id",
     "invalid_request",

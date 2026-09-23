@@ -107,7 +107,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
             "cyber_policy",
             "misalignment_policy_violation",
             "usage_not_included",
-            "slow_down"
+            "slow_down",
+            "insufficient_quota",
+            "credit_balance_exhausted",
+            "organization_spend_limit_exceeded",
+            "project_spend_limit_exceeded"
           ] do
         frame =
           sse_event("response.incomplete", %{
@@ -171,6 +175,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                "response.incomplete",
                "max_output_tokens"
              )
+    end
+
+    test "classifies the spend and credit codes for route health like insufficient_quota" do
+      # The latest released client treats these as a final quota error
+      # (findings#258 row 258-02). They say the account cannot serve, not that
+      # the request was wrong, so like `insufficient_quota` they stay route
+      # failures that demote the assignment; `slow_down` is a retried rate
+      # limit and stays neutral (findings#258 row 258-24).
+      for code <- [
+            "insufficient_quota",
+            "credit_balance_exhausted",
+            "organization_spend_limit_exceeded",
+            "project_spend_limit_exceeded"
+          ] do
+        refute StreamProtocol.ErrorCodes.health_neutral_error_code?(code)
+        refute StreamProtocol.ErrorCodes.provider_overload_error_code?(code)
+        assert StreamProtocol.ErrorCodes.incomplete_failure_reason?(code)
+      end
+
+      assert StreamProtocol.ErrorCodes.health_neutral_error_code?("slow_down")
+      assert StreamProtocol.ErrorCodes.incomplete_failure_reason?("slow_down")
     end
 
     test "classifies workspace credit depletion response.incomplete as failed" do
