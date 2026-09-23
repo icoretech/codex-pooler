@@ -48,6 +48,11 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  # Over HTTP the Codex backend checks the model before `previous_response_id`:
+  # a model the ChatGPT account cannot serve is refused with its model refusal
+  # whether or not the request is anchored (findings#232 row 232-279, live
+  # probe 2026-09-23). The anchored target-model continuation receives that
+  # refusal, not the parameter refusal, and is not retried or re-routed.
   test "a target-model continuation with an explicit prior-model anchor stays terminal", %{conn: conn} do
     upstream =
       start_upstream(
@@ -58,6 +63,7 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
 
     setup = gateway_setup(upstream)
     target = target_model(setup)
+    :ok = FakeUpstream.refuse_http_model(upstream, "provider-gpt-example-target")
     {anchor, call_id} = complete_first_model!(conn, setup)
 
     response =
@@ -66,7 +72,7 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
       |> auth(setup)
       |> post(@endpoint_path, continuation(target, anchor, call_id))
 
-    assert %{"error" => %{"code" => "unsupported_parameter", "param" => "previous_response_id"}} = json_response(response, 400)
+    assert %{"error" => %{"code" => "invalid_request", "param" => nil}} = json_response(response, 400)
     assert [first, second] = FakeUpstream.requests(upstream)
     refute first.json["model"] == second.json["model"]
     assert second.json["previous_response_id"] == anchor
@@ -76,6 +82,9 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
     assert failed.retry_count == 0
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^failed.id), :count) == 1
     assert failed.usage_status == "usage_unknown"
+    assert [failed_attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^failed.id))
+    assert "sha256_" <> _fingerprint = failed_attempt.response_metadata["rejection_detail_class"]
+    refute Map.has_key?(failed_attempt.response_metadata, "rejection_error_param")
 
     assert Enum.sort(Repo.all(from l in LedgerEntry, where: l.request_id == ^failed.id, select: l.entry_kind)) == ["release", "reservation", "settlement"]
 

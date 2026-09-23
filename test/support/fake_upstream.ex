@@ -978,13 +978,19 @@ defmodule CodexPooler.FakeUpstream do
       json: decode_json(body)
     }
 
-    if provider_rejects_http_previous_response_id?(request) do
-      record_rejected_request(pid, request)
-      respond_http_previous_response_id_rejection(conn)
-    else
-      mode = take_response_mode(pid, request)
+    cond do
+      provider_rejects_http_model?(pid, request) ->
+        record_rejected_request(pid, request)
+        respond_http_model_rejection(conn, request.json["model"])
 
-      respond(pid, conn, mode, request)
+      provider_rejects_http_previous_response_id?(request) ->
+        record_rejected_request(pid, request)
+        respond_http_previous_response_id_rejection(conn)
+
+      true ->
+        mode = take_response_mode(pid, request)
+
+        respond(pid, conn, mode, request)
     end
   end
 
@@ -1007,6 +1013,38 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   defp provider_rejects_http_previous_response_id?(_request), do: false
+
+  @doc """
+  Makes the fake refuse `model` on `POST .../codex/responses` the way the
+  Codex backend refuses a model the ChatGPT account cannot serve: `400`
+  `{"detail": "The '<model>' model is not supported when using Codex with a
+  ChatGPT account."}`. Over HTTP the backend checks the model before
+  `previous_response_id`, so this refusal answers an anchored request too
+  (findings#232 row 232-279, live probe 2026-09-23). Like the anchor refusal,
+  the request is captured and no scripted response is consumed.
+  """
+  @spec refuse_http_model(t(), String.t()) :: :ok
+  def refuse_http_model(%__MODULE__{pid: pid}, model) when is_binary(model) do
+    Agent.update(pid, fn state -> Map.update(state, :refused_http_models, MapSet.new([model]), &MapSet.put(&1, model)) end)
+  end
+
+  @doc "The body the Codex backend answers, with status 400, to a model the ChatGPT account cannot serve."
+  @spec http_model_rejection_body(String.t()) :: String.t()
+  def http_model_rejection_body(model) when is_binary(model),
+    do: CodexPooler.JSON.encode!(%{"detail" => "The '#{model}' model is not supported when using Codex with a ChatGPT account."})
+
+  defp provider_rejects_http_model?(pid, %{method: "POST", path: path, json: %{"model" => model}}) when is_binary(model) do
+    String.ends_with?(path, "/codex/responses") and
+      Agent.get(pid, fn state -> state |> Map.get(:refused_http_models, MapSet.new()) |> MapSet.member?(model) end)
+  end
+
+  defp provider_rejects_http_model?(_pid, _request), do: false
+
+  defp respond_http_model_rejection(conn, model) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(400, http_model_rejection_body(model))
+  end
 
   defp record_rejected_request(pid, request) do
     Agent.update(pid, fn state -> %{state | requests: [request | state.requests]} end)
