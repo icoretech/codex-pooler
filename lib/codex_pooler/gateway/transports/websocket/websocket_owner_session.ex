@@ -3571,7 +3571,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          %RemoteReconnectControlV2{action: :preflight, intent: :active_reattach} = control
        )
        when is_map(descriptor) do
-    with true <- control.downstream.epoch == state.downstream_epoch + 1,
+    with {:ok, epoch} <- active_reattach_epoch(state, control.downstream),
          true <- replay_descriptor_match?(descriptor, control),
          true <- descriptor.downstream_status == :lost,
          false <- descriptor.visible_output?,
@@ -3581,13 +3581,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          false <- active_turn.terminal_forwarded?,
          nil <- active_turn.pending_result,
          {:ok, state} <- cas_active_status(state, descriptor, :reattaching) do
-      epoch = DownstreamState.next_downstream_epoch(state.downstream_epoch)
-
       downstream =
         control.downstream
         |> Map.put(:epoch, epoch)
         |> Map.put(:active_turn_reconnect?, true)
 
+      state = DownstreamState.demonitor_downstream(state)
       monitor = Process.monitor(downstream.pid)
       descriptor = %{state.active_turn.descriptor | downstream_status: :attached}
 
@@ -3846,6 +3845,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp apply_valid_reconnect_control_v2(_state, _control), do: {:error, :owner_unavailable}
+
+  # The replacement socket attaches to the owner when it starts, before it sends
+  # its reconnect control, and the attach leaves a `:lost` turn detached
+  # (`attach_downstream_now/2`); its control then names the downstream the owner
+  # already holds at the current epoch, not the next one. Accepting only the
+  # next epoch refused every real reattach `owner_busy`, and the lost turn,
+  # whose next provider frame could not be delivered, settled
+  # `failed owner_busy`, a shape no resend path admits (findings#232 row 232-221:
+  # the socket process killed without terminate, local owner; the submitting
+  # task survives it). A control sent before any attach keeps the next epoch.
+  defp active_reattach_epoch(state, %{epoch: epoch} = downstream) do
+    cond do
+      epoch == state.downstream_epoch + 1 -> {:ok, DownstreamState.next_downstream_epoch(state.downstream_epoch)}
+      epoch == state.downstream_epoch and attached_control_downstream?(state.downstream, downstream) -> {:ok, epoch}
+      true -> :error
+    end
+  end
+
+  defp attached_control_downstream?(%{pid: pid, epoch: epoch, correlation_id: correlation_id}, %{pid: pid, epoch: epoch, correlation_id: correlation_id}),
+    do: true
+
+  defp attached_control_downstream?(_attached, _control), do: false
 
   defp active_turn_same_request?(%{descriptor: %{} = descriptor}, control) do
     secure_digest_match?(Map.get(descriptor, :semantic_turn_digest), control.semantic_turn_digest) and
