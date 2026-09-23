@@ -526,9 +526,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       await_response_tasks(state, reason, remaining_tasks, response_task_drain_ms(state))
 
     Enum.each(remaining_tasks, &Process.exit(&1, :kill))
+    killed_tasks = remaining_tasks
 
     {remaining_tasks, state} =
       await_response_tasks(state, reason, remaining_tasks, response_task_drain_ms(state))
+
+    :ok = interrupt_killed_terminal_pushed_tasks(state, killed_tasks)
 
     record_unreported_termination_receipts(state)
 
@@ -4903,9 +4906,40 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       resendable_postvisible_direct_task?(state, pid) ->
         stop_previsible_direct_task(state, pid, context)
 
+      terminal_pushed_direct_task?(state, pid) ->
+        :ok
+
       true ->
         cancel_direct_response(state, pid, context)
     end
+  end
+
+  # The socket already pushed this turn's terminal (a provider refusal the
+  # client displayed, typically; Codex closes the connection right after it)
+  # and the task only has its own settlement left. Interrupting it here
+  # replaced that refusal with `499 client_disconnected` and dropped its
+  # rejection fields whenever the settlement took longer than the 250 ms drain,
+  # the forwarding-off form of findings#254 row 254-110 (row 254-131, measured
+  # with a delayed settlement). The task settles its own turn during the
+  # post-cleanup drain; one that never reports is interrupted after it was
+  # killed (`interrupt_killed_terminal_pushed_tasks/2`).
+  defp terminal_pushed_direct_task?(state, pid) do
+    match?(%{terminal_class: class, skipped?: false} when is_binary(class), downstream_delivery_evidence(state, pid)) and
+      not Map.has_key?(Map.get(state, :response_task_cleanup_results, %{}), pid)
+  end
+
+  defp interrupt_killed_terminal_pushed_tasks(state, killed_tasks) do
+    unless owner_forwarded_socket?(state) do
+      contexts = Map.get(state, :direct_cleanup_contexts, %{})
+
+      for pid <- killed_tasks, terminal_pushed_direct_task?(state, pid), context = Map.get(contexts, pid), do: interrupt_killed_direct_task(state, pid, context)
+    end
+
+    :ok
+  end
+
+  defp interrupt_killed_direct_task(state, pid, context) do
+    WebsocketControlPath.run(:terminate, fn -> state |> cancel_direct_response(pid, context) |> log_interrupt_failure(state) end)
   end
 
   # A direct task whose client left before it was shown anything is stopped
