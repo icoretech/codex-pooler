@@ -569,6 +569,29 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
       assert within_tail in alternates
       refute beyond_tail in alternates
     end
+
+    # The native HTTP opening request derives its websocket witness from two
+    # variants that differ only in client metadata (findings#232 row 232-231);
+    # their items are hashed once, and each variant's digests are exactly the
+    # ones `replay_claim_alternates/2` gives it.
+    test "the alternates of variants sharing one input equal each variant's own alternates",
+         %{semantic: semantic, anchored: anchored, full: full} do
+      marked = put_in(full, ["client_metadata", "ws_request_header_x_openai_internal_codex_responses_lite"], "true")
+      long = Map.put(full, "input", for(n <- 1..300, do: %{"type" => "message", "role" => "user", "content" => "item #{n}"}))
+      long_marked = put_in(long, ["client_metadata", "ws_request_header_x_openai_internal_codex_responses_lite"], "true")
+      single = Map.put(full, "input", [hd(full["input"])])
+      other_input = Map.put(marked, "input", tl(full["input"]))
+
+      for variants <- [[full, marked], [long, long_marked], [full], [single, Map.put(single, "model", "gpt-other")], [anchored, Map.delete(anchored, "previous_response_id")], [full, other_input]] do
+        expected = for variant <- variants, do: elem(WebsocketTurnIdentity.replay_claim_alternates(semantic, variant), 1)
+        assert {:ok, ^expected} = WebsocketTurnIdentity.replay_claim_alternates_of_variants(semantic, variants)
+      end
+
+      assert {:ok, [plain, lite]} = WebsocketTurnIdentity.replay_claim_alternates_of_variants(semantic, [full, marked])
+      assert length(plain) == 3 and length(lite) == 3
+      assert MapSet.disjoint?(MapSet.new(plain), MapSet.new(lite))
+      assert {:error, _reason} = WebsocketTurnIdentity.replay_claim_alternates_of_variants(<<1, 2>>, [full, marked])
+    end
   end
 
   describe "completed_item_digest/1 and grown_resend_candidates/2" do

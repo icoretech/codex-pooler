@@ -372,15 +372,72 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   def replay_claim_alternates(_semantic_turn_key, _payload),
     do: invalid_replay_claim("semantic_turn_key")
 
+  @doc """
+  `replay_claim_alternates/2` of each of several variants of one request that
+  share the very same `input` and differ only in other fields (the native HTTP
+  opening request's websocket witness, with and without the websocket Lite
+  marker, findings#232 row 232-231), in variant order. The digests are the ones
+  `replay_claim_alternates/2` returns for each variant; every trailing item is
+  hashed once for all variants instead of once per variant. Variants whose
+  inputs differ are answered one by one.
+  """
+  @spec replay_claim_alternates_of_variants(<<_::256>>, [map()]) ::
+          {:ok, [[<<_::256>>]]} | {:error, Error.reason()}
+  def replay_claim_alternates_of_variants(semantic_turn_key, [%{"input" => [_first, _second | _rest] = input} | _more] = variants)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 do
+    if Enum.all?(variants, &(is_map(&1) and Map.get(&1, "input") === input)) do
+      item_digests = trailing_item_digests(tl(input))
+      collect_variant_alternates(variants, &variant_alternates(semantic_turn_key, &1, item_digests))
+    else
+      collect_variant_alternates(variants, &replay_claim_alternates(semantic_turn_key, &1))
+    end
+  end
+
+  def replay_claim_alternates_of_variants(semantic_turn_key, variants) when is_list(variants),
+    do: collect_variant_alternates(variants, &replay_claim_alternates(semantic_turn_key, &1))
+
+  defp variant_alternates(semantic_turn_key, variant, item_digests) do
+    if anchored?(variant) do
+      {:ok, []}
+    else
+      with {:ok, key, base} <- replay_tail_base(semantic_turn_key, variant) do
+        {:ok, trailing_tail_chain(key, base, item_digests)}
+      end
+    end
+  end
+
+  defp collect_variant_alternates(variants, fun) do
+    variants
+    |> Enum.reduce_while({:ok, []}, fn variant, {:ok, acc} ->
+      case fun.(variant) do
+        {:ok, alternates} -> {:cont, {:ok, [alternates | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      {:error, _reason} = error -> error
+    end
+  end
+
   # The chain is built from the last item back, so the digest of every trailing
   # slice is one link away from the next shorter one.
-  defp trailing_tail_digests(key, base, items) do
+  defp trailing_tail_digests(key, base, items),
+    do: trailing_tail_chain(key, base, trailing_item_digests(items))
+
+  # The item digests of the trailing items, last item first, bounded like the
+  # chain they feed.
+  defp trailing_item_digests(items) do
+    items
+    |> Enum.reverse()
+    |> Enum.take(@replay_tail_suffix_limit)
+    |> Enum.map(&replay_tail_item_digest/1)
+  end
+
+  defp trailing_tail_chain(key, base, item_digests) do
     {_tail, digests} =
-      items
-      |> Enum.reverse()
-      |> Enum.take(@replay_tail_suffix_limit)
-      |> Enum.reduce({base, []}, fn item, {tail, digests} ->
-        next = replay_tail_link(key, item, tail)
+      Enum.reduce(item_digests, {base, []}, fn item_digest, {tail, digests} ->
+        next = replay_tail_chain_link(key, item_digest, tail)
         {next, [next | digests]}
       end)
 
@@ -413,10 +470,12 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     end
   end
 
-  defp replay_tail_link(key, item, tail) do
-    item_digest = :crypto.hash(:sha256, :erlang.term_to_binary(item, [:deterministic]))
-    :crypto.mac(:hmac, :sha256, key, item_digest <> tail)
-  end
+  defp replay_tail_link(key, item, tail),
+    do: replay_tail_chain_link(key, replay_tail_item_digest(item), tail)
+
+  defp replay_tail_item_digest(item), do: :crypto.hash(:sha256, :erlang.term_to_binary(item, [:deterministic]))
+
+  defp replay_tail_chain_link(key, item_digest, tail), do: :crypto.mac(:hmac, :sha256, key, item_digest <> tail)
 
   @doc """
   The bounded identity of one completed output item, as the released Codex

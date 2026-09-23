@@ -301,10 +301,12 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   defp native_client_retry_witness(identity, %{"input" => input} = payload, request_options, :opening)
        when is_list(input) do
     frame = Map.put(payload, "type", "response.create")
-    variants = [frame, put_websocket_lite_marker(frame)]
+    variants = lite_marker_variants(frame)
 
+    # The two variants share their input, so its items are hashed once for the
+    # trailing-slice digests of both.
     with {:ok, [digest | variant_digests]} <- collect_digests(variants, &WebsocketTurnIdentity.replay_claim_digest(identity.semantic_turn_key, &1)),
-         {:ok, tail_digests} <- collect_digests(variants, &WebsocketTurnIdentity.replay_claim_alternates(identity.semantic_turn_key, &1)),
+         {:ok, tail_digests} <- WebsocketTurnIdentity.replay_claim_alternates_of_variants(identity.semantic_turn_key, variants),
          {:ok, grown} <- collect_digests(variants, &WebsocketTurnIdentity.grown_resend_candidates(identity.semantic_turn_key, &1)),
          {:ok, witness} <-
            ClientRetry.original_witness(
@@ -320,6 +322,15 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   end
 
   defp native_client_retry_witness(_identity, _payload, _request_options, _arm), do: nil
+
+  # A body that already carries the marker is its own marked variant; it is
+  # digested once.
+  defp lite_marker_variants(frame) do
+    case put_websocket_lite_marker(frame) do
+      ^frame -> [frame]
+      marked -> [frame, marked]
+    end
+  end
 
   defp put_websocket_lite_marker(%{"client_metadata" => metadata} = frame) when is_map(metadata),
     do: Map.put(frame, "client_metadata", Map.put(metadata, @websocket_lite_marker, "true"))

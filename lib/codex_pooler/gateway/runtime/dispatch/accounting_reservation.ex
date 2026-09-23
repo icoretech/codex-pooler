@@ -150,13 +150,49 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
         authorized_correlation_id
       )
       when is_map(payload) do
+    attrs(
+      auth,
+      payload,
+      endpoint,
+      request_options,
+      route_state,
+      authorized_correlation_id,
+      NativeHttpTurnIdentity.request_claim(request_options, payload)
+    )
+  end
+
+  @doc """
+  `attrs/6` with the native HTTP turn claim the caller already resolved
+  (`NativeHttpTurnIdentity.request_claim/2` for this payload and these request
+  options), so a caller that also reads the claim, such as the final-refusal
+  lookup before a native HTTP reservation, derives it (and hashes the payload
+  for its resend witness) once per request.
+  """
+  @spec attrs(
+          auth(),
+          map(),
+          String.t(),
+          RequestOptions.t(),
+          RouteState.t() | nil,
+          Ecto.UUID.t() | nil,
+          {:ok, NativeHttpTurnIdentity.request_claim()} | :none
+        ) :: map()
+  def attrs(
+        auth,
+        payload,
+        endpoint,
+        %RequestOptions{} = request_options,
+        route_state,
+        authorized_correlation_id,
+        native_http_claim
+      )
+      when is_map(payload) do
     %RequestOptions{
       request_metadata: request_metadata,
       transport: transport
     } = request_options
 
     accounting_endpoint = accounting_endpoint(endpoint, request_options)
-    native_http_claim = NativeHttpTurnIdentity.request_claim(request_options, payload)
 
     %{
       endpoint: accounting_endpoint,

@@ -1954,6 +1954,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          turn_claim,
          authorized_correlation_id
        ) do
+    # Resolved once: the reservation attributes and the final-refusal lookup
+    # both read it, and building it hashes the payload for the resend witness.
+    native_http_claim = NativeHttpTurnIdentity.request_claim(request_options, payload)
+
     attrs =
       auth
       |> AccountingReservation.attrs(
@@ -1961,7 +1965,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         endpoint,
         request_options,
         route_state,
-        authorized_correlation_id
+        authorized_correlation_id,
+        native_http_claim
       )
       |> Map.put(:reservation_estimate, AccountingReservation.reservation_estimate(route_state))
       |> Map.put(:turn_claim, turn_claim)
@@ -1975,7 +1980,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
 
       _ordinary ->
-        with :none <- native_http_final_refusal(request_options, payload) do
+        with :none <- native_http_final_refusal(request_options, native_http_claim) do
           auth
           |> Accounting.reserve(model, payload, attrs)
           |> normalize_native_http_turn_duplicate(endpoint, request_options)
@@ -2015,12 +2020,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   # refused again by the provider; the opening request's witness is the
   # websocket request's (findings#232 row 232-231), so the refused turn is found
   # the way its websocket resend finds it. An HTTP predecessor records no
-  # provider status of its own and keeps that step-over.
-  defp native_http_final_refusal(%RequestOptions{transport: %{transport: transport}, continuity: %{codex_session: %CodexSession{} = session}} = request_options, payload)
+  # provider status of its own and keeps that step-over. The claim is the one
+  # `reserve/8` resolved for the reservation attributes, not derived again.
+  defp native_http_final_refusal(%RequestOptions{transport: %{transport: transport}, continuity: %{codex_session: %CodexSession{} = session}} = request_options, native_http_claim)
        when transport in ["http_sse", "http_json"] do
     with true <- NativeHttpTurnIdentity.fenced?(request_options),
          {:ok, %{arm: :opening, semantic_turn_key: semantic_turn_digest, native_client_retry_witness: %{digest: digest, auth_epoch: auth_epoch} = witness}} <-
-           NativeHttpTurnIdentity.request_claim(request_options, payload),
+           native_http_claim,
          {:ok, metadata} <-
            Accounting.final_refusal_predecessor(session, %{
              semantic_turn_digest: semantic_turn_digest,
@@ -2037,7 +2043,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  defp native_http_final_refusal(_request_options, _payload), do: :none
+  defp native_http_final_refusal(_request_options, _native_http_claim), do: :none
 
   defp reserve_client_retry(auth, model, payload, endpoint, request_options, attrs) do
     if native_full_history_compaction?(endpoint, request_options) do
