@@ -58,18 +58,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Superseded
       upstream =
         start_upstream(
           # provenance: observed findings#206 row 206-343 (released Codex 0.156.1 resumed after a kill of the process whose turn the provider held before output)
-          FakeUpstream.strict_sequence([
-            strict_native_request(
-              1,
-              FakeUpstream.barrier_websocket_frames(
-                [CodexPooler.JSON.encode!(created), CodexPooler.JSON.encode!(in_progress)],
-                notify: self(),
-                release_ref: release_ref
-              )
-            ),
-            strict_native_request(2, FakeUpstream.websocket_text_frames([completed_frame("resp_superseding_turn")])),
-            strict_native_request(2, FakeUpstream.websocket_text_frames([completed_frame("resp_later_turn")]))
-          ])
+          FakeUpstream.strict_sequence(
+            [
+              strict_native_request(
+                1,
+                FakeUpstream.barrier_websocket_frames(
+                  [CodexPooler.JSON.encode!(created), CodexPooler.JSON.encode!(in_progress)],
+                  notify: self(),
+                  release_ref: release_ref
+                )
+              ),
+              strict_native_request(2, FakeUpstream.websocket_text_frames([completed_frame("resp_superseding_turn")])),
+              strict_native_request(2, FakeUpstream.websocket_text_frames([completed_frame("resp_later_turn")]))
+            ] ++ if(forwarding?, do: [], else: [strict_native_request(2, FakeUpstream.websocket_text_frames([completed_frame("resp_late_resend")]))])
+          )
         )
 
       setup = gateway_setup(upstream)
@@ -160,6 +162,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Superseded
         assert ledger_kinds(cut.id) == %{"reservation" => 1, "settlement" => 1, "release" => 1}
         _result = Mint.HTTP.close(next_conn)
       else
+        # With forwarding off nothing supersedes the interrupted turn: its late
+        # resend meets the settled cut the direct path admits (a pre-visible
+        # disconnect whose socket pushed only lifecycle frames, findings#232
+        # rows 232-112 and 232-203) and is served once as its own request,
+        # while the cut keeps its single settlement. Kept on purpose; the
+        # released client never resends a turn after starting another
+        # (findings#206 row 206-352).
+        {next_conn, next_websocket} = public_websocket_send_text!(next_conn, next_websocket, next_ref, cut_payload)
+        {next_conn, _next_websocket, resend_frames} = receive_frames_until_terminal!(next_conn, next_websocket, next_ref, [])
+        assert Enum.map(resend_frames, & &1["type"]) == ["response.completed"]
+        assert FakeUpstream.count(upstream) == 4
+        assert [_cut, _next, _later, %Request{} = resend] = request_logs(setup.pool.id)
+        assert await_request_settled(resend.id, System.monotonic_time(:millisecond) + @detection_timeout_ms) == "succeeded"
+        assert ledger_kinds(cut.id) == %{"reservation" => 1, "settlement" => 1, "release" => 1}
+        assert ledger_kinds(resend.id) == %{"reservation" => 1, "settlement" => 1, "release" => 1}
         _result = Mint.HTTP.close(next_conn)
       end
 
