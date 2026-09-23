@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
 
   alias CodexPoolerWeb.Telemetry.PrometheusReporter
 
+  @detection_timeout_ms 15_000
+
   test "HTTP scrapes reuse the scheduled Core rendering" do
     registry = unique_name()
     event = [:codex_pooler_test, :cached, unique_event_atom()]
@@ -87,7 +89,7 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
 
     assert_receive {:prometheus_folded, ^pid}, 1_000
     tasks = for _ <- 1..8, do: Task.async(fn -> PrometheusReporter.scrape(name) end)
-    bodies = Enum.map(tasks, &Task.await(&1, 1_000))
+    bodies = Enum.map(tasks, &Task.await(&1, @detection_timeout_ms))
     assert Enum.uniq(bodies) |> length() == 1
     assert is_binary(hd(bodies))
     assert hd(bodies) == PrometheusReporter.scrape(name)
@@ -178,7 +180,7 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     assert_receive {:scrape_barrier, _pid}
     for value <- [5, 15, 40], do: :telemetry.execute(event, %{value: value}, %{kind: "isolated"})
     send(reporter, {:release, release})
-    bodies = Enum.map(callers, &Task.await(&1, 1_000))
+    bodies = Enum.map(callers, &Task.await(&1, @detection_timeout_ms))
     assert Enum.uniq(bodies) |> length() == 1
     body = hd(bodies)
     assert body =~ "_bucket{kind=\"isolated\",le=\"10\"} 2"

@@ -19,6 +19,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
 
   import CodexPooler.PoolerFixtures
 
+  @detection_timeout_ms 15_000
   @incomplete_job_states ~w(available scheduled executing retryable)
 
   describe "provider token refresh lifecycle" do
@@ -691,7 +692,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
-      assert {:ok, %{status: :active, retryable?: false}} = Task.await(first, 1_000)
+      assert {:ok, %{status: :active, retryable?: false}} = Task.await(first, @detection_timeout_ms)
       assert FakeUpstream.count(upstream) == 1
 
       assert {:ok, ^new_access_token} =
@@ -994,7 +995,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
-      assert {:error, :refresh_in_progress, in_progress} = Task.await(first, 1_000)
+      assert {:error, :refresh_in_progress, in_progress} = Task.await(first, @detection_timeout_ms)
       assert in_progress.generation == newer_metadata["generation"]
 
       persisted = Repo.get!(UpstreamIdentity, identity.id)

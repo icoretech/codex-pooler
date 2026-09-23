@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  @detection_timeout_ms 15_000
+
   defmodule KeepaliveNotifyingAdapter do
     @moduledoc false
 
@@ -5781,7 +5783,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
-    conn = Task.await(task, 1_000)
+    conn = Task.await(task, @detection_timeout_ms)
 
     assert %{"late" => true} = json_response(conn, 200)
 

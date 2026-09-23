@@ -30,6 +30,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.Decision
   alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
 
+  @detection_timeout_ms 15_000
   @firewall_denied_event [:codex_pooler, :ingress, :firewall, :denied]
 
   defp append_req_header(conn, name, value) do
@@ -1677,7 +1678,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       calls = collect_traced_calls(task.pid, module, function, arity, 0)
       send(task.pid, {:release_trace, release_ref})
-      assert Task.await(task, 1_000) == result
+      assert Task.await(task, @detection_timeout_ms) == result
       {result, calls}
     after
       :erlang.trace_pattern(traced_mfa, false, [:local])

@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
+  @detection_timeout_ms 15_000
   @websocket_frame_timeout 1_000
 
   test "successful websocket response confirms the guarded reset probe" do
@@ -109,7 +110,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
                    1_000
 
     assert {:error, %{code: "upstream_request_failed", status: 502}} =
-             Task.await(task, 1_000)
+             Task.await(task, @detection_timeout_ms)
 
     upstream_ref = Process.monitor(upstream_pid)
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})

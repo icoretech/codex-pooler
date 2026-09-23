@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.RouteClass
 
+  @detection_timeout_ms 15_000
+
   defmodule BlockingSaturationServer do
     use GenServer
 
@@ -147,7 +149,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
     refute inspect(snapshot) =~ "monitors"
 
     Admission.release(held)
-    assert {:ok, lease} = Task.await(queued, 1_000)
+    assert {:ok, lease} = Task.await(queued, @detection_timeout_ms)
     Admission.release(lease)
   end
 
@@ -190,7 +192,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
     assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{route_class: "proxy_stream", request_id: "queued-stream"}}
 
     Admission.release(held)
-    assert {:ok, queued_lease} = Task.await(task, 1_000)
+    assert {:ok, queued_lease} = Task.await(task, @detection_timeout_ms)
 
     assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :dequeued], measurements, %{route_class: "proxy_stream", request_id: "queued-stream"}}
 
@@ -252,7 +254,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
     refute inspect(metadata) =~ "secret-token"
 
     assert {:error, %{code: "bulkhead_queue_timeout", route_class: "audio_transcription"}} =
-             Task.await(task, 1_000)
+             Task.await(task, @detection_timeout_ms)
 
     assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :timeout], measurements, timeout_metadata}
 

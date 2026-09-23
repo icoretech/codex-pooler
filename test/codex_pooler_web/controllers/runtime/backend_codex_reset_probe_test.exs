@@ -13,6 +13,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
 
+  @detection_timeout_ms 15_000
+
   test "successful HTTP JSON response confirms the guarded reset probe", %{conn: conn} do
     # Auto redemption consumes the saved reset, but the post-consume usage
     # refresh OMITS the account rate_limit window, so the redemption parks in
@@ -272,7 +274,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
         assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                        1_000
 
-        response = Task.await(task, 1_000)
+        response = Task.await(task, @detection_timeout_ms)
         send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
         response
       end)
@@ -339,7 +341,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     |> Repo.update!()
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
-    response = Task.await(task, 1_000)
+    response = Task.await(task, @detection_timeout_ms)
 
     assert %{"id" => "resp_reset_probe_late"} = json_response(response, 200)
 

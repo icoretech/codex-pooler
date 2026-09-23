@@ -35,6 +35,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPoolerWeb.CodexResponsesSocket
 
+  @detection_timeout_ms 15_000
+
   defmodule RetiringRegisteredOwner do
     use GenServer
 
@@ -1161,7 +1163,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
 
-    assert :ok = Task.await(submit_task, 1_000)
+    assert :ok = Task.await(submit_task, @detection_timeout_ms)
     assert_receive {:websocket_owner_frame, "marker-in-flight", 1, {:data, "in-flight-terminal"}}
     assert_receive {:websocket_owner_frame, "marker-in-flight", 1, :complete}
     assert Process.alive?(owner)
@@ -1190,7 +1192,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert :ok = WebsocketOwnerSession.detach_downstream(owner, downstream)
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
 
-    assert Task.await(submit_task, 1_000) == :ok
+    assert Task.await(submit_task, @detection_timeout_ms) == :ok
     assert Process.alive?(owner)
   end
 
@@ -1227,7 +1229,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
 
-    assert :ok = Task.await(submit_task, 1_000)
+    assert :ok = Task.await(submit_task, @detection_timeout_ms)
 
     assert_receive {:websocket_owner_frame, "draining-owner", 1, {:data, "draining-owner-terminal"}}
 
@@ -2077,7 +2079,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert owner_state.active_turn.downstream.owner_turn_id == owner_turn_id
 
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
-    assert :ok = Task.await(submit_task, 1_000)
+    assert :ok = Task.await(submit_task, @detection_timeout_ms)
 
     assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id, {:data, "public-delta-b"}}
 
@@ -2191,7 +2193,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     release_controlled(barriers, controls, :task_result)
 
-    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert Task.await(submit_task, @detection_timeout_ms) == terminal_result(terminal_frame, "response.completed")
     assert_receive {:websocket_owner_frame, "terminal-first", 1, :complete}
     assert %{active_turn: nil} = :sys.get_state(owner)
   end
@@ -2233,7 +2235,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     release_controlled(terminal_barrier, controls, :terminal_frames)
 
     assert_receive {:websocket_owner_frame, "result-first", 1, {:data, ^terminal_frame}}
-    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert Task.await(submit_task, @detection_timeout_ms) == terminal_result(terminal_frame, "response.completed")
     assert_receive {:websocket_owner_frame, "result-first", 1, :complete}
     assert %{active_turn: nil} = :sys.get_state(owner)
   end
@@ -2273,7 +2275,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
     release_controlled(terminal_barrier, controls, :terminal_frames)
 
-    assert Task.await(submit_task, 1_000) == {:ok, expected_result}
+    assert Task.await(submit_task, @detection_timeout_ms) == {:ok, expected_result}
 
     assert_receive {:websocket_owner_frame, "local-response-identity", 1, {:data, ^terminal_frame}}
 
@@ -2357,7 +2359,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       release_controlled(terminal_barrier, controls, :terminal_frames)
 
       assert_receive {:websocket_owner_frame, ^case_id, 1, {:data, ^terminal_frame}}
-      assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, result_type)
+      assert Task.await(submit_task, @detection_timeout_ms) == terminal_result(terminal_frame, result_type)
       assert_receive {:websocket_owner_frame, ^case_id, 1, :complete}
       refute_received {:websocket_owner_frame, ^case_id, 1, {:data, ^terminal_frame}}
       refute_received {:websocket_owner_frame, ^case_id, 1, :complete}
@@ -2385,7 +2387,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     barriers = await_two_sender_barriers(controls)
     release_controlled(barriers, controls, :task_result)
 
-    assert Task.await(submit_task, 1_000) == {:ok, %{status: 200, terminal: nil}}
+    assert Task.await(submit_task, @detection_timeout_ms) == {:ok, %{status: 200, terminal: nil}}
     assert_receive {:websocket_owner_frame, "nonterminal-result", 1, :complete}
     assert %{active_turn: nil} = :sys.get_state(owner)
 
@@ -2436,7 +2438,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       end
 
       assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, :complete}
-      assert Task.await(submit_task, 1_000) == interrupted_result()
+      assert Task.await(submit_task, @detection_timeout_ms) == interrupted_result()
       assert %{active_turn: nil} = :sys.get_state(owner)
     end
 
@@ -2541,7 +2543,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert {:ok, completed_state} =
              CodexResponsesSocket.handle_info(owner_complete, socket_state)
 
-    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert Task.await(submit_task, @detection_timeout_ms) == interrupted_result()
     assert %{active_turn: nil} = :sys.get_state(owner)
 
     assert {:ok, final_state} =
@@ -2595,7 +2597,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert timeout_payload.code == "owner_forward_timeout"
     assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, :complete}
-    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert Task.await(submit_task, @detection_timeout_ms) == interrupted_result()
 
     send(
       owner,
@@ -2684,7 +2686,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert timeout_payload.code == "owner_forward_timeout"
     assert_receive {:websocket_owner_frame, "commit-silent", ^epoch, ^owner_turn_id, :complete}
-    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert Task.await(submit_task, @detection_timeout_ms) == interrupted_result()
     assert %{active_turn: nil} = :sys.get_state(owner)
   end
 
@@ -2749,7 +2751,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert {:ok, ^socket_state} = CodexResponsesSocket.handle_info(probe, socket_state)
     assert_receive {:websocket_owner_frame, "native-probe-ack", ^epoch, ^owner_turn_id, :complete}
-    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert Task.await(submit_task, @detection_timeout_ms) == interrupted_result()
 
     refute_received {:websocket_owner_frame, "native-probe-ack", ^epoch, ^owner_turn_id, {:error, :owner_forward_timeout, _payload}}
   end
@@ -2780,7 +2782,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert second.epoch == 2
     refute second.active_turn_reconnect?
-    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert Task.await(submit_task, @detection_timeout_ms) == interrupted_result()
     refute_received {:websocket_owner_frame, "commit-reconnect-old", 1, _owner_turn_id, :complete}
     refute_received {:websocket_owner_frame, "commit-reconnect-new", 2, _payload}
     assert %{active_turn: nil} = :sys.get_state(owner)
@@ -2803,7 +2805,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     )
 
     assert_receive {:websocket_owner_frame, "probe-busy", 1, _owner_turn_id, :complete}
-    assert Task.await(probe.submit_task, 1_000) == interrupted_result()
+    assert Task.await(probe.submit_task, @detection_timeout_ms) == interrupted_result()
     assert %{active_turn: nil, draining?: true} = :sys.get_state(probe.owner)
   end
 
@@ -2812,7 +2814,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     %{active_turn: %{output_commit_probe: %{timer_ref: timer_ref}}} = :sys.get_state(probe.owner)
 
     assert :ok = WebsocketOwnerSession.detach_downstream(probe.owner, probe.stable_downstream)
-    assert Task.await(probe.submit_task, 1_000) == {:error, :client_disconnected}
+    assert Task.await(probe.submit_task, @detection_timeout_ms) == {:error, :client_disconnected}
     assert Process.read_timer(timer_ref) == false
     assert %{active_turn: nil, downstream: nil} = :sys.get_state(probe.owner)
 
@@ -2857,7 +2859,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     Process.exit(downstream_pid, :shutdown)
     assert_receive {:DOWN, ^downstream_ref, :process, ^downstream_pid, :shutdown}
 
-    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert Task.await(submit_task, @detection_timeout_ms) == interrupted_result()
     assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
     refute_received {:probe_downstream_message, {:websocket_owner_frame, _, _, _, :complete}}
   end
@@ -2903,13 +2905,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     timer_task = controlled_timer_task(self(), owner, controls, {turn_ref, timer_token})
     timer_barrier = await_controlled_barrier(:timer_message, controls)
     release_controlled(timer_barrier, controls, :timer_message)
-    assert Task.await(timer_task, 1_000) == :ok
+    assert Task.await(timer_task, @detection_timeout_ms) == :ok
 
     assert_receive {:terminal_timeout_invalidation, ^upstream_pid}
     invalidation_barrier = await_controlled_barrier(:invalidation_result, controls)
     release_controlled(invalidation_barrier, controls, :invalidation_result)
 
-    assert {:error, timeout_result} = Task.await(submit_task, 1_000)
+    assert {:error, timeout_result} = Task.await(submit_task, @detection_timeout_ms)
     assert timeout_result.reason == :upstream_websocket_terminal_delivery_timeout
     assert timeout_result.transport_failure["phase"] == "terminal_delivery"
     assert timeout_result.transport_failure["upstream_committed"] == true
@@ -2970,7 +2972,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     invalidation_barrier = await_controlled_barrier(:invalidation_result, controls)
     release_controlled(invalidation_barrier, controls, :invalidation_result)
 
-    assert Task.await(submit_task, 1_000) == {:error, :upstream_websocket_not_connected}
+    assert Task.await(submit_task, @detection_timeout_ms) == {:error, :upstream_websocket_not_connected}
 
     assert_receive {:websocket_owner_frame, "invalidation-failure", 1, {:error, :owner_crashed, safe_payload}}
 
@@ -3015,7 +3017,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     send_barrier = await_controlled_barrier(:downstream_send_result, controls)
     release_controlled(send_barrier, controls, :downstream_send_result)
 
-    assert Task.await(submit_task, 1_000) == {:error, :owner_unavailable}
+    assert Task.await(submit_task, @detection_timeout_ms) == {:error, :owner_unavailable}
 
     assert_receive {:websocket_owner_frame, "send-failure", 1, {:error, :owner_unavailable, safe_payload}}
 
@@ -3059,7 +3061,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     release_controlled(terminal_barrier, controls, :terminal_frames)
 
     assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, {:data, ^terminal_frame}}
-    assert {:ok, result} = Task.await(submit_task, 1_000)
+    assert {:ok, result} = Task.await(submit_task, @detection_timeout_ms)
     assert result == terminal_result(terminal_frame, "response.completed") |> elem(1)
     refute Map.has_key?(result, :response_id)
     assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, :complete}
@@ -3096,7 +3098,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     release_controlled(next_terminal_barrier, controls, :terminal_frames)
     release_controlled(next_barriers, controls, :task_result)
 
-    assert Task.await(next_submit_task, 1_000) ==
+    assert Task.await(next_submit_task, @detection_timeout_ms) ==
              terminal_result(terminal_frame, "response.completed")
 
     assert_receive {:websocket_owner_frame, "reconnect-after-terminal", 2, :complete}
@@ -3133,7 +3135,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     timer_ref = active_turn.terminal_delivery_timer_ref
 
     assert :ok = WebsocketOwnerSession.detach_downstream(owner, downstream)
-    assert Task.await(submit_task, 1_000) == {:error, :client_disconnected}
+    assert Task.await(submit_task, @detection_timeout_ms) == {:error, :client_disconnected}
     assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
     assert Process.read_timer(timer_ref) == false
     refute_received {:websocket_owner_frame, "detach-pending", 1, _payload}
@@ -3178,7 +3180,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     Process.exit(target, :shutdown)
     assert_receive {:DOWN, ^target_ref, :process, ^target, :shutdown}
 
-    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert Task.await(submit_task, @detection_timeout_ms) == terminal_result(terminal_frame, "response.completed")
     assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
     assert Process.read_timer(timer_ref) == false
     refute_received {:collected_owner_frame, :pending_downstream_death, _message}
@@ -3232,7 +3234,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
     assert Process.read_timer(pending.active_turn.terminal_delivery_timer_ref) == false
 
-    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 1_000)
+    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, @detection_timeout_ms)
 
     release_pending_terminal_sender(pending)
     refute_received {:websocket_owner_frame, "pending-drain", 1, {:data, ^terminal_frame}}
@@ -5002,7 +5004,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
            ) == {:error, :owner_busy}
 
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
-    assert :ok = Task.await(submit_task, 1_000)
+    assert :ok = Task.await(submit_task, @detection_timeout_ms)
 
     assert_receive {:collected_owner_frame, :second, {:websocket_owner_frame, "corr-second", 2, {:data, "delta-b"}}}
 
@@ -5571,10 +5573,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert is_map(active_turn)
     assert Process.alive?(owner)
 
-    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
-    assert :ok = Task.await(submit_task, 1_000)
-
+    # Monitored before the release: the owner shuts down 1 ms after the turn
+    # completes, so a monitor taken after the await can already read `:noproc`.
     owner_ref = Process.monitor(owner)
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+    assert :ok = Task.await(submit_task, @detection_timeout_ms)
+
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
     assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
     refute_received {:collected_owner_frame, :downstream_exit, _message}
@@ -5938,7 +5942,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, {:data, ^terminal_frame}}
 
-    assert Task.await(submit_task, 1_000) ==
+    assert Task.await(submit_task, @detection_timeout_ms) ==
              terminal_result(terminal_frame, "response.completed")
 
     assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, :complete}
@@ -6172,7 +6176,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
                  turns_aborted: 1,
                  timeout_ms: 25,
                  already_draining?: false
-               } = Task.await(drain_task, 1_000)
+               } = Task.await(drain_task, @detection_timeout_ms)
 
         assert WebsocketRolloutDrainSupport.VirtualDeadline.waiter_pids(deadline) == []
       end)

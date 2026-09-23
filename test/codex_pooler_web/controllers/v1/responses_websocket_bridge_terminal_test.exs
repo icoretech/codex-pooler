@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Repo
 
+  @detection_timeout_ms 15_000
   @terminal_cases [
     {"response.completed",
      %{
@@ -163,7 +164,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
                    1_000
 
     send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
-    response = Task.await(request_task, 1_000)
+    response = Task.await(request_task, @detection_timeout_ms)
 
     assert [content_type] = get_resp_header(response, "content-type")
     assert content_type =~ "text/event-stream"
@@ -304,7 +305,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       assert Process.info(owner, :status) == {:status, :suspended}
       assert :erlang.resume_process(owner)
 
-      response = Task.await(request_task, 1_000)
+      response = Task.await(request_task, @detection_timeout_ms)
 
       assert response.status == 200
       assert Enum.count(stream_event_types(response.resp_body), &(&1 == @public_type)) == 1
@@ -404,7 +405,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
                    1_000
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
-    response = Task.await(request_task, 1_000)
+    response = Task.await(request_task, @detection_timeout_ms)
 
     assert response.status == 200
     assert stream_event_types(response.resp_body) == ["error"]

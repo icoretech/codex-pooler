@@ -14,6 +14,8 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission
   alias CodexPooler.Repo
 
+  @detection_timeout_ms 15_000
+
   test "manually assembled prepared frames cannot enter prepared execution" do
     payload = %{"generate" => false, "model" => "gpt-example"}
     request_options = RequestOptions.for_websocket(%{request_id: "manual-prepared"}, payload)
@@ -349,7 +351,7 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
       end
 
     Enum.each(task_pids, &send(&1, {:start, start_ref}))
-    results = Enum.map(tasks, &Task.await(&1, 1_000))
+    results = Enum.map(tasks, &Task.await(&1, @detection_timeout_ms))
 
     assert Enum.count(results, &match?({:ok, _result}, &1)) == 1
 

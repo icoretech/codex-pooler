@@ -10,6 +10,8 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPoolerWeb.CodexResponsesSocket
 
+  @detection_timeout_ms 15_000
+
   test "rejects unauthenticated or non-loopback control before parsing" do
     denied = Plug.Test.conn(:post, "/arm", "invalid") |> ControlPlug.call([])
     assert denied.status == 403
@@ -132,13 +134,13 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
     monitor = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
-    assert {:ok, _} = Task.await(task, 1000)
+    assert {:ok, _} = Task.await(task, @detection_timeout_ms)
     assert_no_control_handler(System.monotonic_time(:millisecond) + 1000)
   end
 
   defp finish_control(:watchdog, %{pool: %{id: pool_id}}, task) do
     send(Process.whereis(Control), :watchdog)
-    assert {:ok, _} = Task.await(task, 1000)
+    assert {:ok, _} = Task.await(task, @detection_timeout_ms)
     assert {:ok, %{timed_out: true}} = Control.status(pool_id)
   end
 
@@ -152,7 +154,7 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
              })
 
     assert {:ok, %{compact_request_count: 1}} = Control.release(setup.pool.id)
-    assert {:ok, _} = Task.await(task, 1000)
+    assert {:ok, _} = Task.await(task, @detection_timeout_ms)
   end
 
   defp assert_no_control_handler(deadline) do

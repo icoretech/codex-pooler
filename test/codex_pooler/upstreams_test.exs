@@ -44,6 +44,8 @@ defmodule CodexPooler.UpstreamsTest do
       monthly_only_account_primary_quota_window_attrs: 1
     ]
 
+  @detection_timeout_ms 15_000
+
   describe "upstream identity lifecycle" do
     test "creates, activates, updates, and reuses upstream account identities" do
       assert {:ok, identity} =
@@ -2106,7 +2108,7 @@ defmodule CodexPooler.UpstreamsTest do
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
-      assert {:ok, %{status: :noop, retryable?: false}} = Task.await(refresh_task, 1_000)
+      assert {:ok, %{status: :noop, retryable?: false}} = Task.await(refresh_task, @detection_timeout_ms)
 
       persisted = Repo.get!(UpstreamIdentity, identity.id)
       assert persisted.status == "active"

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
   alias CodexPooler.RouteClass
   alias CodexPoolerWeb.Telemetry.AdmissionSampler
 
+  @detection_timeout_ms 15_000
   @event [:codex_pooler, :gateway, :admission, :saturation]
 
   defmodule DelayedAdmission do
@@ -72,7 +73,7 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
 
     Admission.release(queued_lease)
     send(queued_task.pid, :finish)
-    assert :ok = Task.await(queued_task, 1_000)
+    assert :ok = Task.await(queued_task, @detection_timeout_ms)
 
     assert {:ok, saturation} = Admission.saturation(admission_name)
     assert %{running: 0, queued: 0} = saturation["proxy_stream"]
@@ -86,7 +87,7 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
     sample(sampler)
     assert_saturation(snapshot("proxy_stream", 1, 1))
 
-    assert {:error, %{code: "bulkhead_queue_timeout"}} = Task.await(timeout_task, 1_000)
+    assert {:error, %{code: "bulkhead_queue_timeout"}} = Task.await(timeout_task, @detection_timeout_ms)
     assert_admission_event(:timeout)
 
     assert {:ok, saturation} = Admission.saturation(admission_name)

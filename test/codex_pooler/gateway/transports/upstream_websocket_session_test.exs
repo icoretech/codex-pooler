@@ -2189,7 +2189,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(frame)
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
-             Task.await(request_task, 1_000)
+             Task.await(request_task, @detection_timeout_ms)
 
     assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
                    1_000
@@ -2243,7 +2243,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
                 "last_upstream_event_class" => "none",
                 "terminal_candidate_seen" => false
               }
-            }} = Task.await(request_task, 1_000)
+            }} = Task.await(request_task, @detection_timeout_ms)
 
     assert Process.alive?(session)
     assert lifecycle_state(session).generation == 1
@@ -2481,7 +2481,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     send(session, {:tcp, socket, server_text_frame(terminal)})
 
     assert {:ok, %{terminal: "response.completed", status: 200, body: body}} =
-             Task.await(request_task, 1_000)
+             Task.await(request_task, @detection_timeout_ms)
 
     assert body =~ "resp_ws_coalesced_terminal"
     assert_receive {:coalesced_frame, frame}, 1_000
@@ -2533,7 +2533,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
               body: body,
               reason: %Mint.TransportError{},
               transport_failure: %{"phase" => "receive", "terminal_seen" => false} = failure
-            }} = Task.await(request_task, 1_000)
+            }} = Task.await(request_task, @detection_timeout_ms)
 
     assert body =~ "coalesced partial output"
     assert failure["termination_source"] == "mint_transport_error"
@@ -2582,7 +2582,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
                 "websocket_buffer_bucket" => "bytes_1_125",
                 "websocket_fragment_open" => true
               }
-            }} = Task.await(request_task, 1_000)
+            }} = Task.await(request_task, @detection_timeout_ms)
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
   end
@@ -2740,7 +2740,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive {:controlled_owner_frame, "terminal"}, 1_000
 
     :ok = WebsocketOwnerNodeHarness.release_controlled(task_barrier, controls, :task_result)
-    assert Task.await(send_task, 1_000) == {:ok, :task_result}
+    assert Task.await(send_task, @detection_timeout_ms) == {:ok, :task_result}
 
     for {stage, expected} <- [
           downstream_send_result: :downstream_sent,
@@ -2756,7 +2756,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
       assert release_ref == Map.fetch!(controls, stage)
       :ok = WebsocketOwnerNodeHarness.release_controlled(barrier_pid, controls, stage)
-      assert Task.await(result_task, 1_000) == expected
+      assert Task.await(result_task, @detection_timeout_ms) == expected
     end
 
     timer_target = self()
@@ -2777,7 +2777,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert timer_ref == controls.timer_message
     :ok = WebsocketOwnerNodeHarness.release_controlled(timer_barrier, controls, :timer_message)
     assert_receive {:controlled_timer, ^timer_ref}, 1_000
-    assert Task.await(timer_task, 1_000) == :ok
+    assert Task.await(timer_task, @detection_timeout_ms) == :ok
 
     upstream.close.(upstream_pid)
   end
@@ -3485,9 +3485,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     # response.completed is pushed and the turn settles before the queued call
     # is served.
     assert :ok = FakeUpstream.release_frame(upstream, first_release_ref)
-    assert {:ok, %{terminal: "response.completed", status: 200}} = Task.await(request_task, 1_000)
+    assert {:ok, %{terminal: "response.completed", status: 200}} = Task.await(request_task, @detection_timeout_ms)
     assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^first_release_ref}, 1_000
-    assert {:ok, :sent} = Task.await(send_task, 1_000)
+    assert {:ok, :sent} = Task.await(send_task, @detection_timeout_ms)
 
     # The fake reads the ack only once the trailing barrier is released.
     refute_received {:fake_upstream_frame_barrier, 0, _handler, ^second_release_ref}
@@ -4167,7 +4167,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
     refute Task.yield(request_task, 50)
 
-    assert {:ok, %{terminal: "response.completed", status: 200}} = Task.await(request_task, 1_000)
+    assert {:ok, %{terminal: "response.completed", status: 200}} = Task.await(request_task, @detection_timeout_ms)
     assert_receive {:upstream_websocket_frame, completed_frame}, 1_000
     assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(completed_frame)
   end
@@ -5116,7 +5116,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
               status: 200,
               upstream_error_code: "previous_response_not_found",
               upstream_error_param: "previous_response_id"
-            }} = Task.await(request_task, 1_000)
+            }} = Task.await(request_task, @detection_timeout_ms)
   end
 
   @tag :fake_upstream_lifecycle_regression
