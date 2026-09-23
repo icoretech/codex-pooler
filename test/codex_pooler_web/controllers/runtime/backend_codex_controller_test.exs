@@ -1422,7 +1422,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :sensitive_metadata_sanitization
-  test "Auto preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
+  # A native final 4xx refusal answers the Pooler-authored 400 naming the
+  # provider status whatever the serving mode, never the provider body
+  # (findings#254 row 254-80); the compact route below keeps its passthrough.
+  test "Auto answers an ordinary upstream 422 refusal with the Pooler-authored 400", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
     setup = gateway_setup(upstream)
@@ -1435,12 +1438,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => native_text_input("synthetic Auto compatibility request")
       })
 
-    assert response.status == 422
-    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
-    assert unchanged_body?
+    assert response.status == 400
+    assert json_response(response, 400) == %{"error" => legacy_compatibility_refusal_error()}
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.last_error_code == "upstream_status"
+    assert request.response_status_code == 422
 
     assert %{
              "model_serving_mode_configured" => "auto",
@@ -1534,7 +1537,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :sensitive_metadata_sanitization
-  test "Lite preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
+  # A native final 4xx refusal answers the Pooler-authored 400 naming the
+  # provider status whatever the serving mode, never the provider body
+  # (findings#254 row 254-80); the compact route below keeps its passthrough.
+  test "Lite answers an ordinary upstream 422 refusal with the Pooler-authored 400", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
     setup = gateway_setup(upstream)
@@ -1548,9 +1554,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => native_text_input("synthetic Lite compatibility request")
       })
 
-    assert response.status == 422
-    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
-    assert unchanged_body?
+    assert response.status == 400
+    assert json_response(response, 400) == %{"error" => legacy_compatibility_refusal_error()}
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
 
@@ -8596,7 +8601,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => native_text_input("synthetic generic 404 input")
       })
 
-    assert %{"error" => %{"code" => "request_not_found"}} = json_response(conn, 404)
+    # The final 404 answers the Pooler-authored 400 naming it, the one status
+    # the Codex client does not retry (findings#254 row 254-80).
+    assert %{"error" => %{"code" => "request_not_found", "message" => "upstream rejected the request (request_not_found); upstream status 404"}} = json_response(conn, 400)
     assert FakeUpstream.count(first_upstream) == 1
     assert FakeUpstream.count(second_upstream) == 0
 
@@ -16276,6 +16283,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   defp unchanged_upstream_body?(response, upstream_body) do
     response.resp_body == CodexPooler.JSON.encode!(upstream_body)
+  end
+
+  defp legacy_compatibility_refusal_error do
+    %{
+      "type" => "invalid_request_error",
+      "code" => "legacy_compatibility_error",
+      "param" => "legacy_field",
+      "message" => "upstream rejected parameter legacy_field (legacy_compatibility_error); upstream status 422"
+    }
   end
 
   defp legacy_compatibility_failure_body do

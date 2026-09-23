@@ -215,7 +215,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
     * `:upstream_status` - the provider's status (default 400). Any other
       status is named in the message, because the caller answers the refusal
       as a 400: the native websocket sends a final 4xx as the wrapped 400 the
-      released client reads as a final invalid request (row 254-71).
+      released client reads as a final invalid request (row 254-71), and
+      native HTTP answers it as an HTTP 400 (row 254-80).
 
   The native websocket sends it for a refusal the released client would
   otherwise retry (findings#254 row 254-52), and native HTTP for a 400 it used
@@ -233,6 +234,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
       status -> Map.update!(error, "message", &(&1 <> "; upstream status #{status}"))
     end
   end
+
+  @doc """
+  True for a provider 4xx other than 400 that a native client should read as
+  final: the released Codex client retries every status but 400 as an
+  unexpected status, over HTTP and as a wrapped websocket event, so the native
+  surfaces answer these refusals as a 400 naming the provider status
+  (`refusal_error/2` `:upstream_status`; findings#254 rows 254-71 and 254-80).
+  401 is the upstream credential the Pooler refreshes, 408 a timeout and 429 a
+  throttle; each caller also keeps a 403 that demotes the account retryable.
+  """
+  @spec final_refusal_status?(term()) :: boolean()
+  def final_refusal_status?(status) when is_integer(status), do: status in 402..499 and status not in [408, 429]
+  def final_refusal_status?(_status), do: false
 
   @doc """
   Extracts identifier-shaped supported values from a provider validation

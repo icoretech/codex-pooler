@@ -308,7 +308,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
 
     conn = conn |> auth(setup) |> post(@endpoint_path, stream_payload(setup, "403 quota"))
 
-    assert conn.status == 403
+    # A final 403 that demotes nothing answers the Pooler-authored 400 naming
+    # it (findings#254 row 254-80).
+    assert conn.status == 400
+    assert %{"error" => %{"code" => "insufficient_quota", "message" => "upstream rejected the request (insufficient_quota); upstream status 403"}} = json_response(conn, 400)
+    refute conn.resp_body =~ "provider-quota-sentinel"
     assert :ok = FakeUpstream.verify!(upstream)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))

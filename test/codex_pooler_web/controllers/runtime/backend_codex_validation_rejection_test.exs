@@ -145,36 +145,88 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     end
   end
 
-  test "native HTTP SSE keeps non-400 rejections empty", %{conn: conn} do
-    cases = [
-      {"403", validation_rejection(403, "unsupported_value", "reasoning.effort")},
-      {"404", validation_rejection(404, "unsupported_value", "reasoning.effort")},
-      {"422", validation_rejection(422, "invalid_value", "reasoning.effort")}
-    ]
-
-    for {label, mode} <- cases do
-      upstream =
-        start_upstream(
-          # provenance: synthetic_adversarial
-          FakeUpstream.strict_sequence([
-            FakeUpstream.expect_request(
-              method: "POST",
-              path: "/backend-api/codex/responses",
-              respond: mode
-            )
-          ])
-        )
-
+  # A native refusal with another final 4xx used to keep its status (with an
+  # empty streaming body): the released Codex 0.156.0 client retries every
+  # HTTP status but 400 as an unexpected status, and each retry was admitted
+  # and reached the provider again, six provider requests per turn. It now
+  # answers the Pooler-authored refusal error as a 400 naming the provider
+  # status, as the native websocket does; the request row, the attempt and
+  # route health keep the provider status (findings#254 row 254-80).
+  for stream? <- [true, false], status <- [403, 404, 409, 413, 422] do
+    @tag stream: stream?, provider_status: status
+    test "native HTTP answers a final provider #{status} as the Pooler-authored 400 (stream: #{stream?})", %{conn: conn, stream: stream?, provider_status: status} do
+      upstream = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: codeless_rejection(status, nil))]))
       setup = gateway_setup(upstream)
-      response = post_native(conn, setup)
-      {:json_error, status, _body} = mode
+      response = post_native(conn, setup, stream?)
 
-      assert response.status == status, label
-      assert response.resp_body == "", label
+      assert response.status == 400
+      assert [content_type] = get_resp_header(response, "content-type")
+      assert content_type =~ "application/json"
+      assert CodexPooler.JSON.decode(response.resp_body) == {:ok, %{"error" => final_refusal_error(refusal_error("invalid_request", nil), status)}}
+      refute response.resp_body =~ @provider_sentinel
       FakeUpstream.verify!(upstream)
-      assert Repo.aggregate(BridgeDemotion, :count) == 0, label
-      assert Repo.aggregate(RoutingCircuitState, :count) == 0, label
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert request.status == "failed"
+      assert request.last_error_code == "upstream_status"
+      assert request.response_status_code == status
+      assert attempt.upstream_status_code == status
+      assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
+      refute inspect(request) =~ @provider_sentinel
+      assert Repo.aggregate(BridgeDemotion, :count) == 0
+      assert Repo.aggregate(RoutingCircuitState, :count) == 0
     end
+  end
+
+  test "native HTTP final provider 404 keeps its code and the client's input index in the 400", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: validation_rejection(404, "provider_specific_code", "input[0].content"))]))
+    setup = gateway_setup(upstream)
+    response = post_native(conn, setup)
+
+    assert response.status == 400
+    assert json_response(response, 400) == %{"error" => final_refusal_error(refusal_error("provider_specific_code", "input[0].content"), 404)}
+    FakeUpstream.verify!(upstream)
+  end
+
+  # Controls: a timeout keeps its status and body; a 403 whose code is a
+  # credential failure is the upstream account's, like a 401, and still goes
+  # through the auth refresh (a retryable 503 once exhausted) before any
+  # projection.
+  test "native HTTP keeps a provider 408 as it was", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: codeless_rejection(408, nil))]))
+    setup = gateway_setup(upstream)
+    response = post_native(conn, setup)
+
+    assert response.status == 408
+    assert response.resp_body == ""
+    FakeUpstream.verify!(upstream)
+  end
+
+  test "native HTTP keeps a credential-coded provider 403 on the auth refresh path", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.repeat_last([validation_rejection(403, "invalid_api_key", nil)]))
+    setup = gateway_setup(upstream)
+    response = post_native(conn, setup)
+
+    assert response.status == 503
+    assert %{"error" => %{"code" => "upstream_unauthorized"}} = json_response(response, 503)
+  end
+
+  # `/v1` keeps its own answer for the same refusal: the status and the
+  # redacted error.
+  test "public /v1 keeps a provider 409 as its own redacted answer", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: codeless_rejection(409, nil))]))
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> post("/v1/responses", %{"model" => setup.model.exposed_model_id, "input" => @prompt_sentinel, "stream" => true})
+
+    assert response.status == 409
+    assert %{"error" => %{"message" => "upstream request failed", "code" => "upstream_status"}} = json_response(response, 409)
+    FakeUpstream.verify!(upstream)
   end
 
   test "native HTTP SSE keeps the canonical 401 and 429 errors for validation-shaped bodies", %{
@@ -435,7 +487,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     put_full_override!(setup)
     response = post_native(conn, setup)
 
-    assert response.status == 404
+    # A native final 404 answers the Pooler-authored 400 (findings#254 row
+    # 254-80); nothing of the provider's list travels.
+    assert response.status == 400
     refute response.resp_body =~ "supported values"
     FakeUpstream.verify!(upstream)
 
@@ -560,7 +614,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
   test "explicit Full override relays the provider rejection code on other non-429 4xx statuses",
        %{conn: conn} do
     # provenance: synthetic_adversarial (statuses invented to prove the relay
-    # window matches the persisted rejection-metadata window, not one status)
+    # window matches the persisted rejection-metadata window, not one status).
+    # On the native route a final 4xx answers as a 400 naming the provider
+    # status whatever the serving mode, as the native websocket does, because
+    # the released Codex client retries every other status (findings#254 row
+    # 254-80); code and param stay the ones the Full body relays.
     cases = [
       {403, "unsupported_parameter", "tools.defer_loading"},
       {413, "string_above_max_length", "input[0].content[0].text"},
@@ -583,7 +641,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
       put_full_override!(setup)
       response = post_native(conn, setup)
 
-      assert response.status == status, "status #{status}"
+      assert response.status == 400, "status #{status}"
 
       assert CodexPooler.JSON.decode(response.resp_body) ==
                {:ok,
@@ -592,7 +650,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                     "type" => "invalid_request_error",
                     "code" => code,
                     "param" => param,
-                    "message" => "upstream rejected parameter #{param} (#{code})"
+                    "message" => "upstream rejected parameter #{param} (#{code}); upstream status #{status}"
                   }
                 }},
              "status #{status}"
@@ -848,6 +906,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
   defp refusal_case("server_error_type"), do: {validation_rejection(400, "unsupported_value", "reasoning.effort", "server_error"), refusal_error("unsupported_value", "reasoning.effort")}
   defp refusal_case("missing_type"), do: {validation_rejection(400, "unsupported_value", "reasoning.effort", nil), refusal_error("unsupported_value", "reasoning.effort")}
   defp refusal_case("detail_body"), do: {{:json_error, 400, %{"detail" => "Unsupported value reasoning.effort " <> @provider_sentinel}}, refusal_error("invalid_request", nil)}
+
+  defp final_refusal_error(error, status), do: Map.update!(error, "message", &(&1 <> "; upstream status #{status}"))
 
   defp refusal_error(code, nil), do: %{"type" => "invalid_request_error", "code" => code, "param" => nil, "message" => "upstream rejected the request (#{code})"}
   defp refusal_error(code, param), do: %{"type" => "invalid_request_error", "code" => code, "param" => param, "message" => "upstream rejected parameter #{param} (#{code})"}

@@ -681,10 +681,20 @@ the Codex client showed as an error with no text, and a non-streaming one the
 upstream body. The Codex client reads a `cyber_policy` or `bio_policy` code in
 that body as the policy refusal it names, which an empty body did not allow.
 
-Over HTTP, every other upstream failure keeps its existing behavior: other statuses
-(including `401`, `403`, `404`, `422`, `429`, and `5xx`) and compact routes. The request remains a non-retried failure
-recorded as `upstream_status`, and the rejection does not demote the upstream
-or affect its circuit.
+A native HTTP refusal with another final `4xx` status, such as `403`, `404`,
+`409`, `413` or `422`, is answered the same way with status `400`, whatever the
+serving mode, and the message names the provider status, for example
+`upstream rejected the request (invalid_request); upstream status 404`. The
+Codex client retries every HTTP status but `400` as an unexpected status, and
+each retry used to reach the provider again: a single refused turn cost six
+provider requests. The request and its attempt keep the provider status.
+
+Over HTTP, every other upstream failure keeps its existing behavior: a `401`
+and a `403` with a credential code (refreshed, then a retryable `503`), `408`,
+`429`, `5xx`, misalignment and model-unavailability refusals, and compact
+routes. The request remains a non-retried failure recorded as `upstream_status`,
+and a `4xx` rejection other than `401` and `429` does not demote the upstream or
+affect its circuit.
 
 On `/v1`, such a failure keeps the redacted error (`upstream request failed`,
 code `upstream_status` or the upstream code, no param) on HTTP and in the

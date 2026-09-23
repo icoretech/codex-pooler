@@ -654,7 +654,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
        ) do
     validation_rejection = Keyword.get(opts, :validation_rejection)
 
-    case {Keyword.get(opts, :failure_projection, :mode_scoped), Metadata.explicit_full_ordinary_responses?(request_options)} do
+    projection = failure_projection(Keyword.get(opts, :failure_projection, :mode_scoped), status, request_options)
+
+    case {projection, Metadata.explicit_full_ordinary_responses?(request_options)} do
+      {:native_final_refusal, _explicit_full?} ->
+        native_refusal_result(status, headers, relayable_rejection_error)
+
       {{:misalignment_policy_violation, summary}, _explicit_full?} ->
         error =
           %{"code" => summary.code, "message" => summary.message}
@@ -695,6 +700,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     end
   end
 
+  defp failure_projection(:mode_scoped, status, request_options) do
+    if native_final_refusal?(status, request_options), do: :native_final_refusal, else: :mode_scoped
+  end
+
+  defp failure_projection(projection, _status, _request_options), do: projection
+
   defp passthrough_failure_result(status, headers, body, request_options, error_code, marker) do
     %{
       status: status,
@@ -714,13 +725,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   # drain leaves no public body, and the released Codex client then showed an
   # empty error; a non-streaming one relayed the provider body verbatim
   # (findings#254 row 254-70). Public `/v1` surfaces keep their own redacted
-  # projection, and other statuses keep their existing answer.
+  # projection.
+  #
+  # A native refusal with another final 4xx (404, 409, 413, 422, a 403 that
+  # demotes nothing, ...) answers the same error as a 400 whose message names
+  # the provider status, whatever the serving mode, as the native websocket
+  # does since row 254-71: the released Codex client retries every HTTP status
+  # but 400 as an unexpected status, and the Pooler admitted each retry as a
+  # new request that reached the provider again, six provider requests per
+  # turn on the released-client lane (row 254-80). The attempt, the request
+  # row and route health keep the provider status.
   defp native_refusal_result(status, headers, relayable_rejection_error) do
     %{
-      status: status,
+      status: 400,
       headers: json_content_type(headers),
-      raw_body: CodexPooler.JSON.encode!(%{"error" => ValidationRejection.refusal_error(relayable_rejection_error, index_map: :identity)})
+      raw_body: CodexPooler.JSON.encode!(%{"error" => ValidationRejection.refusal_error(relayable_rejection_error, index_map: :identity, upstream_status: status)})
     }
+  end
+
+  # Every 403 reaching this point completes the route neutrally (a credential
+  # 403 is taken by the HTTP auth refresh before it and answered as its
+  # retryable 503), so a client retry would only reach the same account again.
+  defp native_final_refusal?(status, request_options) do
+    status != 400 and ValidationRejection.final_refusal_status?(status) and native_ordinary_responses_route?(request_options)
   end
 
   defp native_ordinary_responses_route?(%RequestOptions{openai_compatibility: %{source_endpoint: nil}} = request_options),

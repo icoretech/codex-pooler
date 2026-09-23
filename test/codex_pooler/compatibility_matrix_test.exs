@@ -859,6 +859,9 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       # body (row 254-70).
       assert fixture.native_materialized_body == "native_json_error_envelope"
       assert fixture.native_non_relayable_400_body == "pooler_refusal_error_from_sanitized_tokens"
+      # A native final 4xx answers as that error with status 400 naming the
+      # upstream status (row 254-80).
+      assert fixture.native_final_4xx_refusal == %{answered_status: 400, statuses: "402..499 except 408 and 429", message_names_upstream_status: true, serving_modes: :all, recorded_status: :upstream}
       assert fixture.public_v1_body == "openai_error_object"
       refute :explicit_full_override in fixture.unchanged_scopes
       assert :websocket_frames in fixture.unchanged_scopes

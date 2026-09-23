@@ -193,17 +193,12 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     code = Map.get(error, "code")
 
     cond do
-      not final_refusal_status?(status) -> canonical
+      not ValidationRejection.final_refusal_status?(status) -> canonical
       classified_or_retryable_code?(code) -> canonical
       status == 403 and not ErrorCodes.provider_refusal_health_neutral?(status, code) -> canonical
       true -> wrapped_refusal(400, ValidationRejection.refusal_error(provider_rejection_error(status, error), upstream_status: status))
     end
   end
-
-  # Every 4xx the released client would only retry into the same refusal:
-  # 400 has its own projection above, 401 is the upstream credential the
-  # Pooler refreshes, 408 a timeout and 429 a throttle.
-  defp final_refusal_status?(status), do: status in 402..499 and status not in [408, 429]
 
   # Only the wrapped provider frame keeps an integer `status` through the
   # canonicalization; a provider `response.failed` carries none.

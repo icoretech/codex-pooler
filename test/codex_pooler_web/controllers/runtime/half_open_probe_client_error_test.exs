@@ -83,7 +83,10 @@ defmodule CodexPoolerWeb.Runtime.HalfOpenProbeClientErrorTest do
     circuit = half_open_circuit!(setup, "proxy_http")
 
     probe = conn |> auth(setup) |> post("/backend-api/codex/responses", request_body(setup))
-    assert probe.status == 403
+    # The native answer is the Pooler-authored 400 naming the 403 (findings#254
+    # row 254-80); route health still reads the provider's 403.
+    assert probe.status == 400
+    assert json_response(probe, 400)["error"]["message"] == "upstream rejected the request (synthetic_forbidden); upstream status 403"
 
     assert :ok = FakeUpstream.verify!(upstream)
     assert %{status: "half_open", failure_count: 1, metadata: %{"probe_in_flight_count" => 0}} = Repo.get!(RoutingCircuitState, circuit.id)
