@@ -427,8 +427,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     [task_pid] = MapSet.to_list(state.tasks)
     release_task_after_socket_cleanup!(upstream, task_pid)
 
+    # The socket's cleanup runs in a supervised task that terminate waits on
+    # for 100 ms only; under load it outlives that wait (`cleanup_deferred`)
+    # and finishes after terminate returned, and a turn stopped before any
+    # output records its receipt there, after the interrupt it follows. The
+    # receipt is complete once that cleanup has finished (findings#206 row
+    # 206-110: under the lead gate's load the log line landed after the
+    # capture window closed).
     {:ok, logs} =
-      with_info_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, state) end)
+      with_info_log(fn ->
+        assert :ok = CodexResponsesSocket.terminate(:closed, state)
+        assert_receive {:socket_cleanup_finished, ^task_pid}, @connection_shutdown_timeout_ms
+        :ok
+      end)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -1264,6 +1275,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
         :unknown ->
           :ok
       end
+
+      send(caller, {:socket_cleanup_finished, task_pid})
     end
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
