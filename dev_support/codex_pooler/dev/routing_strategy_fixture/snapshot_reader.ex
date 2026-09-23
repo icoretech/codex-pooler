@@ -65,9 +65,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture.SnapshotReader do
   defp quota_windows_for([]), do: []
 
   defp quota_windows_for(identity_ids) do
-    Repo.all(
-      from window in AccountQuotaWindow, where: window.upstream_identity_id in ^identity_ids
-    )
+    Repo.all(from window in AccountQuotaWindow, where: window.upstream_identity_id in ^identity_ids)
   end
 
   defp assignments_for(nil, _identity_ids), do: []

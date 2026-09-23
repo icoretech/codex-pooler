@@ -7,8 +7,7 @@ defmodule CodexPooler.Dev.MCPFixture.Snapshot do
   alias CodexPooler.Repo
 
   @type t :: %{
-          required(String.t()) =>
-            nil | boolean() | integer() | String.t() | %{required(String.t()) => term()}
+          required(String.t()) => nil | boolean() | integer() | String.t() | %{required(String.t()) => term()}
         }
 
   @spec capture!(Ecto.UUID.t()) :: t()
@@ -67,9 +66,7 @@ defmodule CodexPooler.Dev.MCPFixture.Snapshot do
   end
 
   defp restore_operator_gate!(%{"operator_id" => operator_id, "operator_setting" => nil}) do
-    Repo.delete_all(
-      from setting in OperatorMCPSettings, where: setting.operator_id == ^operator_id
-    )
+    Repo.delete_all(from setting in OperatorMCPSettings, where: setting.operator_id == ^operator_id)
 
     :ok
   end

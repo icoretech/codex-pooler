@@ -153,9 +153,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   end
 
   defp pool_by_slug(slug) do
-    case Repo.one(
-           from pool in Pool, where: pool.slug == ^slug and pool.status == "active", limit: 1
-         ) do
+    case Repo.one(from pool in Pool, where: pool.slug == ^slug and pool.status == "active", limit: 1) do
       %Pool{} = pool -> {:ok, pool}
       nil -> {:error, "active pool was not found"}
     end
@@ -306,9 +304,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
           true
         )
 
-      case CodexPooler.JSON.encode(
-             Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))
-           ) do
+      case CodexPooler.JSON.encode(Map.put(header, "ciphertext", Base.encode64(tag <> ciphertext))) do
         {:ok, bundle} -> {:ok, bundle}
         {:error, _reason} -> {:error, lifecycle_error(:bundle_encoding_failed)}
       end

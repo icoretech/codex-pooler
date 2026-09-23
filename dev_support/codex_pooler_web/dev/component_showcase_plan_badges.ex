@@ -14,8 +14,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcasePlanBadges do
         directions: [
           {"enamel", "A / Enamel", "Crisp colour, solid tint and a clean edge."},
           {"satin", "B / Satin", "A restrained metallic finish with a rounded gold Pro capsule."},
-          {"split", "C / Split",
-           "Compact plaque; the palette demonstrates a separate tier segment."}
+          {"split", "C / Split", "Compact plaque; the palette demonstrates a separate tier segment."}
         ],
         plans: [
           {"free", "Free"},
@@ -76,10 +75,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcasePlanBadges do
           </p>
           <div class="plan-proposal-palette mb-4 rounded-box border border-base-300 bg-base-100 p-4">
             <span :for={{family, label} <- @plans} data-family={family} class="plan-proposal-badge">{label}</span>
-            <span data-family="pro" class="plan-proposal-badge">Pro
-            <span class="plan-proposal-tier">5x</span></span>
-            <span data-family="pro" class="plan-proposal-badge">Pro
-            <span class="plan-proposal-tier">20x</span></span>
+            <span data-family="pro" class="plan-proposal-badge">Pro <span class="plan-proposal-tier">5x</span></span>
+            <span data-family="pro" class="plan-proposal-badge">Pro <span class="plan-proposal-tier">20x</span></span>
           </div>
           <div class="grid gap-4">
             <div

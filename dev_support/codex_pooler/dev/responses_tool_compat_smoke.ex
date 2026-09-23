@@ -550,9 +550,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
   @doc false
   @spec accept_catalog_sync_result(term()) :: {:ok, map()} | {:error, String.t()}
-  def accept_catalog_sync_result(
-        {:ok, %{sync_run: %SyncRun{} = sync_run, models: models, partial?: false}}
-      )
+  def accept_catalog_sync_result({:ok, %{sync_run: %SyncRun{} = sync_run, models: models, partial?: false}})
       when is_list(models) and models != [],
       do: {:ok, %{sync_run: sync_run, models: models, partial?: false}}
 
@@ -967,9 +965,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
             status = certification_case_status(profile, smoke_case)
 
             if status == "failed_unexpected_success" do
-              {:halt,
-               {:error,
-                "#{profile}/#{transport}/#{smoke_case.label}: Lite typed tool choice was unexpectedly accepted"}}
+              {:halt, {:error, "#{profile}/#{transport}/#{smoke_case.label}: Lite typed tool choice was unexpectedly accepted"}}
             else
               cell = %{
                 identity: short_hash(fixture.identity.id),
@@ -1040,10 +1036,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
                {"content-type", "application/json"},
                {"accept", "application/json"}
              ],
-             body:
-               CodexPooler.JSON.encode_to_iodata!(
-                 Map.put(smoke_case.payload, "model", model.exposed_model_id)
-               ),
+             body: CodexPooler.JSON.encode_to_iodata!(Map.put(smoke_case.payload, "model", model.exposed_model_id)),
              retry: false,
              receive_timeout: 300_000
            ) do
@@ -1958,8 +1951,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       "assignment",
       Repo.all(
         from assignment in PoolUpstreamAssignment,
-          where:
-            assignment.pool_id == ^pool_id and assignment.upstream_identity_id == ^identity_id
+          where: assignment.pool_id == ^pool_id and assignment.upstream_identity_id == ^identity_id
       ),
       %{pool_id: pool_id, identity_id: identity_id}
     )
@@ -2224,9 +2216,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     session_ids =
-      Repo.all(
-        from session in CodexSession, where: session.pool_id == ^pool_id, select: session.id
-      )
+      Repo.all(from session in CodexSession, where: session.pool_id == ^pool_id, select: session.id)
 
     if session_ids != [] do
       Repo.update_all(
@@ -2658,9 +2648,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     with {diff, 0} <-
            System.cmd("git", ["diff", "--binary", "HEAD", "--"], stderr_to_stdout: true),
          {untracked, 0} <-
-           System.cmd("git", ["ls-files", "--others", "--exclude-standard", "-z"],
-             stderr_to_stdout: true
-           ) do
+           System.cmd("git", ["ls-files", "--others", "--exclude-standard", "-z"], stderr_to_stdout: true) do
       untracked_digests =
         untracked
         |> String.split(<<0>>, trim: true)

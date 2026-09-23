@@ -302,9 +302,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
           where: assignment.id in ^journal["assignment_ids"]
       )
 
-      Repo.delete_all(
-        from identity in UpstreamIdentity, where: identity.id in ^journal["identity_ids"]
-      )
+      Repo.delete_all(from identity in UpstreamIdentity, where: identity.id in ^journal["identity_ids"])
 
       Repo.delete_all(from pool in Pool, where: pool.id in ^journal["pool_ids"])
 

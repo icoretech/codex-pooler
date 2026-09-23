@@ -119,6 +119,5 @@ defmodule CodexPooler.Dev.NativePreAttemptDrain.Plug do
   defp body(%{body_params: params}), do: {:ok, params}
 
   defp json(conn, status, body),
-    do:
-      conn |> put_resp_content_type("application/json") |> send_resp(status, CodexPooler.JSON.encode!(body))
+    do: conn |> put_resp_content_type("application/json") |> send_resp(status, CodexPooler.JSON.encode!(body))
 end

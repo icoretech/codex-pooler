@@ -95,8 +95,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
       api_keys: api_keys,
       upstream_identities: identities,
       expiry_fixtures: expiry_fixtures,
-      assignments:
-        Enum.take(assignments, 6) ++ [secondary_assignment] ++ Enum.drop(assignments, 6),
+      assignments: Enum.take(assignments, 6) ++ [secondary_assignment] ++ Enum.drop(assignments, 6),
       models: models ++ secondary_models,
       quota_windows: quota_windows,
       request_logs: request_logs,
@@ -107,21 +106,13 @@ defmodule CodexPooler.Dev.Seeds.Full do
   end
 
   defp reset_full_fake_data! do
-    Repo.delete_all(
-      from job in Oban.Job, where: fragment("?->>?", job.meta, "dev_seed") == ^@seed_key
-    )
+    Repo.delete_all(from job in Oban.Job, where: fragment("?->>?", job.meta, "dev_seed") == ^@seed_key)
 
-    Repo.delete_all(
-      from event in AuditEvent, where: fragment("?->>?", event.details, "dev_seed") == ^@seed_key
-    )
+    Repo.delete_all(from event in AuditEvent, where: fragment("?->>?", event.details, "dev_seed") == ^@seed_key)
 
-    Repo.delete_all(
-      from invite in Invite, where: like(invite.invited_email, "dev-invite-%@example.com")
-    )
+    Repo.delete_all(from invite in Invite, where: like(invite.invited_email, "dev-invite-%@example.com"))
 
-    Repo.delete_all(
-      from pool in Pool, where: pool.slug in ["dev-primary", "dev-secondary", "dev-disabled"]
-    )
+    Repo.delete_all(from pool in Pool, where: pool.slug in ["dev-primary", "dev-secondary", "dev-disabled"])
 
     Repo.delete_all(
       from identity in UpstreamIdentity,
@@ -478,22 +469,16 @@ defmodule CodexPooler.Dev.Seeds.Full do
         },
         missing_sync_assignment_ids: [active_id]
       ),
-      model_attrs(pool, "gpt-5.5", "GPT 5.5", "active",
-        source_assignment_models: %{active_id => observed_source_metadata()}
-      ),
+      model_attrs(pool, "gpt-5.5", "GPT 5.5", "active", source_assignment_models: %{active_id => observed_source_metadata()}),
       model_attrs(pool, "gpt-5.5-pro", "GPT 5.5 Pro", "stale", stale_at: minutes_ago(45)),
-      model_attrs(pool, "codex-image", "Codex Image", "suppressed",
-        suppressed_at: minutes_ago(15)
-      )
+      model_attrs(pool, "codex-image", "Codex Image", "suppressed", suppressed_at: minutes_ago(15))
     ]
     |> Enum.map(fn attrs -> %Model{} |> Model.changeset(attrs) |> Repo.insert!() end)
   end
 
   defp seed_secondary_models!(pool, secondary_assignment) do
     [
-      model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active",
-        source_assignment_models: %{secondary_assignment.id => observed_source_metadata()}
-      )
+      model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active", source_assignment_models: %{secondary_assignment.id => observed_source_metadata()})
     ]
     |> Enum.map(fn attrs -> %Model{} |> Model.changeset(attrs) |> Repo.insert!() end)
   end
@@ -757,8 +742,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
         usage_status: spec.usage_status,
         correlation_id: "#{Map.get(spec, :correlation_prefix, "dev-seed-request")}-#{index}",
         user_agent: "codex-pooler-dev-seed/1.0",
-        request_metadata:
-          Map.merge(%{"dev_seed" => @seed_key}, Map.get(spec, :request_metadata, %{})),
+        request_metadata: Map.merge(%{"dev_seed" => @seed_key}, Map.get(spec, :request_metadata, %{})),
         admitted_at: timestamp,
         completed_at: Map.get(spec, :completed_at, timestamp),
         response_status_code: spec.response_status_code,

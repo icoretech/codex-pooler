@@ -61,9 +61,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseCatalogExtended do
           exports: [{AdminComponents, :cally_date_filter, 1}],
           selectors: ["#showcase-filter-form", "#showcase_filter_from-picker"]
         ),
-        entry("5.15-empty-state", section_515(), "empty_state/1", AdminComponents, :empty_state,
-          selectors: ["#showcase-empty-state"]
-        ),
+        entry("5.15-empty-state", section_515(), "empty_state/1", AdminComponents, :empty_state, selectors: ["#showcase-empty-state"]),
         entry(
           "5.15-notices",
           section_515(),
@@ -88,9 +86,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseCatalogExtended do
             "#flash-info[role='alert']"
           ]
         ),
-        entry("5.15-theme-toggle", section_515(), "theme_toggle/1", Layouts, :theme_toggle,
-          selectors: ["#showcase-theme-toggle.card.relative.flex.flex-row.rounded-full"]
-        ),
+        entry("5.15-theme-toggle", section_515(), "theme_toggle/1", Layouts, :theme_toggle, selectors: ["#showcase-theme-toggle.card.relative.flex.flex-row.rounded-full"]),
         entry("5.15-inputs", section_515(), "input/1", CoreComponents, :input,
           exports: [{CoreComponents, :otp_input, 1}],
           selectors:
@@ -105,12 +101,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseCatalogExtended do
           :cockpit_page,
           "The authenticated cockpit composite remains on its real fixture-backed route; this task explicitly preserves concurrent cockpit work."
         ),
-        entry("6.1-shell", "### 6.1 Shell and toolbar", "Layouts.app", Layouts, :app,
-          selectors: ["#component-showcase[data-review-state='catalog']"]
-        ),
-        entry("6.1-toolbar", "### 6.1 Shell and toolbar", "Toolbar.toolbar", Toolbar, :toolbar,
-          selectors: ["#observatory-toolbar"]
-        ),
+        entry("6.1-shell", "### 6.1 Shell and toolbar", "Layouts.app", Layouts, :app, selectors: ["#component-showcase[data-review-state='catalog']"]),
+        entry("6.1-toolbar", "### 6.1 Shell and toolbar", "Toolbar.toolbar", Toolbar, :toolbar, selectors: ["#observatory-toolbar"]),
         entry(
           "6.2-telemetry",
           "### 6.2 Telemetry grid",
@@ -119,9 +111,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseCatalogExtended do
           :telemetry,
           selectors: ["#observatory-overview", "#observatory-models"]
         ),
-        entry("6.2-activity", "### 6.2 Telemetry grid", "Activity.activity", Activity, :activity,
-          selectors: ["#observatory-activity", "#observatory-traffic", "#observatory-outcomes"]
-        ),
+        entry("6.2-activity", "### 6.2 Telemetry grid", "Activity.activity", Activity, :activity, selectors: ["#observatory-activity", "#observatory-traffic", "#observatory-outcomes"]),
         entry(
           "6.3-states",
           "### 6.3 Window control and refresh states",

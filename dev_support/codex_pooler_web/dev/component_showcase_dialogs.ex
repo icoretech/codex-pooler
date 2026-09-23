@@ -261,8 +261,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseDialogs do
     account = %{
       identity: identity,
       label: "design-review-account",
-      saved_resets:
-        SavedResetProjection.snapshot(identity, DateTimeDisplay.preferences_for_user(nil))
+      saved_resets: SavedResetProjection.snapshot(identity, DateTimeDisplay.preferences_for_user(nil))
     }
 
     Map.put(

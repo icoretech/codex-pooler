@@ -71,8 +71,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog do
   defp request_restore(state) do
     send(
       state.target,
-      {:native_compaction_trace_sensitivity, :restore, state.generation, state.authorization,
-       state.restorer}
+      {:native_compaction_trace_sensitivity, :restore, state.generation, state.authorization, state.restorer}
     )
 
     %{state | force_timer: Process.send_after(self(), :force_terminate, @restore_grace_ms)}

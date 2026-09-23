@@ -192,8 +192,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer do
         if Process.alive?(pid) and process.state in [:observable, :restore_pending] do
           send(
             pid,
-            {:native_compaction_trace_sensitivity, :restore, state.generation,
-             state.authorization, self()}
+            {:native_compaction_trace_sensitivity, :restore, state.generation, state.authorization, self()}
           )
 
           {pid, %{process | state: :restore_pending}}

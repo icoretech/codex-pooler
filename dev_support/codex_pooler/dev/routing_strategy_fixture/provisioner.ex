@@ -91,9 +91,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture.Provisioner do
       scope = Scope.for_user(user, Accounts.roles_for_user(user))
       if Pools.can_manage_pools?(scope), do: scope
     end)
-    |> Kernel.||(
-      raise "routing strategy fixture requires a bootstrapped local operator with pool access"
-    )
+    |> Kernel.||(raise "routing strategy fixture requires a bootstrapped local operator with pool access")
   end
 
   defp ensure_pool!(scope) do
@@ -298,8 +296,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture.Provisioner do
           "manual_smoke_provisioned" => true,
           "upstream_model" => source_metadata,
           "source_assignment_ids" => assignment_ids,
-          "source_assignment_models" =>
-            Map.new(assignment_ids, fn assignment_id -> {assignment_id, source_metadata} end),
+          "source_assignment_models" => Map.new(assignment_ids, fn assignment_id -> {assignment_id, source_metadata} end),
           "input_modalities" => ["text", "image"]
         })
     }

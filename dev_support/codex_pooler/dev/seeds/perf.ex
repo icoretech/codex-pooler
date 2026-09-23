@@ -85,9 +85,7 @@ defmodule CodexPooler.Dev.Seeds.Perf do
   defp reset_perf_fake_data! do
     perf_pool_ids = from(pool in Pool, where: pool.slug == @perf_pool_slug, select: pool.id)
 
-    Repo.delete_all(
-      from ledger_entry in LedgerEntry, where: ledger_entry.pool_id in subquery(perf_pool_ids)
-    )
+    Repo.delete_all(from ledger_entry in LedgerEntry, where: ledger_entry.pool_id in subquery(perf_pool_ids))
 
     Repo.delete_all(from request in Request, where: request.pool_id in subquery(perf_pool_ids))
     Repo.delete_all(from pool in Pool, where: pool.slug == @perf_pool_slug)

@@ -161,8 +161,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrain do
          {:ok, owner} <- WebsocketOwnerSession.lookup(session_id),
          {:ok, %{active_turn?: false, draining?: false}} <-
            WebsocketOwnerSession.owner_status(owner) do
-      {:reply, :ok,
-       %{state | armed: true, captured: true, pool_id: pool_id, session_id: session_id}}
+      {:reply, :ok, %{state | armed: true, captured: true, pool_id: pool_id, session_id: session_id}}
     else
       _ -> {:reply, {:error, :idle_owner_required}, state}
     end
@@ -189,8 +188,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrain do
 
     case sessions do
       [session_id] ->
-        {:reply, :ok,
-         %{state | armed: true, captured: true, pool_id: pool_id, session_id: session_id}}
+        {:reply, :ok, %{state | armed: true, captured: true, pool_id: pool_id, session_id: session_id}}
 
       _ ->
         {:reply, {:error, :visible_attempt_required}, state}

@@ -74,16 +74,12 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.SnapshotReader do
   defp secrets_for(nil), do: []
 
   defp secrets_for(identity),
-    do:
-      Repo.all(from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity.id)
+    do: Repo.all(from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity.id)
 
   defp quota_windows_for(nil), do: []
 
   defp quota_windows_for(identity),
-    do:
-      Repo.all(
-        from window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id
-      )
+    do: Repo.all(from window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id)
 
   defp models_for(nil), do: []
   defp models_for(pool), do: Repo.all(from model in Model, where: model.pool_id == ^pool.id)

@@ -66,8 +66,7 @@ defmodule CodexPooler.Dev.MCPFixture.Provisioner do
          "instance_owner" in Accounts.roles_for_user(operator) do
       {:ok, operator}
     else
-      {:error,
-       "MCP fixture canonical bootstrap owner is not usable: expected active, undeleted, password-ready instance owner"}
+      {:error, "MCP fixture canonical bootstrap owner is not usable: expected active, undeleted, password-ready instance owner"}
     end
   end
 

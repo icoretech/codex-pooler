@@ -181,9 +181,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture.Snapshot do
 
   defp delete_route_state(assignment_ids) do
     Enum.each([BridgeAffinity, BridgeDemotion, RoutingCircuitState], fn schema ->
-      Repo.delete_all(
-        from state in schema, where: state.pool_upstream_assignment_id in ^assignment_ids
-      )
+      Repo.delete_all(from state in schema, where: state.pool_upstream_assignment_id in ^assignment_ids)
     end)
   end
 

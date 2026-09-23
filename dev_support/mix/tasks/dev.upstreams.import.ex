@@ -36,9 +36,7 @@ defmodule Mix.Tasks.Dev.Upstreams.Import do
     expected_database = System.get_env("CODEX_POOLER_DEV_POSTGRES_DB", "codex_pooler_dev")
 
     if Keyword.fetch!(repo_config, :database) != expected_database do
-      Mix.raise(
-        "development bundle task database configuration does not match CODEX_POOLER_DEV_POSTGRES_DB"
-      )
+      Mix.raise("development bundle task database configuration does not match CODEX_POOLER_DEV_POSTGRES_DB")
     end
 
     endpoint_config = Application.fetch_env!(:codex_pooler, CodexPoolerWeb.Endpoint)

@@ -64,9 +64,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Provisioner do
       scope = Scope.for_user(user, Accounts.roles_for_user(user))
       if Pools.can_manage_pools?(scope), do: scope
     end)
-    |> Kernel.||(
-      raise "OpenAI V1 fixture requires a bootstrapped local operator with pool access"
-    )
+    |> Kernel.||(raise "OpenAI V1 fixture requires a bootstrapped local operator with pool access")
   end
 
   defp ensure_identity!(upstream_base_url) do
@@ -162,8 +160,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Provisioner do
       sticky_http_sessions: false,
       v1_compatibility_enabled: true,
       prompt_cache_affinity_enabled: settings.prompt_cache_affinity_enabled,
-      request_compression_enabled:
-        request_compression_enabled(settings, request_compression_mode),
+      request_compression_enabled: request_compression_enabled(settings, request_compression_mode),
       allow_image_generation: true,
       metadata: settings.metadata || %{},
       created_at: settings.created_at,

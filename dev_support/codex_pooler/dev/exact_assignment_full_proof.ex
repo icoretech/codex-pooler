@@ -508,9 +508,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   defp provision_catalog(_scope, journal, run_dir, pool) do
     with {:ok, journal} <- intent(journal, run_dir, "catalog", "sync", %{pool_id: pool.id}),
          {:ok, %{sync_run: sync_run, models: _models, partial?: false}} <-
-           Journal.accept_catalog_sync_result(
-             Catalog.sync_pool_catalog(pool, trigger_kind: "manual")
-           ),
+           Journal.accept_catalog_sync_result(Catalog.sync_pool_catalog(pool, trigger_kind: "manual")),
          {:ok, journal} <-
            completed(journal, run_dir, "sync_run", sync_run.id, %{pool_id: pool.id}),
          models = Catalog.list_models(pool),
@@ -620,12 +618,10 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
         end
 
       {:ok, candidates} ->
-        {:error,
-         "routeability preflight failed source_bound=#{source_bound?} quota_precise=#{quota_state == :precise} candidate_count=#{length(candidates)}"}
+        {:error, "routeability preflight failed source_bound=#{source_bound?} quota_precise=#{quota_state == :precise} candidate_count=#{length(candidates)}"}
 
       {:error, _reason} ->
-        {:error,
-         "routeability preflight failed source_bound=#{source_bound?} quota_precise=#{quota_state == :precise} candidate_count=0"}
+        {:error, "routeability preflight failed source_bound=#{source_bound?} quota_precise=#{quota_state == :precise} candidate_count=0"}
     end
   end
 
@@ -883,14 +879,11 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
         "endpoint" => @responses_endpoint,
         "requested_model" => @model_id,
         "retry_counts" => requests |> Enum.map(& &1.retry_count) |> Enum.uniq(),
-        "model_serving_mode_configured" =>
-          routing_values(requests, "model_serving_mode_configured"),
+        "model_serving_mode_configured" => routing_values(requests, "model_serving_mode_configured"),
         "model_serving_mode" => routing_values(requests, "model_serving_mode"),
         "model_serving_mode_source" => routing_values(requests, "model_serving_mode_source"),
-        "attempt_identity_match" =>
-          Enum.all?(attempts, &(&1.upstream_identity_id == identity.id)),
-        "attempt_assignment_match" =>
-          Enum.all?(attempts, &(&1.pool_upstream_assignment_id == assignment.id)),
+        "attempt_identity_match" => Enum.all?(attempts, &(&1.upstream_identity_id == identity.id)),
+        "attempt_assignment_match" => Enum.all?(attempts, &(&1.pool_upstream_assignment_id == assignment.id)),
         "upstream_request_id_fingerprints" => fingerprint_by_transport
       }
 
@@ -933,8 +926,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
         {:ok, requests}
 
       System.monotonic_time(:millisecond) > deadline ->
-        {:error,
-         "correlated request rows incomplete: #{length(requests)} rows for the shared correlator"}
+        {:error, "correlated request rows incomplete: #{length(requests)} rows for the shared correlator"}
 
       true ->
         Process.sleep(250)
@@ -970,18 +962,13 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
       {Enum.all?(requests, &(&1.retry_count == 0)), "retry_count was not zero"},
       {Enum.all?(requests, &(&1.model_id == model.id)), "request rows resolved another model"},
       {Enum.all?(requests, &(&1.pool_id == pool.id)), "request rows outside the task pool"},
-      {routing_values(requests, "model_serving_mode_configured") == ["full"],
-       "configured serving mode was not full"},
-      {routing_values(requests, "model_serving_mode") == ["full"],
-       "effective serving mode was not full"},
-      {routing_values(requests, "model_serving_mode_source") == ["override"],
-       "serving mode source was not override"},
+      {routing_values(requests, "model_serving_mode_configured") == ["full"], "configured serving mode was not full"},
+      {routing_values(requests, "model_serving_mode") == ["full"], "effective serving mode was not full"},
+      {routing_values(requests, "model_serving_mode_source") == ["override"], "serving mode source was not override"},
       {length(attempts) == 2, "expected exactly one attempt per request"},
       {Enum.all?(attempts, &(&1.attempt_number == 1)), "attempts retried"},
-      {Enum.all?(attempts, &(&1.upstream_identity_id == identity.id)),
-       "attempt identity was not the task identity"},
-      {Enum.all?(attempts, &(&1.pool_upstream_assignment_id == assignment.id)),
-       "attempt assignment was not the task assignment"}
+      {Enum.all?(attempts, &(&1.upstream_identity_id == identity.id)), "attempt identity was not the task identity"},
+      {Enum.all?(attempts, &(&1.pool_upstream_assignment_id == assignment.id)), "attempt assignment was not the task assignment"}
     ]
 
     case Enum.find(checks, fn {ok?, _message} -> not ok? end) do
@@ -1005,27 +992,17 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
 
       checks = [
         {is_map(http_entry), "HTTP wire capture entry missing for the attempt fingerprint"},
-        {is_map(websocket_entry),
-         "websocket wire capture entry missing for the attempt fingerprint"},
-        {is_map(http_entry) and http_entry["upstreamRequestIdFingerprint"] == http_fingerprint,
-         "HTTP capture fingerprint mismatch"},
+        {is_map(websocket_entry), "websocket wire capture entry missing for the attempt fingerprint"},
+        {is_map(http_entry) and http_entry["upstreamRequestIdFingerprint"] == http_fingerprint, "HTTP capture fingerprint mismatch"},
         {is_map(websocket_entry) and
-           websocket_entry["upstreamRequestIdFingerprint"] == websocket_fingerprint,
-         "websocket capture fingerprint mismatch"},
-        {is_map(http_entry) and http_entry["httpHeaderNames"] != [],
-         "HTTP capture observed no header names"},
-        {is_map(http_entry) and @lite_http_header not in List.wrap(http_entry["httpHeaderNames"]),
-         "HTTP Lite header reached the fake upstream"},
-        {is_map(websocket_entry) and websocket_entry["websocketClientMetadataKeys"] != [],
-         "websocket capture observed no client metadata keys"},
+           websocket_entry["upstreamRequestIdFingerprint"] == websocket_fingerprint, "websocket capture fingerprint mismatch"},
+        {is_map(http_entry) and http_entry["httpHeaderNames"] != [], "HTTP capture observed no header names"},
+        {is_map(http_entry) and @lite_http_header not in List.wrap(http_entry["httpHeaderNames"]), "HTTP Lite header reached the fake upstream"},
+        {is_map(websocket_entry) and websocket_entry["websocketClientMetadataKeys"] != [], "websocket capture observed no client metadata keys"},
         {is_map(websocket_entry) and
-           @websocket_probe_metadata_key in List.wrap(
-             websocket_entry["websocketClientMetadataKeys"]
-           ), "websocket capture did not observe the probe metadata key"},
+           @websocket_probe_metadata_key in List.wrap(websocket_entry["websocketClientMetadataKeys"]), "websocket capture did not observe the probe metadata key"},
         {is_map(websocket_entry) and
-           @lite_websocket_metadata_key not in List.wrap(
-             websocket_entry["websocketClientMetadataKeys"]
-           ), "websocket Lite client metadata reached the fake upstream"}
+           @lite_websocket_metadata_key not in List.wrap(websocket_entry["websocketClientMetadataKeys"]), "websocket Lite client metadata reached the fake upstream"}
       ]
 
       case Enum.find(checks, fn {ok?, _message} -> not ok? end) do
@@ -1034,8 +1011,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
            %{
              "http_header_name_count" => length(http_entry["httpHeaderNames"]),
              "http_lite_header_present" => false,
-             "websocket_metadata_key_count" =>
-               length(websocket_entry["websocketClientMetadataKeys"]),
+             "websocket_metadata_key_count" => length(websocket_entry["websocketClientMetadataKeys"]),
              "websocket_lite_metadata_present" => false,
              "fingerprints_matched" => true
            }}
@@ -1183,9 +1159,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
       Repo.delete_all(from lease in BridgeOwnerLease, where: lease.pool_id in ^pool_ids)
 
     {alias_count, _} =
-      Repo.delete_all(
-        from bridge_alias in BridgeSessionAlias, where: bridge_alias.pool_id in ^pool_ids
-      )
+      Repo.delete_all(from bridge_alias in BridgeSessionAlias, where: bridge_alias.pool_id in ^pool_ids)
 
     {session_count, _} =
       Repo.delete_all(from session in CodexSession, where: session.pool_id in ^pool_ids)
@@ -1304,9 +1278,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
         Repo.delete_all(from window in AccountQuotaWindow, where: window.id in ^quota_window_ids)
 
       {secret_count, _} =
-        Repo.delete_all(
-          from secret in EncryptedSecret, where: secret.upstream_identity_id in ^identity_ids
-        )
+        Repo.delete_all(from secret in EncryptedSecret, where: secret.upstream_identity_id in ^identity_ids)
 
       {identity_count, _} =
         Repo.delete_all(from identity in UpstreamIdentity, where: identity.id in ^identity_ids)
@@ -1392,10 +1364,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
       "requests" => count_where(Request, :id, request_ids),
       "pricing_snapshots" => count_where(PricingSnapshot, :id, pricing_snapshot_ids),
       "quota_windows" => count_where(AccountQuotaWindow, :id, quota_window_ids),
-      "attempts" =>
-        Repo.one(
-          from attempt in Attempt, where: attempt.request_id in ^request_ids, select: count()
-        ),
+      "attempts" => Repo.one(from attempt in Attempt, where: attempt.request_id in ^request_ids, select: count()),
       "upstream_identities" => count_where(UpstreamIdentity, :id, identity_ids),
       "encrypted_secrets" =>
         Repo.one(
@@ -1404,14 +1373,9 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
             select: count()
         ),
       "pools" => count_where(Pool, :id, pool_ids),
-      "pool_models" =>
-        Repo.one(from model in Model, where: model.pool_id in ^pool_ids, select: count()),
-      "pool_sync_runs" =>
-        Repo.one(from sync_run in SyncRun, where: sync_run.pool_id in ^pool_ids, select: count()),
-      "pool_sessions" =>
-        Repo.one(
-          from session in CodexSession, where: session.pool_id in ^pool_ids, select: count()
-        ),
+      "pool_models" => Repo.one(from model in Model, where: model.pool_id in ^pool_ids, select: count()),
+      "pool_sync_runs" => Repo.one(from sync_run in SyncRun, where: sync_run.pool_id in ^pool_ids, select: count()),
+      "pool_sessions" => Repo.one(from session in CodexSession, where: session.pool_id in ^pool_ids, select: count()),
       "codex_turns" =>
         Repo.one(
           from turn in CodexTurn,
@@ -1424,38 +1388,24 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
               ),
             select: count()
         ),
-      "bridge_owner_leases" =>
-        Repo.one(
-          from lease in BridgeOwnerLease, where: lease.pool_id in ^pool_ids, select: count()
-        ),
+      "bridge_owner_leases" => Repo.one(from lease in BridgeOwnerLease, where: lease.pool_id in ^pool_ids, select: count()),
       "bridge_session_aliases" =>
         Repo.one(
           from alias_record in BridgeSessionAlias,
             where: alias_record.pool_id in ^pool_ids,
             select: count()
         ),
-      "bridge_affinities" =>
-        Repo.one(
-          from affinity in BridgeAffinity, where: affinity.pool_id in ^pool_ids, select: count()
-        ),
-      "bridge_demotions" =>
-        Repo.one(
-          from demotion in BridgeDemotion, where: demotion.pool_id in ^pool_ids, select: count()
-        ),
+      "bridge_affinities" => Repo.one(from affinity in BridgeAffinity, where: affinity.pool_id in ^pool_ids, select: count()),
+      "bridge_demotions" => Repo.one(from demotion in BridgeDemotion, where: demotion.pool_id in ^pool_ids, select: count()),
       "routing_circuit_states" =>
         Repo.one(
           from circuit in RoutingCircuitState,
             where: circuit.pool_id in ^pool_ids,
             select: count()
         ),
-      "idempotency_keys" =>
-        Repo.one(from key in IdempotencyKey, where: key.pool_id in ^pool_ids, select: count()),
-      "pool_routing_settings" =>
-        Repo.one(
-          from settings in RoutingSettings, where: settings.pool_id in ^pool_ids, select: count()
-        ),
-      "audit_events" =>
-        Repo.one(from audit in AuditEvent, where: audit.pool_id in ^pool_ids, select: count())
+      "idempotency_keys" => Repo.one(from key in IdempotencyKey, where: key.pool_id in ^pool_ids, select: count()),
+      "pool_routing_settings" => Repo.one(from settings in RoutingSettings, where: settings.pool_id in ^pool_ids, select: count()),
+      "audit_events" => Repo.one(from audit in AuditEvent, where: audit.pool_id in ^pool_ids, select: count())
     }
 
     if plan_gone? and Enum.all?(counts, fn {_key, value} -> value == 0 end) do

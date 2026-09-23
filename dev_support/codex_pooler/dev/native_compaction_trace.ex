@@ -35,12 +35,10 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :ordinary_success, 1},
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :arm_compact, 2},
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :reserve, 5},
-    {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :mark_accounting_started,
-     3},
+    {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :mark_accounting_started, 3},
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :consume, 3},
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :cancel, 4},
-    {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission,
-     :record_compact_collected, 1},
+    {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :record_compact_collected, 1},
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :confirm_compact, 4},
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :clear_consumed, 1},
     {CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission, :clear, 1}
@@ -160,8 +158,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
            {:ok, pid} <-
              GenServer.start(
                __MODULE__,
-               {run_fingerprint, generation, sensitivity_authorization, restorer, limit, mode,
-                trace_plan, opts},
+               {run_fingerprint, generation, sensitivity_authorization, restorer, limit, mode, trace_plan, opts},
                name: @name
              ),
            :ok <-
@@ -276,10 +273,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   def handle_event(_event, _measurements, _metadata, _generation), do: :ok
 
   @impl true
-  def init(
-        {run_fingerprint, generation, sensitivity_authorization, restorer, limit, mode,
-         trace_plan, opts}
-      ) do
+  def init({run_fingerprint, generation, sensitivity_authorization, restorer, limit, mode, trace_plan, opts}) do
     with {:ok, file} <- open_output(mode, run_fingerprint, Keyword.get(opts, :root)) do
       now_system = System.system_time(:microsecond)
       now_mono = System.monotonic_time(:microsecond)
@@ -503,8 +497,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
                role in [:response_task, :owner_session, :upstream_session] do
             send(
               target,
-              {:native_compaction_trace_sensitivity, :restore, state.generation,
-               state.sensitivity_authorization, pid}
+              {:native_compaction_trace_sensitivity, :restore, state.generation, state.sensitivity_authorization, pid}
             )
           end
         end)
@@ -525,8 +518,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
             status = Map.put(state.sensitivity_status, inspect(pid), %{role: role, state: :dead})
             next = %{state | traced: Map.delete(state.traced, pid), sensitivity_status: status}
 
-            {:noreply,
-             append(next, :beam_process_down, %{pid: pid, pid_role: role, reason: reason}, :beam)}
+            {:noreply, append(next, :beam_process_down, %{pid: pid, pid_role: role, reason: reason}, :beam)}
 
           _unknown ->
             {:noreply, state}
@@ -856,8 +848,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
     if cooperative_genserver?(pid) do
       GenServer.call(
         pid,
-        {:native_compaction_trace_sensitivity, :observe, state.generation,
-         state.sensitivity_authorization, state.sensitivity_restorer},
+        {:native_compaction_trace_sensitivity, :observe, state.generation, state.sensitivity_authorization, state.sensitivity_restorer},
         5_000
       )
     else

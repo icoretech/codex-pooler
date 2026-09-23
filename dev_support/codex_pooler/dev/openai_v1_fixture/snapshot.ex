@@ -248,9 +248,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Snapshot do
   defp delete_route_state(_schema, _rows, _pool_id, _assignment_id), do: :ok
 
   defp delete_assignment(assignment_id) when is_binary(assignment_id) do
-    Repo.delete_all(
-      from assignment in PoolUpstreamAssignment, where: assignment.id == ^assignment_id
-    )
+    Repo.delete_all(from assignment in PoolUpstreamAssignment, where: assignment.id == ^assignment_id)
   end
 
   defp delete_assignment(_assignment_id), do: :ok

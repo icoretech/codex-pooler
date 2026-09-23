@@ -33,8 +33,7 @@ defmodule CodexPooler.Dev.OpenAIStatusFixture do
         last_error_at: nil
       })
 
-    {:ok,
-     %{scenario: scenario, incidents: length(rows), aggregate_revision: state.aggregate_revision}}
+    {:ok, %{scenario: scenario, incidents: length(rows), aggregate_revision: state.aggregate_revision}}
   rescue
     exception -> {:error, Exception.message(exception)}
   end

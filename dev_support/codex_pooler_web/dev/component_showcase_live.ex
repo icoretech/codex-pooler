@@ -127,8 +127,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     "browser"
     |> oauth_fixture()
     |> Map.put(:oauth_link_error, %{
-      message:
-        "That callback URL is from an earlier attempt. Open the page again and paste the new one."
+      message: "That callback URL is from an earlier attempt. Open the page again and paste the new one."
     })
   end
 

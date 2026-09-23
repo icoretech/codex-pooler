@@ -148,9 +148,7 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccounting do
         _from,
         %{owner: owner, ref: ref, captured: false} = state
       ),
-      do:
-        {:reply, :hold,
-         %{state | captured: true, captured_at: System.monotonic_time(:millisecond)}}
+      do: {:reply, :hold, %{state | captured: true, captured_at: System.monotonic_time(:millisecond)}}
 
   def handle_call({:capture, _, _}, _from, state), do: {:reply, :ignore, state}
 
@@ -168,8 +166,7 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccounting do
     elapsed = System.monotonic_time(:millisecond) - state.captured_at
     send(state.owner, {:preaccounting_release, state.ref})
 
-    {:noreply,
-     %{state | compact_request_count: count, hold_elapsed_ms: elapsed, waiter: {from, :release}}}
+    {:noreply, %{state | compact_request_count: count, hold_elapsed_ms: elapsed, waiter: {from, :release}}}
   end
 
   def handle_call({_pool, :release}, _from, state), do: {:reply, {:ok, projection(state)}, state}
