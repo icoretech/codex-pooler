@@ -130,9 +130,9 @@ Session continuity is stronger than ordinary stateless routing.
 
 Stateless requests can be routed to any eligible upstream account in the Pool. Strategy, remaining quota, prompt-cache locality, and recent failures shape the order.
 
-An existing Codex session prefers its current upstream account. A native websocket request carrying portable full history can use another eligible account while keeping the client's websocket open. Previous-response anchors, uploaded file references, and connection-bound compaction still require the account that owns that state.
+An existing Codex session prefers its current upstream account. A native websocket request carrying portable full history can use another eligible account while keeping the client's websocket open, including history that starts with the provider's compaction checkpoint. Previous-response anchors, uploaded file references, item references, and a compaction still being collected on the upstream connection require the account that owns that state.
 
-If an upstream rejects a portable full-history websocket request with a quota-limit terminal before output and without reported token usage, Codex Pooler can try the next eligible account in the configured ring. Successful recovery updates the session's account for later turns. Encrypted reasoning items can remain in that history; opaque compaction checkpoints and item references retain their continuity restrictions. Work that has already produced output or reported token usage is not silently repeated on another account.
+If an upstream rejects a portable full-history websocket request with a quota-limit terminal before output and without reported token usage, Codex Pooler can try the next eligible account in the configured ring. Successful recovery updates the session's account for later turns. Encrypted reasoning items and compaction checkpoints can remain in that history; item references retain their continuity restrictions. Work that has already produced output or reported token usage is not silently repeated on another account.
 
 Continuity headers are local routing inputs. Codex Pooler reads them in this order:
 

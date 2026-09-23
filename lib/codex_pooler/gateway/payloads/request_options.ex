@@ -1032,8 +1032,16 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp portable_full_history?(_payload), do: false
 
+  # The provider's `compaction` checkpoint is portable: production served the
+  # same checkpoint on two accounts of one Pool, over the released client's
+  # HTTPS fallback, after the websocket had pinned it to the exhausted one
+  # (findings#206 row 206-357). Only what it wraps besides its own encrypted
+  # payload can still bind it.
+  defp upstream_bound_input?(%{"type" => "compaction"} = item),
+    do: item |> Map.drop(["type", "id", "encrypted_content"]) |> Map.values() |> upstream_bound_input?()
+
   defp upstream_bound_input?(%{} = item) do
-    Map.get(item, "type") in ["item_reference", "compaction", "compaction_trigger"] or
+    Map.get(item, "type") in ["item_reference", "compaction_trigger"] or
       Map.has_key?(item, "file_id") or
       (Map.has_key?(item, "encrypted_content") and Map.get(item, "type") != "reasoning") or
       Enum.any?(Map.values(item), &upstream_bound_input?/1)

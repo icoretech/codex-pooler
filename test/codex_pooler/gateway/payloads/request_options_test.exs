@@ -19,7 +19,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
   @assignment_id "00000000-0000-0000-0000-000000000001"
 
-  test "portable history classification follows the current payload and preserves opaque fences" do
+  test "portable history classification follows the current payload, moves compaction checkpoints and preserves opaque fences" do
     endpoint = "/backend-api/codex/responses"
     base = RequestOptions.build(%{}, endpoint, %{})
 
@@ -45,10 +45,24 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
     options = RequestOptions.for_payload(base, endpoint, %{"input" => history})
     assert options.payload_context.portable_full_history?
 
+    # The provider's compaction checkpoint moves with the history (findings#206
+    # row 206-357); the released client sends it with an id and its encrypted
+    # payload only.
+    checkpoint = %{"type" => "compaction", "id" => "cmp_synthetic", "encrypted_content" => "synthetic"}
+
+    for portable <- [[checkpoint | history], [Map.delete(checkpoint, "id") | history]] do
+      assert RequestOptions.for_payload(options, endpoint, %{"input" => portable}).payload_context.portable_full_history?
+      assert RequestOptions.retarget(options, endpoint, %{"input" => portable}).payload_context.portable_full_history?
+    end
+
     for payload <- [
           %{"input" => history, "previous_response_id" => "resp_opaque_anchor"},
+          %{"input" => [checkpoint | history], "previous_response_id" => "resp_opaque_anchor"},
           %{"input" => [%{"type" => "item_reference", "id" => "msg_opaque"}]},
-          %{"input" => [%{"type" => "compaction", "encrypted_content" => "synthetic"}]},
+          %{"input" => [checkpoint, %{"type" => "item_reference", "id" => "msg_opaque"}]},
+          %{"input" => [Map.put(checkpoint, "content", [%{"type" => "input_file", "file_id" => "file_opaque"}])]},
+          %{"input" => [%{"type" => "compaction_trigger"}]},
+          %{"input" => [%{"type" => "context_compaction", "encrypted_content" => "synthetic"}]},
           %{"input" => [%{"type" => "input_file", "file_id" => "file_opaque"}]}
         ] do
       refute RequestOptions.for_payload(options, endpoint, payload).payload_context.portable_full_history?

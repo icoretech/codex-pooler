@@ -2089,8 +2089,8 @@ defmodule CodexPooler.CompatibilityMatrix do
         transport: "same_downstream_websocket",
         retry_codes: ["usage_limit_reached", "usage_limit_exceeded"],
         retry_boundary: "before_output_with_absent_or_zero_usage",
-        portable_history: "unanchored_input_including_encrypted_reasoning",
-        retained_fences: ["previous_response_id", "file_affinity", "item_reference", "compaction"],
+        portable_history: "unanchored_input_including_encrypted_reasoning_and_compaction_checkpoints",
+        retained_fences: ["previous_response_id", "file_affinity", "item_reference", "compaction_trigger", "connection_bound_compaction"],
         denial_evidence: "explicit_error_source_over_percentage_only_permission",
         accounting: "one_request_with_failed_then_successful_attempts_and_one_settlement"
       },
