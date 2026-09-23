@@ -5117,7 +5117,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       discovered_model_count: 0,
       upserted_model_count: 0,
       stale_marked_count: 0,
-      retired_count: 0,
       error_message: if(status == "failed", do: "model catalog refresh failed"),
       stats: %{}
     })

@@ -284,7 +284,10 @@ defmodule CodexPooler.CatalogTest do
       assert sync_run.status == "succeeded"
       assert sync_run.discovered_model_count == 1
       assert sync_run.upserted_model_count == 1
-      assert sync_run.retired_count == 0
+      # The sync never retires a model and no longer names `retired_count`;
+      # the column stays for older releases that still select and insert it,
+      # so the row must keep the value they read (findings#258).
+      assert %{rows: [[0]]} = Repo.query!("SELECT retired_count FROM sync_runs WHERE id = $1", [Ecto.UUID.dump!(sync_run.id)])
       assert model.exposed_model_id == "gpt-5.4-mini"
       assert model.supports_responses
       assert model.supports_streaming
@@ -1085,7 +1088,6 @@ defmodule CodexPooler.CatalogTest do
       discovered_model_count: Map.get(attrs, :discovered_model_count, 0),
       upserted_model_count: Map.get(attrs, :upserted_model_count, 0),
       stale_marked_count: Map.get(attrs, :stale_marked_count, 0),
-      retired_count: Map.get(attrs, :retired_count, 0),
       error_message: Map.get(attrs, :error_message),
       stats: Map.get(attrs, :stats, %{})
     })

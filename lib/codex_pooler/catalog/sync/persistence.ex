@@ -79,7 +79,6 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
         discovered_model_count: map_size(grouped),
         upserted_model_count: upserted_count,
         stale_marked_count: stale_marked_count,
-        retired_count: 0,
         stats: %{
           "source_assignment_count" => length(assignments),
           "successful_source_assignment_count" => length(successful_assignments),

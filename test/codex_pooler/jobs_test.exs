@@ -739,7 +739,6 @@ defmodule CodexPooler.JobsTest do
       discovered_model_count: 0,
       upserted_model_count: 0,
       stale_marked_count: 0,
-      retired_count: 0,
       stats: %{}
     })
     |> Repo.insert!()

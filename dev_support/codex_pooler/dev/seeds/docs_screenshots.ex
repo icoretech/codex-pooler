@@ -173,7 +173,6 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
         discovered_model_count: model_count,
         upserted_model_count: model_count,
         stale_marked_count: 0,
-        retired_count: 0,
         stats: %{"seed" => "docs_screenshots"}
       })
       |> Repo.insert!()

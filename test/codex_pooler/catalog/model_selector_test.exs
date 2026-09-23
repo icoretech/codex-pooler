@@ -223,7 +223,6 @@ defmodule CodexPooler.Catalog.ModelSelectorTest do
       discovered_model_count: Map.get(attrs, :discovered_model_count, 0),
       upserted_model_count: Map.get(attrs, :upserted_model_count, 0),
       stale_marked_count: Map.get(attrs, :stale_marked_count, 0),
-      retired_count: Map.get(attrs, :retired_count, 0),
       error_message: Map.get(attrs, :error_message),
       stats: Map.get(attrs, :stats, %{})
     })

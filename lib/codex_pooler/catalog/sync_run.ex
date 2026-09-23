@@ -19,7 +19,9 @@ defmodule CodexPooler.Catalog.SyncRun do
     field :discovered_model_count, :integer
     field :upserted_model_count, :integer
     field :stale_marked_count, :integer
-    field :retired_count, :integer
+    # `sync_runs.retired_count` (`DEFAULT 0 NOT NULL`) stays in the table for
+    # good: the sync never retires a model (a dropped model stays `stale`), and
+    # older releases still select and insert the column during an upgrade.
     field :error_message, :string
     field :stats, :map
   end
@@ -36,7 +38,6 @@ defmodule CodexPooler.Catalog.SyncRun do
       :discovered_model_count,
       :upserted_model_count,
       :stale_marked_count,
-      :retired_count,
       :error_message,
       :stats
     ])
@@ -48,7 +49,6 @@ defmodule CodexPooler.Catalog.SyncRun do
       :discovered_model_count,
       :upserted_model_count,
       :stale_marked_count,
-      :retired_count,
       :stats
     ])
     |> validate_inclusion(:trigger_kind, @trigger_kinds)
@@ -56,6 +56,5 @@ defmodule CodexPooler.Catalog.SyncRun do
     |> validate_number(:discovered_model_count, greater_than_or_equal_to: 0)
     |> validate_number(:upserted_model_count, greater_than_or_equal_to: 0)
     |> validate_number(:stale_marked_count, greater_than_or_equal_to: 0)
-    |> validate_number(:retired_count, greater_than_or_equal_to: 0)
   end
 end

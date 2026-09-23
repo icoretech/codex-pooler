@@ -760,7 +760,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
       discovered_model_count: 1,
       upserted_model_count: 1,
       stale_marked_count: 0,
-      retired_count: 0,
       stats: %{}
     })
     |> Repo.insert!()
