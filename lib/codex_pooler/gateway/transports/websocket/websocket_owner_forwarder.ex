@@ -1078,6 +1078,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     remote_submit_frame(codex_session_id, downstream, frame)
   end
 
+  # A timed-out frame forward sends no best-effort cancel (findings#206 row
+  # 206-276). The frame is a single client control message (`response.processed`)
+  # with no turn behind it to abandon, and an erpc timeout abandons only the
+  # reply: the owner still takes the queued frame, whether it was stalled or
+  # still recovering. The cancel is a detach, which the owner applied after
+  # that frame, so the connected socket lost its downstream at the owner and
+  # every later turn on it was refused `stale_owner` until it reconnected.
   defp dispatch_submit(
          {:remote, node, _owner_instance_id},
          codex_session_id,
@@ -1085,14 +1092,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
          frame,
          opts
        ) do
-    result =
-      call_remote(node, :remote_submit_frame, [codex_session_id, downstream, frame, opts], opts)
-
-    if result == {:error, :owner_forward_timeout} do
-      best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
-    end
-
-    result
+    call_remote(node, :remote_submit_frame, [codex_session_id, downstream, frame, opts], opts)
   end
 
   defp dispatch_reconnect_control({:local, _owner_instance_id}, control, _opts) do
