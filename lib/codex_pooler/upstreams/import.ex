@@ -105,6 +105,34 @@ defmodule CodexPooler.Upstreams.Import do
   def prepare_bundle_account(_scope, _pool, _attrs),
     do: {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
 
+  @spec prepare_access_only_bundle_account(Scope.t(), Pool.t(), map()) ::
+          {:ok, PreparedAccount.t()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  @doc """
+  Prepares a bundle account as a copy that holds only its access token.
+
+  A copy that refreshes rotates the refresh token it shares with the account's
+  original home and revokes it there, so any refresh token in `attrs` is dropped
+  before normalization. Without one, an expired access token cannot be recovered,
+  so the prepared account rejects expiry instead of taking the bundle recovery
+  policy.
+  """
+  def prepare_access_only_bundle_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
+    attrs = attrs |> Map.drop([:refresh_token, "refresh_token"]) |> normalize_import_attrs()
+
+    case import_validation_errors(attrs, require_credential_provenance?: true) do
+      [] ->
+        with :ok <- require_import_pool_operate(scope, pool) do
+          prepare_import_account(scope, pool, attrs, trusted_account_link_options(attrs))
+        end
+
+      errors ->
+        {:error, import_identity_changeset(attrs, errors)}
+    end
+  end
+
+  def prepare_access_only_bundle_account(_scope, _pool, _attrs),
+    do: {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
+
   @spec import_trusted_account_in_transaction(Scope.t(), Pool.t(), map()) :: import_result()
   @doc """
   Imports one trusted account inside the caller's transaction.

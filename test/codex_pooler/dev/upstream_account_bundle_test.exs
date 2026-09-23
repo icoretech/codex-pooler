@@ -34,13 +34,13 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     refute bundle =~ source.refresh_token
 
     assert {:ok, import_receipt} =
-             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, refresh_tokens: :import)
 
     assert import_receipt.imported == 1
     assert import_receipt.dry_run == false
 
     assert {:ok, %{imported: 1}} =
-             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, refresh_tokens: :import)
 
     assert length(Upstreams.list_active_pool_assignments(target_pool)) == 1
 
@@ -194,7 +194,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     assert receipt.skipped_missing_refresh_token == 1
 
     assert {:ok, %{imported: 1}} =
-             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, refresh_tokens: :import)
 
     assert Upstreams.get_upstream_identity_by_chatgpt_account(skipped.identity.chatgpt_account_id)
 
@@ -578,7 +578,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     assert {:ok, bundle, _receipt} = UpstreamAccountBundle.export_bundle(source_pool, @password)
 
     assert {:ok, %{imported: 1}} =
-             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, refresh_tokens: :import)
 
     imported =
       Upstreams.get_upstream_identity_by_chatgpt_account(source.identity.chatgpt_account_id)
@@ -594,7 +594,8 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
                missing_refresh,
                pool_fixture(),
                scope,
-               @password
+               @password,
+               refresh_tokens: :import
              )
   end
 
@@ -620,7 +621,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
              UpstreamAccountBundle.export_bundle(source_pool, @password)
 
     assert {:ok, %{imported: 4}} =
-             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, refresh_tokens: :import)
 
     assert %{state: :known, deadline: ^future} =
              known_future.identity

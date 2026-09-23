@@ -11,6 +11,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefreshMetadata
   alias CodexPooler.Upstreams.PreparedAccount
+  alias CodexPooler.Upstreams.Schemas.EncryptedSecret
   alias CodexPooler.Upstreams.Secrets
   alias CodexPooler.Upstreams.TokenLinking
   alias __MODULE__.{CLI, PrivateFile}
@@ -57,7 +58,8 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
          {:ok, pool} <- pool_by_slug(command.pool_slug),
          # Dialyzer cannot see repository-backed dev rows through this boundary and
          # otherwise collapses the real success branch to `no_return`.
-         {:ok, bundle, receipt} <- apply(__MODULE__, :export_bundle, [pool, password]),
+         {:ok, bundle, receipt} <-
+           apply(__MODULE__, :export_bundle, [pool, password, [refresh_tokens: command.refresh_tokens]]),
          {:ok, mode} <- write_bundle_file(command.out_path, bundle) do
       {:ok,
        Map.merge(receipt, %{
@@ -86,7 +88,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
              pool,
              scope,
              password,
-             [dry_run: command.dry_run?]
+             [dry_run: command.dry_run?, refresh_tokens: command.refresh_tokens]
            ]) do
         {:ok, receipt} ->
           {:ok,
@@ -102,26 +104,38 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end
   end
 
-  @spec export_bundle(Pool.t(), binary()) ::
+  # `refresh_tokens: :omit` writes every account with a null refresh token, so
+  # the refresh token never leaves the source database; the default keeps it.
+  @spec export_bundle(Pool.t(), binary(), keyword()) ::
           {:ok, binary(), %{required(:exported) => non_neg_integer()}}
           | {:error, lifecycle_error()}
-  def export_bundle(%Pool{} = pool, password) when is_binary(password) do
+  def export_bundle(pool, password, opts \\ [])
+
+  def export_bundle(%Pool{} = pool, password, opts) when is_binary(password) and is_list(opts) do
     with :ok <- validate_password(password),
-         {:ok, accounts, skipped} <- export_accounts(pool),
+         {:ok, refresh_tokens} <- refresh_token_mode(opts, [:include, :omit], :include),
+         {:ok, accounts, skipped} <- export_accounts(pool, refresh_tokens),
          {:ok, bundle} <- seal_accounts(accounts, password) do
       {:ok, bundle,
        %{
          version: @version,
          account_count: length(accounts),
          exported: length(accounts),
+         refresh_tokens: refresh_token_label(refresh_tokens),
          skipped_missing_access_token: skipped.missing_access_token,
          skipped_missing_refresh_token: skipped.missing_refresh_token
        }}
     end
   end
 
-  def export_bundle(_pool, _password), do: {:error, lifecycle_error(:bundle_invalid_request)}
+  def export_bundle(_pool, _password, _opts), do: {:error, lifecycle_error(:bundle_invalid_request)}
 
+  # An import is a copy of accounts that stay live where they came from. A copy
+  # that refreshes rotates the shared refresh token and revokes it at the
+  # source, so the default `refresh_tokens: :omit` links only the access token
+  # and revokes any refresh token the target identity still holds; the copy
+  # then needs reauth when the access token stops working. `:import` is the
+  # explicit move that carries the refresh token.
   @spec import_bundle(binary(), Pool.t(), Scope.t(), binary(), keyword()) ::
           {:ok, map()} | {:error, lifecycle_error()}
   def import_bundle(bundle, pool, scope, password, opts \\ [])
@@ -134,10 +148,12 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
       dry_run? = Keyword.get(opts, :dry_run, false)
 
       with :ok <- validate_password(password),
+           {:ok, refresh_tokens} <- refresh_token_mode(opts, [:omit, :import], :omit),
            {:ok, accounts} <- open_accounts(bundle, password),
-           :ok <- validate_import_accounts(accounts),
-           {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope) do
-        import_prepared_accounts(prepared_accounts, pool, scope, dry_run?)
+           :ok <- validate_import_accounts(accounts, refresh_tokens),
+           accounts = omit_refresh_tokens(accounts, refresh_tokens),
+           {:ok, prepared_accounts} <- prepare_import_accounts(accounts, pool, scope, refresh_tokens) do
+        import_prepared_accounts(prepared_accounts, pool, scope, dry_run?, refresh_tokens)
       end
     end
   end
@@ -200,13 +216,15 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
       else: {:error, "owner account cannot operate pools"}
   end
 
-  @spec export_accounts(Pool.t()) ::
+  @spec export_accounts(Pool.t(), :include | :omit) ::
           {:ok, [account()], skip_counts()} | {:error, lifecycle_error()}
-  defp export_accounts(pool) do
+  defp export_accounts(pool, refresh_tokens) do
     pool
     |> Upstreams.list_active_pool_assignments()
     |> Enum.reduce_while({:ok, [], empty_skips()}, fn assignment, {:ok, accounts, skipped} ->
-      case export_account(Upstreams.get_upstream_identity(assignment.upstream_identity_id)) do
+      identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+      case export_account(identity, refresh_tokens) do
         {:ok, account} ->
           {:cont, {:ok, [account | accounts], skipped}}
 
@@ -226,10 +244,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end
   end
 
-  defp export_account(%{status: "active"} = identity) do
+  defp export_account(%{status: "active"} = identity, refresh_tokens) do
     with {:ok, access_token} <- required_secret(identity, "access_token", :missing_access_token),
-         {:ok, refresh_token} <-
-           required_secret(identity, "refresh_token", :missing_refresh_token) do
+         {:ok, refresh_token} <- export_refresh_token(identity, refresh_tokens) do
       {:ok,
        %{
          "chatgpt_account_id" => identity.chatgpt_account_id,
@@ -248,7 +265,27 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end
   end
 
-  defp export_account(_identity), do: {:skip, :missing_access_token}
+  defp export_account(_identity, _refresh_tokens), do: {:skip, :missing_access_token}
+
+  # An omitted refresh token is never decrypted.
+  defp export_refresh_token(_identity, :omit), do: {:ok, nil}
+
+  defp export_refresh_token(identity, :include),
+    do: required_secret(identity, "refresh_token", :missing_refresh_token)
+
+  defp refresh_token_mode(opts, allowed, default) do
+    case Keyword.get(opts, :refresh_tokens, default) do
+      mode when is_atom(mode) and not is_nil(mode) ->
+        if mode in allowed, do: {:ok, mode}, else: {:error, lifecycle_error(:bundle_invalid_request)}
+
+      _mode ->
+        {:error, lifecycle_error(:bundle_invalid_request)}
+    end
+  end
+
+  defp refresh_token_label(:omit), do: "omitted"
+  defp refresh_token_label(:include), do: "included"
+  defp refresh_token_label(:import), do: "imported"
 
   defp required_secret(identity, kind, missing_reason) do
     case Secrets.decrypt_active_secret(identity, kind) do
@@ -407,13 +444,25 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end
   end
 
-  defp validate_import_accounts(accounts) do
-    if Enum.all?(accounts, &valid_account?/1) do
-      :ok
-    else
-      {:error, lifecycle_error(:bundle_invalid_account)}
+  defp validate_import_accounts(accounts, refresh_tokens) do
+    cond do
+      not Enum.all?(accounts, &valid_account?/1) ->
+        {:error, lifecycle_error(:bundle_invalid_account)}
+
+      refresh_tokens == :import and not Enum.all?(accounts, &present_string?(&1["refresh_token"])) ->
+        {:error, lifecycle_error(:bundle_missing_refresh_token)}
+
+      true ->
+        :ok
     end
   end
+
+  # Drop the refresh token as soon as the bundle shape is validated, so neither
+  # preparation nor persistence ever receives it.
+  defp omit_refresh_tokens(accounts, :omit),
+    do: Enum.map(accounts, &Map.put(&1, "refresh_token", nil))
+
+  defp omit_refresh_tokens(accounts, :import), do: accounts
 
   defp valid_account?(%{} = account) do
     valid_account_keys?(account) and valid_account_values?(account)
@@ -428,7 +477,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     Enum.all?([
       present_string?(account["chatgpt_account_id"]) and
         present_string?(account["account_label"]),
-      present_string?(account["access_token"]) and present_string?(account["refresh_token"]),
+      present_string?(account["access_token"]) and optional_present_string?(account["refresh_token"]),
       optional_string?(account["chatgpt_user_id"]) and
         optional_string?(account["account_email"]),
       optional_string?(account["workspace_id"]) and
@@ -441,6 +490,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
 
   defp present_string?(value), do: is_binary(value) and byte_size(String.trim(value)) > 0
   defp optional_string?(value), do: is_nil(value) or is_binary(value)
+  defp optional_present_string?(value), do: is_nil(value) or present_string?(value)
 
   defp valid_credential_provenance?(value), do: value in [nil, "codex_chatgpt_oauth"]
 
@@ -452,31 +502,33 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
 
   defp optional_datetime?(_value), do: false
 
-  defp import_prepared_accounts([], _pool, _scope, dry_run?) do
-    {:ok, empty_import_receipt(dry_run?)}
+  defp import_prepared_accounts([], _pool, _scope, dry_run?, refresh_tokens) do
+    {:ok, empty_import_receipt(dry_run?, refresh_tokens)}
   end
 
-  defp import_prepared_accounts(prepared_accounts, pool, scope, true) do
-    validate_import_accounts_transaction(prepared_accounts, pool, scope)
+  defp import_prepared_accounts(prepared_accounts, pool, scope, true, refresh_tokens) do
+    validate_import_accounts_transaction(prepared_accounts, pool, scope, refresh_tokens)
   end
 
-  defp import_prepared_accounts(prepared_accounts, pool, scope, false) do
-    import_accounts(prepared_accounts, pool, scope)
+  defp import_prepared_accounts(prepared_accounts, pool, scope, false, refresh_tokens) do
+    import_accounts(prepared_accounts, pool, scope, refresh_tokens)
   end
 
-  defp empty_import_receipt(dry_run?) do
+  defp empty_import_receipt(dry_run?, refresh_tokens) do
     %{
       version: @version,
       account_count: 0,
       valid: 0,
       imported: 0,
-      dry_run: dry_run?
+      dry_run: dry_run?,
+      refresh_tokens: refresh_token_label(refresh_tokens),
+      revoked_refresh_tokens: 0
     }
   end
 
-  defp import_accounts(prepared_accounts, pool, scope) do
-    case persist_import_accounts(prepared_accounts, pool, scope) do
-      {:ok, results} ->
+  defp import_accounts(prepared_accounts, pool, scope, refresh_tokens) do
+    case persist_import_accounts(prepared_accounts, pool, scope, refresh_tokens) do
+      {:ok, {results, revoked}} ->
         publish_import_results(results, pool, scope)
         imported = length(results)
 
@@ -486,7 +538,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
            account_count: imported,
            valid: imported,
            imported: imported,
-           dry_run: false
+           dry_run: false,
+           refresh_tokens: refresh_token_label(refresh_tokens),
+           revoked_refresh_tokens: revoked
          }}
 
       {:error, _reason} ->
@@ -497,20 +551,39 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   # This deliberately wraps only the transaction invocation. Publication stays
   # outside this boundary so unexpected publication failures remain visible and
   # a database failure can never publish a partially persisted bundle.
-  defp persist_import_accounts(prepared_accounts, pool, scope) do
-    Repo.transaction(fn -> import_accounts_transaction(prepared_accounts, pool, scope) end)
+  defp persist_import_accounts(prepared_accounts, pool, scope, refresh_tokens) do
+    Repo.transaction(fn -> import_accounts_transaction(prepared_accounts, pool, scope, refresh_tokens) end)
   rescue
     _exception in [Postgrex.Error, Ecto.ConstraintError] -> {:error, :persistence_failed}
   end
 
-  defp import_accounts_transaction(prepared_accounts, pool, scope) do
+  defp import_accounts_transaction(prepared_accounts, pool, scope, refresh_tokens) do
     case TokenLinking.link_prepared_batch_in_transaction(scope, pool, prepared_accounts) do
-      {:ok, results} -> results
+      {:ok, results} -> {results, revoke_copied_refresh_tokens(results, refresh_tokens)}
       {:error, _reason} -> Repo.rollback(:bundle_import_failed)
     end
   end
 
-  defp validate_import_accounts_transaction(prepared_accounts, pool, scope) do
+  # Linking without a refresh token leaves an older one active, for example
+  # one an earlier refresh-carrying import stored in this copy. Revoke it in the
+  # same transaction so the copy cannot refresh at all.
+  defp revoke_copied_refresh_tokens(_results, :import), do: 0
+
+  defp revoke_copied_refresh_tokens(results, :omit) do
+    identity_ids = Enum.map(results, & &1.identity.id)
+
+    {revoked, _rows} =
+      Repo.update_all(
+        from(secret in EncryptedSecret,
+          where: secret.upstream_identity_id in ^identity_ids and secret.secret_kind == "refresh_token" and secret.status == "active"
+        ),
+        set: [status: "revoked", superseded_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)]
+      )
+
+    revoked
+  end
+
+  defp validate_import_accounts_transaction(prepared_accounts, pool, scope, refresh_tokens) do
     case validate_import_accounts_transaction_result(prepared_accounts, pool, scope) do
       {:ok, count} ->
         {:ok,
@@ -519,7 +592,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
            account_count: count,
            valid: count,
            imported: 0,
-           dry_run: true
+           dry_run: true,
+           refresh_tokens: refresh_token_label(refresh_tokens),
+           revoked_refresh_tokens: 0
          }}
 
       {:error, _reason} ->
@@ -548,11 +623,19 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
     end)
   end
 
-  defp prepare_import_accounts(accounts, pool, scope) do
+  # Expiry is evaluated here for both normal and dry-run imports: the batch
+  # validation behind a dry run does not evaluate it, and an access-only copy
+  # rejects an expired access token it could never refresh.
+  defp prepare_import_accounts(accounts, pool, scope, refresh_tokens) do
+    evaluated_at = DateTime.utc_now()
+
     accounts
     |> Enum.reduce_while({:ok, []}, fn account, {:ok, prepared} ->
-      case Upstreams.prepare_bundle_account(scope, pool, import_attrs(account)) do
-        {:ok, %PreparedAccount{} = entry} -> {:cont, {:ok, [entry | prepared]}}
+      with {:ok, %PreparedAccount{} = entry} <-
+             prepare_bundle_account(scope, pool, import_attrs(account), refresh_tokens),
+           :ok <- PreparedAccount.evaluate(entry, evaluated_at) do
+        {:cont, {:ok, [entry | prepared]}}
+      else
         {:error, reason} -> {:halt, {:error, preparation_error(reason)}}
       end
     end)
@@ -561,6 +644,12 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
       {:error, _reason} = error -> error
     end
   end
+
+  defp prepare_bundle_account(scope, pool, attrs, :omit),
+    do: Upstreams.prepare_access_only_bundle_account(scope, pool, attrs)
+
+  defp prepare_bundle_account(scope, pool, attrs, :import),
+    do: Upstreams.prepare_bundle_account(scope, pool, attrs)
 
   # Bundle parsing and account-shape validation own their existing public
   # errors. Once preparation reaches identity selection, only authorization is

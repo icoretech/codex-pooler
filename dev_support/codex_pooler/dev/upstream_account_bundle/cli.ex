@@ -4,13 +4,18 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle.CLI do
   @spec parse_export_args([String.t()]) :: {:ok, map()} | {:error, String.t()}
   def parse_export_args(args) when is_list(args) do
     {options, positional, invalid} =
-      OptionParser.parse(args, strict: [out: :string, pool: :string])
+      OptionParser.parse(args, strict: [out: :string, pool: :string, access_token_only: :boolean])
 
     with :ok <- reject_parser_remainders(positional, invalid),
-         :ok <- reject_duplicate_options(args, out: :string, pool: :string),
+         :ok <- reject_duplicate_options(args, out: :string, pool: :string, access_token_only: :boolean),
          {:ok, out_path} <- required_option(options, :out, "--out is required"),
          {:ok, pool_slug} <- required_option(options, :pool, "--pool is required") do
-      {:ok, %{out_path: out_path, pool_slug: pool_slug}}
+      {:ok,
+       %{
+         out_path: out_path,
+         pool_slug: pool_slug,
+         refresh_tokens: if(Keyword.get(options, :access_token_only, false), do: :omit, else: :include)
+       }}
     end
   end
 
@@ -18,7 +23,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle.CLI do
   def parse_import_args(args) when is_list(args) do
     {options, positional, invalid} =
       OptionParser.parse(args,
-        strict: [pool: :string, owner_email: :string, dry_run: :boolean]
+        strict: [pool: :string, owner_email: :string, dry_run: :boolean, with_refresh_token: :boolean]
       )
 
     with :ok <- reject_parser_remainders([], invalid),
@@ -26,7 +31,8 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle.CLI do
            reject_duplicate_options(args,
              pool: :string,
              owner_email: :string,
-             dry_run: :boolean
+             dry_run: :boolean,
+             with_refresh_token: :boolean
            ),
          {:ok, path} <- required_positional(positional),
          {:ok, pool_slug} <- required_option(options, :pool, "--pool is required") do
@@ -35,7 +41,10 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle.CLI do
          path: path,
          pool_slug: pool_slug,
          owner_email: Keyword.get(options, :owner_email),
-         dry_run?: Keyword.get(options, :dry_run, false)
+         dry_run?: Keyword.get(options, :dry_run, false),
+         # An import is a copy of an account that stays live where it came
+         # from; only an explicit move may carry the refresh token.
+         refresh_tokens: if(Keyword.get(options, :with_refresh_token, false), do: :import, else: :omit)
        }}
     end
   end
