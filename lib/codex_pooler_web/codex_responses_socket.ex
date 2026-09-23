@@ -2045,7 +2045,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp maybe_defer_native_compaction(prepared, metadata, phase, control_ref, cause, state) do
     cond do
       active_response_task?(state) ->
-        {:ok, defer_native_compaction_reservation(prepared, metadata, phase, control_ref)}
+        {:ok, defer_native_compaction_reservation(prepared, metadata, phase, control_ref, cause)}
 
       phase == :compact ->
         refuse_unadmitted_native_compaction(metadata, cause, state)
@@ -2392,13 +2392,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp defer_native_compaction_reservation(prepared, metadata, phase, control_ref) do
+  # `cause` is why the owner granted no admission when the frame arrived. The
+  # queue route asks again at dequeue; the active-turn reconnect route cannot
+  # queue, so it decides from this cause.
+  defp defer_native_compaction_reservation(prepared, metadata, phase, control_ref, cause) do
     request_options = %{
       prepared.request_options
       | native_compaction_reservation: %{
           metadata: metadata,
           phase: phase,
-          control_ref: control_ref
+          control_ref: control_ref,
+          cause: cause
         }
     }
 
@@ -2415,7 +2419,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:ok, queue_prepared_response(state, prepared)}
 
       owner_forwarded_socket?(state) and pending_native_compaction_deferral?(prepared) ->
-        reject_deferred_native_compaction(state)
+        dispatch_or_reject_deferred_native_compaction(prepared, state)
 
       owner_forwarded_socket?(state) ->
         dispatch_owner_prepared_response(prepared, state)
@@ -2425,15 +2429,35 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  # The deferral means "the owner refused the compaction reservation; retry it
-  # once the active turn drains". Only the dequeue route honours that, so the
-  # owner-forwarded reconnect route — which must not queue, because it is
-  # reattaching to an owner with a live turn — has to answer instead of
-  # dispatching a turn whose reservation was never admitted. The retryable
-  # `503 owner_unavailable` it returns is the same public contract
-  # `start_deferred_or_tracked_response/2`'s own failure branch already
-  # returns for the identical condition; the two routes used to disagree, and
-  # this one answered `400 invalid_request` (findings#168).
+  # The deferral means "the owner granted no compaction admission; ask again
+  # once the active turn drains". Only the dequeue route can wait, so the
+  # owner-forwarded reconnect route, which must not queue because it is
+  # reattaching to an owner with a live turn, decides with the dequeue's rule
+  # from the cause the reservation met on arrival. A final turn whose owner
+  # answered without an admission is dispatched as the ordinary turn, exactly
+  # as it is when no task is tracked and nothing is deferred; it used to be
+  # refused 503 here, so the released client's next turn after an interrupt in
+  # a compacted session was served or refused depending on whether the new
+  # socket's prewarm task had reported yet (findings#206 row 206-339). An owner
+  # that could not be asked at all and an incremental compaction keep the
+  # retryable `503 owner_unavailable` the dequeue answers for the identical
+  # condition; this route used to answer `400 invalid_request` (findings#168).
+  defp dispatch_or_reject_deferred_native_compaction(
+         %PreparedWebsocketFrame{request_options: %RequestOptions{native_compaction_reservation: %{phase: phase, cause: cause}}} = prepared,
+         state
+       ) do
+    if unadmitted_final_runs_as_ordinary?(phase, cause, state) do
+      prepared
+      |> clear_native_compaction_deferral()
+      |> dispatch_owner_prepared_response(state)
+    else
+      reject_deferred_native_compaction(state)
+    end
+  end
+
+  defp clear_native_compaction_deferral(%PreparedWebsocketFrame{} = prepared),
+    do: %{prepared | request_options: %{prepared.request_options | native_compaction_reservation: nil}}
+
   defp reject_deferred_native_compaction(state) do
     refusal = owner_error(:owner_unavailable)
     log_replay_rejection(state, :owner_unavailable, :native_compaction_deferral, refusal)
@@ -3219,7 +3243,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         start_tracked_response_task(prepared, state)
 
       {:error, {:owner_unavailable, cause}} ->
-        if phase == :final and not admission_owner_unreachable?(cause, state),
+        if unadmitted_final_runs_as_ordinary?(phase, cause, state),
           do: start_deferred_or_tracked_response(prepared, state),
           else: start_owner_retarget_error_task(owner_error(:owner_unavailable), prepared, state)
 
@@ -3227,6 +3251,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         start_owner_retarget_error_task(owner_error(reason), prepared, state)
     end
   end
+
+  # The rule both deferral routes apply to a reservation that found no
+  # admission: only a final turn whose owner could be asked runs as the
+  # ordinary turn.
+  defp unadmitted_final_runs_as_ordinary?(phase, cause, state),
+    do: phase == :final and not admission_owner_unreachable?(cause, state)
 
   # Whether a reservation failed because its owner could not be asked at all.
   # The forwarder folds every owner resolution and transport failure into
