@@ -72,29 +72,30 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
   @tag slow: "the wrapper's cap is whole seconds, so the cancellation under test cannot fire before one second"
   test "the 20 minute cap starts before preparation rather than after QA_READY" do
     fixture = wrapper_fixture!(0, 0)
-    release = Path.join(fixture.root, "prepare-release")
-    wrapper = Task.async(fn -> run_wrapper(fixture, "QA_COMPLETE", [{"RELIABILITY_QA_TIMEOUT_SECONDS", "1"}, {"FIXTURE_PREPARE_BLOCK", "1"}]) end)
+    phase = assert_cap_cancels_blocked_preparation!(fixture)
+    assert length(phase) == 3, "the blocked preparation never started, so the cap was not shown to cancel it"
+  end
 
-    # The blocked preparation never completes on its own, so only the cap can
-    # end it; a slow runner delays the cancellation but cannot let preparation
-    # finish first. A cap that is deferred until preparation completes, or that
-    # starts after QA_READY, leaves the wrapper waiting until this budget ends.
-    {output, code} =
-      case Task.yield(wrapper, @cancellation_budget_ms) do
-        {:ok, result} ->
-          result
+  @tag slow: "the wrapper's cap is whole seconds, so the cancellation under test cannot fire before one second"
+  test "the cap still cancels preparation when its first TERM is lost before the supervisor owns the phase" do
+    fixture = wrapper_fixture!(0, 0)
+    supervisor = Path.join(fixture.root, "dev_support/bin/qa-phase")
+    File.rename!(supervisor, supervisor <> "-real")
 
-        nil ->
-          File.touch!(release)
-          flunk("the cap did not cancel the blocked preparation within #{@cancellation_budget_ms} ms; after the test released it the wrapper returned #{inspect(Task.await(wrapper, @cancellation_budget_ms))}")
-      end
+    # Stands in for the forked shell between fork and exec of the supervisor:
+    # Bash 3.2 (macOS /bin/bash) runs the inherited trap there, so a TERM sent
+    # at that moment never reaches the supervisor, which then runs the phase.
+    # This shell consumes the first TERM and only then becomes the supervisor.
+    write_executable!(supervisor, """
+    #!/bin/bash
+    lost=0
+    trap 'lost=1' TERM
+    while [ "$lost" = 0 ]; do sleep 0.05; done
+    trap - TERM
+    exec "$0-real" "$@"
+    """)
 
-    assert code == 124, output
-    refute File.exists?(Path.join(fixture.root, "prepare-completed"))
-    refute output =~ "QA_READY"
-    assert File.exists?(fixture.compose_down_marker)
-    [phase_pid, descendant_pid] = fixture.root |> Path.join("phase-pids") |> File.read!() |> String.split()
-    for pid <- [phase_pid, descendant_pid], do: CodexPooler.InstancePresencePeer.assert_os_process_absent!(pid)
+    assert_cap_cancels_blocked_preparation!(fixture)
   end
 
   test "provider-connected QA requires the serving process verification before readiness" do
@@ -205,6 +206,93 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
              CodexPooler.JSON.decode!(output)["services"]["db"]["ports"]
   end
 
+  # The blocked preparation never completes on its own, so only the cap can end
+  # it; a slow runner delays the cancellation but cannot let preparation finish
+  # first. A cap that is deferred until preparation completes, that starts
+  # after QA_READY, or whose cancellation never reaches the supervisor leaves
+  # the wrapper waiting until this budget ends. Returns the phase identities
+  # captured while it was blocked (supervisor, command, descendant).
+  defp assert_cap_cancels_blocked_preparation!(fixture) do
+    deadline = System.monotonic_time(:millisecond) + @cancellation_budget_ms
+    wrapper = Task.async(fn -> run_wrapper(fixture, "QA_COMPLETE", [{"RELIABILITY_QA_TIMEOUT_SECONDS", "1"}, {"FIXTURE_PREPARE_BLOCK", "1"}]) end)
+    phase = await_phase_identities(wrapper, Path.join(fixture.root, "phase-pids"), deadline)
+
+    {output, code} =
+      case Task.yield(wrapper, max(deadline - System.monotonic_time(:millisecond), 0)) do
+        {:ok, result} -> result
+        nil -> flunk_uncancelled_preparation!(fixture, wrapper, phase)
+      end
+
+    assert code == 124, output
+    refute File.exists?(Path.join(fixture.root, "prepare-completed"))
+    refute output =~ "QA_READY"
+    assert File.exists?(fixture.compose_down_marker)
+    # Identity-based: a phase process killed together with its supervisor is
+    # reparented and may linger as a zombie where PID 1 does not reap (CI).
+    for {_role, identity} <- phase, is_map(identity), do: CodexPooler.InstancePresencePeer.assert_os_process_stopped!(identity)
+    phase
+  end
+
+  defp await_phase_identities(wrapper, pids_path, deadline) do
+    with {:ok, contents} <- File.read(pids_path),
+         true <- String.ends_with?(contents, "\n"),
+         [_supervisor, _command, _descendant] = pids <- String.split(contents) do
+      Enum.zip([:supervisor, :command, :descendant], Enum.map(pids, &capture_phase_identity/1))
+    else
+      _pending ->
+        if Process.alive?(wrapper.pid) and System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(10)
+          await_phase_identities(wrapper, pids_path, deadline)
+        else
+          []
+        end
+    end
+  end
+
+  defp capture_phase_identity(pid) do
+    case os_process_snapshot(pid) do
+      {:present, %{source: source, start_signature: signature}} -> %{pid: pid, source: source, start_signature: signature}
+      other -> {:not_captured, pid, other}
+    end
+  end
+
+  defp flunk_uncancelled_preparation!(fixture, wrapper, phase) do
+    watchdog_fired = File.exists?(Path.join(fixture.runtime_root, "watchdog-timeout"))
+    statuses = Enum.map(phase, fn {role, identity} -> "#{role}=#{phase_status(identity)}" end)
+    File.touch!(Path.join(fixture.root, "prepare-release"))
+    released_at = System.monotonic_time(:millisecond)
+    result = Task.await(wrapper, @cancellation_budget_ms)
+    returned_ms = System.monotonic_time(:millisecond) - released_at
+    completed = File.exists?(Path.join(fixture.root, "prepare-completed"))
+
+    flunk(
+      "the cap did not cancel the blocked preparation within #{@cancellation_budget_ms} ms " <>
+        "(watchdog fired: #{watchdog_fired}; phase at the deadline: #{inspect(statuses)}); after the test released it " <>
+        "the wrapper returned #{inspect(result)} #{returned_ms} ms later and the preparation completed: #{completed}"
+    )
+  end
+
+  defp phase_status(%{pid: pid} = identity), do: CodexPooler.InstancePresencePeer.classify_owned_process(identity, os_process_snapshot(pid))
+  defp phase_status(not_captured), do: inspect(not_captured)
+
+  defp os_process_snapshot(pid) do
+    case :os.type() do
+      {:unix, :linux} ->
+        case File.read("/proc/#{pid}/stat") do
+          {:ok, stat} -> CodexPooler.InstancePresencePeer.parse_linux_process_stat(stat)
+          {:error, :enoent} -> :absent
+          {:error, reason} -> {:error, reason}
+        end
+
+      _other ->
+        case System.cmd("ps", ["-o", "state=", "-o", "lstart=", "-o", "ppid=", "-p", pid], env: [{"LC_ALL", "C"}], stderr_to_stdout: true) do
+          {output, 0} -> CodexPooler.InstancePresencePeer.parse_portable_process_output(output)
+          {_output, 1} -> :absent
+          {_output, code} -> {:error, {:ps_exit, code}}
+        end
+    end
+  end
+
   defp temp_dir!(label) do
     path =
       Path.join(System.tmp_dir!(), "codex-pooler-#{label}-#{System.unique_integer([:positive])}")
@@ -290,7 +378,7 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
           # Completes only when the test releases it, never on its own.
           (while [ ! -e prepare-release ]; do sleep 0.05; done) &
           descendant=$!
-          printf '%s %s\n' "$$" "$descendant" > phase-pids
+          printf '%s %s %s\n' "$PPID" "$$" "$descendant" > phase-pids
           if wait "$descendant"; then : > prepare-completed; fi
           exit 99
         fi

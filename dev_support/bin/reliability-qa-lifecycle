@@ -122,7 +122,12 @@ stop_phase() {
   [ -n "$phase_pid" ] || return 0
   # The owned supervisor pins its session identity until it has stopped the
   # whole group, even if a descendant ignores TERM or the command exits first.
-  kill -TERM "$phase_pid" >/dev/null 2>&1 || true
+  # A TERM that reaches the forked shell before it has exec'd the supervisor is
+  # consumed by the inherited trap under Bash 3.2 (macOS /bin/bash; Bash 5.2
+  # re-raises it), and the supervisor would then run the phase to completion.
+  # Repeat it until the supervisor is gone: the foreground sleep lets Bash reap
+  # it, after which kill fails and the loop ends.
+  while kill -TERM "$phase_pid" >/dev/null 2>&1; do sleep 0.1; done
   wait "$phase_pid" 2>/dev/null || true
   phase_pid=""
 }
