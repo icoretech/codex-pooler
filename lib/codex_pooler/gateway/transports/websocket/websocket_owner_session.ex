@@ -4380,8 +4380,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   # Detaches it now, as the ordinary detach would after the drain, and fences
   # it: a later submission from it is refused `client_disconnected`, so the
-  # task settles a pre-dispatch client disconnect nothing reached the provider
-  # for, and the resend is admitted as that turn's successor.
+  # task settles a client disconnect this owner sent nothing upstream for, and
+  # the resend is admitted as that turn's successor. The downstream can also be
+  # one a recovery restored here after the previous owner died with the turn
+  # already sent upstream: the fence then stops the recovery's re-submit, the
+  # turn settles `usage_unknown` (a settlement with no billed tokens, the same
+  # as any dispatch whose owner died before the provider's usage came back)
+  # and only the resend is billed, on its own request.
   defp detach_idle_closing_downstream(state, requested_downstream) do
     state =
       state
