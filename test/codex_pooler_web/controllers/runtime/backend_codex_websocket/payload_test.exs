@@ -644,7 +644,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
       assert routing["strategy"] == "bridge_ring"
       assert routing["routing_locality_status"] == "unavailable"
       assert routing["routing_locality_applied"] == false
-      assert routing["routing_locality_unhonored_reason"] == "prompt_cache_key_absent"
+      # The client sent a key; the websocket transport never routes by it, and
+      # the reason says so instead of claiming the key was absent (findings#255
+      # row 255-40).
+      assert routing["routing_locality_unhonored_reason"] == "websocket_transport"
       refute Map.has_key?(routing, "routing_locality_seed_fingerprint")
       refute Map.has_key?(routing, "routing_locality_assignment_fingerprint")
 

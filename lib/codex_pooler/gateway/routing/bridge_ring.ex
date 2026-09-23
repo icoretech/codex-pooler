@@ -603,8 +603,20 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     |> Map.put(:seed, seed)
     |> Map.put(:seed_basis_class, seed_basis_class(seed))
     |> Map.put(:seed_fingerprint, fingerprint(seed))
-    |> Map.merge(prompt_cache_locality_status(settings, affinity, prompt_cache_key, candidate_count))
+    |> Map.merge(prompt_cache_locality_status(opts, settings, affinity, prompt_cache_key, candidate_count))
   end
+
+  # A websocket turn never carries a routing copy of `prompt_cache_key`
+  # (`RequestOptions.for_websocket/2` drops it whatever the client sent: that
+  # transport follows the session's assignment), so its reason names the
+  # transport instead of claiming the client omitted the key (findings#255
+  # row 255-40). Diagnostic only; the ordering is unchanged.
+  defp prompt_cache_locality_status(%RequestOptions{transport: %{transport: "websocket"}}, _settings, _affinity, _prompt_cache_key, _candidate_count) do
+    %{status: "unavailable", applied?: false, unhonored_reason: "websocket_transport"}
+  end
+
+  defp prompt_cache_locality_status(%RequestOptions{}, settings, affinity, prompt_cache_key, candidate_count),
+    do: prompt_cache_locality_status(settings, affinity, prompt_cache_key, candidate_count)
 
   defp prompt_cache_locality_status(_settings, _affinity, prompt_cache_key, _candidate_count)
        when not (is_binary(prompt_cache_key) and prompt_cache_key != "") do
