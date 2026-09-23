@@ -9906,7 +9906,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         receive do
           :sandbox_allowed -> :ok
         after
-          1_000 -> raise "timed out waiting for cancellation stream sandbox allowance"
+          @detection_timeout_ms -> raise "timed out waiting for cancellation stream sandbox allowance"
         end
 
         stream_conn =
@@ -15334,7 +15334,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         receive do
           :sandbox_allowed -> :ok
         after
-          1_000 -> raise "timed out waiting for stream task sandbox allowance"
+          @detection_timeout_ms -> raise "timed out waiting for stream task sandbox allowance"
         end
 
         assert {:ok, %{stream: stream}} =

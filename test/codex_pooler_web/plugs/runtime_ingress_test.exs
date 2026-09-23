@@ -1670,7 +1670,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         receive do
           {:trace_result, pid, result} when pid == task.pid -> result
         after
-          1_000 -> flunk("traced callback did not complete")
+          @detection_timeout_ms -> flunk("traced callback did not complete")
         end
 
       delivered_ref = :erlang.trace_delivered(task.pid)

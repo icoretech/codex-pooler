@@ -983,7 +983,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
   end
 
   defp wait_for_rate_limit_event_window(identity, window_kind, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     identity
     |> QuotaWindows.list_quota_windows()
@@ -1005,7 +1005,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
   end
 
   defp wait_for_rate_limit_event_tasks(deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+    deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
 
     case Task.Supervisor.children(CodexPooler.RateLimitEventSupervisor) do
       [] ->
@@ -1123,7 +1123,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       {^handler_id, _pid, _source, _query, _params} ->
         await_identity_quota_write(handler_id, identity_id)
     after
-      1_000 -> flunk("expected async codex.rate_limits quota write for fixture identity")
+      @detection_timeout_ms -> flunk("expected async codex.rate_limits quota write for fixture identity")
     end
   end
 
@@ -1139,7 +1139,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       {^handler_id, _other_pid, _source, _query, _params} ->
         await_task_commit(handler_id, task_pid)
     after
-      1_000 -> flunk("expected async codex.rate_limits Repo COMMIT")
+      @detection_timeout_ms -> flunk("expected async codex.rate_limits Repo COMMIT")
     end
   end
 

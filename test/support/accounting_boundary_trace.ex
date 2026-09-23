@@ -1,6 +1,11 @@
 defmodule CodexPooler.AccountingBoundaryTrace do
   @moduledoc false
 
+  # Failure-detection budget for the forwarded trace of the boundary call: the
+  # call happened inside the callback, so a green run returns on its message and
+  # only a missing call spends the budget.
+  @detection_timeout_ms 15_000
+
   @type trace_mfa :: {module(), atom(), non_neg_integer()}
 
   @spec capture_call(trace_mfa(), (-> result)) :: {result, [term()]} when result: term()
@@ -56,7 +61,7 @@ defmodule CodexPooler.AccountingBoundaryTrace do
       {^trace_ref, _other_trace} ->
         await_call!(trace_ref, caller, module, function, arity)
     after
-      1_000 ->
+      @detection_timeout_ms ->
         raise "expected #{inspect(module)}.#{function}/#{arity} accounting boundary call"
     end
   end
