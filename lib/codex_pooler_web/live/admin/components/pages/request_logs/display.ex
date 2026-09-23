@@ -472,14 +472,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp fast_service_tier?(tier), do: ServiceTier.fast_mode?(tier)
 
-  # Mirrors how accounting picks the tier it prices: the upstream-reported tier
-  # unless it is absent or `auto`, then the requested tier, then the effective
-  # column for rows that recorded neither.
+  # Mirrors how accounting picks the tier it prices: the requested `priority`
+  # tier when the Codex backend echoes `default` for it, otherwise the
+  # upstream-reported tier unless it is absent or `auto`, then the requested
+  # tier, then the effective column for rows that recorded neither.
   defp pricing_basis_tier(log) do
     reported = ServiceTier.canonicalize(Map.get(log, :actual_service_tier))
     requested = ServiceTier.canonicalize(Map.get(log, :requested_service_tier))
 
     cond do
+      requested == "priority" and reported == "default" -> requested
       reported not in [nil, "auto"] -> reported
       requested -> requested
       reported -> reported

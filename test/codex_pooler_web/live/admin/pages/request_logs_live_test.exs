@@ -418,9 +418,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "#request-log-#{fast_request.id}-protocol [data-role='fast-mode-indicator']"
            )
 
-    # Requested fast mode that the upstream reported as default is priced as
-    # default, so the bolt stays off and the row names the requested tier.
-    refute has_element?(
+    # Requested fast mode that the Codex backend echoes as default is still
+    # priced at the priority tier, so the bolt stays on and the row names the
+    # requested tier.
+    assert has_element?(
              view,
              "#request-log-#{requested_fast_request.id}-protocol [data-role='fast-mode-indicator']"
            )
