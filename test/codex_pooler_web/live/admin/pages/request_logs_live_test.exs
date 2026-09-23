@@ -51,6 +51,33 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-detail-attempt-1-lifecycle-id")
   end
 
+  # The model filter lists every model the visible Pools' history holds, from
+  # a loose index scan instead of a DISTINCT over the whole `requests` table on
+  # every load (findings#206 row 206-373). It still offers exactly the models
+  # it offered before: the oldest turn's model too, never a blank model or an
+  # endpoint path recorded as the model of a metadata request.
+  test "the model filter offers every model of the visible Pools' full history", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "model-filter-history", name: "Model Filter History"})
+    {:ok, other_pool} = Pools.create_pool(scope, %{slug: "model-filter-other", name: "Model Filter Other"})
+
+    %{request: oldest} = request_log_fixture(pool, %{requested_model: "gpt-filter-oldest"})
+    oldest |> Ecto.Changeset.change(admitted_at: DateTime.add(oldest.admitted_at, -400, :day)) |> Repo.update!()
+
+    for model <- ["gpt-filter-beta", "GPT-filter-Alpha", "gpt-filter-beta", "/backend-api/codex/models"],
+        do: request_log_fixture(pool, %{requested_model: model})
+
+    request_log_fixture(other_pool, %{requested_model: "gpt-filter-other-pool"})
+
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert model_filter_values(view) == ["", "GPT-filter-Alpha", "gpt-filter-beta", "gpt-filter-oldest"]
+
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs")
+    offered = model_filter_values(view)
+    assert ["" | _models] = offered
+    assert Enum.filter(offered, &String.contains?(&1, "filter")) == ["GPT-filter-Alpha", "gpt-filter-beta", "gpt-filter-oldest", "gpt-filter-other-pool"]
+    refute Enum.any?(offered, &String.starts_with?(&1, "/"))
+  end
+
   test "renders required selectors and sanitized request log rows with priced cost $0.123456 and unpriced_missing_model status",
        %{
          conn: conn,
@@ -3683,6 +3710,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
   defp normalize_repo_source(value) when is_binary(value), do: value
   defp normalize_repo_source(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_repo_source(value), do: to_string(value)
+
+  defp model_filter_values(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#request-log-model-filter [data-role='model-filter-option']")
+    |> LazyHTML.attribute("data-model")
+  end
 
   defp live_request_logs(conn, path) do
     with {:ok, view, html} <- live(conn, path) do

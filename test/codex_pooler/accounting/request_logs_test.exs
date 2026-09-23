@@ -2750,7 +2750,24 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
       correlation_id: "model-list-other"
     })
 
+    blank =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-blank-later",
+        correlation_id: "model-list-blank"
+      })
+
+    blank |> Ecto.Changeset.change(requested_model: "") |> Repo.update!()
+
     assert Accounting.list_request_log_models(pool) == ["gpt-alpha", "gpt-beta"]
+
+    # The visible Pools bound the list, and a selected Pool the viewer cannot
+    # see lists nothing (findings#206 row 206-373 kept both rules).
+    assert Accounting.list_request_log_models(nil, visible_pool_ids: [pool.id]) == ["gpt-alpha", "gpt-beta"]
+    assert Accounting.list_request_log_models(nil, visible_pool_ids: [pool.id, other_pool.id]) == ["gpt-alpha", "gpt-beta", "gpt-other-pool"]
+    assert Accounting.list_request_log_models(pool, visible_pool_ids: [pool.id, other_pool.id]) == ["gpt-alpha", "gpt-beta"]
+    assert Accounting.list_request_log_models(pool, visible_pool_ids: [other_pool.id]) == []
+    assert Accounting.list_request_log_models(nil, visible_pool_ids: []) == []
+    assert Enum.filter(Accounting.list_request_log_models(nil), &(&1 in ["gpt-alpha", "gpt-beta", "gpt-other-pool", ""])) == ["gpt-alpha", "gpt-beta", "gpt-other-pool"]
   end
 
   test "request logs expose the model the latest attempt sent and the one the upstream served" do

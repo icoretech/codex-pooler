@@ -66,20 +66,45 @@ defmodule CodexPooler.Accounting.RequestLogs do
     enrich_detail_settlement(item)
   end
 
+  # Every requested model a Pool's request history holds, read as a loose index
+  # scan over `requests_pool_requested_model_idx`: each step asks the index for
+  # the first model after the previous one, so the work grows with the number
+  # of distinct models per Pool, not with the history. A plain `DISTINCT` read
+  # the whole table on every request-log load (findings#206 row 206-373).
+  # Blank models and endpoint paths recorded as the model of a metadata request
+  # (`/backend-api/...`) are not models; every non-empty string sorts after ''.
+  @request_models_sql """
+  WITH RECURSIVE models(pool_id, requested_model) AS (
+    SELECT pool.id,
+           (SELECT r.requested_model FROM requests r
+             WHERE r.pool_id = pool.id AND r.requested_model > ''
+             ORDER BY r.requested_model LIMIT 1)
+      FROM unnest($1::uuid[]) AS pool(id)
+    UNION ALL
+    SELECT models.pool_id,
+           (SELECT r.requested_model FROM requests r
+             WHERE r.pool_id = models.pool_id AND r.requested_model > models.requested_model
+             ORDER BY r.requested_model LIMIT 1)
+      FROM models
+     WHERE models.requested_model IS NOT NULL
+  )
+  SELECT DISTINCT requested_model FROM models
+   WHERE requested_model IS NOT NULL AND requested_model NOT LIKE '/%'
+  """
+
   @spec list_models(term(), keyword()) :: [String.t()]
   def list_models(pool_or_id, opts \\ []) do
-    pool_id = id_for(pool_or_id)
-    visible_pool_ids = Keyword.get(opts, :visible_pool_ids)
+    case request_model_pool_ids(id_for(pool_or_id), Keyword.get(opts, :visible_pool_ids)) do
+      [] ->
+        []
 
-    Request
-    |> maybe_filter_request_model_visible_pools(visible_pool_ids)
-    |> maybe_filter_request_model_pool(pool_id)
-    |> where([request], not is_nil(request.requested_model) and request.requested_model != "")
-    |> where([request], not like(request.requested_model, "/%"))
-    |> distinct(true)
-    |> select([request], request.requested_model)
-    |> Repo.all()
-    |> Enum.sort_by(&String.downcase/1)
+      pool_ids ->
+        %{rows: rows} = Repo.query!(@request_models_sql, [Enum.map(pool_ids, &Ecto.UUID.dump!/1)])
+
+        rows
+        |> Enum.map(fn [model] -> model end)
+        |> Enum.sort_by(&String.downcase/1)
+    end
   end
 
   @spec list_models_for_scope(CodexPooler.Accounts.Scope.t()) :: [String.t()]
@@ -434,15 +459,14 @@ defmodule CodexPooler.Accounting.RequestLogs do
   defp maybe_filter_request_log_visible_pools(query, pool_ids) when is_list(pool_ids),
     do: from([request, ...] in query, where: request.pool_id in ^pool_ids)
 
-  defp maybe_filter_request_model_pool(query, nil), do: query
+  # The Pools whose history the model list reads: the selected Pool, only when
+  # the viewer can see it, else every visible Pool, else every Pool.
+  defp request_model_pool_ids(nil, nil), do: Repo.all(from(pool in Pool, select: pool.id))
+  defp request_model_pool_ids(nil, visible_pool_ids) when is_list(visible_pool_ids), do: Enum.uniq(visible_pool_ids)
+  defp request_model_pool_ids(pool_id, nil), do: [pool_id]
 
-  defp maybe_filter_request_model_pool(query, pool_id),
-    do: from(request in query, where: request.pool_id == ^pool_id)
-
-  defp maybe_filter_request_model_visible_pools(query, nil), do: query
-
-  defp maybe_filter_request_model_visible_pools(query, pool_ids) when is_list(pool_ids),
-    do: from(request in query, where: request.pool_id in ^pool_ids)
+  defp request_model_pool_ids(pool_id, visible_pool_ids) when is_list(visible_pool_ids),
+    do: if(pool_id in visible_pool_ids, do: [pool_id], else: [])
 
   defp maybe_filter_request_log_status(query, nil), do: query
 
