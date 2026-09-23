@@ -144,16 +144,18 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendLockOrderTest do
         ).rows
       end)
 
-    case observation do
-      [[query] | _rest] ->
-        case Regex.run(~r/FROM "(\w+)"/, query) do
-          [_match, relation] -> relation
-          nil -> flunk("blocked statement did not name a relation")
-        end
+    # `query` comes from the backend-status snapshot the sampling transaction
+    # took, while `pg_blocking_pids/1` is read live, so one sample can pair the
+    # wait with the waiter's previous statement (findings#206 row 206-182). A
+    # wait whose statement names no relation is sampled again until the
+    # deadline, and fails there.
+    case blocked_relation(observation) do
+      {:ok, relation} ->
+        relation
 
-      [] ->
+      {:resample, failure} ->
         if System.monotonic_time(:millisecond) > deadline do
-          flunk("session-first transaction never blocked on the resend claim")
+          flunk(failure || "session-first transaction never blocked on the resend claim")
         else
           # Polls PostgreSQL's own lock-wait view; the barrier, not this interval,
           # decides the ordering.
@@ -162,6 +164,15 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendLockOrderTest do
         end
     end
   end
+
+  defp blocked_relation([[query] | _rest]) do
+    case Regex.run(~r/FROM "(\w+)"/, query) do
+      [_match, relation] -> {:ok, relation}
+      nil -> {:resample, "blocked statement did not name a relation"}
+    end
+  end
+
+  defp blocked_relation([]), do: {:resample, nil}
 
   # The committed owner's registered removal takes the whole graph with it: its Pool cascades to
   # the key, model, assignment, session, requests, attempts and turns, and the identity goes as
