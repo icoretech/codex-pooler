@@ -36,7 +36,10 @@ defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFence do
   `install!/1` until the teardown capture is collected: ExUnit's console
   handler stays detached across that window, and the only lines dropped are
   those emitted between the end of the test's own capture and the test
-  process's exit.
+  process's exit. The callback returns only after the holder has closed both
+  captures, so the handler swap that brings the console handler back has
+  finished before any `on_exit` registered before the fence runs (findings#206
+  row 206-160).
   """
 
   import ExUnit.Assertions, only: [flunk: 1]
@@ -103,29 +106,39 @@ defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFence do
   # The outer capture only keeps ExUnit's console handler detached and is
   # discarded (its level lets nothing through to formatting). The teardown
   # capture starts at the test process's exit or at the callback's request.
+  #
+  # The collector gets its log only after both captures are closed. Closing
+  # the last capture makes ExUnit swap its handler for the console one through
+  # `:logger.remove_handler/1`, which snapshots the primary config, global
+  # level included, and writes that snapshot back after an asynchronous step.
+  # Answered before the swap, the callback went on to the `on_exit` callbacks
+  # registered before the fence, and a test that restored the level there
+  # (`Logger.configure(level: previous)` after raising it to `:info`) could
+  # have that restore overwritten by the stale snapshot, leaving every later
+  # test of the partition at `:info` (findings#206 row 206-160).
   defp hold(test_pid, installer) do
     test_ref = Process.monitor(test_pid)
 
-    ExUnit.CaptureLog.capture_log([level: :emergency], fn ->
-      send(installer, {self(), :holding})
+    {{collector, log}, _discarded} =
+      ExUnit.CaptureLog.with_log([level: :emergency], fn ->
+        send(installer, {self(), :holding})
 
-      first =
-        receive do
-          {:DOWN, ^test_ref, :process, ^test_pid, _reason} -> nil
-          {:start_teardown, from, ref} -> {from, ref}
-        end
+        first =
+          receive do
+            {:DOWN, ^test_ref, :process, ^test_pid, _reason} -> nil
+            {:start_teardown, from, ref} -> {from, ref}
+          end
 
-      {collector, log} =
         ExUnit.CaptureLog.with_log([level: :info], fn ->
           acknowledge_teardown(first)
           await_collect()
         end)
+      end)
 
-      case collector do
-        {from, ref} -> send(from, {ref, log})
-        :expired -> pass_through_unexpected(log)
-      end
-    end)
+    case collector do
+      {from, ref} -> send(from, {ref, log})
+      :expired -> pass_through_unexpected(log)
+    end
   end
 
   defp acknowledge_teardown(nil), do: :ok
