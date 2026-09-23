@@ -1044,6 +1044,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     end
   end
 
+  # Only the node named as the owner is asked for its role, so resolving an
+  # owner costs one probe whatever else is connected.
   defp resolve_remote_owner(owner_instance_id, opts) do
     node_client = node_client(opts)
 
@@ -1051,8 +1053,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     |> Enum.find_value(fn candidate_node ->
       candidate_node_string = safe_node_string(candidate_node)
 
-      if remote_app_node?(candidate_node, candidate_node_string, opts) and
-           candidate_node_string == owner_instance_id do
+      if candidate_node_string == owner_instance_id and
+           remote_app_node?(candidate_node, candidate_node_string, opts) do
         {:ok, {:remote, candidate_node, candidate_node_string}}
       end
     end)
@@ -2536,14 +2538,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     @moduledoc false
 
     @behaviour NodeClient
+    alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
     alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
 
     @impl NodeClient
     def connected_app_nodes, do: Node.list()
 
+    # The role probe waits as long as the owner call that follows it
+    # (findings#206 row 206-245). Under a one-second budget an owner node that
+    # stalled for longer resolved as unavailable, and a closing socket's detach
+    # that reads `owner_unavailable` runs its owner-lost recovery against a turn
+    # the owner is still serving: the outcome row 206-212 removed from the
+    # detach call itself.
     @impl NodeClient
     def app_node?(node) when is_atom(node) do
-      case :erpc.call(node, System, :get_env, ["OBAN_MODE"], 1_000) do
+      case :erpc.call(node, System, :get_env, ["OBAN_MODE"], WebsocketOwnerContract.default_owner_call_timeout_ms()) do
         role when role in [nil, "", "web", "all"] -> true
         _role -> false
       end

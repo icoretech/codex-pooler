@@ -35,6 +35,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
   @frame "synthetic-frame"
   @peer_detection_timeout_ms 10_000
+  @stalled_owner_node_ms 1_200
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
   defmodule V2FailureKindNodeClient do
@@ -2753,6 +2754,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_frame, "corr-real-peer-response-identity", 1, {:data, _terminal}}
 
     assert_receive {:websocket_owner_frame, "corr-real-peer-response-identity", 1, :complete}
+  end
+
+  # findings#206 row 206-245: resolving a remote owner asks the owner node for
+  # its role. Under the one-second probe budget an owner node that stalled for
+  # longer (a stop-the-world pause, a congested distribution link) read as
+  # unavailable, and a socket's detach that reads it runs its owner-lost
+  # recovery against an owner still serving the turn. The peer's OS process is stopped
+  # for 1.2 s, longer than that budget and well inside the owner call budget.
+  test "a stalled real peer owner node still resolves as the owner" do
+    {_peer_pid, peer_node} = start_current_peer_process!("stalled_role_probe_owner")
+    os_pid = peer_node |> :erpc.call(:os, :getpid, [], @peer_detection_timeout_ms) |> List.to_string()
+    on_exit(fn -> System.cmd("kill", ["-CONT", os_pid], stderr_to_stdout: true) end)
+    session = %CodexSession{owner_instance_id: Atom.to_string(peer_node)}
+
+    assert {_output, 0} = System.cmd("kill", ["-STOP", os_pid], stderr_to_stdout: true)
+
+    resume =
+      Task.async(fn ->
+        Process.sleep(@stalled_owner_node_ms)
+        System.cmd("kill", ["-CONT", os_pid], stderr_to_stdout: true)
+      end)
+
+    assert {:ok, {:remote, ^peer_node, _owner_instance_id}} = WebsocketOwnerForwarder.resolve_owner(session)
+    assert {_output, 0} = Task.await(resume, @peer_detection_timeout_ms)
   end
 
   test "real peer owner captures its node-local timeout and recovery captures the recovering node timeout",
