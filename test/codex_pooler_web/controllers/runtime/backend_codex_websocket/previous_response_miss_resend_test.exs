@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
+  import CodexPooler.PoolerFixtures, only: [model_fixture: 2]
 
   alias CodexPooler.Accounting.{Attempt, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
@@ -207,6 +208,78 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
     end
   end
 
+  # The anchored turn names a model the account cannot serve, on the
+  # connection that produced its anchor: the provider resolves the anchor and
+  # refuses the model with a codeless `400 invalid_request_error` whose message
+  # names the model (live probe 2026-09-23, findings#232 rows 232-279/232-281).
+  # It is not an anchor miss, so it is never the retry event: the client gets
+  # the final wrapped refusal, and nothing is retried or dispatched again.
+  for forwarding? <- [false, true] do
+    test "the provider's model refusal of an anchored turn on its producing connection stays a final refusal (owner forwarding #{forwarding?})" do
+      CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, unquote(forwarding?))
+
+      first_input = native_text_input("model anchor")
+      next_input = native_text_input("model next")
+
+      upstream =
+        start_upstream(
+          # provenance: observed findings#232 row 232-279 (provider model refusal frame shape, live probe 2026-09-23); reply frames synthetic
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]],
+              respond: completed_response_frames("resp_ws_model_refusal_opener", [@answer], 2, 1)
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              path: "/backend-api/codex/responses",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create", "model" => "provider-gpt-example-unservable", "previous_response_id" => "resp_ws_model_refusal_opener"}],
+              respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(model_refusal("provider-gpt-example-unservable"))])
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      target = unservable_model(setup)
+      assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
+      port = start_public_endpoint!()
+      thread = "ws-model-refusal-#{System.unique_integer([:positive])}"
+      {conn, websocket, ref} = public_websocket_connect!(port, setup, thread)
+      frame = released_client_frame(setup, thread)
+
+      try do
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame.(first_input, Ecto.UUID.generate(), %{}))
+        {conn, websocket, opener_terminal} = receive_until_terminal(conn, websocket, ref)
+        assert %{"type" => "response.completed", "response" => %{"id" => "resp_ws_model_refusal_opener"}} = opener_terminal
+        assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}}, @settlement_detection_timeout_ms
+
+        {conn, websocket} =
+          public_websocket_send_text!(conn, websocket, ref, frame.(next_input, Ecto.UUID.generate(), %{"model" => target.exposed_model_id, "previous_response_id" => "resp_ws_model_refusal_opener"}))
+
+        {conn, _websocket, refusal_frame} = public_websocket_receive_text!(conn, websocket, ref)
+        refusal = CodexPooler.JSON.decode!(refusal_frame)
+        refute refusal == native_previous_response_retry_event()
+        assert %{"type" => "error", "status" => 400, "error" => %{"code" => "invalid_request", "type" => "invalid_request_error"}} = refusal
+        assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "failed"}}}, @settlement_detection_timeout_ms
+
+        assert [_opener, anchored] = FakeUpstream.requests(upstream)
+        assert anchored.json["previous_response_id"] == "resp_ws_model_refusal_opener"
+        assert [_opener_row, refused] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id, order_by: [asc: request.admitted_at]))
+        assert {refused.status, refused.requested_model, refused.retry_count} == {"failed", target.exposed_model_id, 0}
+        assert [refused_attempt] = Repo.all(from(attempt in Attempt, where: attempt.request_id == ^refused.id))
+        refute refused_attempt.response_metadata["rejection_message_class"] == "invalid_previous_response_id"
+        assert :ok = FakeUpstream.verify!(upstream)
+        conn
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
   # A `response.create` shaped like the released client's: its turn metadata
   # names the thread and the turn, so a resend of the same turn carries the
   # same turn id.
@@ -233,6 +306,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PreviousResponseMissResen
   defp linked_successor?(%Request{id: refused_id}, %Request{id: resend_id} = resend) do
     resend.request_metadata["client_resend"]["predecessor_request_id"] == refused_id or
       Repo.exists?(from(link in RequestClientRetryLink, where: link.predecessor_request_id == ^refused_id and link.successor_request_id == ^resend_id))
+  end
+
+  # The Codex backend's websocket refusal of a model the ChatGPT account
+  # cannot serve: codeless, frame keys `type`/`status`/`error`, error keys
+  # `type`/`message` (P55 probe `provider-ws-order-probe-2.jsonl`).
+  defp model_refusal(model), do: %{"type" => "error", "status" => 400, "error" => %{"type" => "invalid_request_error", "message" => "The '#{model}' model is not supported when using Codex with a ChatGPT account."}}
+
+  defp unservable_model(setup) do
+    source = Map.put(setup.model.metadata["source_assignment_models"][setup.assignment.id], "slug", "gpt-example-unservable")
+
+    model_fixture(setup.pool, %{
+      exposed_model_id: "gpt-example-unservable",
+      upstream_model_id: "provider-gpt-example-unservable",
+      metadata: %{"source_assignment_ids" => [setup.assignment.id], "source_assignment_models" => %{setup.assignment.id => source}}
+    })
   end
 
   defp completed_response_frames(response_id, output, input_tokens, output_tokens) do
