@@ -1529,9 +1529,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
   @tag :replay_matrix
   @tag :replay_race
   test "the released client's full-history resend of a pre-visible incremental turn redeems its replay" do
-    %{setup: setup, upstream: upstream, request_id: request_id, retry_result: retry_result, armed: armed} =
-      incremental_previsible_scenario(:full_history)
+    :full_history |> incremental_previsible_scenario() |> assert_incremental_replay_redeemed!()
+  end
 
+  # The released client sends a tool continuation the moment the previous
+  # response completes, while the socket still tracks that turn's response task,
+  # so the frame is queued and started when the task retires. That dequeue used
+  # to skip the owner's replay preflight: the turn ran without its replay binding,
+  # a cut before any output settled it `client_disconnected` with no entitlement,
+  # and the resend was never a replay (findings#232 row 232-181, measured with
+  # Codex 0.156.1 at a 0 ms gap between the two turns).
+  @tag :replay_matrix
+  @tag :replay_race
+  test "a pre-visible incremental turn sent the moment the previous turn completes still arms the replay its resend redeems" do
+    :full_history |> incremental_previsible_scenario(:immediate) |> assert_incremental_replay_redeemed!()
+  end
+
+  defp assert_incremental_replay_redeemed!(%{setup: setup, upstream: upstream, request_id: request_id, retry_result: retry_result, armed: armed}) do
     assert {armed, retry_result["type"], get_in(retry_result, ["error", "code"])} ==
              {:armed, "response.completed", nil}
 
@@ -2002,7 +2016,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
   # client's anchored delta and is cut before any output, and the retry on a
   # new socket is the full-history form of turn B (or, as the control, that
   # form with its own trailing item changed).
-  defp incremental_previsible_scenario(resend_shape) when resend_shape in [:full_history, :altered_tail] do
+  defp incremental_previsible_scenario(resend_shape, turn_gap \\ :after_settlement)
+       when resend_shape in [:full_history, :altered_tail] and turn_gap in [:after_settlement, :immediate] do
     release_ref = make_ref()
 
     replay =
@@ -2054,11 +2069,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(turn_a))
     {conn, websocket, completed_a} = receive_until_terminal!(conn, websocket, ref)
     assert completed_a["type"] == "response.completed"
-    # The next turn starts once the client has its answer and the socket has
-    # retired turn A's task, as it does between two user prompts.
-    assert [%Request{id: request_a_id}] = request_logs(setup.pool.id)
-    assert_request_settled!(request_a_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
-    await_socket_idle!()
+
+    # `:after_settlement`: the next turn starts once the client has its answer
+    # and the socket has retired turn A's task, as between two user prompts.
+    # `:immediate`: it goes out as soon as turn A's terminal arrives, as a tool
+    # continuation does.
+    if turn_gap == :after_settlement do
+      assert [%Request{id: request_a_id}] = request_logs(setup.pool.id)
+      assert_request_settled!(request_a_id, System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms)
+      await_socket_idle!()
+    end
 
     {conn, _websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(turn_b))
 

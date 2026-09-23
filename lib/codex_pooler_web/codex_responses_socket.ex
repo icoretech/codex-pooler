@@ -2405,31 +2405,74 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp dispatch_replay_intent(prepared, state, %{intent: intent} = replay_intent) do
+  defp dispatch_replay_intent(prepared, state, replay_intent) do
     control_ref = make_ref()
-    downstream = Map.take(state.websocket_owner_downstream, [:pid, :epoch, :correlation_id])
 
-    with {:ok, control} <-
-           RemoteReconnectControlV2.new(%{
-             version: 2,
-             action: :preflight,
-             intent: intent,
-             codex_session_id: state.codex_session.id,
-             downstream: downstream,
-             semantic_turn_digest: prepared.semantic_turn_key,
-             replay_claim_digest: prepared.replay_claim_digest,
-             provisional_token: nil,
-             replay_generation: nil,
-             owner_lease_token: state.websocket_owner_lease_token,
-             control_ref: control_ref,
-             authorization_binding: replay_intent.authorization_binding,
-             consume_binding: active_lifecycle_binding(replay_intent)
-           }),
+    with {:ok, control} <- replay_preflight_control(prepared, state, replay_intent, control_ref),
          result <- Adapter.reconnect_control_v2(state, control) do
       apply_replay_preflight_result(result, prepared, state, replay_intent, control_ref)
     else
       _invalid -> reject_owner_preflight(:owner_busy, state)
     end
+  end
+
+  defp replay_preflight_control(prepared, state, %{intent: intent} = replay_intent, control_ref) do
+    RemoteReconnectControlV2.new(%{
+      version: 2,
+      action: :preflight,
+      intent: intent,
+      codex_session_id: state.codex_session.id,
+      downstream: Map.take(state.websocket_owner_downstream, [:pid, :epoch, :correlation_id]),
+      semantic_turn_digest: prepared.semantic_turn_key,
+      replay_claim_digest: prepared.replay_claim_digest,
+      provisional_token: nil,
+      replay_generation: nil,
+      owner_lease_token: state.websocket_owner_lease_token,
+      control_ref: control_ref,
+      authorization_binding: replay_intent.authorization_binding,
+      consume_binding: active_lifecycle_binding(replay_intent)
+    })
+  end
+
+  # A native frame the client sends while this socket still tracks its previous
+  # turn's response task is queued before the owner preflight above, and the
+  # dequeue used to start it without the replay binding that preflight attaches.
+  # The owner then ran it as a turn that is never replay-active, so a cut before
+  # any output settled it `client_disconnected` instead of suspending it into its
+  # replay entitlement. The released client sends a tool continuation the moment
+  # the previous response completes, which is exactly when the frame is queued
+  # (findings#232 rows 232-181, 232-202). The dequeue therefore asks the owner
+  # the same fresh-dispatch question now that the previous turn is gone; any
+  # other answer keeps the frame as it was, and its submission meets the owner's
+  # ordinary checks exactly as before.
+  defp attach_queued_owner_replay_intent(%PreparedWebsocketFrame{} = prepared, state) do
+    with true <- owner_forwarded_socket?(state),
+         false <- Map.get(state, :websocket_owner_active_turn_reconnect?, false),
+         false <- is_map(Map.get(state, :websocket_owner_pending_handoff)),
+         true <- WebsocketCodec.replay_eligible?(prepared),
+         {:ok, %{intent: :fresh, lifecycle: nil} = replay_intent} <- Service.prepare_replay_intent(state.auth, prepared),
+         {:ok, control} <- replay_preflight_control(prepared, state, replay_intent, make_ref()),
+         {:ok, :fresh_dispatch, binding} <- Adapter.reconnect_control_v2(state, control),
+         true <- fresh_owner_binding?(binding, state),
+         {:ok, resealed} <-
+           WebsocketCodec.attach_replay_intent(
+             prepared,
+             replay_intent.authorization_binding,
+             fresh_replay_lifecycle(replay_intent, state)
+           ) do
+      resealed
+    else
+      _not_fresh -> prepared
+    end
+  end
+
+  defp fresh_replay_lifecycle(replay_intent, state) do
+    (replay_intent.lifecycle || %{replay_generation: 0})
+    |> Map.merge(%{
+      owner_idle_validated?: true,
+      owner_lease_token: state.websocket_owner_lease_token,
+      owner_instance_id: state.codex_session.owner_instance_id
+    })
   end
 
   # A full-history resend of an anchored request carries the armed request's
@@ -2465,18 +2508,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          _ref
        ) do
     if fresh_owner_binding?(binding, state) do
-      lifecycle =
-        (intent.lifecycle || %{replay_generation: 0})
-        |> Map.merge(%{
-          owner_idle_validated?: true,
-          owner_lease_token: state.websocket_owner_lease_token,
-          owner_instance_id: state.codex_session.owner_instance_id
-        })
-
       case WebsocketCodec.attach_replay_intent(
              prepared,
              intent.authorization_binding,
-             lifecycle
+             fresh_replay_lifecycle(intent, state)
            ) do
         {:ok, resealed} -> {:ok, start_or_queue_prepared_response(resealed, state)}
         {:error, _reason} -> reject_owner_preflight(:owner_busy, state)
@@ -3093,7 +3128,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp start_deferred_or_tracked_response(prepared, state),
-    do: start_tracked_response_task(prepared, state)
+    do: prepared |> attach_queued_owner_replay_intent(state) |> start_tracked_response_task(state)
 
   defp reserve_and_start_deferred_response(prepared, metadata, phase, control_ref, state) do
     case reserve_owner_capability(prepared, metadata, phase, control_ref, state) do
