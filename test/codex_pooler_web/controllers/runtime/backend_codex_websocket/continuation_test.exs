@@ -249,6 +249,105 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
     end
   end
 
+  # The fake upstream closes a websocket that has read no client data for this
+  # long, as Bandit does after its default 60 s read timeout: the peer idle
+  # timeout that killed the held proxy turn of the smoke proxy-drain lane
+  # (icoretech/codex-pooler-findings#206 row 206-142).
+  @upstream_idle_timeout_ms 150
+  # Detection budget for the settlement the test only observes.
+  @settlement_detection_timeout_ms 15_000
+
+  # Owner forwarding off runs the turn through `request_once/1` in the response
+  # task; on, through the owner's upstream session process (the lane's
+  # topology).
+  for forwarding? <- [false, true] do
+    @tag :websocket_in_flight_keepalive
+    @tag slow: "the provider must stay silent past a real peer idle timeout twice on a public socket"
+    test "a silent in-flight turn keeps its upstream websocket past the peer's idle timeout and completes once (owner forwarding #{forwarding?})" do
+      CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, unquote(forwarding?))
+      CodexPooler.TestAppEnv.restore_on_exit(UpstreamWebsocketSession)
+
+      Application.put_env(:codex_pooler, UpstreamWebsocketSession,
+        keepalive_interval_ms: 25,
+        keepalive_pong_timeout_ms: 5_000
+      )
+
+      # The provider stays silent for two idle periods after the submission, so
+      # the turn outlives the peer's idle timeout twice before its terminal. A
+      # single silent span keeps frame processing out of the measured window.
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          FakeUpstream.delayed_sse_stream(
+            [
+              {"response.completed",
+               %{
+                 "type" => "response.completed",
+                 "response" => %{
+                   "id" => "resp_in_flight_keepalive",
+                   "status" => "completed",
+                   "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+                 }
+               }}
+            ],
+            interval_ms: 2 * @upstream_idle_timeout_ms
+          ),
+          thousand_island_options: [read_timeout: @upstream_idle_timeout_ms]
+        )
+
+      on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+      setup = gateway_setup(upstream)
+      assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
+      port = start_public_endpoint!()
+      turn_state = "ws-in-flight-keepalive-#{System.unique_integer([:positive])}"
+      {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+      try do
+        payload =
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("in-flight keepalive"),
+            "stream" => true,
+            "generate" => true
+          })
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+        {conn, _websocket, completed} = public_websocket_receive_text!(conn, websocket, ref)
+
+        assert %{"type" => "response.completed", "response" => %{"id" => "resp_in_flight_keepalive"}} =
+                 CodexPooler.JSON.decode!(completed)
+
+        assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                       @settlement_detection_timeout_ms
+
+        assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+        assert request.transport == "websocket"
+        assert request.status == "succeeded"
+        assert request.retry_count == 0
+        assert [%Attempt{status: "succeeded", transport: "websocket"}] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+        # One submission only, on the connection the fake pinged while the
+        # provider stayed silent. The fake records a Ping before it pushes the
+        # later terminal from the same handler, so the record is read from its
+        # state; the public socket receive helper may consume mailbox notices.
+        assert [upstream_request] = FakeUpstream.requests(upstream)
+        assert upstream_request.method == "WEBSOCKET"
+        connection_id = upstream_request.websocket_connection_id
+
+        assert Enum.any?(
+                 FakeUpstream.websocket_control_frames(upstream),
+                 &match?(%{opcode: :ping, websocket_connection_id: ^connection_id}, &1)
+               )
+
+        conn
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
   @tag :continuation_generation_boundary
   test "native continuation guard blocks replacement send and accepts the explicit full retry" do
     previous_response_id = "resp_generation_boundary_sentinel"

@@ -1215,9 +1215,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp maybe_record_successful_serving_mode(state, _result, %ReceiveState{}), do: state
 
+  # The idle keepalive only runs between requests, while this process waits in
+  # its GenServer loop. A submitted turn blocks that loop in `receive_events/2`
+  # for as long as the provider stays silent (a long reasoning pause, a held
+  # turn), so without an in-flight ping the peer or an intermediary sees no
+  # client data and can close the socket on its own idle timeout, failing a
+  # turn that was still running upstream (Bandit's default 60 s, the smoke
+  # proxy-drain lane, icoretech/codex-pooler-findings#206 row 206-142). The
+  # keepalive clock restarts at the submission and keeps pinging on the same
+  # interval until the request ends; the reply re-arms the idle keepalive.
   defp await_sent_request(state, receive_state) do
     :erlang.garbage_collect(self())
-    {result, state} = receive_events(state, receive_state)
+    {result, state} = receive_events(schedule_keepalive(state), receive_state)
     {:ok, result, state}
   end
 
@@ -1417,6 +1426,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     socket = mint_socket(conn)
     request_caller_pid = receive_state.request_caller_pid
     request_caller_monitor = receive_state.request_caller_monitor
+    keepalive_token = Map.get(state, :keepalive_token)
 
     receive do
       {:DOWN, ^request_caller_monitor, :process, ^request_caller_pid, _reason}
@@ -1443,6 +1453,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
       {:upstream_websocket_pong_deadline, token} ->
         handle_pong_deadline_message(state, receive_state, token)
+
+      {:upstream_websocket_keepalive, ^keepalive_token} when is_reference(keepalive_token) ->
+        send_in_flight_keepalive(state, receive_state)
     after
       receive_state.timeouts.receive_timeout_ms ->
         result =
@@ -1464,6 +1477,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
            }}
 
         {result, invalidate_state(state)}
+    end
+  end
+
+  # An in-flight ping only keeps the connection visibly alive; it arms no pong
+  # deadline, so a provider that answers late never fails a running turn that
+  # the receive timeout still covers. A pong deadline armed by an idle ping
+  # before the request keeps its existing meaning. A ping that cannot be written
+  # fails the turn exactly like a Pong that cannot be written.
+  defp send_in_flight_keepalive(state, %ReceiveState{} = receive_state) do
+    case send_frame(state, {:ping, unique_keepalive_payload()}) do
+      {:ok, state} ->
+        receive_events(schedule_keepalive(state), receive_state)
+
+      {:error, reason, state} ->
+        receive_state = %{receive_state | termination_source: :websocket_control_send_error}
+        finish_receive_result({:failure, state, receive_state, {:websocket_control_send_failed, reason}})
     end
   end
 
@@ -2544,8 +2573,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     |> Map.put(:keepalive_token, token)
   end
 
-  defp cancel_keepalive(%{keepalive_ref: ref} = state) when is_reference(ref) do
-    Process.cancel_timer(ref)
+  # `request_once/1` runs a turn in the caller's process, so a keepalive that
+  # fired while that turn was finishing must not stay behind in the caller's
+  # mailbox.
+  defp cancel_keepalive(%{keepalive_ref: ref, keepalive_token: token} = state)
+       when is_reference(ref) do
+    if Process.cancel_timer(ref) == false do
+      receive do
+        {:upstream_websocket_keepalive, ^token} -> :ok
+      after
+        0 -> :ok
+      end
+    end
 
     state
     |> Map.delete(:keepalive_ref)
