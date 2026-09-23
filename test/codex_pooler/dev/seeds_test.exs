@@ -15,7 +15,10 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Catalog.{Model, SyncRun}
   alias CodexPooler.Dev.Seeds
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
+  alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Jobs.{AccountReconciliationEnqueueWorker, AccountReconciliationWorker}
@@ -505,6 +508,41 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert Enum.map(result.expiry_fixtures, & &1.account_label) ==
              Map.keys(expected) |> Enum.sort()
+  end
+
+  # The "Dev limited models" key enforces a service tier. The runtime filter
+  # refuses a non-default tier a source assignment does not declare, so a seed
+  # that forces `priority` on models without tiers answers every request with
+  # that key `503 no_compatible_backend` (findings#206 row 206-272).
+  test "full seed limited key's enforced service tier is servable on every model it allows" do
+    result = Seeds.full()
+    limited = Repo.get!(APIKey, Enum.find(result.api_keys, &(&1.display_name == "Dev limited models")).id)
+    assert %APIKey{enforced_service_tier: "priority", allowed_model_identifiers: allowed} = limited
+    assert allowed != []
+    assert {:ok, policy} = CodexPooler.Access.normalize_api_key_policy(limited)
+    endpoint = "/backend-api/codex/responses"
+
+    for exposed_model_id <- allowed do
+      model = Repo.get_by!(Model, pool_id: limited.pool_id, exposed_model_id: exposed_model_id)
+      source_ids = model.metadata["source_assignment_ids"]
+      assert source_ids != []
+
+      candidates =
+        Enum.map(source_ids, fn id ->
+          assignment = Repo.get!(PoolUpstreamAssignment, id)
+          {assignment, Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)}
+        end)
+
+      payload = %{"model" => exposed_model_id}
+      request_options = RequestOptions.build(%{api_key_policy: policy}, endpoint, payload)
+
+      assert {:ok, admitted} =
+               %{model: model, endpoint: endpoint, payload: payload, request_options: request_options, candidates: candidates}
+               |> FilterInput.new()
+               |> CandidateEligibility.filter_runtime_compatible_candidates()
+
+      assert Enum.sort(Enum.map(admitted, fn {assignment, _identity} -> assignment.id end)) == Enum.sort(source_ids)
+    end
   end
 
   test "documentation screenshot seed is public-safe and idempotent" do

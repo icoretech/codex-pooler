@@ -31,6 +31,17 @@ defmodule CodexPooler.Dev.Seeds.Full do
 
   @seed_key "codex_pooler_dev_seed"
 
+  # The Fast tier the provider's catalog declares for the seeded gpt-6 models,
+  # in the shape the upstream sync stores per source assignment. The "Dev
+  # limited models" key enforces `priority`, and the runtime filter refuses a
+  # non-default tier the source assignment does not declare (`503
+  # no_compatible_backend`), so the seed declares what the provider declares.
+  @provider_service_tiers %{
+    "gpt-6-luna" => %{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"},
+    "gpt-6-sol" => %{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"},
+    "gpt-6-astra" => %{"id" => "priority", "name" => "Fast", "description" => "2x speed, increased usage"}
+  }
+
   @spec run(%{
           required(:owner) => User.t(),
           required(:operators) => [User.t()],
@@ -464,20 +475,20 @@ defmodule CodexPooler.Dev.Seeds.Full do
     [
       model_attrs(pool, "gpt-6-luna", "GPT 6 Luna", "active",
         source_assignment_models: %{
-          active_id => observed_source_metadata(),
-          ready_id => observed_source_metadata(),
-          clear_id => observed_source_metadata(),
-          absent_id => observed_source_metadata()
+          active_id => observed_source_metadata("gpt-6-luna"),
+          ready_id => observed_source_metadata("gpt-6-luna"),
+          clear_id => observed_source_metadata("gpt-6-luna"),
+          absent_id => observed_source_metadata("gpt-6-luna")
         }
       ),
       model_attrs(pool, "gpt-6-sol", "GPT 6 Sol", "active",
         source_assignment_models: %{
-          active_id => observed_source_metadata(),
-          ready_id => observed_source_metadata()
+          active_id => observed_source_metadata("gpt-6-sol"),
+          ready_id => observed_source_metadata("gpt-6-sol")
         },
         missing_sync_assignment_ids: [active_id]
       ),
-      model_attrs(pool, "gpt-6-astra", "GPT 6 Astra", "active", source_assignment_models: %{active_id => observed_source_metadata()}),
+      model_attrs(pool, "gpt-6-astra", "GPT 6 Astra", "active", source_assignment_models: %{active_id => observed_source_metadata("gpt-6-astra")}),
       model_attrs(pool, "gpt-5.5-pro", "GPT 5.5 Pro", "stale", stale_at: minutes_ago(45)),
       model_attrs(pool, "codex-image", "Codex Image", "suppressed", suppressed_at: minutes_ago(15))
     ]
@@ -486,17 +497,20 @@ defmodule CodexPooler.Dev.Seeds.Full do
 
   defp seed_secondary_models!(pool, secondary_assignment) do
     [
-      model_attrs(pool, "gpt-6-luna", "GPT 6 Luna", "active", source_assignment_models: %{secondary_assignment.id => observed_source_metadata()})
+      model_attrs(pool, "gpt-6-luna", "GPT 6 Luna", "active", source_assignment_models: %{secondary_assignment.id => observed_source_metadata("gpt-6-luna")})
     ]
     |> Enum.map(fn attrs -> %Model{} |> Model.changeset(attrs) |> Repo.insert!() end)
   end
 
-  defp observed_source_metadata do
+  defp observed_source_metadata(exposed_model_id) do
     %{
       "supports_responses" => true,
       "supports_streaming" => true,
       "supports_tools" => true,
-      "supports_reasoning" => true
+      "supports_reasoning" => true,
+      "service_tiers" => [Map.fetch!(@provider_service_tiers, exposed_model_id)],
+      "default_service_tier" => nil,
+      "additional_speed_tiers" => ["fast"]
     }
   end
 
