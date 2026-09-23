@@ -1161,28 +1161,43 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def await_public_websocket_upgrade(conn, ref, status, response_headers) do
-    receive do
-      message ->
-        case Mint.WebSocket.stream(conn, message) do
-          {:ok, conn, responses} ->
-            status = websocket_status_part(responses, ref) || status
-            response_headers = websocket_headers_part(responses, ref) || response_headers
+    message = receive_mint_socket_message!(conn, @detection_timeout_ms, "timed out waiting for websocket upgrade")
 
-            if Enum.any?(responses, &match?({:done, ^ref}, &1)) do
-              complete_public_websocket_upgrade(conn, status, response_headers)
-            else
-              await_public_websocket_upgrade(conn, ref, status, response_headers)
-            end
+    case Mint.WebSocket.stream(conn, message) do
+      {:ok, conn, responses} ->
+        status = websocket_status_part(responses, ref) || status
+        response_headers = websocket_headers_part(responses, ref) || response_headers
 
-          {:error, conn, reason, _responses} ->
-            Mint.HTTP.close(conn)
-            flunk("websocket upgrade failed: #{inspect(reason)}")
-
-          :unknown ->
-            await_public_websocket_upgrade(conn, ref, status, response_headers)
+        if Enum.any?(responses, &match?({:done, ^ref}, &1)) do
+          complete_public_websocket_upgrade(conn, status, response_headers)
+        else
+          await_public_websocket_upgrade(conn, ref, status, response_headers)
         end
+
+      {:error, conn, reason, _responses} ->
+        Mint.HTTP.close(conn)
+        flunk("websocket upgrade failed: #{inspect(reason)}")
+
+      :unknown ->
+        await_public_websocket_upgrade(conn, ref, status, response_headers)
+    end
+  end
+
+  @doc """
+  Receives the next message Mint delivers for `conn`'s own socket, and only
+  that: `{:tcp | :ssl, socket, data}`, `{:tcp_closed | :ssl_closed, socket}` or
+  `{:tcp_error | :ssl_error, socket, reason}`. Every other message stays in the
+  test mailbox, in order: a fake upstream's barrier or control notice, a pool
+  event, a telemetry message or another connection's socket data.
+  """
+  def receive_mint_socket_message!(conn, timeout_ms, timeout_message) do
+    socket = Mint.HTTP.get_socket(conn)
+
+    receive do
+      {tag, ^socket, _data_or_reason} = message when tag in [:tcp, :ssl, :tcp_error, :ssl_error] -> message
+      {tag, ^socket} = message when tag in [:tcp_closed, :ssl_closed] -> message
     after
-      @detection_timeout_ms -> flunk("timed out waiting for websocket upgrade")
+      timeout_ms -> flunk(timeout_message)
     end
   end
 
@@ -1234,27 +1249,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         ref,
         timeout_ms \\ @detection_timeout_ms
       ) do
-    receive do
-      message ->
-        case Mint.WebSocket.stream(conn, message) do
-          {:ok, conn, responses} ->
-            case decode_public_websocket_close(websocket, ref, responses) do
-              {:ok, websocket, code, reason} ->
-                {conn, websocket, code, reason}
+    message = receive_mint_socket_message!(conn, timeout_ms, "timed out waiting for websocket close")
 
-              {:cont, websocket} ->
-                public_websocket_receive_close!(conn, websocket, ref, timeout_ms)
-            end
+    case Mint.WebSocket.stream(conn, message) do
+      {:ok, conn, responses} ->
+        case decode_public_websocket_close(websocket, ref, responses) do
+          {:ok, websocket, code, reason} ->
+            {conn, websocket, code, reason}
 
-          {:error, conn, reason, _responses} ->
-            Mint.HTTP.close(conn)
-            flunk("websocket close receive failed: #{inspect(reason)}")
-
-          :unknown ->
+          {:cont, websocket} ->
             public_websocket_receive_close!(conn, websocket, ref, timeout_ms)
         end
-    after
-      timeout_ms -> flunk("timed out waiting for websocket close")
+
+      {:error, conn, reason, _responses} ->
+        Mint.HTTP.close(conn)
+        flunk("websocket close receive failed: #{inspect(reason)}")
+
+      :unknown ->
+        public_websocket_receive_close!(conn, websocket, ref, timeout_ms)
     end
   end
 
@@ -1277,27 +1289,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   defp receive_public_websocket_text!(conn, websocket, ref) do
-    receive do
-      message ->
-        case Mint.WebSocket.stream(conn, message) do
-          {:ok, conn, responses} ->
-            case decode_public_websocket_text(websocket, ref, responses) do
-              {:ok, websocket, text} ->
-                continue_public_websocket_receive(conn, websocket, ref, text)
+    message = receive_mint_socket_message!(conn, @detection_timeout_ms, "timed out waiting for websocket frame")
 
-              {:cont, websocket} ->
-                public_websocket_receive_text!(conn, websocket, ref)
-            end
+    case Mint.WebSocket.stream(conn, message) do
+      {:ok, conn, responses} ->
+        case decode_public_websocket_text(websocket, ref, responses) do
+          {:ok, websocket, text} ->
+            continue_public_websocket_receive(conn, websocket, ref, text)
 
-          {:error, conn, reason, _responses} ->
-            Mint.HTTP.close(conn)
-            flunk("websocket receive failed: #{inspect(reason)}")
-
-          :unknown ->
+          {:cont, websocket} ->
             public_websocket_receive_text!(conn, websocket, ref)
         end
-    after
-      @detection_timeout_ms -> flunk("timed out waiting for websocket frame")
+
+      {:error, conn, reason, _responses} ->
+        Mint.HTTP.close(conn)
+        flunk("websocket receive failed: #{inspect(reason)}")
+
+      :unknown ->
+        public_websocket_receive_text!(conn, websocket, ref)
     end
   end
 

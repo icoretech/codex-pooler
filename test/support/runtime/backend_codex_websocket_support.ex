@@ -617,23 +617,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
   defp receive_released_client_outcome(client, deadline) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
-    receive do
-      message ->
-        case Mint.WebSocket.stream(client.conn, message) do
-          {:ok, conn, responses} ->
-            released_client_responses(%{client | conn: conn}, responses, deadline)
+    message = receive_mint_socket_message!(client.conn, remaining, "timed out waiting for a released-client websocket outcome")
 
-          {:error, conn, _reason, responses} ->
-            case released_client_responses(%{client | conn: conn}, responses, :no_wait) do
-              :continue -> {:closed, %{client | conn: conn}, nil, "transport_closed"}
-              outcome -> outcome
-            end
+    case Mint.WebSocket.stream(client.conn, message) do
+      {:ok, conn, responses} ->
+        released_client_responses(%{client | conn: conn}, responses, deadline)
 
-          :unknown ->
-            receive_released_client_outcome(client, deadline)
+      {:error, conn, _reason, responses} ->
+        case released_client_responses(%{client | conn: conn}, responses, :no_wait) do
+          :continue -> {:closed, %{client | conn: conn}, nil, "transport_closed"}
+          outcome -> outcome
         end
-    after
-      remaining -> flunk("timed out waiting for a released-client websocket outcome")
+
+      :unknown ->
+        receive_released_client_outcome(client, deadline)
     end
   end
 
