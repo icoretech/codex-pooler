@@ -529,23 +529,31 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
         ).rows
       end)
 
-    case rows do
-      [[query]] ->
-        blocked_relation!(query)
+    # `query` comes from the backend-status snapshot the sampling transaction
+    # took, while `wait_event_type` and `pg_blocking_pids/1` are read live, so
+    # one sample can pair the lock wait with the waiter's previous statement
+    # (seen under load, findings#206 row 206-182). A wait whose statement
+    # names no relation is sampled again from a fresh snapshot until the
+    # deadline, and fails there.
+    case sampled_relation(rows) do
+      {:ok, relation} ->
+        relation
 
-      [] ->
+      {:resample, failure} ->
         if System.monotonic_time(:millisecond) >= deadline,
-          do: flunk("backend #{waiter} was not observed waiting on backend #{blocker}"),
+          do: flunk(failure || "backend #{waiter} was not observed waiting on backend #{blocker}"),
           else: await_waiting_on!(waiter, blocker, deadline)
     end
   end
 
-  defp blocked_relation!(query) do
+  defp sampled_relation([[query]]) do
     case Regex.run(~r/FROM "(\w+)"/, query) do
-      [_match, relation] -> relation
-      nil -> flunk("the blocked statement did not name a relation")
+      [_match, relation] -> {:ok, relation}
+      nil -> {:resample, "the blocked statement did not name a relation"}
     end
   end
+
+  defp sampled_relation([]), do: {:resample, nil}
 
   defp backend_state(backend) do
     Sandbox.unboxed_run(Repo, fn ->
