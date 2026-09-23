@@ -25,14 +25,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
   # `c367a8b5a`.
   #
   # The refusal is kept although the compact was billed. Delivering the item
-  # instead would not spare the second compaction: without `pending_final` the
-  # turn that carries the item meets the compaction's own turn claim and is
-  # refused `409 duplicate_turn`, which the released client does not retry,
-  # exactly as it is here right after the refusal. On the generic 502 the
-  # client in production redid the compaction over HTTP and finished the turn
-  # there (findings#206 row 206-284). Frames keep the released client's
-  # upgrade headers and key sets; identifiers, prompt text and reply frames
-  # are synthetic.
+  # instead does not carry the turn on this socket: without `pending_final`
+  # the turn that carries the item meets the compaction's own turn claim and
+  # is refused `409 duplicate_turn`, exactly as it is here right after the
+  # refusal. The released client retries a 409 like any unexpected status
+  # (`rust-v0.156.1` `CodexErr::UnexpectedStatus`); whether its HTTP fallback
+  # would then finish the turn without a second compaction is not
+  # established. On the generic 502 the client in production redid the
+  # compaction over HTTP and finished the turn there (findings#206 row
+  # 206-284). Frames keep the released client's upgrade headers and key sets;
+  # identifiers, prompt text and reply frames are synthetic.
   @thread_id "019a0000-0000-7000-8000-00000000d001"
   @window_id "#{@thread_id}:0"
   @resumed_window_id "#{@thread_id}:1"
