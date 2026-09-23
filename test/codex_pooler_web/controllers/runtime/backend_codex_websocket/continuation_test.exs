@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport
 
   # Failure-detection budget for an expected message: a green run returns as
   # soon as the message arrives, so only a missing one spends it.
@@ -302,6 +303,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
       on_exit(fn -> FakeUpstream.stop(upstream) end)
 
       setup = gateway_setup(upstream)
+      stop_pool_owners_on_exit(setup.pool)
       assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
       port = start_public_endpoint!()
       turn_state = "ws-in-flight-keepalive-#{System.unique_integer([:positive])}"
@@ -1523,6 +1525,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
         )
 
       setup = gateway_setup(upstream)
+      stop_pool_owners_on_exit(setup.pool)
       scope = model_serving_scope()
       revision = set_model_serving_mode!(scope, setup, "full")
       assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
@@ -1622,6 +1625,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
       )
 
     setup = gateway_setup(upstream)
+    stop_pool_owners_on_exit(setup.pool)
     scope = model_serving_scope()
     revision = set_model_serving_mode!(scope, setup, "lite")
     assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
@@ -2233,6 +2237,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
+  end
+
+  # With owner forwarding on, the turn's owner outlives the test's sockets. An
+  # owner still running when the sandbox owner exited wrote its exit
+  # persistence and answered `owner_status` without a connection at suite
+  # teardown (`DBConnection.OwnershipError`, findings#206 row 206-328), so this
+  # Pool's owners are stopped while the sandbox is still up. Registered right
+  # after the Pool exists, before any socket can start an owner.
+  defp stop_pool_owners_on_exit(pool) do
+    on_exit(fn ->
+      from(session in CodexSession, where: session.pool_id == ^pool.id, select: session.id)
+      |> Repo.all()
+      |> Enum.each(&BackendCodexWebsocketOwnerForwardingSupport.await_owner_cleanup!/1)
+    end)
   end
 
   defp await_frame_call_queued!(task, session) do
