@@ -245,7 +245,7 @@ defmodule CodexPooler.Quotas.CodexParsersAdditionalIdentityTest do
   # erased, and a blank one is absent.
   test "a model fallback inside the identifier bound stays cleartext" do
     for {key, model} <- [
-          {"model", "gpt-5.6-terra"},
+          {"model", "gpt-6-sol"},
           {"model_id", "gpt_6.astra:v2"},
           {"model_identifier", "example-org/model-1"}
         ] do
