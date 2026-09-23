@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Accounting.{LedgerEntry, Request}
+  alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.{NativeCompactionAdmission, WebsocketOwnerSession}
@@ -91,6 +92,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
       owner = owner!(setup)
       admission = await_pending_compact!(owner)
       if arm == :expired, do: expire_admission!(owner, admission)
+      await_socket_response_tasks_released!(setup)
 
       {first, log} =
         with_log([level: :warning], fn ->
@@ -268,6 +270,39 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
   # Every response task settles its request after the terminal frame reached
   # the client; no completion signal reaches the test, so wait for the rows
   # within a bounded detection budget.
+  # The first turn's response task streams the terminal to the client, settles,
+  # and only then hands its result to the socket, which stops tracking it once
+  # it has acknowledged the delivery. A compaction that reaches the socket while
+  # it still tracks a task is deferred behind it and refused at dequeue, which
+  # answers the same 503 but logs only the generic failed-turn line (the class
+  # of Drone 1538, findings#206 row 206-392). Wait, within the detection
+  # budget, until the socket's own state (the set its deferral decision reads)
+  # tracks no task, so the compaction meets the owner's refusal directly.
+  # `:sys.get_state/1` answers after every message the socket already holds.
+  defp await_socket_response_tasks_released!(setup) do
+    assert [{socket, _value}] = Registry.lookup(CodexPooler.PubSub, Events.pubsub_topic(setup.pool.id, "pools"))
+    await_socket_response_tasks_released!(socket, System.monotonic_time(:millisecond) + 15_000)
+  end
+
+  defp await_socket_response_tasks_released!(socket, deadline) do
+    {_transport, handler_state} = :sys.get_state(socket)
+    tasks = Map.get(handler_state.connection.websock_state, :tasks, MapSet.new())
+
+    cond do
+      MapSet.size(tasks) == 0 ->
+        :ok
+
+      System.monotonic_time(:millisecond) < deadline ->
+        receive do
+        after
+          10 -> await_socket_response_tasks_released!(socket, deadline)
+        end
+
+      true ->
+        flunk("the socket still tracks response tasks #{inspect(MapSet.to_list(tasks))}")
+    end
+  end
+
   defp settled_pool_requests!(pool_id, count) do
     deadline = System.monotonic_time(:millisecond) + 15_000
 
