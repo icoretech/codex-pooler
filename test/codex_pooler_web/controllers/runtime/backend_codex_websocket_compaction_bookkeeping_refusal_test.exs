@@ -42,6 +42,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
   @context_window_id "00000000-0000-4000-8000-00000000d004"
   @resumed_context_window_id "00000000-0000-4000-8000-00000000d005"
   @anchor "resp_bookkeeping_refusal_anchor1"
+  @foreign_anchor "resp_bookkeeping_refusal_foreign"
   @compact_response "resp_bookkeeping_refusal_compact"
   @final_response "resp_bookkeeping_refusal_final01"
 
@@ -49,14 +50,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
   # 206-288): the released client's pre-turn compaction on the socket that had
   # served the previous turn 34 s earlier (turn completed 14:26:52.583,
   # compaction admitted 14:27:26.892, both on one socket per the owner log).
-  # The compaction carries the NEW turn's id, so its binding never matches the
-  # admission the previous turn's success armed (`binding_mismatch`), and the
-  # rows show two different turn claims. Row 206-289: after a pause longer
-  # than the admission's 60 s (`@compact_reservation_ttl_ms`) the owner refuses
-  # the reservation `expired` before it compares bindings, so the same frame
-  # ends the same way; the test moves the armed deadline into the past instead
-  # of waiting, since the owner compares it with the wall clock at reservation.
-  for {arm, cause} <- [{:pre_turn, "binding_mismatch"}, {:expired, "expired"}] do
+  # The compaction carries the NEW turn's id, so its binding never matched the
+  # admission the previous turn's success armed (`binding_mismatch`). Since
+  # findings#206 row 206-304 the owner admits it when its anchor is exactly the
+  # admitted response (`backend_codex_websocket_pre_turn_compaction_admission_test.exs`);
+  # the `foreign_anchor` arm keeps the refusal for a pre-turn compaction
+  # anchored on any other response. Row 206-289: after a pause longer than the
+  # admission's 60 s (`@compact_reservation_ttl_ms`) the owner refuses the
+  # reservation `expired` before it compares bindings; the test moves the armed
+  # deadline into the past instead of waiting, since the owner compares it with
+  # the wall clock at reservation.
+  for {arm, cause} <- [{:foreign_anchor, "binding_mismatch"}, {:expired, "expired"}] do
     @tag arm: arm, cause: cause
     test "owner_forwarded #{arm} anchored compaction without a usable admission is refused before dispatch and the client's full-history retry carries the turn",
          %{arm: arm, cause: cause} do
@@ -91,7 +95,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionBookkeepingRefus
 
       {first, log} =
         with_log([level: :warning], fn ->
-          first = send_frame!(first, anchored_compaction_frame(setup, @anchor, [prompt("next")], @next_turn_id))
+          anchor = if arm == :foreign_anchor, do: @foreign_anchor, else: @anchor
+          first = send_frame!(first, anchored_compaction_frame(setup, anchor, [prompt("next")], @next_turn_id))
           {first, refusal} = receive_frame!(first)
           assert %{"type" => "error", "status" => 503, "error" => %{"code" => "owner_unavailable"}} = refusal
           first

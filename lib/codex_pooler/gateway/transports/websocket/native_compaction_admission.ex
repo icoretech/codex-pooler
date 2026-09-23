@@ -44,9 +44,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       :topology,
       :lifecycle_id,
       :generation,
-      standalone_resolved_anchor?: false
+      standalone_resolved_anchor?: false,
+      pre_turn_continuation?: false
     ]
 
+    # `pre_turn_continuation?` is set by the socket for an anchored incremental
+    # compaction whose turn metadata declares `phase: pre_turn` (findings#206
+    # row 206-304). A binding crosses nodes to a remote owner, so during a
+    # rolling update a node may meet a binding built by a release without this
+    # key: read it only with `Map.get/3` and a `false` default, never with dot
+    # access. An owner without the key ignores it and answers
+    # `binding_mismatch`, which the socket turns into today's retryable
+    # `503 owner_unavailable`.
     @type t :: %__MODULE__{
             semantic_turn_key: <<_::256>>,
             window_digest: <<_::256>>,
@@ -58,7 +67,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
             topology: Topology.Direct.t() | Topology.Forwarded.t(),
             lifecycle_id: Ecto.UUID.t(),
             generation: pos_integer(),
-            standalone_resolved_anchor?: boolean()
+            standalone_resolved_anchor?: boolean(),
+            pre_turn_continuation?: boolean()
           }
   end
 
@@ -763,6 +773,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
   defp valid_binding_identity?(binding) do
     valid_window_number?(binding.window_number) and is_atom(binding.serving_mode) and
       is_boolean(binding.standalone_resolved_anchor?) and
+      is_boolean(Map.get(binding, :pre_turn_continuation?, false)) and
       valid_topology?(binding.topology) and
       match?({:ok, _uuid}, Ecto.UUID.cast(binding.lifecycle_id)) and
       is_integer(binding.generation) and binding.generation > 0
@@ -817,7 +828,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
   end
 
   defp compact_identity_match?(original, candidate),
-    do: immutable_binding_match?(original, candidate)
+    do: immutable_binding_match?(original, candidate) or pre_turn_continuation_match?(original, candidate)
+
+  # The released client's pre-turn compaction (Codex 0.156.1, observed on the
+  # wire, findings#206 row 206-304) runs inside the NEW turn: it carries that
+  # turn's id, so its semantic turn key never equals the one the previous
+  # turn's success armed the admission for, while its anchor is exactly the
+  # response that success produced, on the same window, context window,
+  # connection generation and downstream. Such a compaction is the continuation
+  # the admission was armed for, so it may take the admission once, before the
+  # deadline, and the reservation adopts its turn key: the confirmation then
+  # arms `pending_final` for the turn whose final request carries the item.
+  # Without this it was refused before dispatch and the client paid a
+  # reconnect and a full-history resend for every pre-turn compaction.
+  defp pre_turn_continuation_match?(original, candidate) do
+    Map.get(candidate, :pre_turn_continuation?, false) == true and
+      digest_match?(original.previous_response_digest, candidate.previous_response_digest) and
+      immutable_binding_match?(%{original | semantic_turn_key: candidate.semantic_turn_key}, candidate)
+  end
 
   defp compact_confirmation_binding_match?(original, candidate, compaction_item_digest) do
     immutable_binding_match?(original, candidate) and

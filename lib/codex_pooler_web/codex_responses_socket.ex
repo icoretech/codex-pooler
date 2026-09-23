@@ -2294,7 +2294,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp native_compaction_binding(
          metadata,
          prepared,
-         _phase,
+         phase,
          lifecycle,
          topology,
          serving_mode,
@@ -2312,9 +2312,23 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       topology: topology,
       lifecycle_id: lifecycle.lifecycle_id,
       generation: lifecycle.generation,
-      standalone_resolved_anchor?: Map.get(prepared.request_options.extra, :standalone_compact_resolved_anchor?, false)
+      standalone_resolved_anchor?: Map.get(prepared.request_options.extra, :standalone_compact_resolved_anchor?, false),
+      pre_turn_continuation?: pre_turn_continuation?(metadata, phase, previous_response_digest)
     }
   end
+
+  # The released client's pre-turn compaction: anchored, incremental, and
+  # declaring `phase: pre_turn`. The owner decides whether its anchor is the
+  # response the admission was armed for (findings#206 row 206-304).
+  defp pre_turn_continuation?(
+         %NativeCodexTurnMetadata{request_kind: :compaction, compaction: %NativeCodexTurnMetadata.Compaction{phase: :pre_turn}},
+         :compact,
+         previous_response_digest
+       )
+       when is_binary(previous_response_digest),
+       do: true
+
+  defp pre_turn_continuation?(_metadata, _phase, _previous_response_digest), do: false
 
   defp prepared_serving_mode(prepared, pending_owner_mode) do
     case prepared.request_options.routing.model_serving_mode do

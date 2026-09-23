@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmissionTest
   use ExUnit.Case, async: true
 
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias NativeCompactionAdmission.Binding
   alias NativeCompactionAdmission.Capability
   alias NativeCompactionAdmission.CapabilityToken
@@ -663,6 +664,124 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmissionTest
       end
     end
   end
+
+  # findings#206 row 206-304. The released client's pre-turn compaction
+  # carries the next turn's id, the previous turn's window and context window,
+  # and the response that turn's success armed the admission for as its
+  # anchor (Codex 0.156.1, observed on the wire by P61).
+  test "a pre-turn continuation anchored on the armed response takes the admission once under its own turn key and arms the final for that turn" do
+    for binding <- [direct_binding(), forwarded_binding()] do
+      {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+      {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, @now + 100)
+      candidate = %{binding | semantic_turn_key: <<77::256>>, pre_turn_continuation?: true}
+
+      assert {:ok, reserved, capability} = NativeCompactionAdmission.reserve(pending, :compact, candidate, make_ref(), @now)
+      assert reserved.binding.semantic_turn_key == <<77::256>>
+      assert capability.binding == candidate
+      assert {:error, :invalid_transition} = NativeCompactionAdmission.reserve(reserved, :compact, candidate, make_ref(), @now)
+
+      {:ok, accounting} = NativeCompactionAdmission.mark_accounting_started(reserved, capability, @now)
+      {:ok, consumed} = NativeCompactionAdmission.consume(accounting, capability, @now)
+      {:ok, collected} = NativeCompactionAdmission.record_compact_collected(consumed)
+      digest = <<76::256>>
+
+      # The finalizer builds the confirmation from the request's own metadata,
+      # without the socket's flag.
+      confirmation = %Confirmation{
+        source_phase: :compact,
+        source_control_ref: capability.control_ref,
+        binding: %{candidate | compaction_item_digest: digest, pre_turn_continuation?: false}
+      }
+
+      assert {:ok, pending_final} = NativeCompactionAdmission.confirm_compact(collected, digest, confirmation, @now + 100)
+      assert NativeCompactionAdmission.phase(pending_final) == :pending_final
+      assert pending_final.binding.semantic_turn_key == <<77::256>>
+
+      final = %{candidate | window_digest: <<2::256>>, context_digest: <<3::256>>, window_number: binding.window_number + 1, compaction_item_digest: digest, previous_response_digest: nil, pre_turn_continuation?: false}
+
+      assert {:ok, reserved_final, _final_capability} = NativeCompactionAdmission.reserve(pending_final, :final, final, make_ref(), @now)
+      assert NativeCompactionAdmission.phase(reserved_final) == :reserved_final
+      assert {:error, :binding_mismatch} = NativeCompactionAdmission.reserve(pending_final, :final, %{final | semantic_turn_key: binding.semantic_turn_key}, make_ref(), @now)
+    end
+  end
+
+  test "a pre-turn continuation is refused unless it is anchored on the armed response of the same window, connection and downstream before the deadline" do
+    for binding <- [direct_binding(), forwarded_binding()] do
+      {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+      {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, @now + 100)
+      candidate = %{binding | semantic_turn_key: <<77::256>>, pre_turn_continuation?: true}
+
+      for invalid <- [
+            %{candidate | pre_turn_continuation?: false},
+            %{candidate | previous_response_digest: nil},
+            %{candidate | previous_response_digest: <<98::256>>},
+            %{candidate | window_digest: <<97::256>>},
+            %{candidate | context_digest: <<96::256>>},
+            %{candidate | window_number: binding.window_number + 1},
+            %{candidate | generation: 2},
+            %{candidate | lifecycle_id: "018f60df-713f-7ca8-b9a0-0d12c508a124"},
+            %{candidate | serving_mode: :other},
+            %{candidate | topology: %Forwarded{owner_instance_digest: <<52::256>>, downstream_epoch: 5, owner_lease_digest: <<53::256>>}},
+            %{candidate | compaction_item_digest: <<95::256>>}
+          ] do
+        assert {:error, :binding_mismatch} = NativeCompactionAdmission.reserve(pending, :compact, invalid, make_ref(), @now)
+      end
+
+      assert {:error, :expired} = NativeCompactionAdmission.reserve(pending, :compact, candidate, make_ref(), @now + 101)
+    end
+  end
+
+  # A binding crosses nodes to a remote owner, so during a rolling update an
+  # owner meets bindings built by another release.
+  test "a binding without the pre-turn key, as an older release builds it, keeps the previous turn-key match and never raises" do
+    binding = forwarded_binding()
+    old_shape = binding |> Map.delete(:pre_turn_continuation?) |> across_nodes()
+    refute Map.has_key?(old_shape, :pre_turn_continuation?)
+
+    assert {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(old_shape)
+    assert {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, @now + 100)
+    assert {:ok, _reserved, _capability} = NativeCompactionAdmission.reserve(pending, :compact, old_shape, make_ref(), @now)
+    assert {:error, :binding_mismatch} = NativeCompactionAdmission.reserve(pending, :compact, %{old_shape | semantic_turn_key: <<77::256>>}, make_ref(), @now)
+
+    downstream = %{pid: self(), epoch: 4, correlation_id: "p61-correlation"}
+
+    assert {:ok, %WebsocketOwnerAdmissionControlV1{}} =
+             WebsocketOwnerAdmissionControlV1.new(%{
+               Map.from_struct(struct(WebsocketOwnerAdmissionControlV1))
+               | version: 1,
+                 action: :reserve,
+                 downstream: downstream,
+                 binding: %{old_shape | semantic_turn_key: <<77::256>>},
+                 phase: :compact,
+                 control_ref: make_ref(),
+                 now_ms: @now
+             })
+  end
+
+  test "a binding with a key this release does not know, as a newer release builds it, is accepted by the owner control and matched on the fields this release reads" do
+    binding = forwarded_binding()
+    newer_shape = binding |> Map.put(:field_of_a_newer_release, true) |> across_nodes()
+
+    assert {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+    assert {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, @now + 100)
+    assert {:ok, _reserved, capability} = NativeCompactionAdmission.reserve(pending, :compact, newer_shape, make_ref(), @now)
+    assert capability.binding == newer_shape
+
+    assert {:ok, %WebsocketOwnerAdmissionControlV1{}} =
+             WebsocketOwnerAdmissionControlV1.new(%{
+               Map.from_struct(struct(WebsocketOwnerAdmissionControlV1))
+               | version: 1,
+                 action: :reserve,
+                 downstream: %{pid: self(), epoch: 4, correlation_id: "p61-correlation"},
+                 binding: newer_shape,
+                 phase: :compact,
+                 control_ref: make_ref(),
+                 now_ms: @now
+             })
+  end
+
+  # A binding reaches a remote owner as an external term.
+  defp across_nodes(term), do: term |> :erlang.term_to_binary() |> :erlang.binary_to_term()
 
   defp direct_binding(overrides \\ []) do
     defaults = [
