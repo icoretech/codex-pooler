@@ -1966,6 +1966,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     )
   end
 
+  # Fire and forget under the one-second budget on purpose (findings#206 row
+  # 206-242): an erpc timeout abandons only the reply, the owner-node process
+  # still runs the detach or cancel under the owner's own call budget, and no
+  # caller acts on the answer. Contrast `reconcile_remote_v4_timeout/4`, whose
+  # query answer decides whether a cancel is sent at all.
   defp best_effort_cancel_downstream(
          node,
          codex_session_id,

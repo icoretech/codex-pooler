@@ -1216,6 +1216,12 @@ defmodule CodexPooler.Gateway.Websocket do
     end
   end
 
+  # The one-second budget stays on purpose (findings#206 row 206-242): the
+  # erpc timeout only abandons the reply, the owner-node process still makes
+  # the owner call under the owner's own budget, and the owner cancels and
+  # settles the turn whether or not this caller is still waiting. Nothing here
+  # reads the answer; the socket awaits the response task, which ends when the
+  # owner, having cancelled the turn, answers its pending submission.
   defp cancel_owner_turn(
          {:remote, node, _owner_instance_id},
          codex_session_id,
