@@ -113,14 +113,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     FakeUpstream.verify!(upstream)
   end
 
-  test "native HTTP SSE keeps unknown, non-validation, detail, and non-400 rejections empty", %{
-    conn: conn
-  } do
+  # A 400 outside the relayable validation set used to reach a streaming native
+  # client as the 400 with an empty body (the drain leaves no public body), so
+  # the released Codex 0.156.0 client showed `error: ` with no text, and a
+  # non-streaming one as the provider body verbatim. Both now answer the
+  # Pooler-authored error the native websocket sends for the same refusal,
+  # built from the sanitized tokens only; the provider message never travels
+  # (findings#254 row 254-70).
+  for stream? <- [true, false], refusal <- ~w(codeless codeless_param codeless_input_param unknown_code server_error_type missing_type detail_body) do
+    @tag stream: stream?, refusal: refusal
+    test "native HTTP answers a non-relayable 400 with the Pooler-authored refusal error (#{refusal}, stream: #{stream?})", %{conn: conn, stream: stream?, refusal: refusal} do
+      {mode, expected_error} = refusal_case(refusal)
+      upstream = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: mode)]))
+      setup = gateway_setup(upstream)
+      response = post_native(conn, setup, stream?)
+
+      assert response.status == 400
+      assert [content_type] = get_resp_header(response, "content-type")
+      assert content_type =~ "application/json"
+      assert CodexPooler.JSON.decode(response.resp_body) == {:ok, %{"error" => expected_error}}
+      refute response.resp_body =~ @provider_sentinel
+      FakeUpstream.verify!(upstream)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "failed"
+      assert request.last_error_code == "upstream_status"
+      assert request.response_status_code == 400
+      refute inspect(request) =~ @provider_sentinel
+      assert Repo.aggregate(BridgeDemotion, :count) == 0
+      assert Repo.aggregate(RoutingCircuitState, :count) == 0
+    end
+  end
+
+  test "native HTTP SSE keeps non-400 rejections empty", %{conn: conn} do
     cases = [
-      {"unknown code", validation_rejection(400, "provider_specific_code", "reasoning.effort")},
-      {"server_error type", validation_rejection(400, "unsupported_value", "reasoning.effort", "server_error")},
-      {"missing type", validation_rejection(400, "unsupported_value", "reasoning.effort", nil)},
-      {"detail body", {:json_error, 400, %{"detail" => "Unsupported value reasoning.effort " <> @provider_sentinel}}},
       {"403", validation_rejection(403, "unsupported_value", "reasoning.effort")},
       {"404", validation_rejection(404, "unsupported_value", "reasoning.effort")},
       {"422", validation_rejection(422, "invalid_value", "reasoning.effort")}
@@ -802,16 +828,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     })
   end
 
-  defp post_native(conn, setup) do
+  defp post_native(conn, setup, stream? \\ true) do
     conn
     |> recycle()
     |> auth(setup)
     |> post("/backend-api/codex/responses", %{
       "model" => setup.model.exposed_model_id,
       "input" => native_text_input(@prompt_sentinel),
-      "stream" => true
+      "stream" => stream?
     })
   end
+
+  defp refusal_case("codeless"), do: {codeless_rejection(400, nil), refusal_error("invalid_request", nil)}
+  defp refusal_case("codeless_param"), do: {codeless_rejection(400, "tools.tool_search"), refusal_error("invalid_request", "tools.tool_search")}
+  # The HTTP answer holds the turn's input index map (the websocket event does
+  # not), so an `input[N]` param keeps the client's own index.
+  defp refusal_case("codeless_input_param"), do: {codeless_rejection(400, "input[0].content"), refusal_error("invalid_request", "input[0].content")}
+  defp refusal_case("unknown_code"), do: {validation_rejection(400, "provider_specific_code", "reasoning.effort"), refusal_error("provider_specific_code", "reasoning.effort")}
+  defp refusal_case("server_error_type"), do: {validation_rejection(400, "unsupported_value", "reasoning.effort", "server_error"), refusal_error("unsupported_value", "reasoning.effort")}
+  defp refusal_case("missing_type"), do: {validation_rejection(400, "unsupported_value", "reasoning.effort", nil), refusal_error("unsupported_value", "reasoning.effort")}
+  defp refusal_case("detail_body"), do: {{:json_error, 400, %{"detail" => "Unsupported value reasoning.effort " <> @provider_sentinel}}, refusal_error("invalid_request", nil)}
+
+  defp refusal_error(code, nil), do: %{"type" => "invalid_request_error", "code" => code, "param" => nil, "message" => "upstream rejected the request (#{code})"}
+  defp refusal_error(code, param), do: %{"type" => "invalid_request_error", "code" => code, "param" => param, "message" => "upstream rejected parameter #{param} (#{code})"}
 
   defp codeless_rejection(status, param) do
     {:json_error, status,

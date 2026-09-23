@@ -204,15 +204,23 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejection do
   The Codex Pooler-authored error for a provider 400 refusal that is not a
   relayable parameter-validation rejection, built only from its sanitized
   tokens (`Metadata.rejection_error/1`): the relayed code, the bounded param
-  with any `input[N]` index dropped (the caller holds no per-turn index map),
   and the message this module authors. Provider message text never travels.
+
+  Options:
+
+    * `:index_map` - how an `input[N]` param is rendered (`for_client/2`). The
+      default `:unknown` drops the index, for a caller that holds no per-turn
+      map (the native websocket socket); `:identity` keeps a param the caller
+      already mapped.
+
   The native websocket sends it for a refusal the released client would
-  otherwise retry (findings#254 row 254-52).
+  otherwise retry (findings#254 row 254-52), and native HTTP for a 400 it used
+  to answer with an empty body (row 254-70).
   """
-  @spec refusal_error(map()) :: relayed_error()
-  def refusal_error(rejection_error) when is_map(rejection_error) do
+  @spec refusal_error(map(), keyword()) :: relayed_error()
+  def refusal_error(rejection_error, opts \\ []) when is_map(rejection_error) and is_list(opts) do
     %{code: relayed_code(rejection_error), param: Map.get(rejection_error, :param), supported_values: nil, supported_values_state: nil}
-    |> for_client(:unknown)
+    |> for_client(Keyword.get(opts, :index_map, :unknown))
     |> error()
   end
 

@@ -685,16 +685,48 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       {:mode_scoped, false} when is_map(validation_rejection) ->
         validation_rejection_result(status, headers, validation_rejection)
 
+      {:mode_scoped, false} when status == 400 ->
+        if native_ordinary_responses_route?(request_options),
+          do: native_refusal_result(status, headers, relayable_rejection_error),
+          else: passthrough_failure_result(status, headers, body, request_options, error_code, marker)
+
       {_projection, _explicit_full?} ->
-        %{
-          status: status,
-          headers: headers,
-          raw_body: body,
-          public_stream_startup_error_code: stream_startup_error_code(error_code, request_options),
-          public_input_file_upstream_404?: marker
-        }
+        passthrough_failure_result(status, headers, body, request_options, error_code, marker)
     end
   end
+
+  defp passthrough_failure_result(status, headers, body, request_options, error_code, marker) do
+    %{
+      status: status,
+      headers: headers,
+      raw_body: body,
+      public_stream_startup_error_code: stream_startup_error_code(error_code, request_options),
+      public_input_file_upstream_404?: marker
+    }
+  end
+
+  # A native 400 refusal outside the relayable validation set (the provider's
+  # codeless refusal, an unknown code, a `{"detail": ...}` body) answers the
+  # Pooler-authored error the native websocket sends for the same refusal,
+  # built from the sanitized tokens only (`ValidationRejection.refusal_error/2`;
+  # the param was already mapped through the turn's input index map). A
+  # streaming request used to get the 400 with an empty body, because the
+  # drain leaves no public body, and the released Codex client then showed an
+  # empty error; a non-streaming one relayed the provider body verbatim
+  # (findings#254 row 254-70). Public `/v1` surfaces keep their own redacted
+  # projection, and other statuses keep their existing answer.
+  defp native_refusal_result(status, headers, relayable_rejection_error) do
+    %{
+      status: status,
+      headers: json_content_type(headers),
+      raw_body: CodexPooler.JSON.encode!(%{"error" => ValidationRejection.refusal_error(relayable_rejection_error, index_map: :identity)})
+    }
+  end
+
+  defp native_ordinary_responses_route?(%RequestOptions{openai_compatibility: %{source_endpoint: nil}} = request_options),
+    do: Metadata.ordinary_responses_route?(request_options)
+
+  defp native_ordinary_responses_route?(%RequestOptions{}), do: false
 
   # The relayed validation error is the native JSON error envelope whether the
   # native request streamed (the drain leaves no public body) or not. A

@@ -1345,7 +1345,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "stream" => true
       })
 
-    assert response(conn, 400) == ""
+    # The codeless refusal answers the Pooler-authored error built from the
+    # sanitized type and param, never the provider message; it used to be an
+    # empty body (findings#254 row 254-70).
+    assert CodexPooler.JSON.decode!(response(conn, 400)) == %{
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request",
+               "param" => "input[0].content",
+               "message" => "upstream rejected parameter input[0].content (invalid_request)"
+             }
+           }
+
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
 

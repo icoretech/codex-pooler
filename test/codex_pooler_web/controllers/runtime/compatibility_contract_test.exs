@@ -3813,7 +3813,19 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
           "stream" => true
         })
 
-      assert response(conn, 400) == ""
+      # The refusal answers the Pooler-authored error from the sanitized code,
+      # never the provider message; it used to be an empty body (findings#254
+      # row 254-70).
+      assert CodexPooler.JSON.decode!(response(conn, 400)) == %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request_error",
+                 "param" => nil,
+                 "message" => "upstream rejected the request (invalid_request_error)"
+               }
+             }
+
+      refute response(conn, 400) =~ "synthetic upstream validation failure"
       refute response(conn, 400) =~ "quota_evidence_unavailable"
 
       assert [captured] = FakeUpstream.requests(upstream)

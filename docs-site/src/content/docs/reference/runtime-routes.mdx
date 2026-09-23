@@ -650,9 +650,17 @@ itself keeps its `response.failed` event, so the client still compacts on
 `misalignment_policy_violation` as it would from the provider; overload and
 rate-limit codes stay retryable.
 
+A native HTTP `POST /backend-api/codex/responses` answers such a `400`
+refusal (no code, an unknown code, another error type, or a `{"detail": ...}`
+body) with the same Codex Pooler-authored error object as JSON, streaming or
+not, keeping the `400` status; an `input[N]` param keeps the index the client
+sent. A streaming request used to receive the `400` with an empty body, which
+the Codex client showed as an error with no text, and a non-streaming one the
+upstream body. The Codex client reads a `cyber_policy` or `bio_policy` code in
+that body as the policy refusal it names, which an empty body did not allow.
+
 Over HTTP, every other upstream failure keeps its existing behavior: other statuses
-(including `401`, `403`, `404`, `422`, `429`, and `5xx`), other error types or
-codes, `{"detail": ...}` bodies, and compact routes. The request remains a non-retried failure
+(including `401`, `403`, `404`, `422`, `429`, and `5xx`) and compact routes. The request remains a non-retried failure
 recorded as `upstream_status`, and the rejection does not demote the upstream
 or affect its circuit.
 

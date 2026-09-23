@@ -853,7 +853,12 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.chat_param == "client_field_for_adapter_renames_else_upstream_path"
       assert fixture.provider_message_forwarded == false
       assert fixture.native_streaming_body == "native_json_error_envelope"
-      assert fixture.native_materialized_body == "unchanged_passthrough"
+      # A materialized native body is the Pooler envelope too since
+      # findings#254 row 254-54, and a native 400 outside the relay answers the
+      # Pooler refusal error instead of an empty streaming body or the provider
+      # body (row 254-70).
+      assert fixture.native_materialized_body == "native_json_error_envelope"
+      assert fixture.native_non_relayable_400_body == "pooler_refusal_error_from_sanitized_tokens"
       assert fixture.public_v1_body == "openai_error_object"
       refute :explicit_full_override in fixture.unchanged_scopes
       assert :websocket_frames in fixture.unchanged_scopes
