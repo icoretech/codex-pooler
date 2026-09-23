@@ -487,8 +487,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     as_of = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
     old_reset = DateTime.add(as_of, -3, :day)
     current_reset = DateTime.add(as_of, 6, :day)
-    anchored_spark_observed_at = DateTime.add(as_of, -5, :minute)
-    floating_spark_observed_at = DateTime.add(as_of, -10, :minute)
+    # Both Spark cards must stay fresh until the page renders. Their latest
+    # observations sat 15 minutes before now, exactly on the default 15-minute
+    # freshness TTL, so a card went stale (anchored: reset unconfirmed) whenever
+    # more than a second passed between here and the render (findings#206,
+    # lead gate wave3k). The latest observations are now 5 and 10 minutes old.
+    anchored_spark_observed_at = DateTime.add(as_of, 5, :minute)
+    floating_spark_observed_at = DateTime.add(as_of, -5, :minute)
     legacy_observed_at = DateTime.add(as_of, -2 * Evidence.freshness_ttl_seconds(), :second)
 
     current_observed_at = as_of
