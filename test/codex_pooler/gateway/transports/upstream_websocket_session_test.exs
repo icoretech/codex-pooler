@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Confirmation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Direct
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObservation
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -457,6 +458,43 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       capability = reserve_and_start_direct(session, :compact, binding)
       assert :ok = UpstreamWebsocketSession.clear_compaction_admission(session, capability)
       assert [:request_rejected] = drain_direct_admission_clear_reasons()
+    end
+
+    # findings#258 row 258-130: the clear reasons were only in a debug log line
+    # and an unexported telemetry event, so production could not see them. The
+    # real session clears reach the exported counter; a close on a session that
+    # never held an admission, which every upstream connection close runs
+    # through the same clear path, is not counted.
+    test "admission clears reach the exported counter by reason, stage and topology" do
+      metric =
+        Enum.find(
+          CodexPoolerWeb.Telemetry.prometheus_metrics(),
+          &(&1.name == [:codex_pooler, :gateway, :native_compaction, :admission_clear, :count])
+        )
+
+      assert metric
+      registry = :"native_compaction_admission_clear_#{System.unique_integer([:positive])}"
+      start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
+
+      %{session: session, binding: binding} = armed_direct_admission()
+      _capability = reserve_and_start_direct(session, :compact, binding)
+      assert :ok = UpstreamWebsocketSession.close(session)
+
+      {:ok, never_armed} = UpstreamWebsocketSession.start_link([])
+      assert :ok = UpstreamWebsocketSession.close(never_armed)
+
+      body = TelemetryMetricsPrometheus.Core.scrape(registry)
+
+      assert body =~
+               ~s(codex_pooler_gateway_native_compaction_admission_clear_count{reason="connection_closed",stage="compacting",topology="direct"} 1)
+
+      refute body =~ ~s(stage="unknown")
+
+      # Every admission phase maps to a named stage, so a phase added to the
+      # admission cannot silently land in "unknown".
+      for phase <- NativeCompactionLifecycleObservation.phases(), phase != :cleared do
+        assert metric.tag_values.(%{reason: :final_success, phase_from: phase, topology: :forwarded}).stage in ~w(armed compacting finalizing)
+      end
     end
   end
 

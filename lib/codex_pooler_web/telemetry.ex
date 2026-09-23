@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Telemetry do
   alias CodexPooler.Gateway.Routing.AffinityTelemetry
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObservation
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
@@ -46,9 +47,24 @@ defmodule CodexPoolerWeb.Telemetry do
         }
   @type affinity_stale_write_tags :: %{operation: String.t(), affinity_kind: String.t()}
   @type duplicate_turn_refused_tags :: %{stage: String.t(), transport: String.t()}
+  @type native_compaction_admission_clear_tags :: %{reason: String.t(), stage: String.t(), topology: String.t()}
   @type bridge_fallback_tags :: %{reason: String.t()}
   @type pre_attempt_release_tags :: %{phase: String.t(), transport: String.t(), via: String.t()}
   @type saved_reset_convergence_tags :: %{source: String.t(), outcome: String.t()}
+
+  @native_compaction_topologies ~w(direct forwarded)
+  @native_compaction_admission_stages %{
+    ordinary_success: "armed",
+    pending_compact: "armed",
+    reserved_compact: "compacting",
+    accounting_started_compact: "compacting",
+    consumed_compact: "compacting",
+    collected_unconfirmed: "compacting",
+    pending_final: "finalizing",
+    reserved_final: "finalizing",
+    accounting_started_final: "finalizing",
+    consumed_final: "finalizing"
+  }
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
   @admission_queue_buckets [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
@@ -647,6 +663,17 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &affinity_stale_write_tag_values/1,
         description: "Affinity writes the updated_at fence refused, by bounded operation and affinity kind."
       ),
+      counter("codex_pooler.gateway.native_compaction.admission_clear.count",
+        event_name: [:codex_pooler, :gateway, :native_compaction, :lifecycle],
+        measurement: :count,
+        keep: &native_compaction_admission_clear?/1,
+        tags: [:reason, :stage, :topology],
+        tag_values: &native_compaction_admission_clear_tag_values/1,
+        description:
+          "Native compaction admissions cleared on serving nodes, by bounded clear reason, the admission stage " <>
+            "the clear ended (armed, compacting or finalizing) and the direct or owner-forwarded topology. " <>
+            "A clear on a connection that held no admission is not counted."
+      ),
       counter("codex_pooler.gateway.duplicate_turn.refused.count",
         event_name: DuplicateTurnTelemetry.event(),
         measurement: :count,
@@ -932,6 +959,22 @@ defmodule CodexPoolerWeb.Telemetry do
     %{
       operation: admin_stats_enum_value(metadata[:operation], AffinityTelemetry.operations()),
       affinity_kind: admin_stats_enum_value(metadata[:affinity_kind], AffinityTelemetry.affinity_kinds())
+    }
+  end
+
+  # Every upstream websocket connection close runs the clear path, admission or
+  # not; only a clear that ended an admission is a lifecycle fact worth counting.
+  @spec native_compaction_admission_clear?(map()) :: boolean()
+  defp native_compaction_admission_clear?(metadata) do
+    metadata[:operation] == :clear and metadata[:phase_from] != :cleared
+  end
+
+  @spec native_compaction_admission_clear_tag_values(map()) :: native_compaction_admission_clear_tags()
+  defp native_compaction_admission_clear_tag_values(metadata) do
+    %{
+      reason: admin_stats_enum_value(metadata[:reason], Enum.map(NativeCompactionLifecycleObservation.reasons(), &Atom.to_string/1)),
+      stage: Map.get(@native_compaction_admission_stages, metadata[:phase_from], "unknown"),
+      topology: admin_stats_enum_value(metadata[:topology], @native_compaction_topologies)
     }
   end
 

@@ -109,6 +109,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObse
           downstream_epoch: non_neg_integer() | nil
         }
 
+  @doc "Fixed operation vocabulary; any other value is observed as `:unknown`."
+  @spec operations() :: [operation()]
+  def operations, do: @operations
+
+  @doc "Fixed reason vocabulary; any other value is observed as `:unknown`."
+  @spec reasons() :: [reason()]
+  def reasons, do: @reasons
+
+  @doc "Admission phases; `:cleared` is also reported when there was no admission."
+  @spec phases() :: [Admission.phase()]
+  def phases, do: @phases
+
   @spec observe(Admission.t() | nil, Admission.t() | nil, operation(), reason(), topology()) ::
           t()
   def observe(before_state, after_state, operation, reason, topology) do

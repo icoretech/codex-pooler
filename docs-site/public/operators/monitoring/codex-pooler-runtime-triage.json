@@ -2636,6 +2636,58 @@
       }
     },
     {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Native Compaction Admission Clears",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Native compaction admissions ended on serving nodes, by bounded clear reason, the stage the admission was in, and the direct or owner-forwarded topology. Every successful native websocket turn arms an admission for a possible in-band compaction (stage armed), so connection_closed on armed is the ordinary end of a socket and tracks websocket volume. final_success on finalizing is a completed in-band compaction. Any other reason on the compacting or finalizing stage is an in-band compaction that did not complete: compact_failure and final_failure are unsuccessful upstream exchanges, owner_drained, upstream_exited, stale_owner and handoff_timeout are owner lifecycle events cutting it short, downstream_detached and downstream_cancelled are the client leaving, and request_rejected is only the runtime's explicit clear after it rejected the compaction request. A clear on a connection that never held an admission is not counted. No Pool, API-key, session, request or lifecycle identifier is exported.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason, stage, topology) (rate(codex_pooler_gateway_native_compaction_admission_clear_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{reason}} {{stage}} {{topology}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 145
+      }
+    },
+    {
       "type": "row",
       "collapsed": false,
       "id": 0,
@@ -2643,7 +2695,7 @@
       "title": "Saved-reset Post-consume Convergence",
       "gridPos": {
         "x": 0,
-        "y": 145,
+        "y": 154,
         "h": 1,
         "w": 24
       }
@@ -2697,7 +2749,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 146
+        "y": 155
       }
     },
     {
@@ -2765,7 +2817,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 146
+        "y": 155
       }
     },
     {
@@ -2817,7 +2869,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 155
+        "y": 164
       }
     },
     {
@@ -2869,7 +2921,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 155
+        "y": 164
       }
     },
     {
@@ -2921,7 +2973,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 164
+        "y": 173
       }
     },
     {
@@ -2973,7 +3025,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 164
+        "y": 173
       }
     },
     {
@@ -2984,7 +3036,7 @@
       "title": "Job Telemetry Relay",
       "gridPos": {
         "x": 0,
-        "y": 173,
+        "y": 182,
         "h": 1,
         "w": 24
       }
@@ -3046,7 +3098,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 174
+        "y": 183
       }
     },
     {
@@ -3098,7 +3150,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 174
+        "y": 183
       }
     },
     {
@@ -3158,7 +3210,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 182
+        "y": 191
       }
     }
   ]
