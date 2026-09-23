@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -112,8 +113,38 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
 
   @spec downstream_response_chunk(binary()) :: binary()
   def downstream_response_chunk(data) when is_binary(data) do
-    StreamProtocol.canonicalize_native_codex_responses_json_message(data)
+    case CodexPooler.JSON.decode(data) do
+      {:ok, %{} = decoded} ->
+        {canonical, canonical_decoded} = StreamProtocol.canonicalize_native_codex_responses_json_message(data, decoded)
+        native_validation_rejection_frame(canonical, canonical_decoded)
+
+      _other ->
+        StreamProtocol.canonicalize_native_codex_responses_json_message(data)
+    end
   end
+
+  # A provider parameter-validation refusal arrives as the wrapped
+  # `{"type":"error","status":400,...}` frame and is canonicalized to the
+  # `response.failed` the response task, the owner and the socket settle and
+  # account on (attempt rejection fields included). Only the frame the native
+  # client receives is projected here: the wrapped `error` event with the
+  # Pooler-authored error the native HTTP answer relays for the same refusal
+  # (`ValidationRejection`: type, code, bounded param, supported values, never
+  # the provider message, which can quote Pooler-rewritten request fields). The
+  # released client's parser reads a wrapped 400 as a non-retryable invalid
+  # request, as it reads the HTTP 400, and a `response.failed` naming one of
+  # these codes as a retryable stream error (findings#254 row 254-31). Every
+  # other frame passes unchanged.
+  defp native_validation_rejection_frame(canonical, %{"type" => "response.failed", "status" => 400 = status, "error" => %{} = error}) do
+    response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}
+
+    case ValidationRejection.fetch_ordinary_route(response) do
+      %{} = rejection -> CodexPooler.JSON.encode!(%{"type" => "error", "status" => status, "error" => ValidationRejection.error(rejection)})
+      nil -> canonical
+    end
+  end
+
+  defp native_validation_rejection_frame(canonical, _canonical_decoded), do: canonical
 
   @spec downstream_response_chunk(
           binary(),

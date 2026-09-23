@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
         |> post("/backend-api/codex/responses", %{"model" => setup.model.exposed_model_id, "input" => native_text_input(@prompt_sentinel), "stream" => true})
 
       assert response.status == 400
-      assert json_response(response, 400)["error"]["code"] == code
+      assert json_response(response, 400) == %{"error" => pooler_error(code)}
 
       {request, attempt} = sole_rows!(setup)
       assert request.status == "failed"
@@ -94,8 +94,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
 
           assert {:ok, turn_state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
           {turn_state, frames} = collect_native_turn_frames!(turn_state)
-          terminal = assert_single_native_turn_terminal!(frames, "response.failed")
-          assert terminal["response"]["error"]["code"] == code
+          # The client receives the wrapped `error` event carrying the error the
+          # HTTP answer above relays for the same refusal, never the provider
+          # message: the released client reads it as a non-retryable invalid
+          # request, as it reads the HTTP 400, where a `response.failed` naming
+          # this code is a retryable stream error (findings#254 row 254-31).
+          terminal = assert_single_native_turn_terminal!(frames, "error")
+          assert terminal == %{"type" => "error", "status" => 400, "error" => pooler_error(code)}
+          refute CodexPooler.JSON.encode!(frames) =~ @provider_sentinel
 
           assert :ok = FakeUpstream.verify!(upstream)
           {request, attempt} = sole_rows!(setup)
@@ -120,6 +126,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
         end
       end
     end
+  end
+
+  defp pooler_error(code) do
+    %{"type" => "invalid_request_error", "code" => code, "param" => @param, "message" => "upstream rejected parameter #{@param} (#{code})"}
   end
 
   defp provider_error(code) do

@@ -618,10 +618,15 @@ A streaming
 `content-type: application/json` and no SSE stream; a non-streaming native
 request keeps its existing upstream body.
 
+A native `/backend-api/codex/responses` websocket turn receives the same error
+object in one wrapped error event, `{"type":"error","status":400,"error":{...}}`,
+so the Codex client reports it as an invalid request instead of retrying it, as
+it does for the HTTP answer. The public `GET /v1/responses` websocket sends the
+same error object in its `error` event.
+
 Every other upstream failure keeps its existing behavior: other statuses
 (including `401`, `403`, `404`, `422`, `429`, and `5xx`), other error types or
-codes, `{"detail": ...}` bodies,
-compact routes, and websocket turns. The request remains a non-retried failure
+codes, `{"detail": ...}` bodies, and compact routes. The request remains a non-retried failure
 recorded as `upstream_status`, and the rejection does not demote the upstream
 or affect its circuit.
 
