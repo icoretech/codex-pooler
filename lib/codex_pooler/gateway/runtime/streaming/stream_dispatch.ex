@@ -752,9 +752,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
+  # The turn becomes visible on the first chunk that shows the client output or
+  # a terminal. A lifecycle preamble is withheld for the first-event retry
+  # window and never reaches the client on its own, so it must not stamp the
+  # turn: the Pooler's own receive timeout after it left the client's resend
+  # refused as a duplicate of output it was never shown (findings#225 row
+  # 225-191).
   defp write_stream_data_preserving_state(%ResponseContext{} = response_context, conn, data) do
     {downstream_data, conn, delivery} =
-      normalize_stream_data(response_context, conn, data, &StreamProtocol.stream_data_visible?/1)
+      normalize_stream_data(response_context, conn, data, &StreamProtocol.stream_data_client_visible?/1)
 
     write_normalized_stream_data_preserving_state(conn, downstream_data, delivery)
   end

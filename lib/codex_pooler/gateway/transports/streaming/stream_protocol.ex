@@ -208,6 +208,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec client_visible_output_event?(term()) :: boolean()
   defdelegate client_visible_output_event?(event), to: TerminalOutcome
 
+  @spec stream_data_client_visible?(term()) :: boolean()
+  defdelegate stream_data_client_visible?(data), to: TerminalOutcome
+
   @spec retry_window_preamble_event?(term()) :: boolean()
   defdelegate retry_window_preamble_event?(event), to: TerminalOutcome
 

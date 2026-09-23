@@ -407,6 +407,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   def stream_data_visible?(_data), do: false
 
+  @doc """
+  True when an upstream SSE chunk carries a block the client would be shown:
+  model output or a terminal, never only lifecycle or control blocks
+  (`client_visible_output_event?/1`). This is what commits a native HTTP turn's
+  visibility; a withheld `response.created` never reached the client and is not
+  a reason to refuse its resend (findings#225 row 225-191).
+  """
+  @spec stream_data_client_visible?(term()) :: boolean()
+  def stream_data_client_visible?(data) when is_binary(data) do
+    {blocks, _buffer} = SSEParser.complete_sse_blocks(data, bounded?: false)
+
+    Enum.any?(blocks, fn block ->
+      event_type = SSEParser.sse_field(block, "event")
+      decoded = block |> SSEParser.sse_field("data") |> SSEParser.decode_sse_data()
+      data_type = ErrorCanonicalization.decoded_string(decoded, "type")
+      client_visible_output_event?(%{event_type: event_type, data_type: data_type})
+    end)
+  end
+
+  def stream_data_client_visible?(_data), do: false
+
   defp direct_terminal_outcome(data) do
     case CodexPooler.JSON.decode(data) do
       {:ok, %{} = decoded} ->
