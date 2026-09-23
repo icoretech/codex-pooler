@@ -156,15 +156,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalRefusalResendTest do
 
   defp pool_requests(pool_id), do: Repo.all(from(r in Request, where: r.pool_id == ^pool_id, order_by: [asc: r.admitted_at]))
 
-  # The closing socket's own cleanup can hold the shared sandbox connection
-  # longer than a checkout waits under load; a dropped checkout is retried.
   defp await_settled!(request_id, deadline_ms) do
-    status =
-      try do
-        Repo.get!(Request, request_id).status
-      rescue
-        DBConnection.ConnectionError -> "in_progress"
-      end
+    status = Repo.get!(Request, request_id).status
 
     cond do
       status != "in_progress" ->

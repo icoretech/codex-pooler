@@ -145,7 +145,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.UndeliveredCompletionRese
   # The closing socket's own cleanup can hold the shared sandbox connection
   # longer than a checkout waits under load; a dropped checkout is retried.
   defp await_receipt!(request_id, deadline_ms) do
-    attempts = safe_all(from(a in Attempt, where: a.request_id == ^request_id))
+    attempts = Repo.all(from(a in Attempt, where: a.request_id == ^request_id))
 
     cond do
       match?([%Attempt{response_metadata: %{"downstream_delivery" => %{}}}], attempts) -> attempts
@@ -155,18 +155,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.UndeliveredCompletionRese
   end
 
   defp await_all_settled!(pool_id, deadline_ms) do
-    requests = safe_all(from(r in Request, where: r.pool_id == ^pool_id))
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^pool_id))
 
     cond do
       requests != [] and Enum.all?(requests, &(&1.status != "in_progress")) -> :ok
       System.monotonic_time(:millisecond) >= deadline_ms -> flunk("requests never settled")
       true -> Process.sleep(20) && await_all_settled!(pool_id, deadline_ms)
     end
-  end
-
-  defp safe_all(query) do
-    Repo.all(query)
-  rescue
-    DBConnection.ConnectionError -> []
   end
 end

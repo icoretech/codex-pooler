@@ -120,19 +120,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LostDownst
   end
 
   defp await_settled!(pool_id, deadline_ms) do
-    requests = safe_all(from(r in Request, where: r.pool_id == ^pool_id))
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^pool_id))
 
     cond do
       requests != [] and Enum.all?(requests, &(&1.status != "in_progress")) -> requests
       System.monotonic_time(:millisecond) >= deadline_ms -> flunk("requests never settled")
       true -> Process.sleep(20) && await_settled!(pool_id, deadline_ms)
     end
-  end
-
-  defp safe_all(query) do
-    Repo.all(query)
-  rescue
-    DBConnection.ConnectionError -> []
   end
 
   defp completed_frame(response_id) do

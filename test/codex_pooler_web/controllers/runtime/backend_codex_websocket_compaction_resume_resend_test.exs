@@ -219,19 +219,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionResumeResendTest
   end
 
   defp await_settled_pool_requests(pool_id, count, deadline) do
-    rows =
-      try do
-        Repo.all(from(r in Request, where: r.pool_id == ^pool_id, order_by: [asc: r.admitted_at, asc: r.id]))
-      rescue
-        DBConnection.ConnectionError -> :busy
-      end
+    rows = Repo.all(from(r in Request, where: r.pool_id == ^pool_id, order_by: [asc: r.admitted_at, asc: r.id]))
 
     cond do
-      is_list(rows) and length(rows) == count and Enum.all?(rows, &(&1.status not in ["accepted", "in_progress"])) ->
+      length(rows) == count and Enum.all?(rows, &(&1.status not in ["accepted", "in_progress"])) ->
         rows
 
       System.monotonic_time(:millisecond) >= deadline ->
-        flunk("expected #{count} settled requests, got #{inspect(if is_list(rows), do: Enum.map(rows, & &1.status), else: rows)}")
+        flunk("expected #{count} settled requests, got #{inspect(Enum.map(rows, & &1.status))}")
 
       true ->
         Process.sleep(10)

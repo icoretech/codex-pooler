@@ -337,7 +337,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
   # the polls are spaced so the test's own reads do not crowd the queue the
   # socket, its task and the owner settle through.
   defp await_receipt!(request_id, deadline_ms) do
-    case safe_all(from(a in Attempt, where: a.request_id == ^request_id)) do
+    case Repo.all(from(a in Attempt, where: a.request_id == ^request_id)) do
       [%Attempt{response_metadata: %{"downstream_delivery" => %{} = receipt}}] ->
         receipt
 
@@ -349,7 +349,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
   end
 
   defp await_settled!(request_id, deadline_ms) do
-    case safe_all(from(r in Request, where: r.id == ^request_id and r.status != "in_progress")) do
+    case Repo.all(from(r in Request, where: r.id == ^request_id and r.status != "in_progress")) do
       [%Request{} = request] ->
         request
 
@@ -361,18 +361,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
   end
 
   defp await_all_settled!(pool_id, deadline_ms) do
-    requests = safe_all(from(r in Request, where: r.pool_id == ^pool_id))
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^pool_id))
 
     cond do
       requests != [] and Enum.all?(requests, &(&1.status != "in_progress")) -> :ok
       System.monotonic_time(:millisecond) >= deadline_ms -> flunk("requests never settled")
       true -> Process.sleep(@poll_ms) && await_all_settled!(pool_id, deadline_ms)
     end
-  end
-
-  defp safe_all(query) do
-    Repo.all(query)
-  rescue
-    DBConnection.ConnectionError -> []
   end
 end
