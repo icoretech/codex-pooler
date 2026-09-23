@@ -1532,6 +1532,70 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  # With owner forwarding off (the runtime default for one app replica) the
+  # resend of a turn's opening request is judged by the failed-predecessor
+  # claim alone, whose turn claim used to admit only a dead execution or a
+  # quota rejection: every released-client resend after a provider stream cut
+  # met `409 duplicate_turn` and the turn failed (findings#232 row 232-174).
+  @tag :stream_cut_resend
+  test "with owner forwarding off a lifecycle-only stream cut of a turn's opening request admits the byte-identical resend" do
+    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled),
+        else: Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+    end)
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings issue 124 (lifecycle frames, transport close); observed row 232-174 at forwarding off
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, stream_cut_frames("direct_opening", [])),
+          strict_native_request(2, completed_response_frames("resp_direct_opening_resend", 3, 1))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    payload = stream_cut_payload(setup, native_text_input("direct opening cut prompt sentinel"), "direct_opening")
+    {_server, port} = start_public_endpoint_with_server!()
+    turn_state = Ecto.UUID.generate()
+
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+    {conn, _websocket, _types, failure_frame} = receive_public_websocket_until_terminal(conn, websocket, ref, [])
+    assert %{"type" => "error", "status" => 502} = failure_frame
+
+    failed_request_id = await_failed_request_id!(setup.pool.id, System.monotonic_time(:millisecond) + 5_000)
+
+    Mint.HTTP.close(conn)
+
+    {resend_outcome, log} =
+      with_info_log(fn ->
+        {retry_conn, retry_websocket, retry_ref} = public_websocket_connect!(port, setup, turn_state)
+        {retry_conn, retry_websocket} = public_websocket_send_text!(retry_conn, retry_websocket, retry_ref, payload)
+        {retry_conn, _retry_websocket, _types, terminal} = receive_public_websocket_until_terminal(retry_conn, retry_websocket, retry_ref, [])
+        Mint.HTTP.close(retry_conn)
+
+        case terminal do
+          %{"type" => "response.completed", "response" => %{"id" => id}} -> {:completed, id}
+          %{"type" => "error", "status" => status, "error" => %{"code" => code}} -> {:error, status, code}
+        end
+      end)
+
+    assert resend_outcome == {:completed, "resp_direct_opening_resend"}
+    refute log =~ "prompt sentinel"
+
+    assert [%Request{id: ^failed_request_id, status: "failed", last_error_code: "upstream_stream_error"}, %Request{} = resend] =
+             Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
+
+    assert resend.request_metadata["client_resend"]["predecessor_request_id"] == failed_request_id
+    assert FakeUpstream.count(upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   @tag :stream_cut_resend
   test "lifecycle-only stream cut on a text-only turn admits the byte-identical resend as one client-retry successor" do
     %{request: request, resend: resend} =
@@ -2228,6 +2292,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
            }
 
     %{conn: conn, request: request, attempt: attempt, turn: turn}
+  end
+
+  defp await_failed_request_id!(pool_id, deadline_ms) do
+    case Repo.one(from(r in Request, where: r.pool_id == ^pool_id and r.status == "failed", select: r.id)) do
+      id when is_binary(id) ->
+        id
+
+      nil ->
+        if System.monotonic_time(:millisecond) >= deadline_ms, do: flunk("the cut request did not settle")
+        Process.sleep(10)
+        await_failed_request_id!(pool_id, deadline_ms)
+    end
   end
 
   defp stream_cut_frames(label, pre_close_frames) do

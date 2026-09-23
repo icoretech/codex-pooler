@@ -152,7 +152,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          effective_now <- if(marker, do: db_now(), else: now),
          {:ok, request_shape} <-
            validate_predecessor(request, scoped_validation, effective_now),
-         :ok <- validate_semantic_retry(request, scoped_validation) do
+         :ok <- validate_semantic_retry(request, request_shape, scoped_validation) do
       markers = if marker, do: [marker | markers], else: markers
       resolve_chain(derived, request, request_shape, scope, now, markers, depth + 1)
     end
@@ -177,7 +177,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # The pre-visible disconnect is the released client's commonest resend: the
   # opening request of every turn carries this claim, and with owner
   # forwarding off it was refused on every retry (findings#232 row 232-170).
-  defp validate_semantic_retry(request, %{semantic_claim?: true} = scope) do
+  # A provider stream cut before any completed output (lifecycle-only or
+  # partial reasoning, both verified on the final attempt) is the other shape
+  # the released client resends: with owner forwarding on the client-retry
+  # preflight already admitted it, with forwarding off every resend of an
+  # opening request was refused and the turn failed (row 232-174).
+  defp validate_semantic_retry(request, shape, %{semantic_claim?: true} = scope) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
 
@@ -195,14 +200,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          true <-
            ClientRetry.verified_dead_execution?(turn, request, attempt) or
              ClientRetry.verified_quota_rejection?(turn, request, attempt) or
-             previsible_websocket_disconnect?(request) do
+             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut] do
       :ok
     else
       _invalid -> {:error, :terminal_predecessor}
     end
   end
 
-  defp validate_semantic_retry(_request, _scope), do: :ok
+  defp validate_semantic_retry(_request, _shape, _scope), do: :ok
 
   defp lock_request_by_claim(claim) do
     Repo.one(
