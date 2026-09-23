@@ -224,7 +224,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
   test "rejects a non-loopback upstream before receipt or database mutation", context do
     options = Keyword.put(context.options, :upstream_base_url, "https://example.com")
 
-    assert {:error, "upstream base URL must be an origin-only loopback HTTP URL with a port"} =
+    assert {:error, "upstream base URL must be an origin-only loopback HTTP URL with a port, or an in-cluster service origin"} =
              OpenAIV1Fixture.acquire(options)
 
     refute File.exists?(context.receipt_path)

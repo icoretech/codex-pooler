@@ -13,6 +13,10 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
       MIX_ENV=dev mix dev.routing_strategy_fixture acquire --routing-strategy least_recent_success --assignments 5
       MIX_ENV=dev mix dev.routing_strategy_fixture status
       MIX_ENV=dev mix dev.routing_strategy_fixture release
+      MIX_ENV=dev mix dev.routing_strategy_fixture acquire --target-database codex_pooler_replica --upstream-base-url http://fake-upstream:4058
+
+  `--target-database NAME` targets an explicitly named local database reached
+  over loopback (a kind port-forward is fine) instead of `codex_pooler_dev`.
 
   The routing strategy is leased like `--request-compression` is in
   `mix dev.openai_v1_fixture`: the exact prior `pool_routing_settings` row,
@@ -51,7 +55,8 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
              upstream_base_url: :string,
              routing_strategy: :string,
              assignments: :integer,
-             allow_isolated_dev_database: :boolean
+             allow_isolated_dev_database: :boolean,
+             target_database: :string
            ],
            aliases: []
          ) do
@@ -71,7 +76,7 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
 
   defp usage do
     "use acquire [--upstream-base-url URL] [--routing-strategy #{Enum.join(RoutingStrategyFixture.routing_strategies(), "|")}] " <>
-      "[--assignments N], release, or status"
+      "[--assignments N] [--target-database NAME], release [--target-database NAME], or status [--target-database NAME]"
   end
 
   defp normalize_acquire_options(options) do
@@ -80,14 +85,15 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
       :upstream_base_url,
       :routing_strategy,
       :assignments,
-      :allow_isolated_dev_database
+      :allow_isolated_dev_database,
+      :target_database
     ])
     |> maybe_allow_isolated_dev_database()
   end
 
   defp normalize_release_options(options) do
     options
-    |> Keyword.take([:allow_isolated_dev_database])
+    |> Keyword.take([:allow_isolated_dev_database, :target_database])
     |> maybe_allow_isolated_dev_database()
   end
 

@@ -16,6 +16,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.CodexCompactionSmokeFixture.{Journal, Provisioner}
+  alias CodexPooler.Dev.LocalTarget
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Pools.{ModelServingOverride, Pool}
   alias CodexPooler.Repo
@@ -658,16 +659,12 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
     end
   end
 
+  # Loopback for the managed listener, or an in-cluster service origin that a
+  # local replica's pods can reach; public hosts stay refused.
   defp fetch_origin(options) do
-    value = Keyword.get(options, :upstream_base_url)
-    uri = if is_binary(value), do: URI.parse(value), else: %URI{}
-
-    if uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost", "::1"] and
-         is_integer(uri.port) and uri.path in [nil, "", "/"] and is_nil(uri.query) and
-         is_nil(uri.fragment) and is_nil(uri.userinfo) do
-      {:ok, String.trim_trailing(value, "/")}
-    else
-      {:error, "upstream base URL must be an origin-only loopback HTTP URL"}
+    case Keyword.get(options, :upstream_base_url) do
+      value when is_binary(value) -> LocalTarget.upstream_base_url(value, value)
+      _missing -> {:error, "--upstream-base-url is required"}
     end
   end
 

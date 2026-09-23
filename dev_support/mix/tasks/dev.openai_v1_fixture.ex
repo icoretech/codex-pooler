@@ -6,6 +6,10 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
       MIX_ENV=dev mix dev.openai_v1_fixture acquire --upstream-base-url http://127.0.0.1:4057 --request-compression
       MIX_ENV=dev mix dev.openai_v1_fixture status
       MIX_ENV=dev mix dev.openai_v1_fixture release
+      MIX_ENV=dev mix dev.openai_v1_fixture acquire --target-database codex_pooler_replica --upstream-base-url http://fake-upstream:4058
+
+  `--target-database NAME` targets an explicitly named local database reached
+  over loopback (a kind port-forward is fine) instead of `codex_pooler_dev`.
   """
 
   use Mix.Task
@@ -39,7 +43,8 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
            strict: [
              upstream_base_url: :string,
              request_compression: :boolean,
-             allow_isolated_dev_database: :boolean
+             allow_isolated_dev_database: :boolean,
+             target_database: :string
            ],
            aliases: []
          ) do
@@ -53,7 +58,7 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
         {:ok, :status, normalize_release_options(options)}
 
       _invalid ->
-        {:error, "use acquire [--upstream-base-url URL] [--request-compression], release, or status"}
+        {:error, "use acquire [--upstream-base-url URL] [--request-compression] [--target-database NAME], release [--target-database NAME], or status [--target-database NAME]"}
     end
   end
 
@@ -89,7 +94,7 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
 
   defp normalize_release_options(options) do
     options
-    |> Keyword.take([:allow_isolated_dev_database])
+    |> Keyword.take([:allow_isolated_dev_database, :target_database])
     |> maybe_allow_isolated_dev_database()
   end
 

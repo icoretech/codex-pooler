@@ -33,15 +33,26 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
   Ring size stays at the product default of 3 while the fixture provisions four
   or more assignments, because truncation is the one situation where the
   strategies differ in the *selected* assignment rather than only in the tail.
+
+  ## Local targets
+
+  `target_database: NAME` runs every action against an explicitly named local
+  database, for example a kind replica's Postgres through a loopback
+  port-forward (`CodexPooler.Dev.LocalTarget`), and keeps that database's
+  receipt below `tmp/routing-strategy-fixture/target-NAME/`. `upstream_base_url`
+  accepts a loopback origin or an in-cluster service origin the replica's pods
+  can reach.
   """
 
+  alias CodexPooler.Dev.LocalTarget
   alias CodexPooler.Dev.RoutingStrategyFixture.{Provisioner, Receipt, Snapshot}
   alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Repo
 
   @database "codex_pooler_dev"
   @default_upstream_base_url "http://127.0.0.1:4057"
-  @default_receipt_path Path.join(["tmp", "routing-strategy-fixture", "setup.json"])
+  @receipt_root Path.join(["tmp", "routing-strategy-fixture"])
+  @default_receipt_path Path.join(@receipt_root, "setup.json")
   @default_assignments 4
   @minimum_assignments 4
   @maximum_assignments 8
@@ -50,6 +61,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
           environment: atom(),
           allow_test_database: boolean(),
           allow_isolated_dev_database: boolean(),
+          target_database: String.t(),
           receipt_path: String.t(),
           upstream_base_url: String.t(),
           routing_strategy: String.t(),
@@ -104,12 +116,14 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
 
   @spec status(options()) :: {:ok, status()} | {:error, String.t()}
   def status(options \\ []) do
-    path = resolved_receipt_path(options)
+    with :ok <- validate_target_status(options) do
+      path = resolved_receipt_path(options)
 
-    case Receipt.read(path) do
-      {:ok, setup} -> public_status(setup, path)
-      :missing -> {:ok, %{status: "absent", leases: 0, receipt: receipt_label(path)}}
-      {:error, message} -> {:error, message}
+      case Receipt.read(path) do
+        {:ok, setup} -> public_status(setup, path)
+        :missing -> {:ok, %{status: "absent", leases: 0, receipt: receipt_label(path)}}
+        {:error, message} -> {:error, message}
+      end
     end
   end
 
@@ -120,8 +134,12 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
     allow_test_database? = Keyword.get(options, :allow_test_database, false)
     allow_isolated_dev_database? = Keyword.get(options, :allow_isolated_dev_database, false)
     database = Keyword.get(repo_config, :database)
+    target_database = Keyword.get(options, :target_database)
 
     cond do
+      environment == :dev and is_binary(target_database) ->
+        LocalTarget.validate_target_database(target_database, repo_config)
+
       allowed_environment?(environment, database, allow_isolated_dev_database?, allow_test_database?) ->
         :ok
 
@@ -131,6 +149,10 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
       true ->
         {:error, "routing strategy fixture requires database #{@database}"}
     end
+  end
+
+  defp validate_target_status(options) do
+    if Keyword.has_key?(options, :target_database), do: validate_environment(options), else: :ok
   end
 
   defp isolated_dev_database?(database) when is_binary(database) do
@@ -317,18 +339,8 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
     end
   end
 
-  defp upstream_base_url(options) do
-    value = Keyword.get(options, :upstream_base_url, @default_upstream_base_url)
-    uri = URI.parse(value)
-
-    if uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost", "::1"] and
-         is_integer(uri.port) and is_nil(uri.userinfo) and is_nil(uri.query) and
-         is_nil(uri.fragment) and uri.path in [nil, "", "/"] do
-      {:ok, value |> String.trim_trailing("/")}
-    else
-      {:error, "upstream base URL must be an origin-only loopback HTTP URL with a port"}
-    end
-  end
+  defp upstream_base_url(options),
+    do: LocalTarget.upstream_base_url(Keyword.get(options, :upstream_base_url), @default_upstream_base_url)
 
   defp routing_strategy(options) do
     strategy = Keyword.get(options, :routing_strategy, "bridge_ring")
@@ -358,7 +370,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
   defp resolved_receipt_path(options) do
     case Keyword.fetch(options, :receipt_path) do
       {:ok, path} when is_binary(path) -> Path.expand(path)
-      :error -> receipt_path()
+      :error -> LocalTarget.receipt_path(receipt_path(), @receipt_root, Keyword.get(options, :target_database))
     end
   end
 

@@ -9,6 +9,9 @@ defmodule Mix.Tasks.Dev.McpFixture do
   `--allow-isolated-dev-database` lets every action target a disposable
   isolated QA database (`codex_pooler_relqa_*` over loopback TCP) instead of
   `codex_pooler_dev`; its receipt then lives below `tmp/mcp-fixture/<database>/`.
+  `--target-database NAME` targets any explicitly named local database reached
+  over loopback (a kind port-forward is fine); its receipt lives below
+  `tmp/mcp-fixture/target-NAME/`.
   """
 
   use Mix.Task
@@ -34,18 +37,24 @@ defmodule Mix.Tasks.Dev.McpFixture do
   end
 
   defp parse_args(args) do
-    case OptionParser.parse(args, strict: [allow_isolated_dev_database: :boolean]) do
-      {options, ["acquire"], []} -> {:ok, :acquire, isolated_option(options)}
-      {options, ["release"], []} -> {:ok, :release, isolated_option(options)}
-      {options, ["status"], []} -> {:ok, :status, isolated_option(options)}
-      _invalid -> {:error, "use acquire, release, or status [--allow-isolated-dev-database]"}
+    case OptionParser.parse(args, strict: [allow_isolated_dev_database: :boolean, target_database: :string]) do
+      {options, ["acquire"], []} -> {:ok, :acquire, target_options(options)}
+      {options, ["release"], []} -> {:ok, :release, target_options(options)}
+      {options, ["status"], []} -> {:ok, :status, target_options(options)}
+      _invalid -> {:error, "use acquire, release, or status [--allow-isolated-dev-database | --target-database NAME]"}
     end
   end
 
-  defp isolated_option(options) do
-    if Keyword.get(options, :allow_isolated_dev_database, false),
-      do: [allow_isolated_dev_database: true],
-      else: []
+  defp target_options(options) do
+    isolated =
+      if Keyword.get(options, :allow_isolated_dev_database, false),
+        do: [allow_isolated_dev_database: true],
+        else: []
+
+    case Keyword.fetch(options, :target_database) do
+      {:ok, target} -> Keyword.put(isolated, :target_database, target)
+      :error -> isolated
+    end
   end
 
   defp maybe_start_application(:status), do: :ok

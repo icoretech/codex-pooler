@@ -11,8 +11,13 @@ defmodule CodexPooler.Dev.MCPFixture do
   database (`codex_pooler_relqa_*`) reached over loopback TCP only, and scopes
   its receipt below `tmp/mcp-fixture/<database>/` so a lease held against the
   development database is never reused for, or restored into, another database.
+  `target_database: NAME` accepts any explicitly named local database reached
+  over loopback (for example a kind replica through a port-forward, see
+  `CodexPooler.Dev.LocalTarget`), with its receipt below
+  `tmp/mcp-fixture/target-NAME/`.
   """
 
+  alias CodexPooler.Dev.LocalTarget
   alias CodexPooler.Dev.MCPFixture.{Provisioner, Receipt, Snapshot}
   alias CodexPooler.MCP.Material
   alias CodexPooler.Repo
@@ -26,6 +31,7 @@ defmodule CodexPooler.Dev.MCPFixture do
           environment: atom(),
           allow_test_database: boolean(),
           allow_isolated_dev_database: boolean(),
+          target_database: String.t(),
           receipt_path: String.t(),
           repo_config: keyword()
         ]
@@ -73,7 +79,10 @@ defmodule CodexPooler.Dev.MCPFixture do
     repo_config = Keyword.get(options, :repo_config, Repo.config())
     allow_test_database? = Keyword.get(options, :allow_test_database, false)
 
+    target_database = Keyword.get(options, :target_database)
+
     cond do
+      environment == :dev and is_binary(target_database) -> LocalTarget.validate_target_database(target_database, repo_config)
       environment == :dev and development_database?(options, repo_config) -> :ok
       environment == :test and allow_test_database? -> :ok
       environment != :dev -> {:error, "MCP fixture runs only with MIX_ENV=dev"}
@@ -100,7 +109,7 @@ defmodule CodexPooler.Dev.MCPFixture do
   end
 
   defp validate_isolated_status(options) do
-    if Keyword.get(options, :allow_isolated_dev_database, false),
+    if Keyword.get(options, :allow_isolated_dev_database, false) or Keyword.has_key?(options, :target_database),
       do: validate_environment(options),
       else: :ok
   end
@@ -217,10 +226,22 @@ defmodule CodexPooler.Dev.MCPFixture do
     |> Path.expand(File.cwd!())
   end
 
+  # A target database's receipt path is derived only from a name that
+  # `LocalTarget` accepts as a single safe path segment.
+  defp default_receipt_path(options) do
+    target_database = Keyword.get(options, :target_database)
+
+    if is_binary(target_database) do
+      LocalTarget.receipt_path(receipt_path(), @receipt_root, target_database)
+    else
+      isolated_or_default_receipt_path(options)
+    end
+  end
+
   # Only reached after `validate_environment/1` accepted the isolated database,
   # so its name matches the `codex_pooler_relqa_*` pattern and is a safe single
   # path segment.
-  defp default_receipt_path(options) do
+  defp isolated_or_default_receipt_path(options) do
     if Keyword.get(options, :allow_isolated_dev_database, false) do
       repo_config = Keyword.get(options, :repo_config, Repo.config())
       database = Keyword.fetch!(repo_config, :database)

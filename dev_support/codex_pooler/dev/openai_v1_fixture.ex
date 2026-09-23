@@ -6,20 +6,30 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture do
   set, API key, and quota snapshot. Multiple local callers share a
   reference-counted receipt; only the final release restores the exact prior
   database state.
+
+  `target_database: NAME` runs every action against an explicitly named local
+  database, for example a kind replica's Postgres through a loopback
+  port-forward (`CodexPooler.Dev.LocalTarget`), and keeps that database's
+  receipt below `tmp/openai-v1-fixture/target-NAME/`. `upstream_base_url`
+  accepts a loopback origin or an in-cluster service origin the replica's pods
+  can reach.
   """
 
+  alias CodexPooler.Dev.LocalTarget
   alias CodexPooler.Dev.OpenAIV1Fixture.{Provisioner, Receipt, Snapshot}
   alias CodexPooler.Repo
 
   @database "codex_pooler_dev"
   @default_upstream_base_url "http://127.0.0.1:4057"
-  @default_receipt_path Path.join(["tmp", "openai-v1-fixture", "setup.json"])
+  @receipt_root Path.join(["tmp", "openai-v1-fixture"])
+  @default_receipt_path Path.join(@receipt_root, "setup.json")
 
   @type request_compression_mode :: :preserve | :enabled
   @type options :: [
           environment: atom(),
           allow_test_database: boolean(),
           allow_isolated_dev_database: boolean(),
+          target_database: String.t(),
           receipt_path: String.t(),
           upstream_base_url: String.t(),
           request_compression: request_compression_mode(),
@@ -61,12 +71,14 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture do
 
   @spec status(options()) :: {:ok, status()} | {:error, String.t()}
   def status(options \\ []) do
-    path = resolved_receipt_path(options)
+    with :ok <- validate_target_status(options) do
+      path = resolved_receipt_path(options)
 
-    case Receipt.read(path) do
-      {:ok, setup} -> public_status(setup, path)
-      :missing -> {:ok, %{status: "absent", leases: 0, receipt_path: path}}
-      {:error, message} -> {:error, message}
+      case Receipt.read(path) do
+        {:ok, setup} -> public_status(setup, path)
+        :missing -> {:ok, %{status: "absent", leases: 0, receipt_path: path}}
+        {:error, message} -> {:error, message}
+      end
     end
   end
 
@@ -77,8 +89,12 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture do
     allow_test_database? = Keyword.get(options, :allow_test_database, false)
     allow_isolated_dev_database? = Keyword.get(options, :allow_isolated_dev_database, false)
     database = Keyword.get(repo_config, :database)
+    target_database = Keyword.get(options, :target_database)
 
     cond do
+      environment == :dev and is_binary(target_database) ->
+        LocalTarget.validate_target_database(target_database, repo_config)
+
       allowed_environment?(environment, database, allow_isolated_dev_database?, allow_test_database?) ->
         :ok
 
@@ -88,6 +104,10 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture do
       true ->
         {:error, "OpenAI V1 fixture requires database #{@database}"}
     end
+  end
+
+  defp validate_target_status(options) do
+    if Keyword.has_key?(options, :target_database), do: validate_environment(options), else: :ok
   end
 
   defp isolated_dev_database?(database) when is_binary(database) do
@@ -247,18 +267,8 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture do
     end
   end
 
-  defp upstream_base_url(options) do
-    value = Keyword.get(options, :upstream_base_url, @default_upstream_base_url)
-    uri = URI.parse(value)
-
-    if uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost", "::1"] and
-         is_integer(uri.port) and is_nil(uri.userinfo) and is_nil(uri.query) and
-         is_nil(uri.fragment) and uri.path in [nil, "", "/"] do
-      {:ok, value |> String.trim_trailing("/")}
-    else
-      {:error, "upstream base URL must be an origin-only loopback HTTP URL with a port"}
-    end
-  end
+  defp upstream_base_url(options),
+    do: LocalTarget.upstream_base_url(Keyword.get(options, :upstream_base_url), @default_upstream_base_url)
 
   defp request_compression_mode(options) do
     case Keyword.get(options, :request_compression, :preserve) do
@@ -270,7 +280,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture do
   defp resolved_receipt_path(options) do
     case Keyword.fetch(options, :receipt_path) do
       {:ok, path} when is_binary(path) -> Path.expand(path)
-      :error -> receipt_path()
+      :error -> LocalTarget.receipt_path(receipt_path(), @receipt_root, Keyword.get(options, :target_database))
     end
   end
 
