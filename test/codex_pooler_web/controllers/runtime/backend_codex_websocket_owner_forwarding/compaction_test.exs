@@ -941,19 +941,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     {:ok, state} = owner_socket(auth, "socket-compact-retry", "socket-compact-retry-state")
 
+    # The anchor is the same turn's ordinary request, so its success arms the
+    # owner's native compaction admission the incremental compact reserves: an
+    # anchored incremental compaction without one is refused before dispatch
+    # (findings#206 row 206-288).
+    turn_metadata = %{
+      "turn_id" => "socket-compact-turn",
+      "window_id" => "socket-compact-window",
+      "context_window_id" => Ecto.UUID.generate(),
+      "window_number" => 1
+    }
+
     anchor =
-      websocket_payload(setup, "synthetic anchor", %{"request_id" => "socket-compact-anchor"})
+      websocket_payload(setup, "synthetic anchor", %{
+        "request_id" => "socket-compact-anchor",
+        "client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(Map.put(turn_metadata, "request_kind", "turn"))}
+      })
 
     assert {:ok, state} = CodexResponsesSocket.handle_in({anchor, [opcode: :text]}, state)
     assert {:push, {:text, _anchor_frame}, state} = receive_owner_socket_push(state)
     assert {:ok, state} = receive_socket_done(state)
 
     metadata =
-      CodexPooler.JSON.encode!(%{
-        "turn_id" => "socket-compact-turn",
-        "window_id" => "socket-compact-window",
-        "context_window_id" => Ecto.UUID.generate(),
-        "window_number" => 1,
+      turn_metadata
+      |> Map.merge(%{
         "request_kind" => "compaction",
         "compaction" => %{
           "trigger" => "auto",
@@ -963,6 +974,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
           "strategy" => "memento"
         }
       })
+      |> CodexPooler.JSON.encode!()
 
     compact = %{
       "type" => "response.create",

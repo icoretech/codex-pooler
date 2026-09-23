@@ -2014,9 +2014,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         trace_reserve_finished(metadata, phase, control_ref, :ok)
         {:ok, prepared}
 
-      {:error, :owner_unavailable} ->
+      {:error, {:owner_unavailable, cause}} ->
         trace_reserve_finished(metadata, phase, control_ref, :queued)
-        maybe_defer_native_compaction(prepared, metadata, phase, control_ref, state)
+        maybe_defer_native_compaction(prepared, metadata, phase, control_ref, cause, state)
 
       {:error, reason} ->
         trace_reserve_finished(metadata, phase, control_ref, {:error, reason})
@@ -2042,13 +2042,56 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp trace_reason({:error, reason}), do: reason
   defp trace_reason(_outcome), do: nil
 
-  defp maybe_defer_native_compaction(prepared, metadata, phase, control_ref, state) do
-    if active_response_task?(state) do
-      {:ok, defer_native_compaction_reservation(prepared, metadata, phase, control_ref)}
-    else
-      {:ok, prepared}
+  defp maybe_defer_native_compaction(prepared, metadata, phase, control_ref, cause, state) do
+    cond do
+      active_response_task?(state) ->
+        {:ok, defer_native_compaction_reservation(prepared, metadata, phase, control_ref)}
+
+      phase == :compact ->
+        refuse_unadmitted_native_compaction(metadata, cause, state)
+
+      true ->
+        {:ok, prepared}
     end
   end
+
+  # An incremental compaction the owner granted no admission can never be
+  # confirmed: it used to be dispatched anyway, the provider served and billed
+  # it, the confirmation was refused `missing_confirmation_provenance`, and the
+  # compaction kept its turn's claim, so every resend of the client met
+  # `409 duplicate_turn` and the client paid again over HTTPS (findings#206
+  # rows 206-288/206-289). It is answered like a deferred reservation that
+  # failed at dequeue, with the retryable `503 owner_unavailable`, before
+  # anything is claimed, recorded or sent. The released client drops the
+  # connection after the error and retries with its full history, which needs
+  # no admission. A final turn without an admission still runs as an ordinary
+  # turn.
+  defp refuse_unadmitted_native_compaction(metadata, cause, state) do
+    refusal = owner_error(:owner_unavailable)
+
+    Logger.warning(fn ->
+      "native compaction refused before dispatch " <>
+        "reason=admission_unavailable " <>
+        "cause=#{DiagnosticTaxonomy.identifier(cause) || "unknown"} " <>
+        "code=#{refusal.code} " <>
+        "status=#{refusal.status} " <>
+        "compaction_phase=#{native_compaction_metadata_phase(metadata)} " <>
+        "topology=#{if owner_forwarded_socket?(state), do: "forwarded", else: "direct"} " <>
+        "codex_session_id=#{codex_session_id(state)}"
+    end)
+
+    {:error, refusal}
+  end
+
+  defp native_compaction_metadata_phase(%NativeCodexTurnMetadata{compaction: %NativeCodexTurnMetadata.Compaction{phase: phase}}), do: phase
+  defp native_compaction_metadata_phase(%NativeCodexTurnMetadata{}), do: "none"
+
+  # Why no admission was granted, for the refusal line: the owner's own reason,
+  # or `no_admission` when nothing was armed for this socket.
+  defp reservation_unavailable_cause({:error, reason}) when is_atom(reason), do: reason
+  defp reservation_unavailable_cause({:ok, nil}), do: :no_admission
+  defp reservation_unavailable_cause(nil), do: :no_admission
+  defp reservation_unavailable_cause(_other), do: :unexpected_result
 
   defp canonical_native_turn_metadata?(%{
          "client_metadata" => %{"x-codex-turn-metadata" => _metadata}
@@ -2156,7 +2199,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       put_owner_capability(prepared, capability, {:direct, owner}, lifecycle)
     else
       {:error, :compaction_item_mismatch} -> {:error, invalid_compaction_binding_error()}
-      _unavailable -> {:error, :owner_unavailable}
+      unavailable -> {:error, {:owner_unavailable, reservation_unavailable_cause(unavailable)}}
     end
   end
 
@@ -2214,7 +2257,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       put_owner_capability(prepared, capability, owner_ref, lifecycle)
     else
       {:error, :compaction_item_mismatch} -> {:error, invalid_compaction_binding_error()}
-      _unavailable -> {:error, :owner_unavailable}
+      unavailable -> {:error, {:owner_unavailable, reservation_unavailable_cause(unavailable)}}
     end
   end
 
@@ -3149,6 +3192,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     case reserve_owner_capability(prepared, metadata, phase, control_ref, state) do
       {:ok, prepared} ->
         start_tracked_response_task(prepared, state)
+
+      {:error, {:owner_unavailable, _cause}} ->
+        start_owner_retarget_error_task(owner_error(:owner_unavailable), prepared, state)
 
       {:error, reason} ->
         start_owner_retarget_error_task(owner_error(reason), prepared, state)
