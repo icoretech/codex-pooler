@@ -820,13 +820,18 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     :ok
   end
 
-  # A socket that reconnected while the owner still held its predecessor, had
-  # its only frame refused and left: the reconnect flag is its only cleanup
-  # authority, it holds no witness, so the owner-scoped interrupt can only roll
-  # back as stale. Nothing of its own was left behind (findings#225, row
-  # 225-95); the owner settles its own turn through its downstream monitor.
+  # The owner-scoped interrupt needs the cleanup witness the owner sends once
+  # it has started the socket's turn; without one it rolls back as stale by
+  # construction, so that outcome is routine, never a failed cleanup. Two
+  # shapes reach it: a reconnect socket whose only frame the owner refused
+  # (findings#225 row 225-95), and a socket cut before the owner's witness
+  # reached it, with its turn still being reserved or already refused
+  # (row 225-210, a pre-visible cut whose resend then succeeded). Neither left
+  # anything this interrupt could close: the owner settles a turn it started
+  # through its own detach or monitor, and a turn it never started is settled
+  # by the socket's own response task when the terminate cancels it.
   defp log_interrupt_failure({:error, :stale_owner_cleanup} = result, state) do
-    if no_turn_of_its_own?(state) do
+    if is_nil(Map.get(state, :websocket_owner_cleanup_witness)) do
       Logger.info(
         "websocket interrupt cleanup skipped " <>
           "codex_session_id=#{codex_session_id(state)} " <>

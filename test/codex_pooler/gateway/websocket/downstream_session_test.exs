@@ -337,10 +337,14 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
     assert_lease_preserved!(fixture)
   end
 
-  # A socket that still tracks a response task of its own but holds no cleanup
-  # witness for it is not that routine shape: the turn it started cannot be
-  # cleaned up from here, so the detach keeps the warning.
-  test "detach of a socket with its own response task but no cleanup witness still warns", fixture do
+  # A socket cut right after it sent its frame still tracks the response task
+  # for it, but the owner's cleanup witness never reached it: the turn was still
+  # being reserved or the owner had already refused it. The witness-scoped
+  # interrupt can only roll back as stale, and nothing is left for it to close
+  # (the task settles or never reserves; the owner settles a turn it started),
+  # so it is routine: production shape of findings#225 row 225-210, a
+  # pre-visible cut whose resend then succeeded.
+  test "detach of a socket cut before the owner's cleanup witness reached it logs its no-op cleanup at info", fixture do
     predecessor = active_turn_fixture(fixture, "websocket")
     finalize_turn(predecessor, "failed", "client_disconnected")
 
@@ -351,9 +355,11 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
 
     log = capture_info_log(fn -> assert :ok = DownstreamSession.cleanup(state) end)
 
-    assert log =~ "[warning] websocket interrupt cleanup failed"
-    assert log =~ "codex_session_id=#{fixture.session.id} failure_reason=stale_owner_cleanup cleanup_path=owner_detach"
-    refute log =~ "websocket interrupt cleanup skipped"
+    refute log =~ "[warning]"
+    refute log =~ "websocket interrupt cleanup failed"
+    assert log =~ "[info] websocket interrupt cleanup skipped"
+    assert log =~ "codex_session_id=#{fixture.session.id} cleanup_path=owner_detach reason_code=no_cleanup_witness"
+    assert Repo.get!(Request, predecessor.request.id).status == "failed"
   end
 
   test "successful detach preserves a failed terminal winner and its single settlement",
