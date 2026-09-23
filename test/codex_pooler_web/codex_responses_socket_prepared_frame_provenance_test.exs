@@ -11,19 +11,25 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
   server bookkeeping fault, with no log line at any of the three emit sites.
 
   The scenario starts where the request starts — a raw text frame arriving at
-  `handle_in/2` — and asserts on the frame pushed back to the client. The only
-  stand-ins are the external surfaces: the session's owner lives on an instance
-  that is not connected, which is what makes the reservation fail with
+  `handle_in/2` — and asserts on the frame pushed back to the client. It runs
+  with an authenticated API key and a model the Pool routes: a synthetic auth
+  without `key_prefix`/`api_key_id`/`pool_id` and an unroutable model made
+  every ordinary run from this fixture crash in `Denials.request_metadata/3`
+  or answer `400 invalid_model` (findings#206 row 206-340). The only stand-ins
+  are the external surfaces: the session's owner lives on an instance that is
+  not connected, which is what makes the reservation fail with
   `owner_unavailable` through the real forwarder.
   """
 
-  use CodexPooler.DataCase, async: false
+  use CodexPoolerWeb.ConnCase, async: false
 
   @moduletag capture_log: true
 
-  import CodexPooler.AccountingTestSupport
   import ExUnit.CaptureLog, only: [with_log: 1]
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
+  alias CodexPooler.Access
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
@@ -34,157 +40,170 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
   @detection_timeout_ms 15_000
 
   setup do
-    setup = accounting_setup()
-    auth = %{pool: setup.pool, api_key: setup.api_key}
+    # Nothing in these scenarios may reach the provider.
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert {:ok, %CodexSession{} = session} =
-             Gateway.start_codex_session(auth, %{
-               accepted_turn_state: "provenance-#{System.unique_integer([:positive])}",
-               owner_instance_id: "provenance-absent-instance@127.0.0.1"
-             })
-
-    {:ok, auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
+    {:ok, upstream: upstream, setup: setup, auth: auth, model: setup.model.exposed_model_id}
   end
 
-  test "a deferred compaction reservation on the reconnect route answers owner_unavailable, not a client 400",
-       %{auth: auth, session: session, model: model} do
-    active_turn = idle_process()
-    on_exit(fn -> send(active_turn, :stop) end)
+  describe "an owner on an instance that is not connected" do
+    setup %{auth: auth} do
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 accepted_turn_state: "provenance-#{System.unique_integer([:positive])}",
+                 owner_instance_id: "provenance-absent-instance@127.0.0.1"
+               })
 
-    state = reconnect_socket_state(auth, session, active_turn)
+      {:ok, session: Repo.get!(CodexSession, session.id)}
+    end
 
-    assert {:push, {:text, frame}, settled_state} =
-             CodexResponsesSocket.handle_in(
-               {final_compaction_frame(model), [opcode: :text]},
-               state
-             )
+    test "a deferred compaction reservation on the reconnect route answers owner_unavailable, not a client 400",
+         %{auth: auth, session: session, model: model, upstream: upstream} do
+      active_turn = idle_process()
+      on_exit(fn -> send(active_turn, :stop) end)
 
-    decoded = CodexPooler.JSON.decode!(frame)
+      state = reconnect_socket_state(auth, session, active_turn)
 
-    # The honest answer for "the owner could not admit the reservation and this
-    # route cannot queue the frame": the retryable owner vocabulary that
-    # `start_deferred_or_tracked_response/2`'s own failure branch already
-    # returns. Before the fix this was `400 invalid_request` with
-    # "prepared websocket frame provenance is invalid".
-    assert decoded["status"] == 503
-    assert decoded["error"]["code"] == "owner_unavailable"
-    refute decoded["error"]["message"] =~ "provenance"
+      assert {:push, {:text, frame}, settled_state} =
+               CodexResponsesSocket.handle_in(
+                 {final_compaction_frame(model), [opcode: :text]},
+                 state
+               )
 
-    # The frame is refused before any response work starts.
-    assert settled_state.tasks == MapSet.new([active_turn])
-    assert :queue.is_empty(settled_state.queued_response_payloads)
-  end
+      decoded = CodexPooler.JSON.decode!(frame)
 
-  test "the queue route unwinds the deferral, re-seals, and reports the owner failure once", %{
-    auth: auth,
-    session: session,
-    model: model
-  } do
-    active_turn = idle_process()
-    on_exit(fn -> send(active_turn, :stop) end)
+      # The honest answer for "the owner could not admit the reservation and this
+      # route cannot queue the frame": the retryable owner vocabulary that
+      # `start_deferred_or_tracked_response/2`'s own failure branch already
+      # returns. Before the fix this was `400 invalid_request` with
+      # "prepared websocket frame provenance is invalid".
+      assert decoded["status"] == 503
+      assert decoded["error"]["code"] == "owner_unavailable"
+      refute decoded["error"]["message"] =~ "provenance"
 
-    state =
-      auth
-      |> reconnect_socket_state(session, active_turn)
-      |> Map.put(:websocket_owner_active_turn_reconnect?, false)
-      |> put_in([:websocket_owner_downstream, :active_turn_reconnect?], false)
+      # The frame is refused before any response work starts.
+      assert settled_state.tasks == MapSet.new([active_turn])
+      assert :queue.is_empty(settled_state.queued_response_payloads)
+      assert FakeUpstream.count(upstream) == 0
+    end
 
-    # An owner-forwarded socket with a live turn queues the frame instead of
-    # dispatching it, deferral and all.
-    assert {:ok, queued_state} =
-             CodexResponsesSocket.handle_in(
-               {final_compaction_frame(model), [opcode: :text]},
-               state
-             )
+    test "the queue route unwinds the deferral, re-seals, and reports the owner failure once", %{
+      auth: auth,
+      session: session,
+      model: model,
+      upstream: upstream
+    } do
+      active_turn = idle_process()
+      on_exit(fn -> send(active_turn, :stop) end)
 
-    assert [%{request_options: %RequestOptions{native_compaction_reservation: %{phase: :final}}}] =
-             :queue.to_list(queued_state.queued_response_payloads)
+      state =
+        auth
+        |> reconnect_socket_state(session, active_turn)
+        |> Map.put(:websocket_owner_active_turn_reconnect?, false)
+        |> put_in([:websocket_owner_downstream, :active_turn_reconnect?], false)
 
-    # Draining the active turn dequeues it: the deferral is unwound, the frame
-    # is re-sealed with the runtime options, and the owner is asked again.
-    assert {:ok, dequeued_state} =
-             CodexResponsesSocket.handle_info(
-               {:codex_response_done, active_turn, :ok},
-               queued_state
-             )
+      # An owner-forwarded socket with a live turn queues the frame instead of
+      # dispatching it, deferral and all.
+      assert {:ok, queued_state} =
+               CodexResponsesSocket.handle_in(
+                 {final_compaction_frame(model), [opcode: :text]},
+                 state
+               )
 
-    assert :queue.is_empty(dequeued_state.queued_response_payloads)
-    assert [retry_task] = MapSet.to_list(dequeued_state.tasks)
-    refute retry_task == active_turn
+      assert [%{request_options: %RequestOptions{native_compaction_reservation: %{phase: :final}}}] =
+               :queue.to_list(queued_state.queued_response_payloads)
 
-    # The owner is still absent, so the retry reports the same retryable
-    # vocabulary the reconnect route now returns.
-    assert_receive {:codex_response_done, ^retry_task, result}, @detection_timeout_ms
+      # Draining the active turn dequeues it: the deferral is unwound, the frame
+      # is re-sealed with the runtime options, and the owner is asked again.
+      assert {:ok, dequeued_state} =
+               CodexResponsesSocket.handle_info(
+                 {:codex_response_done, active_turn, :ok},
+                 queued_state
+               )
 
-    assert {:push, {:text, frame}, _final_state} =
-             CodexResponsesSocket.handle_info(
-               {:codex_response_done, retry_task, result},
-               dequeued_state
-             )
+      assert :queue.is_empty(dequeued_state.queued_response_payloads)
+      assert [retry_task] = MapSet.to_list(dequeued_state.tasks)
+      refute retry_task == active_turn
 
-    decoded = CodexPooler.JSON.decode!(frame)
-    assert decoded["status"] == 503
-    assert decoded["error"]["code"] == "owner_unavailable"
-  end
+      # The owner is still absent, so the retry reports the same retryable
+      # vocabulary the reconnect route now returns.
+      assert_receive {:codex_response_done, ^retry_task, result}, @detection_timeout_ms
 
-  # The capability is a GenServer with a hard 30 s TTL and no keepalive, so a
-  # frame parked behind a long turn loses it before the dequeue re-seals. That
-  # is a second, independent trigger for the same rejection (findings #168's
-  # first adjacent finding) and it is not fixed here — but the re-seal failure
-  # must not turn its retryable answer into an invariant-breach 5xx now that
-  # the failure travels instead of being swallowed. Stopping the capability
-  # process is exactly what the TTL does.
-  test "a capability lost before the dequeue re-seal stays retryable and is no longer silent", %{
-    auth: auth,
-    session: session,
-    model: model
-  } do
-    active_turn = idle_process()
-    on_exit(fn -> send(active_turn, :stop) end)
+      assert {:push, {:text, frame}, _final_state} =
+               CodexResponsesSocket.handle_info(
+                 {:codex_response_done, retry_task, result},
+                 dequeued_state
+               )
 
-    state =
-      auth
-      |> reconnect_socket_state(session, active_turn)
-      |> Map.put(:websocket_owner_active_turn_reconnect?, false)
-      |> put_in([:websocket_owner_downstream, :active_turn_reconnect?], false)
+      decoded = CodexPooler.JSON.decode!(frame)
+      assert decoded["status"] == 503
+      assert decoded["error"]["code"] == "owner_unavailable"
+      assert FakeUpstream.count(upstream) == 0
+    end
 
-    assert {:ok, queued_state} =
-             CodexResponsesSocket.handle_in(
-               {final_compaction_frame(model), [opcode: :text]},
-               state
-             )
+    # The capability is a GenServer with a hard 30 s TTL and no keepalive, so a
+    # frame parked behind a long turn loses it before the dequeue re-seals. That
+    # is a second, independent trigger for the same rejection (findings #168's
+    # first adjacent finding) and it is not fixed here — but the re-seal failure
+    # must not turn its retryable answer into an invariant-breach 5xx now that
+    # the failure travels instead of being swallowed. Stopping the capability
+    # process is exactly what the TTL does.
+    test "a capability lost before the dequeue re-seal stays retryable and is no longer silent", %{
+      auth: auth,
+      session: session,
+      model: model,
+      upstream: upstream
+    } do
+      active_turn = idle_process()
+      on_exit(fn -> send(active_turn, :stop) end)
 
-    assert [queued] = :queue.to_list(queued_state.queued_response_payloads)
-    assert :ok = GenServer.stop(queued.provenance.capability.server)
+      state =
+        auth
+        |> reconnect_socket_state(session, active_turn)
+        |> Map.put(:websocket_owner_active_turn_reconnect?, false)
+        |> put_in([:websocket_owner_downstream, :active_turn_reconnect?], false)
 
-    {dequeued_state, log} =
-      with_log(fn ->
-        assert {:ok, dequeued_state} =
-                 CodexResponsesSocket.handle_info(
-                   {:codex_response_done, active_turn, :ok},
-                   queued_state
-                 )
+      assert {:ok, queued_state} =
+               CodexResponsesSocket.handle_in(
+                 {final_compaction_frame(model), [opcode: :text]},
+                 state
+               )
 
-        dequeued_state
-      end)
+      assert [queued] = :queue.to_list(queued_state.queued_response_payloads)
+      assert :ok = GenServer.stop(queued.provenance.capability.server)
 
-    # The swallowed re-seal failure left no trace at all before this change.
-    assert log =~ "prepared websocket frame reseal failed"
-    assert log =~ "stage=deferred_runtime_options"
-    refute log =~ model
+      {dequeued_state, log} =
+        with_log(fn ->
+          assert {:ok, dequeued_state} =
+                   CodexResponsesSocket.handle_info(
+                     {:codex_response_done, active_turn, :ok},
+                     queued_state
+                   )
 
-    assert [retry_task] = MapSet.to_list(dequeued_state.tasks)
-    assert_receive {:codex_response_done, ^retry_task, result}, @detection_timeout_ms
+          dequeued_state
+        end)
 
-    assert {:push, {:text, frame}, _final_state} =
-             CodexResponsesSocket.handle_info(
-               {:codex_response_done, retry_task, result},
-               dequeued_state
-             )
+      # The swallowed re-seal failure left no trace at all before this change.
+      assert log =~ "prepared websocket frame reseal failed"
+      assert log =~ "stage=deferred_runtime_options"
+      refute log =~ model
 
-    decoded = CodexPooler.JSON.decode!(frame)
-    assert decoded["status"] == 503
-    assert decoded["error"]["code"] == "owner_unavailable"
+      assert [retry_task] = MapSet.to_list(dequeued_state.tasks)
+      assert_receive {:codex_response_done, ^retry_task, result}, @detection_timeout_ms
+
+      assert {:push, {:text, frame}, _final_state} =
+               CodexResponsesSocket.handle_info(
+                 {:codex_response_done, retry_task, result},
+                 dequeued_state
+               )
+
+      decoded = CodexPooler.JSON.decode!(frame)
+      assert decoded["status"] == 503
+      assert decoded["error"]["code"] == "owner_unavailable"
+      assert FakeUpstream.count(upstream) == 0
+    end
   end
 
   defp reconnect_socket_state(auth, session, active_turn) do
