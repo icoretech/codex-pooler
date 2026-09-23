@@ -102,6 +102,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :forwarded_send_witness,
     :compaction_retry_submit_hold,
     :closed_downstream,
+    terminal_delivery_timeout_ms: @terminal_delivery_timeout_ms,
     provisional_issuances: [],
     pending_admissions: %{},
     pending_admission_monitors: %{}
@@ -1173,6 +1174,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       Keyword.get(opts, :handoff_absolute_timeout_ms, @handoff_absolute_timeout_ms)
 
     output_commit_probe_timeout_ms = output_commit_probe_timeout_ms(opts)
+    terminal_delivery_timeout_ms = terminal_delivery_timeout_ms(opts)
 
     owner_renewal_delay =
       Keyword.get(opts, :owner_renewal_delay, &jittered_owner_renewal_delay/1)
@@ -1213,6 +1215,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          handoff_soft_timeout_ms: handoff_soft_timeout_ms,
          handoff_absolute_timeout_ms: handoff_absolute_timeout_ms,
          output_commit_probe_timeout_ms: output_commit_probe_timeout_ms,
+         terminal_delivery_timeout_ms: terminal_delivery_timeout_ms,
          draining?: false,
          retire_after_active_turn?: false,
          native_compaction_admission: nil,
@@ -4699,7 +4702,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       Process.send_after(
         self(),
         {:websocket_owner_terminal_delivery_timeout, turn_ref, timer_token},
-        @terminal_delivery_timeout_ms
+        state.terminal_delivery_timeout_ms
       )
 
     active_turn = %{
@@ -4955,6 +4958,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     case Keyword.get(opts, :output_commit_probe_timeout_ms) do
       timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 -> timeout_ms
       _absent_or_invalid -> WebsocketOwnerContract.default_forward_timeout_ms()
+    end
+  end
+
+  # Test-facing knob for how long a retained terminal-bearing task result waits
+  # for its terminal frame to reach the downstream; production callers never
+  # pass it, so the owner keeps the one second default unless the override is
+  # a positive integer.
+  defp terminal_delivery_timeout_ms(opts) do
+    case Keyword.get(opts, :terminal_delivery_timeout_ms) do
+      timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 -> timeout_ms
+      _absent_or_invalid -> @terminal_delivery_timeout_ms
     end
   end
 end

@@ -69,6 +69,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   end
 
   @pending_terminal_observation_timeout_ms 5_000
+  # Scenario timer for the owner's terminal-delivery fallback in tests that
+  # release the retained task result before the terminal frames: it outlasts
+  # every detection wait, so a test stalled between the two releases cannot
+  # see the production one second timeout settle the turn first (findings#206
+  # row 206-292). The timeout path itself is driven by injected messages.
+  @terminal_delivery_scenario_timeout_ms 60_000
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
 
   setup do
@@ -1729,7 +1735,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     owner_ref = Process.monitor(owner)
     assert :ok = WebsocketOwnerSession.detach_downstream(owner, second_downstream)
-    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}, 1_000
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}, @detection_timeout_ms
     assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
   end
 
@@ -2209,7 +2215,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         task_result: terminal_result(terminal_frame, "response.completed")
       )
 
-    {:ok, owner} = start_owner(context, upstream: upstream)
+    {:ok, owner} =
+      start_owner(context,
+        upstream: upstream,
+        terminal_delivery_timeout_ms: @terminal_delivery_scenario_timeout_ms
+      )
+
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
 
     {:ok, downstream} =
@@ -2223,9 +2234,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     barriers = await_two_sender_barriers(controls)
     release_controlled(barriers, controls, :task_result)
 
-    assert %{active_turn: %{terminal_forwarded?: false, pending_result: pending_result}} =
-             await_pending_terminal_result(owner)
+    assert %{
+             active_turn: %{
+               terminal_forwarded?: false,
+               pending_result: pending_result,
+               terminal_delivery_timer_ref: terminal_delivery_timer_ref
+             }
+           } = await_pending_terminal_result(owner)
 
+    assert Process.read_timer(terminal_delivery_timer_ref) > @detection_timeout_ms
     assert pending_result == terminal_result(terminal_frame, "response.completed")
     assert Task.yield(submit_task, 0) == nil
     refute_received {:websocket_owner_frame, "result-first", 1, :complete}
@@ -2258,7 +2275,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         task_result: {:ok, expected_result}
       )
 
-    {:ok, owner} = start_owner(context, upstream: upstream)
+    {:ok, owner} =
+      start_owner(context,
+        upstream: upstream,
+        terminal_delivery_timeout_ms: @terminal_delivery_scenario_timeout_ms
+      )
+
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
 
     {:ok, downstream} =
@@ -2335,7 +2357,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
           task_result: terminal_result(terminal_frame, result_type)
         )
 
-      {:ok, owner} = start_owner(owner_context, upstream: upstream)
+      {:ok, owner} =
+        start_owner(owner_context,
+          upstream: upstream,
+          terminal_delivery_timeout_ms: @terminal_delivery_scenario_timeout_ms
+        )
+
       assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
 
       {:ok, downstream} =
@@ -3039,7 +3066,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         task_result: terminal_result(terminal_frame, "response.completed")
       )
 
-    {:ok, owner} = start_owner(context, upstream: upstream)
+    {:ok, owner} =
+      start_owner(context,
+        upstream: upstream,
+        terminal_delivery_timeout_ms: @terminal_delivery_scenario_timeout_ms
+      )
+
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
 
     {:ok, downstream} =
@@ -5503,20 +5535,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         correlation_id: "detach-local-owner"
       })
 
+    # The receive timeout is a scenario bound the submitter's exit must beat, so
+    # it outlasts every detection wait below: at one second a test that stalled
+    # past it at the barrier found the turn already timed out.
     send(
       submitter,
       {:submit_local_owner_bridge, downstream,
        %{
          websocket_request()
          | url: FakeUpstream.url(upstream),
-           timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
+           timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 60_000}
        }}
     )
 
     submitter_ref = Process.monitor(submitter)
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, socket_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     assert %{active_turn: %{task_pid: active_turn_worker_pid}} = :sys.get_state(owner)
 
@@ -5525,12 +5560,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     Process.exit(submitter, :shutdown)
 
-    assert_receive {:DOWN, ^submitter_ref, :process, ^submitter, :shutdown}, 1_000
+    assert_receive {:DOWN, ^submitter_ref, :process, ^submitter, :shutdown}, @detection_timeout_ms
 
     assert_receive {:DOWN, ^active_turn_worker_ref, :process, ^active_turn_worker_pid, :shutdown},
-                   1_000
+                   @detection_timeout_ms
 
-    assert_receive {:DOWN, ^socket_ref, :process, ^socket_pid, _reason}, 1_000
+    assert_receive {:DOWN, ^socket_ref, :process, ^socket_pid, _reason}, @detection_timeout_ms
     assert %{active_turn: nil, downstream: nil} = await_owner_cleared(owner)
     refute_received {:local_owner_bridge_submitter_result, _result}
   end
@@ -5960,7 +5995,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     release_ref = Map.fetch!(controls, stage)
 
     assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid, ^release_ref},
-                   1_000
+                   @detection_timeout_ms
 
     barrier_pid
   end
