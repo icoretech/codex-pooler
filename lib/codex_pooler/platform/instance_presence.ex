@@ -39,6 +39,7 @@ defmodule CodexPooler.Platform.InstancePresence do
   alias CodexPooler.Repo
 
   @heartbeat_interval_ms 15_000
+  @heartbeat_write_budget_ms 1_000
   @liveness_window_seconds 120
   @retention_seconds 7 * 24 * 60 * 60
 
@@ -58,12 +59,26 @@ defmodule CodexPooler.Platform.InstancePresence do
 
   @spec record_heartbeat(Identity.t()) :: {:ok, Instance.t()} | {:error, term()}
   def record_heartbeat(identity \\ local_identity()) do
-    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [], timeout: 1_000)
-    record_heartbeat(identity, now)
+    options = heartbeat_query_options()
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [], options)
+    insert_heartbeat(identity, now, options)
   end
 
   @spec record_heartbeat(Identity.t(), DateTime.t()) :: {:ok, Instance.t()} | {:error, term()}
-  def record_heartbeat(%Identity{} = identity, %DateTime{} = now) do
+  def record_heartbeat(%Identity{} = identity, %DateTime{} = now),
+    do: insert_heartbeat(identity, now, heartbeat_query_options())
+
+  # One budget for the whole beat. DBConnection enforces it by disconnecting the
+  # pooled connection the write holds; without `checkout_retries: 0` a statement
+  # cut while it was being prepared is retried on another connection, which the
+  # already expired deadline disconnects too (or, for a statement without a
+  # deadline, waits out a second budget). A database stall then cost every
+  # role's pool two connections per missed beat (findings#206 row 206-358).
+  defp heartbeat_query_options do
+    [timeout: @heartbeat_write_budget_ms, deadline: System.monotonic_time(:millisecond) + @heartbeat_write_budget_ms, checkout_retries: 0]
+  end
+
+  defp insert_heartbeat(%Identity{} = identity, %DateTime{} = now, options) do
     now = DateTime.truncate(now, :microsecond)
 
     Repo.insert(
@@ -75,10 +90,7 @@ defmodule CodexPooler.Platform.InstancePresence do
         last_seen_at: now,
         updated_at: now
       },
-      on_conflict: [set: [last_seen_at: now, updated_at: now]],
-      conflict_target: :instance_id,
-      timeout: 1_000,
-      deadline: System.monotonic_time(:millisecond) + 1_000
+      [on_conflict: [set: [last_seen_at: now, updated_at: now]], conflict_target: :instance_id] ++ options
     )
   end
 

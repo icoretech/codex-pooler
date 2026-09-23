@@ -59,8 +59,7 @@ defmodule CodexPooler.Telemetry.Relay do
 
         :ok
       end,
-      timeout: 1_000,
-      deadline: System.monotonic_time(:millisecond) + 1_000
+      bounded_write_options()
     )
   end
 
@@ -69,8 +68,7 @@ defmodule CodexPooler.Telemetry.Relay do
     Repo.query!(
       "INSERT INTO telemetry_relay_consumers(owner,heartbeat_at,quiesced) VALUES ($1,clock_timestamp(),$2) ON CONFLICT(owner) DO UPDATE SET heartbeat_at=EXCLUDED.heartbeat_at,quiesced=EXCLUDED.quiesced",
       [owner, quiesced],
-      timeout: 1_000,
-      deadline: System.monotonic_time(:millisecond) + 1_000
+      bounded_write_options()
     )
 
     :ok
@@ -106,8 +104,7 @@ defmodule CodexPooler.Telemetry.Relay do
     case Repo.query(
            "INSERT INTO telemetry_relay_heartbeats (owner, heartbeat_at) VALUES ($1, NOW()) ON CONFLICT (owner) DO UPDATE SET heartbeat_at = EXCLUDED.heartbeat_at",
            [owner],
-           timeout: 1_000,
-           deadline: System.monotonic_time(:millisecond) + 1_000
+           bounded_write_options()
          ) do
       {:ok, _} -> :ok
       {:error, error} -> {:error, error}
@@ -143,10 +140,19 @@ defmodule CodexPooler.Telemetry.Relay do
     |> Repo.insert(query_options())
   end
 
+  # Heartbeat and checkpoint writes get one second in total. DBConnection
+  # enforces it by disconnecting the pooled connection; `checkout_retries: 0`
+  # keeps a statement cut while it was being prepared from being retried on a
+  # second connection that the expired deadline would disconnect as well
+  # (findings#206 row 206-358).
+  defp bounded_write_options do
+    [timeout: 1_000, deadline: System.monotonic_time(:millisecond) + 1_000, checkout_retries: 0]
+  end
+
   defp query_options do
     case Process.get({CodexPooler.Telemetry.RelayRuntime, :flush_deadline}) do
       deadline when is_integer(deadline) ->
-        [deadline: deadline, timeout: max(deadline - System.monotonic_time(:millisecond), 1)]
+        [deadline: deadline, timeout: max(deadline - System.monotonic_time(:millisecond), 1), checkout_retries: 0]
 
       _ ->
         []
