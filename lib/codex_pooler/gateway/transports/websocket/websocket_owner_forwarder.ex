@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.AbandonedSubmissions
   alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -729,10 +730,51 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       when is_binary(codex_session_id) do
     with :ok <- validate_admission_control(control),
          {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-      WebsocketOwnerSession.admission_control(owner_pid, control)
+      owner_pid
+      |> WebsocketOwnerSession.admission_control(control)
+      |> owner_admission_answer(control)
     else
       {:error, _reason} -> {:error, :owner_unavailable}
     end
+  end
+
+  # Every admission control answer leaves the owner's node through this
+  # function, whether the socket is on that node (`dispatch_admission_control/4`,
+  # local) or on another one (`remote_admission_control_v1` over `call_remote`).
+  # A refusal is passed on only when it is `NativeCompactionAdmission`'s or the
+  # owner vocabulary's, which is exactly what `normalize_remote_call_result/2`
+  # lets through on the calling node; anything else becomes the admission's own
+  # `invalid_transition` here, identically for a local and a remote owner,
+  # instead of reading `owner_crashed` only when the owner is remote
+  # (findings#206 row 206-402).
+  defp owner_admission_answer({:error, reason} = result, control) do
+    if admission_answer?(reason) do
+      result
+    else
+      log_unlisted_admission_refusal(reason, control)
+      {:error, :invalid_transition}
+    end
+  end
+
+  defp owner_admission_answer(result, _control), do: result
+
+  defp admission_answer?(reason) when is_atom(reason),
+    do: NativeCompactionAdmission.refusal_reason?(reason) or WebsocketOwnerContract.owner_error?(reason)
+
+  defp admission_answer?(_reason), do: false
+
+  defp log_unlisted_admission_refusal(reason, control) do
+    require Logger
+
+    reason_code =
+      if is_atom(reason),
+        do: DiagnosticTaxonomy.identifier(Atom.to_string(reason)),
+        else: "non_atom"
+
+    Logger.warning(
+      "native compaction admission refusal outside vocabulary " <>
+        "action=#{control.action} reason_code=#{reason_code} answered=invalid_transition"
+    )
   end
 
   @doc false
