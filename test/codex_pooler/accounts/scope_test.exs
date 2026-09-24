@@ -35,10 +35,10 @@ defmodule CodexPooler.Accounts.ScopeTest do
     scope = Scope.for_user(user)
     assert scope.user == user
     assert scope.roles == ["instance_admin"]
-    assert Scope.assigned_pool_ids(scope) == [first_pool.id, second_pool.id]
+    assert scope.assigned_pool_ids == [first_pool.id, second_pool.id]
 
     later |> Ecto.Changeset.change(status: "revoked", revoked_at: now) |> Repo.update!()
-    assert Scope.assigned_pool_ids(Scope.for_user(user)) == [first_pool.id]
+    assert Scope.for_user(user).assigned_pool_ids == [first_pool.id]
   end
 
   test "explicit role projection filters non-strings and still reads persisted assignments" do
@@ -48,15 +48,11 @@ defmodule CodexPooler.Accounts.ScopeTest do
 
     scope = Scope.for_user(owner, [nil, "instance_admin", :instance_owner, 1])
     assert scope.roles == ["instance_admin"]
-    assert Scope.assigned_pool_ids(scope) == [pool.id]
+    assert scope.assigned_pool_ids == [pool.id]
   end
 
-  test "absent users and malformed scope projections remain empty" do
+  test "absent users have no scope" do
     assert Scope.for_user(nil) == nil
     assert Scope.for_user(nil, ["instance_owner"]) == nil
-
-    for scope <- [nil, %{}, %Scope{}, %Scope{assigned_pool_ids: nil}] do
-      assert Scope.assigned_pool_ids(scope) == []
-    end
   end
 end

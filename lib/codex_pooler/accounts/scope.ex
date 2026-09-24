@@ -44,14 +44,6 @@ defmodule CodexPooler.Accounts.Scope do
 
   def for_user(nil, _roles), do: nil
 
-  @spec assigned_pool_ids(t() | term()) :: [Ecto.UUID.t()]
-  def assigned_pool_ids(%__MODULE__{assigned_pool_ids: assigned_pool_ids})
-      when is_list(assigned_pool_ids) do
-    assigned_pool_ids
-  end
-
-  def assigned_pool_ids(_scope), do: []
-
   defp roles_for_user(user_id) do
     Repo.all(
       from membership in Membership,
