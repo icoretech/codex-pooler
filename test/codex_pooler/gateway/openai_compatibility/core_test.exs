@@ -3240,6 +3240,58 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              ] = payload["input"]
     end
 
+    # findings#258 row 258-11: the Responses SDK types a tool-output image as
+    # `input_image` with `file_id` or `image_url`; the file reference is kept.
+    test "function_call_output keeps an input_image file_id from Responses SDK tool output" do
+      assert {:ok, %{payload: payload}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "type" => "function_call_output",
+                     "call_id" => "call_fixture_image_file",
+                     "output" => [
+                       %{"type" => "input_text", "text" => "synthetic screenshot stored"},
+                       %{"type" => "input_image", "detail" => "auto", "file_id" => "file-fixture-image"},
+                       %{
+                         "type" => "input_image",
+                         "file_id" => "file-fixture-image-marked",
+                         "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                       }
+                     ]
+                   }
+                 ]
+               })
+
+      assert [
+               %{
+                 "type" => "function_call_output",
+                 "call_id" => "call_fixture_image_file",
+                 "output" => [
+                   %{"type" => "input_text", "text" => "synthetic screenshot stored"},
+                   %{"type" => "input_image", "file_id" => "file-fixture-image"},
+                   %{
+                     "type" => "input_image",
+                     "file_id" => "file-fixture-image-marked",
+                     "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                   }
+                 ]
+               }
+             ] = payload["input"]
+
+      assert {:error, %{param: "input"}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "type" => "function_call_output",
+                     "call_id" => "call_fixture_image_blank_file",
+                     "output" => [%{"type" => "input_image", "file_id" => ""}]
+                   }
+                 ]
+               })
+    end
+
     test "structured function_call_output preserves explicit null output" do
       assert {:ok, %{payload: payload}} =
                Responses.coerce(%{
@@ -7891,6 +7943,34 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                 param: "input"
               }} = Responses.coerce(%{"model" => "gpt-6-sol", "input" => [item]})
     end
+  end
+
+  # The Responses SDK types a message image with a required `detail`, so a
+  # marked SDK image always carries it; the unmarked path already kept it.
+  @tag :prompt_cache_controls
+  test "marked user input_image keeps its detail for file_id and image_url references" do
+    breakpoint = prompt_cache_breakpoint()
+
+    parts = [
+      %{"type" => "input_image", "detail" => "high", "file_id" => "file-fixture-marked", "prompt_cache_breakpoint" => breakpoint},
+      %{"type" => "input_image", "detail" => "auto", "image_url" => "https://example.com/marked.png", "prompt_cache_breakpoint" => breakpoint}
+    ]
+
+    assert {:ok, %{payload: payload}} =
+             Responses.coerce(%{"model" => "gpt-6-sol", "input" => [%{"role" => "user", "content" => parts}]})
+
+    assert [%{"role" => "user", "content" => ^parts}] = payload["input"]
+
+    assert {:error, %{message: "message content part is not translatable"}} =
+             Responses.coerce(%{
+               "model" => "gpt-6-sol",
+               "input" => [
+                 %{
+                   "role" => "user",
+                   "content" => [%{"type" => "input_image", "detail" => "high", "file_id" => "file-fixture-marked", "extra" => true, "prompt_cache_breakpoint" => breakpoint}]
+                 }
+               ]
+             })
   end
 
   defp prompt_cache_breakpoint, do: %{"mode" => "explicit"}

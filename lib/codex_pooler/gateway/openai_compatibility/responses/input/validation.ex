@@ -919,17 +919,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
          context
        )
        when is_binary(image_url) and context in [:user, :tool_output] do
-    with :ok <- validate_content_part_keys(part, ["type", "image_url", "prompt_cache_breakpoint"]) do
+    with :ok <- validate_content_part_keys(part, ["type", "image_url", "detail", "prompt_cache_breakpoint"]) do
       validate_prompt_cache_breakpoint(part)
     end
   end
 
   defp validate_cacheable_content_part(
          %{"type" => "input_image", "file_id" => file_id} = part,
-         :user
+         context
        )
-       when is_binary(file_id) and file_id != "" do
-    with :ok <- validate_content_part_keys(part, ["type", "file_id", "prompt_cache_breakpoint"]) do
+       when is_binary(file_id) and file_id != "" and context in [:user, :tool_output] do
+    with :ok <- validate_content_part_keys(part, ["type", "file_id", "detail", "prompt_cache_breakpoint"]) do
       validate_prompt_cache_breakpoint(part)
     end
   end

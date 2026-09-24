@@ -598,6 +598,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
      |> maybe_put_prompt_cache_breakpoint(part)}
   end
 
+  defp normalize_tool_output_part(%{"type" => "input_image", "file_id" => file_id} = part)
+       when is_binary(file_id) and file_id != "" do
+    {:ok,
+     %{"type" => "input_image", "file_id" => file_id}
+     |> maybe_put_prompt_cache_breakpoint(part)}
+  end
+
   defp normalize_tool_output_part(%{"type" => "image_url"} = part) do
     case Map.get(part, "image_url") do
       %{"url" => image_url} when is_binary(image_url) ->
