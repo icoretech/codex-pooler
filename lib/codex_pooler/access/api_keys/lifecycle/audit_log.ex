@@ -1,7 +1,7 @@
 defmodule CodexPooler.Access.APIKeys.AuditLog do
   @moduledoc false
 
-  alias CodexPooler.Access.APIKey
+  alias CodexPooler.Access.{APIKey, APIKeyPolicyBinding}
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Audit
 
@@ -60,8 +60,9 @@ defmodule CodexPooler.Access.APIKeys.AuditLog do
 
   def api_key_policy_audit_details(_resource), do: %{}
 
-  @spec api_key_update_audit_details(term(), APIKey.t(), map()) :: map()
-  def api_key_update_audit_details(resource, %APIKey{} = previous_api_key, attrs) do
+  @spec api_key_update_audit_details(term(), APIKey.t(), map(), [APIKeyPolicyBinding.t()] | nil) ::
+          map()
+  def api_key_update_audit_details(resource, %APIKey{} = previous_api_key, attrs, previous_bindings \\ nil) do
     updated_api_key = api_key_audit_resource(resource)
 
     pool_changed? =
@@ -79,7 +80,10 @@ defmodule CodexPooler.Access.APIKeys.AuditLog do
       end
 
     %{
-      changed_fields: api_key_audit_changed_fields(attrs),
+      # What the update changed, compared value by value; `submitted_fields`
+      # is what the caller sent (the operator form sends every field).
+      changed_fields: api_key_audit_changed_fields(previous_api_key, previous_bindings, resource),
+      submitted_fields: api_key_audit_submitted_fields(attrs),
       previous_pool_id: previous_api_key.pool_id,
       pool_changed: pool_changed?,
       runtime_revocation_epoch_advanced: epoch_advanced?,
@@ -118,7 +122,79 @@ defmodule CodexPooler.Access.APIKeys.AuditLog do
     }
   end
 
-  defp api_key_audit_changed_fields(attrs) do
+  @audited_key_fields [
+    :display_name,
+    :pool_id,
+    :status,
+    :dashboard_access,
+    :max_active_requests,
+    :expires_at,
+    :allowed_model_identifiers,
+    :metadata,
+    :enforced_model_identifier,
+    :enforced_reasoning_effort,
+    :maximum_reasoning_effort,
+    :enforced_service_tier
+  ]
+
+  @audited_binding_fields [
+    :model_identifier,
+    :status,
+    :max_requests_per_minute,
+    :max_tokens_per_day,
+    :max_tokens_per_week,
+    :max_input_tokens_per_request,
+    :max_output_tokens_per_request
+  ]
+
+  defp api_key_audit_changed_fields(%APIKey{} = previous_api_key, previous_bindings, resource) do
+    case api_key_audit_resource(resource) do
+      %APIKey{} = updated_api_key ->
+        key_fields =
+          Enum.filter(@audited_key_fields, fn field ->
+            audited_value(field, Map.get(previous_api_key, field)) !=
+              audited_value(field, Map.get(updated_api_key, field))
+          end)
+
+        (key_fields ++ changed_binding_fields(previous_bindings, resource))
+        |> Enum.map(&Atom.to_string/1)
+        |> Enum.sort()
+
+      nil ->
+        []
+    end
+  end
+
+  defp changed_binding_fields(previous_bindings, %{policy_bindings: bindings})
+       when is_list(previous_bindings) and is_list(bindings) do
+    Enum.reject(
+      [default_policy: "default", model_policies: "model"],
+      fn {_field, scope} -> audited_bindings(previous_bindings, scope) == audited_bindings(bindings, scope) end
+    )
+    |> Enum.map(fn {field, _scope} -> field end)
+  end
+
+  defp changed_binding_fields(_previous_bindings, _resource), do: []
+
+  defp audited_bindings(bindings, scope) do
+    bindings
+    |> Enum.filter(&(&1.binding_scope == scope))
+    |> Enum.map(&Map.take(&1, @audited_binding_fields))
+    |> Enum.sort()
+  end
+
+  # The allow list compares as a set, as the runtime epoch does; a timestamp
+  # compares by instant and a map by its string-keyed content.
+  defp audited_value(:allowed_model_identifiers, values) when is_list(values), do: values |> Enum.uniq() |> Enum.sort()
+  defp audited_value(:expires_at, %DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
+  defp audited_value(:metadata, value) when is_map(value), do: stringify_keys(value)
+  defp audited_value(_field, value), do: value
+
+  defp stringify_keys(map) when is_map(map) and not is_struct(map), do: Map.new(map, fn {key, value} -> {to_string(key), stringify_keys(value)} end)
+  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
+  defp stringify_keys(value), do: value
+
+  defp api_key_audit_submitted_fields(attrs) do
     known_fields = [
       "display_name",
       "pool_id",

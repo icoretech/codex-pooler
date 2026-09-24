@@ -109,8 +109,15 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
       assert exact_key.enforced_reasoning_effort == "xhigh"
       assert is_nil(exact_key.maximum_reasoning_effort)
 
+      # An omitted reasoning pair keeps the stored policy; nil clears it.
+      assert {:ok, %{api_key: kept_key}} = Access.update_api_key_with_policy(scope, exact_key, %{})
+      assert kept_key.enforced_reasoning_effort == "xhigh"
+
       assert {:ok, %{api_key: unrestricted_key}} =
-               Access.update_api_key_with_policy(scope, exact_key, %{})
+               Access.update_api_key_with_policy(scope, exact_key, %{
+                 enforced_reasoning_effort: nil,
+                 maximum_reasoning_effort: nil
+               })
 
       assert is_nil(unrestricted_key.enforced_reasoning_effort)
       assert is_nil(unrestricted_key.maximum_reasoning_effort)
@@ -209,13 +216,15 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
       assert exact_key.enforced_reasoning_effort == "xhigh"
       assert is_nil(exact_key.maximum_reasoning_effort)
 
+      # The omitted reasoning pair is kept from the locked row, not from the
+      # stale struct's ceiling.
       assert {:ok, %{api_key: returned_key}} =
                Access.update_api_key_with_policy(scope, stale_maximum_key, %{})
 
       persisted_key = Repo.get!(APIKey, maximum_key.id)
       assert returned_key.enforced_reasoning_effort == persisted_key.enforced_reasoning_effort
       assert returned_key.maximum_reasoning_effort == persisted_key.maximum_reasoning_effort
-      assert is_nil(returned_key.enforced_reasoning_effort)
+      assert returned_key.enforced_reasoning_effort == "xhigh"
       assert is_nil(returned_key.maximum_reasoning_effort)
 
       latest_audit =
@@ -228,8 +237,9 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       assert latest_audit.details["previous_reasoning_policy_mode"] == "always_use"
       assert latest_audit.details["previous_reasoning_policy_configuration"] == "xhigh"
-      assert latest_audit.details["reasoning_policy_mode"] == "unrestricted"
-      assert is_nil(latest_audit.details["reasoning_policy_configuration"])
+      assert latest_audit.details["reasoning_policy_mode"] == "always_use"
+      assert latest_audit.details["reasoning_policy_configuration"] == "xhigh"
+      assert latest_audit.details["changed_fields"] == []
     end
 
     test "rejects API key assignment when a selected key is not visible" do

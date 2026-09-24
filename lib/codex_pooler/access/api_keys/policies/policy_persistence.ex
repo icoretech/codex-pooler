@@ -73,6 +73,19 @@ defmodule CodexPooler.Access.APIKeys.PolicyPersistence do
     end
   end
 
+  @doc """
+  Reads a key's policy bindings. An update reads them after it takes the key's
+  writer lock, which every binding write also holds.
+  """
+  @spec list_policy_bindings(Ecto.UUID.t()) :: [APIKeyPolicyBinding.t()]
+  def list_policy_bindings(api_key_id) do
+    Repo.all(
+      from binding in APIKeyPolicyBinding,
+        where: binding.api_key_id == ^api_key_id,
+        order_by: [asc: binding.binding_scope, asc: binding.model_identifier]
+    )
+  end
+
   @spec normalize_transaction_result(transaction_result(value)) :: {:ok, value} | {:error, term()}
         when value: term()
   def normalize_transaction_result({:ok, %{result: value}}), do: {:ok, value}

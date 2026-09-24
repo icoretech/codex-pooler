@@ -1,7 +1,7 @@
 defmodule CodexPooler.Access.APIKeys.Policy do
   @moduledoc false
 
-  alias CodexPooler.Access.APIKey
+  alias CodexPooler.Access.{APIKey, APIKeyPolicyBinding}
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.ServiceTier
 
@@ -10,6 +10,31 @@ defmodule CodexPooler.Access.APIKeys.Policy do
   @status_revoked "revoked"
   @reasoning_efforts ~w(none minimal low medium high xhigh max ultra)
   @service_tiers ~w(auto default flex priority scale)
+
+  # Each group is one unit of an update: an omitted group keeps the stored
+  # value, a submitted one replaces it whole. The allow list and the reasoning
+  # pair are units because each describes one mode (`model_mode` without a
+  # list, or an exact effort replacing a ceiling).
+  @allow_list_keys [
+    :model_mode,
+    "model_mode",
+    :allowed_models_mode,
+    "allowed_models_mode",
+    :allowed_model_identifiers,
+    "allowed_model_identifiers",
+    :allowed_models,
+    "allowed_models"
+  ]
+  @enforced_model_keys [:enforced_model_identifier, "enforced_model_identifier"]
+  @reasoning_keys [
+    :enforced_reasoning_effort,
+    "enforced_reasoning_effort",
+    :maximum_reasoning_effort,
+    "maximum_reasoning_effort"
+  ]
+  @service_tier_keys [:enforced_service_tier, "enforced_service_tier"]
+  @default_policy_keys [:default_policy, "default_policy"]
+  @model_policies_keys [:model_policies, "model_policies"]
 
   @type access_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type policy_result :: {:ok, map()} | {:error, atom() | access_error()}
@@ -37,6 +62,70 @@ defmodule CodexPooler.Access.APIKeys.Policy do
   def allow_list_mode(nil, :models), do: :all_models
   def allow_list_mode([], :models), do: :deny_all_models
   def allow_list_mode(_values, :models), do: :selected_models
+
+  @doc """
+  Completes an update's attrs with the stored policy for every policy group
+  the caller did not submit, so an omitted field keeps its value instead of
+  normalizing to all models, no enforcement or no limit (findings#206 row
+  206-497). A submitted group replaces the stored one, `nil` included, and
+  the caller validates the merged result as a whole.
+  """
+  @spec merge_stored(map(), APIKey.t(), [APIKeyPolicyBinding.t()]) :: map()
+  def merge_stored(attrs, %APIKey{} = api_key, bindings) when is_map(attrs) and is_list(bindings) do
+    attrs
+    |> put_unless_submitted(@allow_list_keys, %{
+      model_mode: allow_list_mode(api_key.allowed_model_identifiers, :models),
+      allowed_model_identifiers: api_key.allowed_model_identifiers
+    })
+    |> put_unless_submitted(@enforced_model_keys, %{enforced_model_identifier: api_key.enforced_model_identifier})
+    |> put_unless_submitted(@reasoning_keys, %{
+      enforced_reasoning_effort: api_key.enforced_reasoning_effort,
+      maximum_reasoning_effort: api_key.maximum_reasoning_effort
+    })
+    |> put_unless_submitted(@service_tier_keys, %{enforced_service_tier: api_key.enforced_service_tier})
+    # `normalize_inputs/1` reads the bindings from the top level only.
+    |> put_unless_submitted(@default_policy_keys, %{default_policy: stored_default_policy(bindings)}, :top_level)
+    |> put_unless_submitted(@model_policies_keys, %{model_policies: stored_model_policies(bindings)}, :top_level)
+  end
+
+  defp put_unless_submitted(attrs, keys, stored, depth \\ :with_nested_policy) do
+    if submitted?(attrs, keys, depth), do: attrs, else: Map.merge(attrs, stored)
+  end
+
+  defp submitted?(attrs, keys, :top_level), do: Enum.any?(keys, &Map.has_key?(attrs, &1))
+
+  defp submitted?(attrs, keys, :with_nested_policy) do
+    nested_policy = Map.get(attrs, :policy) || Map.get(attrs, "policy")
+
+    submitted?(attrs, keys, :top_level) or
+      (is_map(nested_policy) and submitted?(nested_policy, keys, :top_level))
+  end
+
+  defp stored_default_policy(bindings) do
+    case Enum.find(bindings, &(&1.binding_scope == "default")) do
+      %APIKeyPolicyBinding{} = binding -> stored_binding_attrs(binding, "default")
+      nil -> %{}
+    end
+  end
+
+  defp stored_model_policies(bindings) do
+    bindings
+    |> Enum.filter(&(&1.binding_scope == "model"))
+    |> Enum.map(&stored_binding_attrs(&1, "model"))
+  end
+
+  defp stored_binding_attrs(%APIKeyPolicyBinding{} = binding, scope) do
+    %{
+      binding_scope: scope,
+      model_identifier: binding.model_identifier,
+      status: binding.status,
+      max_requests_per_minute: binding.max_requests_per_minute,
+      max_tokens_per_day: binding.max_tokens_per_day,
+      max_tokens_per_week: binding.max_tokens_per_week,
+      max_input_tokens_per_request: binding.max_input_tokens_per_request,
+      max_output_tokens_per_request: binding.max_output_tokens_per_request
+    }
+  end
 
   @spec normalize_attrs(Scope.t(), Ecto.UUID.t(), map()) ::
           {:ok, map()} | {:error, access_error()}
