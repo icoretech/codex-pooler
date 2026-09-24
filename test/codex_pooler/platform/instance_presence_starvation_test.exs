@@ -104,7 +104,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
       CodexPooler.InstancePresencePeer.cleanup_timeout_ms(15_000)
     )
 
-    {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [], @peer_call_budget_ms)
+    _failed_beats = CodexPooler.InstancePresencePeer.publish_presence!(peer, @peer_call_budget_ms)
 
     {request, attempt, executor} =
       :peer.call(peer, CodexPooler.InstancePresencePeer, :start, [setup], @peer_call_budget_ms)

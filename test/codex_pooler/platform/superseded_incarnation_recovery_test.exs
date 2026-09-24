@@ -210,7 +210,9 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     os_identity = InstancePresencePeer.capture_os_process_identity!(os_pid)
 
     identity = :peer.call(peer, CodexPooler.Platform.InstancePresence.Identity, :local, [], @peer_timeout_ms)
-    {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [], @peer_timeout_ms)
+    # Through the production heartbeat, which retries a beat its one-second
+    # write budget cut; one direct beat failed on a loaded host (row 206-473).
+    _failed_beats = InstancePresencePeer.publish_presence!(peer, @peer_timeout_ms)
 
     UnboxedFixture.register_unboxed_cleanup!(
       fn ->

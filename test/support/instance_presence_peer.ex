@@ -2,6 +2,7 @@ defmodule CodexPooler.InstancePresencePeer do
   @moduledoc false
   import ExUnit.Callbacks
   import ExUnit.Assertions
+  import Ecto.Query, only: [from: 2]
   alias CodexPooler.Platform.InstancePresence.Identity
 
   @type os_process_source :: :proc | :ps
@@ -422,6 +423,102 @@ defmodule CodexPooler.InstancePresencePeer do
 
   @doc false
   def capture(_event, %{failures: 1}, %{}, parent), do: send(parent, :heartbeat_failed)
+
+  # Fixture cadence of the production heartbeat while a peer publishes: a missed
+  # beat is retried on the next tick, as production does every 15 s.
+  @presence_retry_interval_ms 50
+
+  @doc """
+  Publishes a BEAM peer's presence row through the production heartbeat and
+  returns how many beats failed before one landed.
+
+  A single `InstancePresence.record_heartbeat/0` call made the fixture depend on
+  one beat fitting its one-second production write budget. On a loaded host a
+  freshly bootstrapped peer spent that budget before its insert, DBConnection
+  closed the insert's connection, and the test failed with `tcp recv: closed`
+  (findings#206 row 206-473). The peer instead runs the real
+  `InstanceHeartbeat`, which retries a failed beat on its next tick, until its
+  row exists; the heartbeat is then stopped, so the row changes only when the
+  test changes it. Only a peer with no landed beat inside `budget_ms` fails, and
+  the failure names the missed beats and the one-second budget that cuts a
+  starved beat.
+  """
+  @spec publish_presence!(pid(), pos_integer()) :: non_neg_integer()
+  def publish_presence!(peer, budget_ms) when is_integer(budget_ms) and budget_ms > 0 do
+    # The peer stops its heartbeat before answering, which can wait out one
+    # more beat's budget.
+    case :peer.call(peer, __MODULE__, :publish_local_presence, [budget_ms], budget_ms * 2 + 5_000) do
+      {:ok, failed_beats} ->
+        failed_beats
+
+      {:error, failed_beats} ->
+        flunk(
+          "the peer published no presence within #{budget_ms} ms: #{failed_beats} heartbeat beat(s) failed. " <>
+            "A beat that outlives InstancePresence's one-second production write budget loses its connection " <>
+            "(DBConnection closes it: `tcp recv: closed`), so a host or database that starves the peer fails " <>
+            "every beat; the peer logs each failed write"
+        )
+    end
+  end
+
+  @doc false
+  @spec publish_local_presence(pos_integer()) :: {:ok | :error, non_neg_integer()}
+  def publish_local_presence(budget_ms) do
+    identity = InstancePresence.local_identity()
+    failures = :counters.new(1, [])
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :instance_presence, :heartbeat],
+        &__MODULE__.count_failed_beat/4,
+        failures
+      )
+
+    try do
+      {:ok, heartbeat} =
+        InstanceHeartbeat.start_link(enabled: true, identity: identity, interval_ms: @presence_retry_interval_ms)
+
+      Process.unlink(heartbeat)
+
+      published? =
+        try do
+          await_presence_row(identity, System.monotonic_time(:millisecond) + budget_ms)
+        after
+          GenServer.stop(heartbeat)
+        end
+
+      {if(published?, do: :ok, else: :error), :counters.get(failures, 1)}
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  # The poll shares the peer's pool with the beats; a connection the pool is
+  # replacing is "not yet", not a failure of the fixture.
+  defp presence_row?(identity) do
+    Repo.exists?(from instance in InstancePresence.Instance, where: instance.instance_id == ^identity.instance_id)
+  rescue
+    _error in [DBConnection.ConnectionError] -> false
+  end
+
+  @doc false
+  def count_failed_beat(_event, %{failures: 1}, _metadata, failures), do: :counters.add(failures, 1, 1)
+
+  defp await_presence_row(identity, deadline) do
+    cond do
+      presence_row?(identity) ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        Process.sleep(10)
+        await_presence_row(identity, deadline)
+    end
+  end
 
   defp restore_distribution_config({:ok, value}),
     do: Application.put_env(:kernel, :prevent_overlapping_partitions, value)
