@@ -61,7 +61,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
         snapshot.credential_epoch,
         snapshot.as_of
       ) ->
-        availability_exclusion(:blocked, ordinary.selection)
+        :blocked |> availability_exclusion(ordinary.selection) |> put_blocked_hint_reset_at(ordinary.selection, snapshot.as_of)
 
       ordinary.eligible? ->
         ordinary
@@ -532,6 +532,34 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
         )
     }
   end
+
+  # The provider refused the account (`allowed: false`) without naming the
+  # window that binds, so this exclusion has no `reset_at` of its own; its
+  # `hint_reset_at` is retry advice only, read by the terminal usage-limit
+  # answer of an all-exhausted Pool (findings#206 row 206-508): the soonest
+  # future reset among the account's fresh exhausted windows, or among all its
+  # fresh account windows when none reads exhausted (a credit or spend block
+  # below 100%). It never makes the account routable and nothing else reads
+  # it; without a fresh reset-bearing account window there is no hint.
+  defp put_blocked_hint_reset_at(%{exclusions: [exclusion]} = result, selection, timestamp) do
+    windows = Enum.filter(selection.routing_windows, &fresh_account_reset_ahead?(&1, timestamp))
+
+    hint =
+      case Enum.filter(windows, &exhausted?/1) do
+        [] -> earliest_reset(windows)
+        exhausted -> earliest_reset(exhausted)
+      end
+
+    if hint, do: %{result | exclusions: [Map.put(exclusion, :hint_reset_at, iso8601_or_nil(hint))]}, else: result
+  end
+
+  defp fresh_account_reset_ahead?(%Quota.AccountQuotaWindow{quota_scope: "account", reset_at: %DateTime{} = reset_at} = window, timestamp),
+    do: DateTime.compare(reset_at, timestamp) == :gt and fresh_window?(window, timestamp)
+
+  defp fresh_account_reset_ahead?(%Quota.AccountQuotaWindow{}, _timestamp), do: false
+
+  defp earliest_reset([]), do: nil
+  defp earliest_reset(windows), do: windows |> Enum.map(& &1.reset_at) |> Enum.min(DateTime)
 
   defp availability_exclusion(reason, selection) when reason in [:blocked, :not_fresh] do
     reason_code = if reason == :blocked, do: "exhausted", else: "not_fresh"

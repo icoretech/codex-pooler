@@ -613,7 +613,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
       :source,
       :source_precision,
       :freshness_state,
-      :reset_at
+      :reset_at,
+      :hint_reset_at
     ])
     |> Map.new(fn {key, value} -> {to_string(key), value} end)
   end

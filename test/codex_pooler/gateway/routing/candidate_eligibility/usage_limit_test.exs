@@ -1,22 +1,27 @@
 defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimitTest do
   # The earliest reset of an all-exhausted Pool (findings#206 rows 206-508,
-  # 206-522): a candidate returns when the last of its exhausted windows
-  # resets, the Pool when its first candidate returns; any unknown return
-  # time leaves no terminal answer.
+  # 206-522): the advice is the soonest reset among every candidate's exhausted
+  # windows, because the listed windows do not say which one binds; any
+  # unknown return time leaves no terminal answer.
   use ExUnit.Case, async: true
 
   alias CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit
 
   @now ~U[2030-01-01 00:00:00.250000Z]
 
-  test "the Pool's reset is its earliest candidate's, and a candidate's is its latest exhausted window's" do
+  test "the advice is the soonest reset among every candidate's exhausted windows" do
     exclusions = [
-      candidate([exhausted(in_seconds(3_600)), exhausted(in_seconds(7_200))]),
+      candidate([exhausted(in_seconds(7_200)), exhausted(in_seconds(604_800))]),
       candidate([exhausted(in_seconds(5_400))])
     ]
 
     assert {:ok, %{resets_at: resets_at, resets_in_seconds: 5_400}} = UsageLimit.earliest_reset(exclusions, @now)
     assert resets_at == DateTime.to_unix(in_seconds(5_400)) + 1
+
+    # A refused model meter marks its 5-hour and weekly windows exhausted
+    # together; the advice is the 5-hour reset, not the week.
+    assert {:ok, %{resets_in_seconds: 18_000}} =
+             UsageLimit.earliest_reset([candidate([exhausted(in_seconds(18_000)), exhausted(in_seconds(604_800))])], @now)
   end
 
   test "the weekly exhaustion code counts as an exhaustion" do

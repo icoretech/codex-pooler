@@ -68,7 +68,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
                setup.assignment
              )
 
-    assert dispatch(Phoenix.ConnTest.build_conn(), setup).status == 503
+    assert_usage_limit!(dispatch(Phoenix.ConnTest.build_conn(), setup), 604_800)
     assert generation_count(upstream) == 2
     assert Repo.aggregate(Attempt, :count) == 2
   end
@@ -176,7 +176,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
       payload = denied_payload(unquote(denial))
       {upstream, setup} = reconciled_setup(payload)
       conn = dispatch(conn, setup)
-      assert conn.status == 503
+      assert_usage_limit!(conn, 604_800)
       assert generation_count(upstream) == 0
       assert Repo.aggregate(Attempt, :count) == 0
     end
@@ -219,7 +219,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
         upstream_model_id: "gpt-5.3-codex-spark"
       )
 
-    assert dispatch(conn, setup).status == 503
+    assert_usage_limit!(dispatch(conn, setup), 604_800)
     assert generation_count(upstream) == 0
     assert Repo.aggregate(Attempt, :count) == 0
   end
@@ -442,6 +442,23 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
     payload = %{"model" => setup.model.exposed_model_id, "input" => []}
     options = RequestOptions.build(%{api_key_policy: policy}, @endpoint_path, payload)
     {auth, payload, options}
+  end
+
+  # Every candidate excluded for quota with a reset still ahead answers the
+  # provider's terminal usage limit with the soonest reset (findings#206 row
+  # 206-508): a model meter the provider refused advises its 5-hour reset, an
+  # account the Usage API reports blocked advises its exhausted window's.
+  defp assert_usage_limit!(conn, expected_seconds) do
+    assert conn.status == 429
+
+    assert %{"error" => %{"type" => "usage_limit_reached", "code" => "quota_exhausted", "resets_at" => resets_at, "resets_in_seconds" => seconds}} =
+             CodexPooler.JSON.decode!(conn.resp_body)
+
+    assert is_integer(resets_at)
+    assert seconds in (expected_seconds - 5)..expected_seconds
+    assert get_resp_header(conn, "retry-after") == [Integer.to_string(seconds)]
+    assert get_resp_header(conn, "x-should-retry") == ["false"]
+    conn
   end
 
   defp dispatch(conn, setup) do

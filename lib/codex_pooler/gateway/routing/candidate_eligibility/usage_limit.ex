@@ -8,13 +8,24 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit do
   the released Codex client ends the turn on it and names the reset, where it
   resends a `503` as a transient fault. When routing excluded every candidate
   for exhaustion and each exhausted window carries a reset still ahead, the
-  Pool is in the same state, and its earliest availability is the soonest of
-  the candidates' own resets (a candidate is back when the last of its
-  exhausted windows resets).
+  Pool is in the same state, and the advice is the soonest reset among the
+  exhausted windows of all its candidates.
+
+  Soonest, not the moment a candidate is certainly back, because the listed
+  windows do not say which one binds: a model meter the provider refused
+  (`allowed: false`) marks every window of the meter exhausted whatever its
+  percentage, and a 100% account window stays listed next to a model-meter
+  block even when an affirmative account permission would let it serve.
+  Taking the latest of a candidate's windows advised a week for a meter that
+  could return with its 5-hour window. `Retry-After` is the earliest moment a
+  retry can succeed: a hint too early costs the client one more refused
+  request, whose answer carries the next reset; one too late keeps it away for
+  hours or days (findings#206 rows 206-508, 206-522).
 
   A candidate with any exclusion that is not a reset-bearing exhaustion (stale,
   resetless or missing evidence, a pending saved-reset probe, a provider
-  `blocked` availability without a window) has no known return time, so the
+  `blocked` availability with no fresh reset-bearing account window) has no
+  known return time, so the
   answer stays the retryable `503`. So does a Pool where the circuit filter
   removed a candidate before quota classification: an open circuit probes
   again after `circuit_open_seconds`, which no reset bounds.
@@ -50,7 +61,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit do
     case field(exclusion, :reasons) do
       [_ | _] = reasons ->
         resets = Enum.map(reasons, &exhaustion_reset(&1, now))
-        if Enum.all?(resets, &match?(%DateTime{}, &1)), do: Enum.max(resets, DateTime)
+        if Enum.all?(resets, &match?(%DateTime{}, &1)), do: Enum.min(resets, DateTime)
 
       _none ->
         nil
@@ -69,11 +80,16 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit do
 
   defp exhaustion_reset(_reason, _now), do: nil
 
-  # A workspace-level provider denial names its own advice, the earliest
-  # fresh account reset (findings#206 row 206-522); every other exhaustion
-  # returns with its window.
+  # A refusal that does not name its binding window carries its own advice:
+  # a workspace-level provider denial (findings#206 row 206-522) and a
+  # provider-blocked account availability (row 206-508). Every other
+  # exhaustion returns with its window.
   defp reset_field(reason) do
-    if provider_denied?(reason), do: field(reason, :hint_reset_at), else: field(reason, :reset_at)
+    cond do
+      provider_denied?(reason) -> field(reason, :hint_reset_at)
+      is_nil(field(reason, :reset_at)) -> field(reason, :hint_reset_at)
+      true -> field(reason, :reset_at)
+    end
   end
 
   defp provider_denied?(reason), do: is_list(field(reason, :reason_codes)) and "provider_denied" in field(reason, :reason_codes)
