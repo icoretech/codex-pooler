@@ -149,6 +149,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics do
           required(:last_error_code) => String.t() | nil,
           required(:attempt_count) => non_neg_integer()
         }
+  @type recent_request_events :: %{
+          required(:rows) => [recent_request_event_row()],
+          required(:searched_attempt_limit) => pos_integer() | nil
+        }
 
   @spec request_health(Scope.t(), identity_ref()) :: request_health()
   def request_health(%Scope{} = scope, identity_or_id) do
@@ -231,12 +235,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics do
     PoolContribution.without_request_data(assignments, Common.now())
   end
 
-  @spec recent_request_event_rows(Scope.t(), identity_ref(), pos_integer()) :: [
-          recent_request_event_row()
-        ]
-  def recent_request_event_rows(%Scope{} = scope, identity_or_id, limit) when is_integer(limit) do
-    RequestHealth.recent_request_event_rows(scope, identity_or_id, max(limit, 0))
+  @spec recent_request_events(Scope.t(), identity_ref(), pos_integer()) :: recent_request_events()
+  def recent_request_events(%Scope{} = scope, identity_or_id, limit) when is_integer(limit) do
+    RequestHealth.recent_request_events(scope, identity_or_id, max(limit, 0))
   end
 
-  def recent_request_event_rows(_scope, _identity_or_id, _limit), do: []
+  def recent_request_events(_scope, _identity_or_id, _limit), do: %{rows: [], searched_attempt_limit: nil}
 end

@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
+  alias CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth
   alias CodexPooler.Admin.UpstreamRoutingReadiness
   alias CodexPooler.Audit
   alias CodexPooler.Audit.AuditEvent
@@ -36,6 +37,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   }
 
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary
   alias CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
@@ -5314,6 +5316,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#upstream-event-summary")
     assert has_element?(view, "#upstream-event-summary-empty")
     assert has_element?(view, "#upstream-event-summary-empty", "No recent upstream events")
+    assert has_element?(view, "#upstream-event-summary-empty", "Request failures and audit activity for this account will appear here.")
+    refute has_element?(view, "#upstream-event-summary-empty", "attempts of each Pool assignment")
+    refute has_element?(view, "#upstream-event-summary-request-window")
     refute has_element?(view, "#upstream-event-summary [data-role='recent-event-row']")
 
     assert has_element?(
@@ -5332,6 +5337,67 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
 
     refute has_element?(view, "#upstream-event-summary a[href='']")
+  end
+
+  # A healthy account deeper than the request walk's attempt window: the walk
+  # stops at the window, so the empty state says what was searched instead of
+  # implying that nothing older failed (findings#206 row 206-441). The failure
+  # behind the window is not shown.
+  @tag :recent_events_ui_empty
+  test "an empty recent-events state names the searched attempt window when older attempts were not read", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "recent-events-window", name: "Recent Events Window"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool, %{account_label: "Deep healthy account"})
+    depth = RequestHealth.event_walk_depth()
+    now = DateTime.utc_now()
+    seed = request_fixture(%{pool: pool, api_key: api_key})
+    seed_attempt = attempt_fixture(seed, assignment)
+
+    insert_request_history!(seed, seed_attempt, depth + 100, fn ordinal ->
+      %{status: if(ordinal == depth + 50, do: "failed", else: "succeeded"), admitted_at: DateTime.add(now, -10 * ordinal, :second)}
+    end)
+
+    # Fresh statistics, as autovacuum keeps them: with none, the Pool-contribution
+    # query picks a plan that takes about 3 s over these rows, the walk 25 ms.
+    Repo.query!("ANALYZE requests")
+    Repo.query!("ANALYZE attempts")
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+    assert cockpit.recent_events.items == []
+    assert cockpit.recent_events.searched_attempt_limit == depth
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
+
+    assert has_element?(view, "#upstream-event-summary-empty", "No recent upstream events")
+
+    assert has_element?(
+             view,
+             "#upstream-event-summary-empty",
+             "No failed or retried requests in the latest 10,000 attempts of each Pool assignment and no account changes; older request history is in Request logs."
+           )
+
+    refute has_element?(view, "#upstream-event-summary [data-role='recent-event-row']")
+  end
+
+  test "listed recent events name the searched attempt window only when older attempts were not read" do
+    event = %{timestamp: ~U[2026-09-24 10:00:00Z], source: "request_log", title: "500 · upstream_error", subtitle: "Failed · 1 attempt", link: nil, request_id: Ecto.UUID.generate(), failure?: true}
+    identity_id = Ecto.UUID.generate()
+
+    render = fn searched_attempt_limit ->
+      render_component(&Sections.recent_events_section/1,
+        cockpit: %{identity: %{id: identity_id}, recent_events: %{items: [event], count: 1, empty?: false, degraded?: true, missing?: false, searched_attempt_limit: searched_attempt_limit}},
+        datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"}
+      )
+    end
+
+    cut = render.(10_000)
+    assert cut =~ ~s(id="upstream-event-summary-request-window")
+    assert cut =~ "Failed and retried requests are searched in the latest 10,000 attempts of each Pool assignment; older request history is in Request logs."
+    refute render.(nil) =~ "upstream-event-summary-request-window"
   end
 
   @tag :refresh_action
@@ -6920,5 +6986,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   defp assert_occurrences(html, needle, expected_count) do
     actual_count = html |> String.split(needle) |> length() |> Kernel.-(1)
     assert actual_count == expected_count
+  end
+
+  # Bulk request history for one assignment, each attempt starting at its request's admission.
+  defp insert_request_history!(seed, seed_attempt, count, attrs_fun) do
+    request_fields = Request.__schema__(:fields)
+    attempt_fields = Attempt.__schema__(:fields)
+
+    requests =
+      for ordinal <- 1..count do
+        seed
+        |> Map.take(request_fields)
+        |> Map.merge(%{id: Ecto.UUID.generate(), correlation_id: "window-history-#{System.unique_integer([:positive])}"})
+        |> Map.merge(attrs_fun.(ordinal))
+      end
+
+    requests |> Enum.chunk_every(1_000) |> Enum.each(&Repo.insert_all(Request, &1))
+
+    requests
+    |> Enum.map(&(seed_attempt |> Map.take(attempt_fields) |> Map.merge(%{id: Ecto.UUID.generate(), request_id: &1.id, started_at: &1.admitted_at})))
+    |> Enum.chunk_every(1_000)
+    |> Enum.each(&Repo.insert_all(Attempt, &1))
   end
 end

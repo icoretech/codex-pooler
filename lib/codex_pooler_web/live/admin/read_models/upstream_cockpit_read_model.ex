@@ -108,7 +108,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:count) => non_neg_integer(),
           required(:empty?) => boolean(),
           required(:degraded?) => boolean(),
-          required(:missing?) => boolean()
+          required(:missing?) => boolean(),
+          required(:searched_attempt_limit) => pos_integer() | nil
         }
   @type action :: %{
           required(:available?) => boolean(),
@@ -266,7 +267,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       previous.recent_events.items
       |> Enum.filter(&(&1.source == "request_log"))
       |> Enum.concat(cockpit.recent_events.items)
-      |> summarize_recent_events()
+      |> summarize_recent_events(previous.recent_events.searched_attempt_limit)
 
     merge_deferred_request_data(cockpit, %{
       request_health: previous.charts.request_health,
@@ -530,20 +531,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   defp recent_events(identity_id, scope, oauth_flows, options \\ [])
        when is_binary(identity_id) do
-    request_items =
+    %{rows: request_rows, searched_attempt_limit: searched_attempt_limit} =
       if Keyword.get(options, :request_events?, true) do
-        request_recent_event_items(identity_id, scope)
+        request_recent_events(identity_id, scope)
       else
-        []
+        %{rows: [], searched_attempt_limit: nil}
       end
 
-    request_items
+    request_rows
+    |> Enum.map(&request_recent_event_item(&1, identity_id))
     |> Enum.concat(audit_recent_event_items(scope, identity_id))
     |> Enum.concat(oauth_recent_event_items(oauth_flows))
-    |> summarize_recent_events()
+    |> summarize_recent_events(searched_attempt_limit)
   end
 
-  defp summarize_recent_events(items) do
+  # `searched_attempt_limit` is set only when the request walk stopped at its
+  # attempt window with older attempts left unread.
+  defp summarize_recent_events(items, searched_attempt_limit) do
     items =
       items
       |> Enum.sort_by(&datetime_sort_value(&1.timestamp), :desc)
@@ -554,25 +558,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       count: length(items),
       empty?: items == [],
       degraded?: Enum.any?(items, & &1.failure?),
-      missing?: false
+      missing?: false,
+      searched_attempt_limit: searched_attempt_limit
     }
   end
 
-  defp request_recent_event_items(identity_id, scope) do
-    identity_id
-    |> request_recent_event_rows(scope)
-    |> Enum.map(&request_recent_event_item(&1, identity_id))
+  defp request_recent_events(identity_id, %Scope{} = scope) do
+    UpstreamCockpitMetrics.recent_request_events(scope, identity_id, @recent_event_prefetch_limit)
   end
 
-  defp request_recent_event_rows(identity_id, %Scope{} = scope) do
-    UpstreamCockpitMetrics.recent_request_event_rows(
-      scope,
-      identity_id,
-      @recent_event_prefetch_limit
-    )
-  end
-
-  defp request_recent_event_rows(_identity_id, _scope), do: []
+  defp request_recent_events(_identity_id, _scope), do: %{rows: [], searched_attempt_limit: nil}
 
   defp request_recent_event_item(row, identity_id) do
     %{

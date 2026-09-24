@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: AccountFormatting
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.ReinviteLink
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath
@@ -533,13 +534,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <AdminComponents.empty_state
           id="upstream-event-summary-empty"
           title="No recent upstream events"
-          description="Request failures and audit activity for this account will appear here."
+          description={recent_events_empty_description(@cockpit.recent_events.searched_attempt_limit)}
           icon="hero-clipboard-document-list"
         />
       </div>
+
+      <p
+        :if={@request_data_loaded? && @cockpit.recent_events.items != [] && @cockpit.recent_events.searched_attempt_limit}
+        id="upstream-event-summary-request-window"
+        class="border-t border-base-300/50 px-4 py-2 text-xs leading-5 text-base-content/55"
+      >
+        {searched_attempts_label(@cockpit.recent_events.searched_attempt_limit)}; older request history is in Request logs.
+      </p>
     </section>
     """
   end
+
+  # The request walk reads a bounded window of each assignment's newest
+  # attempts; when older attempts were left unread the page says what was
+  # searched instead of implying the whole history is clean.
+  defp recent_events_empty_description(nil),
+    do: "Request failures and audit activity for this account will appear here."
+
+  defp recent_events_empty_description(limit),
+    do: "No failed or retried requests in the #{searched_attempts_scope(limit)} and no account changes; older request history is in Request logs."
+
+  defp searched_attempts_label(limit), do: "Failed and retried requests are searched in the #{searched_attempts_scope(limit)}"
+
+  defp searched_attempts_scope(limit), do: "latest #{AccountFormatting.format_integer(limit)} attempts of each Pool assignment"
 
   defp routing_readiness(%{header: %{routing_readiness: readiness}}) when is_map(readiness),
     do: readiness

@@ -282,7 +282,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
       network_error_code: "retryable_failure"
     })
 
-    rows = UpstreamCockpitMetrics.recent_request_event_rows(scope, identity, 10)
+    assert %{rows: rows, searched_attempt_limit: nil} = UpstreamCockpitMetrics.recent_request_events(scope, identity, 10)
 
     assert Enum.map(rows, & &1.id) == [failed.id, retried.id]
 
