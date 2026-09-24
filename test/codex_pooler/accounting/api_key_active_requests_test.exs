@@ -698,5 +698,7 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
     end
   end
 
-  defp active_count_query?(query), do: String.contains?(query.query, "count(DISTINCT")
+  # `LedgerReads.outstanding_reservation_count/1`: the key's live requests with
+  # one aggregate probe of each request's ledger entries.
+  defp active_count_query?(query), do: String.starts_with?(query.query, "SELECT count(*) FROM \"requests\"") and String.contains?(query.query, "HAVING")
 end

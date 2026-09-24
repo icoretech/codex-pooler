@@ -273,6 +273,7 @@ defmodule CodexPooler.SchemaContractTest do
     assert indexes["requests_api_key_admitted_idx"] =~ "id DESC"
 
     assert indexes["requests_admitted_id_idx"] =~ "(admitted_at DESC, id DESC)"
+    assert indexes["requests_api_key_live_idx"] =~ "(api_key_id) WHERE (status = ANY (ARRAY['accepted'::text, 'in_progress'::text]))"
 
     assert indexes["account_quota_windows_evidence_identity_uq"] =~
              "COALESCE(lower(model), ''::text)"
