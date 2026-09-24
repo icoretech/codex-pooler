@@ -956,20 +956,27 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   # released client's turn (its turn metadata makes the frame replay-eligible)
   # met this refusal here and left no row and no log line (production rev 50,
   # Codex 0.156.1).
-  defp refuse_replay_model(%{record_model_denial?: false}, {:policy, _model, reason}),
+  #
+  # The record carries the routing the fresh path has put on its request
+  # options by the same refusal: the requested model always, and once the
+  # key's policy resolved it, the effective model and the policy (the source
+  # of `enforced_model`). Without them the preflight's row read as a refusal
+  # of the requested model when the key had substituted an enforced one
+  # (findings#206 row 206-535).
+  defp refuse_replay_model(%{record_model_denial?: false}, {:policy, _model, reason, _routing}),
     do: {:error, Denials.policy_denial_error(reason)}
 
-  defp refuse_replay_model(%{record_model_denial?: false}, {:gateway, _model, reason}),
+  defp refuse_replay_model(%{record_model_denial?: false}, {:gateway, _model, reason, _routing}),
     do: {:error, reason}
 
-  defp refuse_replay_model(context, {kind, model, reason}) do
+  defp refuse_replay_model(context, {kind, model, reason, routing}) do
     denial_context = %Denials.Context{
       auth: context.auth,
       model: model,
       reason: reason,
       endpoint: context.endpoint,
       payload: context.payload,
-      opts: context.request_options
+      opts: RequestOptions.put_routing(context.request_options, [requested_model: context.requested_model] ++ routing)
     }
 
     {:error, public_error} =
@@ -1332,47 +1339,41 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   # that failed normalization answered `model_not_allowed` here.
   defp authorize_replay_model(api_key, pool, context) do
     with {:ok, policy} <- normalize_replay_policy(api_key),
-         {:ok, effective_model} <-
-           effective_model_name(
-             policy,
-             context.requested_model,
-             context.endpoint,
-             context.request_options
-           ),
-         %Model{} = model <- Catalog.get_model_by_exposed_id(pool, effective_model),
-         true <- model.status == "active",
-         :ok <- authorize_replay_model_policy(policy, model) do
-      {:ok, model}
-    else
-      nil ->
-        replay_model_denial(:gateway, nil, error(400, "invalid_model", "model is not available for this pool", "model"))
-
-      false ->
-        replay_model_denial(:gateway, nil, error(400, "invalid_model", "model is not available for this pool", "model"))
-
-      {:error, {:replay_model_denial, _denial}} = denial ->
-        denial
-
-      {:error, %{code: _code} = reason} ->
-        replay_model_denial(:gateway, nil, reason)
+         {:ok, effective_model} <- effective_replay_model_name(policy, context) do
+      authorize_replay_catalog_model(pool, policy, effective_model)
     end
   end
 
   defp normalize_replay_policy(api_key) do
     case Access.normalize_api_key_policy(api_key) do
       {:ok, policy} -> {:ok, policy}
-      {:error, reason} -> replay_model_denial(:policy, nil, reason)
+      {:error, reason} -> replay_model_denial(:policy, nil, reason, [])
     end
   end
 
-  defp authorize_replay_model_policy(policy, %Model{} = model) do
-    case Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
-      {:ok, _policy} -> :ok
-      {:error, reason} -> replay_model_denial(:gateway, model, Denials.policy_denial_error(reason))
+  defp effective_replay_model_name(policy, context) do
+    case effective_model_name(policy, context.requested_model, context.endpoint, context.request_options) do
+      {:ok, effective_model} -> {:ok, effective_model}
+      {:error, reason} -> replay_model_denial(:gateway, nil, reason, [])
     end
   end
 
-  defp replay_model_denial(kind, model, reason), do: {:error, {:replay_model_denial, {kind, model, reason}}}
+  defp authorize_replay_catalog_model(pool, policy, effective_model) do
+    routing = [api_key_policy: policy, effective_model: effective_model]
+
+    case Catalog.get_model_by_exposed_id(pool, effective_model) do
+      %Model{status: "active"} = model ->
+        case Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
+          {:ok, _policy} -> {:ok, model}
+          {:error, reason} -> replay_model_denial(:gateway, model, Denials.policy_denial_error(reason), routing)
+        end
+
+      _missing_or_inactive ->
+        replay_model_denial(:gateway, nil, error(400, "invalid_model", "model is not available for this pool", "model"), routing)
+    end
+  end
+
+  defp replay_model_denial(kind, model, reason, routing), do: {:error, {:replay_model_denial, {kind, model, reason, routing}}}
 
   defp replay_authorization_binding(session, authorization, model) do
     %{
