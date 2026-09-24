@@ -149,6 +149,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
   end
 
   # Every row each plan node handled: the rows it returned and the rows its filters removed, over all its loops.
+  # A bitmap index scan's rows are index entries, dead ones included (rolled-back rows of earlier tests in the
+  # partition); the bitmap heap scan above it counts the live rows, so the index side is left out.
+  defp handled_rows(%{"Node Type" => "Bitmap Index Scan"}), do: 0
+
   defp handled_rows(node) do
     own = (node["Actual Rows"] + Map.get(node, "Rows Removed by Filter", 0) + Map.get(node, "Rows Removed by Join Filter", 0)) * node["Actual Loops"]
     own + (node |> Map.get("Plans", []) |> Enum.sum_by(&handled_rows/1))
