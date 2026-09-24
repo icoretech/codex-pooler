@@ -5183,7 +5183,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
        )
        when is_integer(timeout) and timeout > 0 and is_function(renewal_delay, 1) do
     if uuid?(session_id) do
-      delay = OwnerRenewalSchedule.bounded_delay(renewal_delay.(timeout), timeout)
+      # The same ttl / 3 cap as the HTTP heartbeat, against the ttl the next
+      # renewal writes, so no renewal setting or start option can let a live
+      # owner's lease lapse between renewals (findings#206 row 206-499).
+      interval = OwnerRenewalSchedule.base_interval_ms(timeout, owner_lease_ttl_ms())
+      delay = OwnerRenewalSchedule.bounded_delay(renewal_delay.(interval), interval)
 
       %{state | owner_renewal_ref: Process.send_after(self(), :renew_owner_lease, delay)}
     else
@@ -5245,6 +5249,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp owner_renewal_ms do
     OperationalSettings.current().bridge_owner_lease_renewal_seconds * 1_000
+  end
+
+  defp owner_lease_ttl_ms do
+    OperationalSettings.current().bridge_owner_lease_ttl_seconds * 1_000
   end
 
   defp touch_active_replay_liveness(%{suspended_replay: %{consume_binding: binding}} = state)

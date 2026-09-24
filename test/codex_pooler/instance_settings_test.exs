@@ -541,12 +541,50 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     assert InstanceSettings.get!().lock_version == settings.lock_version
 
+    # The renewal must fit a third of the new ttl (findings#206 row 206-499).
     assert {:ok, at_minimum} =
              InstanceSettings.update_system_settings(settings, %{
-               "gateway" => %{"bridge_owner_lease_ttl_seconds" => minimum}
+               "gateway" => %{"bridge_owner_lease_ttl_seconds" => minimum, "bridge_owner_lease_renewal_seconds" => div(minimum, 3)}
              })
 
     assert at_minimum.gateway.bridge_owner_lease_ttl_seconds == minimum
+  end
+
+  test "owner lease renewal keeps its 15 s default and refuses values above a third of the ttl" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert settings.gateway.bridge_owner_lease_renewal_seconds == 15
+    assert Settings.default().gateway.bridge_owner_lease_renewal_seconds == 15
+
+    # Renewal alone against the stored 45 s ttl, the ttl alone against the
+    # stored 15 s renewal, and both at once.
+    for {attrs, maximum} <- [
+          {%{"bridge_owner_lease_renewal_seconds" => 16}, 15},
+          {%{"bridge_owner_lease_renewal_seconds" => 45}, 15},
+          {%{"bridge_owner_lease_renewal_seconds" => 60}, 15},
+          {%{"bridge_owner_lease_ttl_seconds" => 44}, 14},
+          {%{"bridge_owner_lease_ttl_seconds" => 24, "bridge_owner_lease_renewal_seconds" => 24}, 8}
+        ] do
+      assert {:error, changeset} = InstanceSettings.update_system_settings(settings, %{"gateway" => attrs})
+
+      assert "must be less than or equal to #{maximum}, a third of the owner lease TTL" in errors_on(changeset).gateway.bridge_owner_lease_renewal_seconds
+    end
+
+    assert InstanceSettings.get!().lock_version == settings.lock_version
+
+    assert {:ok, bounded} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"bridge_owner_lease_ttl_seconds" => 24, "bridge_owner_lease_renewal_seconds" => 8}
+             })
+
+    assert {bounded.gateway.bridge_owner_lease_ttl_seconds, bounded.gateway.bridge_owner_lease_renewal_seconds} == {24, 8}
+
+    assert {:ok, raised} =
+             InstanceSettings.update_system_settings(bounded, %{
+               "gateway" => %{"bridge_owner_lease_ttl_seconds" => 90, "bridge_owner_lease_renewal_seconds" => 30}
+             })
+
+    assert {raised.gateway.bridge_owner_lease_ttl_seconds, raised.gateway.bridge_owner_lease_renewal_seconds} == {90, 30}
   end
 
   test "proactive refresh defaults on and can be disabled without changing its margin" do

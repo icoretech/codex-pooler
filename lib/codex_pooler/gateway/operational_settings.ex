@@ -162,8 +162,8 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       file_max_size_bytes: settings.files.max_size_bytes,
       upload_ttl_seconds: settings.files.upload_ttl_seconds,
       abandoned_upload_cleanup_interval_seconds: settings.files.abandoned_upload_cleanup_interval_seconds,
-      bridge_owner_lease_ttl_seconds: OwnerRenewalSchedule.effective_lease_ttl_seconds(settings.gateway.bridge_owner_lease_ttl_seconds, @struct_fields[:bridge_owner_lease_ttl_seconds]),
-      bridge_owner_lease_renewal_seconds: settings.gateway.bridge_owner_lease_renewal_seconds,
+      bridge_owner_lease_ttl_seconds: effective_owner_lease_ttl_seconds(settings.gateway),
+      bridge_owner_lease_renewal_seconds: effective_owner_lease_renewal_seconds(settings.gateway),
       expired_alias_ttl_seconds: settings.gateway.expired_alias_ttl_seconds,
       firewall_allowlist: settings.ingress.firewall_allowlist,
       firewall_allowlist_compiled: IPRules.compile(settings.ingress.firewall_allowlist),
@@ -263,6 +263,28 @@ defmodule CodexPooler.Gateway.OperationalSettings do
         raise ArgumentError,
               "#{@websocket_owner_forwarding_env} must be one of #{@websocket_owner_forwarding_allowed_values}"
     end
+  end
+
+  @doc """
+  The owner lease ttl in effect for stored gateway settings: a stored value
+  below `OwnerRenewalSchedule.minimum_lease_ttl_seconds/0` is raised to it.
+  """
+  @spec effective_owner_lease_ttl_seconds(map()) :: pos_integer()
+  def effective_owner_lease_ttl_seconds(gateway) when is_map(gateway),
+    do: OwnerRenewalSchedule.effective_lease_ttl_seconds(Map.get(gateway, :bridge_owner_lease_ttl_seconds), @struct_fields[:bridge_owner_lease_ttl_seconds])
+
+  @doc """
+  The owner lease renewal interval in effect for stored gateway settings: a
+  stored value above a third of the effective ttl is lowered to it, so every
+  owner renews well before its lease expires (findings#206 row 206-499).
+  """
+  @spec effective_owner_lease_renewal_seconds(map()) :: pos_integer()
+  def effective_owner_lease_renewal_seconds(gateway) when is_map(gateway) do
+    OwnerRenewalSchedule.effective_renewal_seconds(
+      Map.get(gateway, :bridge_owner_lease_renewal_seconds),
+      effective_owner_lease_ttl_seconds(gateway),
+      @struct_fields[:bridge_owner_lease_renewal_seconds]
+    )
   end
 
   defp normalize_bulkheads(bulkheads) when is_map(bulkheads) do

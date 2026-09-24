@@ -1875,24 +1875,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       45_000
     end
 
+    # 10 s is below the default ttl's third, so the cap leaves it as given; the
+    # policy's longer answer is still bounded by the interval.
     assert {:ok, owner} =
              start_owner(context,
                upstream: upstream,
-               owner_renewal_ms: 60_000,
+               owner_renewal_ms: 10_000,
                owner_renewal_delay: owner_renewal_delay
              )
 
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
-    assert_receive {:websocket_owner_renewal_delay, ^delay_ref, 60_000}
+    assert_receive {:websocket_owner_renewal_delay, ^delay_ref, 10_000}
 
     assert %{owner_renewal_ref: first_timer_ref} = :sys.get_state(owner)
     assert is_reference(first_timer_ref)
-    assert Process.read_timer(first_timer_ref) in 0..45_000
+    assert Process.read_timer(first_timer_ref) in 0..10_000
     cancel_owner_timer(first_timer_ref)
 
     send(owner, :renew_owner_lease)
 
-    assert_receive {:websocket_owner_renewal_delay, ^delay_ref, 60_000}
+    assert_receive {:websocket_owner_renewal_delay, ^delay_ref, 10_000}
   end
 
   test "renews persisted owner lease while owner remains alive" do
@@ -1925,6 +1927,75 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
              :gt
 
     assert {:ok, ^owner, :existing} = start_owner(context, upstream: upstream)
+  end
+
+  # The HTTP heartbeat caps its cadence at ttl / 3; the websocket owner renews
+  # on the same `OwnerRenewalSchedule` cap, so a renewal setting at or above
+  # the lease ttl cannot let a live owner's lease lapse between renewals
+  # (findings#206 row 206-499). The delay policy takes the whole interval, the
+  # stagger's worst case, and every scheduled renewal must land before the
+  # lease it renews expires.
+  test "renews before its lease expires when the renewal setting is at or above the lease ttl" do
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
+
+    for {ttl_seconds, renewal_seconds} <- [{45, 60}, {24, 24}] do
+      settings = %{OperationalSettings.current() | bridge_owner_lease_ttl_seconds: ttl_seconds, bridge_owner_lease_renewal_seconds: renewal_seconds}
+      Application.put_env(:codex_pooler, OperationalSettings, Keyword.put(previous, :settings, settings))
+
+      context = db_owner_context()
+      on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)
+
+      upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+      test_pid = self()
+      delay_ref = make_ref()
+
+      owner_renewal_delay = fn interval ->
+        send(test_pid, {:websocket_owner_renewal_interval, delay_ref, interval})
+        interval
+      end
+
+      assert {:ok, owner} = start_owner(context, upstream: upstream, owner_renewal_delay: owner_renewal_delay)
+      assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+      for cycle <- [:start, :renewed] do
+        if cycle == :renewed, do: send(owner, :renew_owner_lease)
+
+        assert_receive {:websocket_owner_renewal_interval, ^delay_ref, interval}
+        assert interval <= div(ttl_seconds * 1_000, 3), "ttl=#{ttl_seconds} renewal=#{renewal_seconds} cycle=#{cycle} interval=#{interval}"
+
+        assert %{owner_renewal_ref: timer_ref} = :sys.get_state(owner)
+        renewal_in_ms = Process.read_timer(timer_ref)
+        lease_left_ms = lease_left_ms!(context.codex_session_id)
+
+        assert is_integer(renewal_in_ms) and renewal_in_ms < lease_left_ms,
+               "ttl=#{ttl_seconds} renewal=#{renewal_seconds} cycle=#{cycle} renewal_in_ms=#{inspect(renewal_in_ms)} lease_left_ms=#{lease_left_ms}"
+      end
+
+      assert active_lease!(context.codex_session_id).lease_token == context.owner_lease_token
+    end
+  end
+
+  test "caps an explicit renewal interval at a third of the lease ttl" do
+    context = db_owner_context()
+    on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)
+
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    test_pid = self()
+    delay_ref = make_ref()
+    ttl_ms = OperationalSettings.current().bridge_owner_lease_ttl_seconds * 1_000
+
+    owner_renewal_delay = fn interval ->
+      send(test_pid, {:websocket_owner_renewal_interval, delay_ref, interval})
+      interval
+    end
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream, owner_renewal_ms: ttl_ms, owner_renewal_delay: owner_renewal_delay)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert_receive {:websocket_owner_renewal_interval, ^delay_ref, interval}
+    assert interval == div(ttl_ms, 3)
+
+    assert %{owner_renewal_ref: timer_ref} = :sys.get_state(owner)
+    assert Process.read_timer(timer_ref) < lease_left_ms!(context.codex_session_id)
   end
 
   test "stops as stale owner when renewal token is no longer current", context do
@@ -6510,6 +6581,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         where: lease.codex_session_id == ^session_id and lease.status == "active",
         limit: 1
     )
+  end
+
+  # Milliseconds left on the session's active owner lease by the database clock
+  # that wrote its deadline.
+  defp lease_left_ms!(session_id) do
+    %{rows: [[%DateTime{} = now]]} = Repo.query!("SELECT clock_timestamp()")
+    DateTime.diff(active_lease!(session_id).expires_at, now, :millisecond)
   end
 
   defp released_lease!(session_id) do

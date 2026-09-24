@@ -38,6 +38,30 @@ defmodule CodexPooler.Gateway.OwnerRenewalSchedule do
   def effective_lease_ttl_seconds(_ttl_seconds, default) when is_integer(default) and default > 0,
     do: max(default, @minimum_lease_ttl_seconds)
 
+  @doc """
+  The longest renewal interval, in whole seconds, a lease of `ttl_seconds`
+  allows: a third of the ttl, the same cap `base_interval_ms/2` applies to
+  every renewal cadence, so a live owner gets at least two renewal attempts
+  before its lease expires.
+  """
+  @spec maximum_renewal_seconds(pos_integer()) :: pos_integer()
+  def maximum_renewal_seconds(ttl_seconds) when is_integer(ttl_seconds) and ttl_seconds > 0,
+    do: max(div(ttl_seconds, 3), 1)
+
+  @doc """
+  The renewal interval in effect for a stored setting and the effective lease
+  ttl: a value above `maximum_renewal_seconds/1` (stored before the bound
+  existed, or left unchanged while the ttl was lowered) is lowered to it at
+  read time rather than rewritten.
+  """
+  @spec effective_renewal_seconds(term(), pos_integer(), pos_integer()) :: pos_integer()
+  def effective_renewal_seconds(renewal_seconds, ttl_seconds, _default)
+      when is_integer(renewal_seconds) and renewal_seconds > 0,
+      do: min(renewal_seconds, maximum_renewal_seconds(ttl_seconds))
+
+  def effective_renewal_seconds(_renewal_seconds, ttl_seconds, default) when is_integer(default) and default > 0,
+    do: min(default, maximum_renewal_seconds(ttl_seconds))
+
   @spec base_interval_ms(milliseconds(), milliseconds()) :: milliseconds()
   def base_interval_ms(configured_interval_ms, ttl_ms)
       when is_integer(configured_interval_ms) and configured_interval_ms > 0 and

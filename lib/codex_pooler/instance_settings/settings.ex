@@ -307,6 +307,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       greater_than_or_equal_to: OwnerRenewalSchedule.minimum_lease_ttl_seconds()
     )
     |> validate_positive_integer(:bridge_owner_lease_renewal_seconds)
+    |> validate_owner_lease_renewal_within_ttl()
     |> validate_positive_integer(:circuit_failure_threshold)
     |> validate_positive_integer(:circuit_open_seconds)
     |> validate_positive_integer(:circuit_half_open_probe_limit)
@@ -628,6 +629,35 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   defp validate_positive_integer(changeset, field) do
     validate_number(changeset, field, greater_than: 0)
+  end
+
+  # Every owner (HTTP heartbeat and websocket owner) renews at most every
+  # ttl / 3, so a live owner gets at least two renewal attempts before its
+  # lease expires; a renewal setting above that is refused here and lowered at
+  # read time (findings#206 row 206-499). The ttl compared is the one in
+  # effect, raised to its minimum. Checked only when either field changes,
+  # like every other gateway validation, so an unrelated save still succeeds.
+  defp validate_owner_lease_renewal_within_ttl(changeset) do
+    renewal = get_field(changeset, :bridge_owner_lease_renewal_seconds)
+    ttl = get_field(changeset, :bridge_owner_lease_ttl_seconds)
+
+    changed? =
+      changed?(changeset, :bridge_owner_lease_renewal_seconds) or
+        changed?(changeset, :bridge_owner_lease_ttl_seconds)
+
+    maximum =
+      if is_integer(ttl) and ttl > 0,
+        do: OwnerRenewalSchedule.maximum_renewal_seconds(max(ttl, OwnerRenewalSchedule.minimum_lease_ttl_seconds()))
+
+    if changed? and is_integer(renewal) and is_integer(maximum) and renewal > maximum do
+      add_error(changeset, :bridge_owner_lease_renewal_seconds, "must be less than or equal to %{number}, a third of the owner lease TTL",
+        validation: :number,
+        kind: :less_than_or_equal_to,
+        number: maximum
+      )
+    else
+      changeset
+    end
   end
 
   defp validate_cidr_rules(field, rules) do

@@ -287,7 +287,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
             id: "instance-settings-bridge-owner-lease-renewal-seconds",
             field: :bridge_owner_lease_renewal_seconds,
             label: "Owner lease renewal (s)",
-            hint: "How often active bridge owners renew their lease while work is running.",
+            hint: "How often active bridge owners renew their lease while work is running. At most a third of the owner lease TTL, so an owner renews well before its lease expires; a higher stored value is lowered to it.",
             minimum: 1,
             unit: "s"
           })
