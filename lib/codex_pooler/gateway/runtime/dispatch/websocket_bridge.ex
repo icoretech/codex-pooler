@@ -135,6 +135,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
         Process.demonitor(monitor_ref, [:flush])
         {:ok, put_bridged_options(prepared_context, options), rejection_response(stream, status, body)}
 
+      # A provider usage limit before output (findings#206 row 206-582): the
+      # same `429` the provider answers over HTTP, with the frame's sanitized
+      # headers, so the HTTP finalization fails over or answers the terminal
+      # usage limit exactly as it does for that response.
+      {^ref, {:preflight, {:rejected, status, body, headers}}} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {:ok, put_bridged_options(prepared_context, options), rejection_response(stream, status, body, headers)}
+
       {^ref, {:preflight, {:fallback, reason}}} ->
         Process.demonitor(monitor_ref, [:flush])
         WebsocketBridgeStream.cancel(stream)
@@ -183,12 +191,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   # request over HTTP, so the standard finalization answers the public client
   # with the same status and error body and records the same rejection fields
   # (findings#225). Taking the relay's metadata reaps it and its submit task.
-  defp rejection_response(%WebsocketBridgeStream{} = stream, status, body) do
+  defp rejection_response(%WebsocketBridgeStream{} = stream, status, body, headers \\ []) do
     %{upstream_websocket_connection: connection} =
       WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream)
 
+    response_headers = Enum.reduce(headers, %{"content-type" => ["application/json"]}, fn {name, value}, acc -> Map.put_new(acc, name, [value]) end)
+
     Req.Response.put_private(
-      %Req.Response{status: status, headers: %{"content-type" => ["application/json"]}, body: body},
+      %Req.Response{status: status, headers: response_headers, body: body},
       :upstream_websocket_connection,
       connection
     )

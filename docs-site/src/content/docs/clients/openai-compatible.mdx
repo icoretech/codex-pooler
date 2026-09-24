@@ -545,7 +545,10 @@ exhausted with a known reset (otherwise the refusal stays retryable),
 `Retry-After`, and `x-should-retry: false` when the wait is longer than 60
 seconds. The backend's own message and other fields are not relayed. Over
 the `GET /v1/responses` websocket the same refusal is the `error` event with
-`"status": 429`, those fields and `headers.retry-after`. A usage-limit
+`"status": 429`, those fields and `headers.retry-after`. A streaming
+`/v1/responses` request that Codex Pooler carries over the backend's
+websocket gets the same HTTP answer, or moves to another eligible account,
+when the refusal arrives before any output. A usage-limit
 refusal that names no reset still ahead keeps the redacted `rate_limit_error`
 described below.
 

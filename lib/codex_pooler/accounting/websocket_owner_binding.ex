@@ -96,7 +96,7 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBinding do
              completed_at: nil,
              replay_generation: 0
            } <- attempt,
-           true <- binding_compatible?(request.request_metadata, binding) do
+           true <- binding_compatible?(request.request_metadata, binding, rebind_attempt?(attempt, upstream_transport)) do
         persist_binding(request, attempt, binding, upstream_transport)
       else
         _invalid -> Repo.rollback(:stale_websocket_owner_binding)
@@ -254,12 +254,38 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBinding do
     }
   end
 
-  defp binding_compatible?(metadata, binding) when is_map(metadata) do
+  defp binding_compatible?(metadata, binding, rebind_attempt?) when is_map(metadata) do
     case Map.fetch(metadata, "websocket_owner_forwarding") do
       :error -> true
-      {:ok, existing} -> existing == binding
+      {:ok, existing} -> existing == binding or (rebind_attempt? and later_attach_of_same_owner?(existing, binding))
     end
   end
 
-  defp binding_compatible?(_metadata, _binding), do: false
+  defp binding_compatible?(_metadata, _binding, _rebind_attempt?), do: false
+
+  # Only a bridge binding of a later attempt the websocket has not carried yet
+  # can follow a newer attach: the same attempt re-attached by another
+  # downstream stays stale, as does every native owner binding.
+  defp rebind_attempt?(%Attempt{attempt_number: number, transport: transport}, "websocket")
+       when is_integer(number) and number > 1,
+       do: transport != "websocket"
+
+  defp rebind_attempt?(_attempt, _upstream_transport), do: false
+
+  # A bridged attempt that ended before output (a provider usage limit on its
+  # first frame) moves the request to its next candidate, and that attempt
+  # attaches to the same owner again under the same lease with the next
+  # downstream epoch (findings#206 row 206-582). The binding follows the
+  # newer attach; an older epoch or another owner or proxy instance stays
+  # stale. The caller already requires the bound attempt to be the request's
+  # latest, in progress, under the current session lease, and
+  # `rebind_attempt?/2` a later bridge attempt.
+  defp later_attach_of_same_owner?(
+         %{"enabled" => true, "owner_instance_id" => owner, "proxy_instance_id" => proxy, "downstream_epoch" => existing_epoch},
+         %{"enabled" => true, "owner_instance_id" => owner, "proxy_instance_id" => proxy, "downstream_epoch" => epoch}
+       )
+       when is_integer(existing_epoch) and is_integer(epoch),
+       do: epoch > existing_epoch
+
+  defp later_attach_of_same_owner?(_existing, _binding), do: false
 end

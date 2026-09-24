@@ -23,6 +23,41 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBindingTest do
     assert Repo.reload!(fixture.request).request_metadata == bound.request_metadata
   end
 
+  # A bridged attempt that ended before output moves the request to its next
+  # candidate, which attaches to the same owner under the same lease with the
+  # next downstream epoch (findings#206 row 206-582).
+  test "a later bridge attempt follows a newer attach of the same owner; the same attempt and an older epoch stay stale" do
+    fixture = fixture()
+
+    assert {:ok, %{request: first}} = WebsocketOwnerBinding.bind_bridge(fixture.auth, fixture.request, fixture.attempt, fixture.options)
+    newer = RequestOptions.put_transport(fixture.options, websocket_owner_downstream_epoch: 2)
+
+    # The same attempt re-attached by a newer downstream stays stale.
+    assert {:error, :stale_websocket_owner_binding} = WebsocketOwnerBinding.bind_bridge(fixture.auth, fixture.request, fixture.attempt, newer)
+
+    update_row(fixture.attempt, status: "retryable_failed", completed_at: past())
+    later = attempt_fixture(fixture.request, fixture.assignment, %{attempt_number: 2, status: "in_progress", completed_at: nil, transport: "http_sse"})
+
+    # The native owner binding never follows a newer attach.
+    assert {:error, :stale_websocket_owner_binding} = Accounting.bind_websocket_owner(fixture.auth, fixture.request, later, newer)
+
+    assert Repo.reload!(fixture.request).request_metadata == first.request_metadata
+
+    assert {:ok, %{request: rebound, attempt: attempt}} = WebsocketOwnerBinding.bind_bridge(fixture.auth, fixture.request, later, newer)
+    assert rebound.request_metadata["websocket_owner_forwarding"] == Map.put(expected_binding(fixture), "downstream_epoch", 2)
+    assert attempt.transport == "websocket"
+
+    # That attempt, now carried on the websocket, is not re-bound by a newer attach either.
+    newest = RequestOptions.put_transport(fixture.options, websocket_owner_downstream_epoch: 3)
+    assert {:error, :stale_websocket_owner_binding} = WebsocketOwnerBinding.bind_bridge(fixture.auth, fixture.request, attempt, newest)
+
+    # An older attach never takes the binding back.
+    update_row(later, status: "retryable_failed", completed_at: past())
+    third = attempt_fixture(fixture.request, fixture.assignment, %{attempt_number: 3, status: "in_progress", completed_at: nil, transport: "http_sse"})
+    assert {:error, :stale_websocket_owner_binding} = WebsocketOwnerBinding.bind_bridge(fixture.auth, fixture.request, third, fixture.options)
+    assert Repo.reload!(fixture.request).request_metadata == rebound.request_metadata
+  end
+
   test "bridge binding marks the upstream carrier in the same transaction" do
     fixture = fixture()
 

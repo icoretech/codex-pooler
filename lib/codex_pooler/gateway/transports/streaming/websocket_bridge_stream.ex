@@ -32,6 +32,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   with the provider's `{"error": ...}` body instead of committing a stream,
   and the dispatcher finalizes it like that HTTP response (findings#225).
 
+  A provider usage limit sent before any output is the same kind of refusal,
+  but the upstream session consumes that frame as a retryable quota first
+  event and the owner completes the turn without delivering it. The submit
+  result carries the frame, so the relay reports it as
+  `{:rejected, 429, body, headers}` with the provider's `{"error": ...}` body
+  and the frame's sanitized headers, and the dispatcher reaches the HTTP
+  decision for the same `429`: another eligible candidate, or the terminal
+  usage-limit answer (findings#206 row 206-582). It used to commit a stream
+  error the client saw as an interrupted stream.
+
   An owner error or completion frame that lands before commitment is terminal
   for the turn, and the owner replies to the submit call before sending it, so
   the relay yields on the submit task for one short hop
@@ -64,7 +74,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           correlation_id: String.t(),
           settle_timeout_ms: non_neg_integer()
         }
-  @type decision :: :stream | {:fallback, term()} | {:rejected, 400..499, binary()}
+  @type decision ::
+          :stream
+          | {:fallback, term()}
+          | {:rejected, 400..499, binary()}
+          | {:rejected, 429, binary(), [{String.t(), String.t()}]}
   @type part :: {:data, binary()} | :done | {:bridge_error, term()}
   @type attempt_metadata :: %{
           upstream_websocket_connection: map() | nil,
@@ -144,6 +158,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           pending_bytes: 0,
           upstream_websocket_connection: nil,
           transport_failure: nil,
+          quota_rejection: nil,
           upstream_committed: false
         })
       end)
@@ -321,11 +336,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       {^task_ref, {:error, reason} = result} ->
         state = put_submit_result_and_clear_task(state, result)
 
-        if pre_submission_failure?(state.transport_failure) do
-          report_fallback(parent, ref, error_reason(reason))
-        else
-          report_stream_error(parent, ref, error_reason(reason))
-          metadata_loop(state)
+        cond do
+          quota_rejection?(state) ->
+            report_quota_rejection(state)
+
+          pre_submission_failure?(state.transport_failure) ->
+            report_fallback(parent, ref, error_reason(reason))
+
+          true ->
+            report_stream_error(parent, ref, error_reason(reason))
+            metadata_loop(state)
         end
 
       {^task_ref, result} ->
@@ -384,12 +404,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         end
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
-        report_stream_error(parent, ref, :upstream_websocket_error)
-        metadata_loop(state)
+        if quota_rejection?(state) do
+          report_quota_rejection(state)
+        else
+          report_stream_error(parent, ref, :upstream_websocket_error)
+          metadata_loop(state)
+        end
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:error, error, _payload}} ->
-        report_stream_error(parent, ref, owner_error_reason(error))
-        metadata_loop(state)
+        if quota_rejection?(state) do
+          report_quota_rejection(state)
+        else
+          report_stream_error(parent, ref, owner_error_reason(error))
+          metadata_loop(state)
+        end
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} ->
         preflight_after_result(state)
@@ -551,17 +579,26 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     state = settle_owner_terminal_task(state)
     reason = owner_error_reason(error)
 
-    if pre_submission_failure?(state.transport_failure) do
-      report_fallback(state.parent, state.ref, reason)
-    else
-      report_stream_error(state.parent, state.ref, reason)
-      metadata_loop(state)
+    cond do
+      quota_rejection?(state) ->
+        report_quota_rejection(state)
+
+      pre_submission_failure?(state.transport_failure) ->
+        report_fallback(state.parent, state.ref, reason)
+
+      true ->
+        report_stream_error(state.parent, state.ref, reason)
+        metadata_loop(state)
     end
   end
 
   defp preflight_complete(state) do
     state = settle_owner_terminal_task(state)
 
+    if quota_rejection?(state), do: report_quota_rejection(state), else: preflight_complete_failure(state)
+  end
+
+  defp preflight_complete_failure(state) do
     if pre_submission_failure?(state.transport_failure) do
       report_fallback(
         state.parent,
@@ -822,14 +859,68 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       |> TransportFailureReason.sanitize_transport_failure_metadata()
       |> committed_transport_failure(state.upstream_committed)
 
-    %{
-      state
-      | upstream_websocket_connection: connection || state.upstream_websocket_connection,
-        transport_failure: nonempty_map(transport_failure) || state.transport_failure
-    }
+    put_quota_rejection(
+      %{
+        state
+        | upstream_websocket_connection: connection || state.upstream_websocket_connection,
+          transport_failure: nonempty_map(transport_failure) || state.transport_failure
+      },
+      {status, result}
+    )
   end
 
   defp put_submit_result_connection(state, _result), do: state
+
+  defp quota_rejection?(%{quota_rejection: {429, _body, _headers}, upstream_committed: false}), do: true
+  defp quota_rejection?(_state), do: false
+
+  defp report_quota_rejection(%{quota_rejection: {status, body, headers}} = state) do
+    send(state.parent, {state.ref, {:preflight, {:rejected, status, body, headers}}})
+    metadata_loop(state)
+  end
+
+  # The pre-output usage-limit refusal the upstream session consumed: its
+  # submit result keeps the provider's frame in the retained body and the
+  # frame's sanitized headers. Only the error object and those headers go on.
+  defp put_quota_rejection(state, {:error, %{reason: {:quota_exhausted_first_event, _failure}} = result}) do
+    case provider_error(Map.get(result, :body)) do
+      %{} = error ->
+        headers = result |> Map.get(:websocket_frame_headers) |> frame_headers()
+        %{state | quota_rejection: {429, CodexPooler.JSON.encode!(%{"error" => error}), headers}}
+
+      nil ->
+        state
+    end
+  end
+
+  defp put_quota_rejection(state, _result), do: state
+
+  # The retained body frames each upstream text line as its own `data:` line
+  # and each frame as its own block (findings#254 row 254-60).
+  defp provider_error(body) when is_binary(body) do
+    body
+    |> String.split(["\n\n", "\r\n\r\n"], trim: true)
+    |> Enum.find_value(fn block ->
+      data =
+        block
+        |> String.split(["\r\n", "\n"])
+        |> Enum.flat_map(fn
+          "data:" <> value -> [String.trim_leading(value)]
+          _line -> []
+        end)
+        |> Enum.join("\n")
+
+      case CodexPooler.JSON.decode(data) do
+        {:ok, %{"error" => %{} = error}} -> error
+        _other -> nil
+      end
+    end)
+  end
+
+  defp provider_error(_body), do: nil
+
+  defp frame_headers(%{} = headers), do: Enum.flat_map(headers, fn {name, value} -> if is_binary(value), do: [{to_string(name), value}], else: [] end)
+  defp frame_headers(_headers), do: []
 
   defp put_submit_result_and_clear_task(%{task: %Task{ref: task_ref}} = state, result) do
     Process.demonitor(task_ref, [:flush])
