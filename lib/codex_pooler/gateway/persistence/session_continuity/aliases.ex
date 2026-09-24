@@ -9,7 +9,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeSessionAlias,
-    CodexSession
+    CodexSession,
+    CodexTurn
   }
 
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
@@ -221,6 +222,98 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
       {:error, :session_alias_conflict}
     end
   end
+
+  @doc """
+  Leads the `session_header` lookup of a window a websocket turn frame carries
+  to the session of the socket that sent it (findings#206, P115). The window's
+  alias is created, refreshed, or moved from the session holding it, unless
+  that session has a turn in progress, whose own reconnect needs the window.
+  It runs under the socket session's lock inside the turn's reservation, so
+  it never waits for the alias row: one another transaction holds (an
+  upgrade resolving the window) is left alone (`:busy`). Answers what it did;
+  a lookup aid, it never fails the turn.
+  """
+  @spec point_frame_window_hash(CodexSession.t(), map(), <<_::256>>, DateTime.t()) :: :created | :refreshed | :moved | :kept | :busy
+  def point_frame_window_hash(
+        %CodexSession{pool_id: pool_id, api_key_id: api_key_id} = session,
+        %{pool: %{id: pool_id}, api_key: %{id: api_key_id}},
+        hash,
+        now
+      )
+      when is_binary(hash) and byte_size(hash) == 32 do
+    expires_at = DateTime.add(now, expired_alias_ttl_seconds(), :second)
+
+    current =
+      Repo.one(
+        from alias_record in BridgeSessionAlias,
+          where:
+            alias_record.pool_id == ^pool_id and alias_record.api_key_id == ^api_key_id and
+              alias_record.alias_kind == "session_header" and alias_record.alias_hash == ^hash and
+              alias_record.status == ^@alias_active,
+          lock: "FOR UPDATE SKIP LOCKED"
+      )
+
+    case current do
+      nil -> register_session_header_hash_row(session, hash, now, expires_at)
+      %BridgeSessionAlias{} = row -> point_existing_alias(row, session, now, expires_at)
+    end
+  end
+
+  defp point_existing_alias(%BridgeSessionAlias{codex_session_id: session_id} = row, %CodexSession{id: session_id}, now, expires_at) do
+    refresh_alias!(row, now, expires_at, row.metadata)
+    :refreshed
+  end
+
+  defp point_existing_alias(%BridgeSessionAlias{codex_session_id: holder_id} = row, %CodexSession{} = session, now, expires_at) do
+    if turn_in_progress?(holder_id) do
+      :kept
+    else
+      row
+      |> Ecto.Changeset.change(codex_session_id: session.id)
+      |> refresh_alias!(now, expires_at, %{"source" => "native_frame_window"})
+
+      :moved
+    end
+  end
+
+  defp register_session_header_hash_row(session, hash, now, expires_at) do
+    Repo.insert_all(
+      BridgeSessionAlias,
+      [
+        %{
+          id: Ecto.UUID.generate(),
+          codex_session_id: session.id,
+          pool_id: session.pool_id,
+          api_key_id: session.api_key_id,
+          alias_kind: "session_header",
+          alias_hash: hash,
+          alias_preview: alias_preview(hash),
+          status: @alias_active,
+          expires_at: expires_at,
+          last_seen_at: now,
+          metadata: %{"source" => "native_frame_window"},
+          created_at: now,
+          updated_at: now
+        }
+      ],
+      on_conflict: :nothing,
+      conflict_target: @session_alias_conflict_target
+    )
+    |> case do
+      {1, _rows} -> :created
+      {0, _rows} -> :busy
+    end
+  end
+
+  defp refresh_alias!(%BridgeSessionAlias{} = row, now, expires_at, metadata), do: row |> Ecto.Changeset.change() |> refresh_alias!(now, expires_at, metadata)
+
+  defp refresh_alias!(%Ecto.Changeset{} = changeset, now, expires_at, metadata) do
+    changeset
+    |> Ecto.Changeset.change(expires_at: expires_at, last_seen_at: now, updated_at: now, metadata: metadata)
+    |> Repo.update!()
+  end
+
+  defp turn_in_progress?(session_id), do: Repo.exists?(from(turn in CodexTurn, where: turn.codex_session_id == ^session_id and turn.status == "in_progress"))
 
   defp maybe_require_active_owner_lease(query, "previous_response_id", _now), do: query
 

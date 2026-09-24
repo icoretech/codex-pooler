@@ -2517,14 +2517,33 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         )
 
       :none ->
-        :ok
+        register_frame_window_alias(auth, payload, request_options)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp register_final_window_alias(_auth, _payload, _request_options, _correlation), do: :ok
+  defp register_final_window_alias(auth, payload, request_options, _correlation),
+    do: register_frame_window_alias(auth, payload, request_options)
+
+  # A turn frame naming a newer window than the socket's session is keyed by:
+  # the client's reconnect names that window, so the window must lead to this
+  # session, whose owner holds the turn's replay (findings#206, P115). Best
+  # effort: the lookup aid never fails the turn.
+  defp register_frame_window_alias(auth, payload, %RequestOptions{continuity: %{codex_session: %CodexSession{} = session}} = request_options) do
+    case ReplayPreparation.frame_window_alias_hash(request_options, payload) do
+      {:ok, hash} ->
+        disposition = SessionAliases.point_frame_window_hash(session, auth, hash, DateTime.utc_now() |> DateTime.truncate(:microsecond))
+        Logger.info("websocket frame window alias codex_session_id=#{session.id} alias_preview=#{hash |> Base.encode16(case: :lower) |> String.slice(0, 16)} disposition=#{disposition}")
+        :ok
+
+      :none ->
+        :ok
+    end
+  end
+
+  defp register_frame_window_alias(_auth, _payload, _request_options), do: :ok
 
   defp lock_codex_session_before_reservation(%RequestOptions{runtime: %{session_owner_witness: %OwnerWitness{}}} = request_options) do
     :ok =

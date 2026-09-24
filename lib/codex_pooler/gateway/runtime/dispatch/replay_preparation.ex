@@ -43,6 +43,53 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
 
   def final_window_alias_hash(%RequestOptions{}, _payload), do: :none
 
+  @doc """
+  The session lookup hash of the window a native websocket turn frame carries
+  when it is not the window the socket's session is keyed by: a process that
+  compacted on its socket, or a resumed process whose upgrade lost the
+  client's startup prewarm race, keeps sending on the older window's socket
+  while its frames already name the next window, and its reconnect after a
+  cut names that next window (findings#206, P115). Only a released-client
+  window header of the same thread qualifies; anything else answers `:none`.
+  """
+  @spec frame_window_alias_hash(RequestOptions.t(), map()) :: :none | {:ok, <<_::256>>}
+  def frame_window_alias_hash(
+        %RequestOptions{
+          continuity: %{session_header: header, session_header_source: "x-codex-window-id"},
+          payload_context: %{native_codex_turn_metadata: %NativeCodexTurnMetadata{request_kind: :turn} = metadata},
+          openai_compatibility: %{source_endpoint: nil},
+          transport: %{transport: "websocket"}
+        },
+        payload
+      )
+      when is_binary(header) do
+    with {:ok, canonical} <- canonical_metadata(payload),
+         window when is_binary(window) <- canonical["window_id"],
+         window = String.trim(window),
+         true <- NativeCodexTurnMetadata.window_id_digest(window) == metadata.window_id_digest,
+         header = String.trim(header),
+         true <- window != header,
+         {:ok, thread} <- window_thread(window),
+         {:ok, ^thread} <- window_thread(header) do
+      {:ok, :crypto.hash(:sha256, window)}
+    else
+      _other -> :none
+    end
+  end
+
+  def frame_window_alias_hash(%RequestOptions{}, _payload), do: :none
+
+  # `<thread>:<window number>`, the released client's window id.
+  defp window_thread(window) do
+    case String.split(window, ":") do
+      [thread, number] when thread != "" and number != "" ->
+        if String.match?(number, ~r/\A[0-9]{1,20}\z/), do: {:ok, thread}, else: :error
+
+      _other ->
+        :error
+    end
+  end
+
   defp canonical_metadata(%{"client_metadata" => %{"x-codex-turn-metadata" => metadata}})
        when is_map(metadata), do: {:ok, metadata}
 
