@@ -223,7 +223,11 @@ defmodule CodexPooler.Gateway.DenialsTest do
     refute inspect(request.request_metadata) =~ raw_effort
   end
 
-  test "websocket denial inserts a separate rejected row with current request claim" do
+  # A refusal made before the request's claim never takes that claim: the same
+  # request resent once the cause is gone would meet it and get `409
+  # duplicate_turn` for good (findings#206 row 206-429). It takes the socket's
+  # handshake request id instead.
+  test "websocket denial inserts a separate rejected row that never takes the request claim" do
     fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
     setup = gateway_setup(fake)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -284,7 +288,8 @@ defmodule CodexPooler.Gateway.DenialsTest do
              })
 
     assert [^anchor, rejected] = Repo.all(from request in Request, order_by: request.admitted_at)
-    assert rejected.correlation_id == request_claim_key
+    assert rejected.correlation_id == frame_correlation
+    refute Repo.get_by(Request, correlation_id: request_claim_key)
     assert rejected.status == "rejected"
 
     assert {:error, ^reason} =

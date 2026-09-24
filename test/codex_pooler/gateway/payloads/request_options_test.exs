@@ -575,7 +575,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert RequestOptions.websocket_denial_correlation_id(options, persisted_request) ==
                request_claim_key
 
-      assert RequestOptions.websocket_denial_correlation_id(options, nil) == request_claim_key
+      # A refusal made before the claim never takes it (findings#206 row 206-429).
+      refute RequestOptions.websocket_denial_correlation_id(options, nil) == request_claim_key
 
       assert options.continuity.turn_claim_key == turn_claim_key
 

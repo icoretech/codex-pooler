@@ -118,13 +118,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimlessDenialResendTest
     end
   end
 
+  # A refusal made before the released client's request is claimed is recorded
+  # without that request's claim: the row used to take the `codex-request:`
+  # claim, so the same request, resent once the refusal's cause was gone, met
+  # it and got `409 duplicate_turn` for good (findings#206 row 206-429).
+  for forwarding <- [:owner_forwarding, :direct] do
+    @tag forwarding: forwarding
+    test "a released request refused before its claim is served once the cause is gone, never fenced (#{forwarding})", %{forwarding: forwarding} do
+      restored = strict_native_request(1, completed_frames("resp_claimless_restored", 4, 1))
+
+      %{conn: conn, websocket: websocket, ref: ref, setup: setup, sticky: sticky, fallback: fallback, fallback_assignment: fallback_assignment} =
+        opened_session!(forwarding, :released, [restored])
+
+      # A tool result anchored on the opening response: claimed under
+      # `codex-request:`, not the turn's `codex-turn:`.
+      put_model_source_assignments!(setup.model, [fallback_assignment])
+      tool_output = [%{"type" => "function_call_output", "call_id" => "call_claimless_anchored", "output" => "synthetic tool output"}]
+      frame = frame(setup, :released, "opening-turn", tool_output, @opening_response_id)
+      {conn, refused} = send_times(conn, websocket, ref, frame, 1)
+      [_opening, refused_row] = pool_requests(setup.pool.id)
+
+      put_model_source_assignments!(setup.model, [setup.assignment, fallback_assignment])
+      {conn, resent} = send_times(conn, websocket, ref, frame, 1)
+      Mint.HTTP.close(conn)
+
+      assert %{
+               refused: refused,
+               refused_row_claim: claim_prefix(refused_row.correlation_id),
+               resent: resent,
+               sticky: FakeUpstream.count(sticky),
+               fallback: FakeUpstream.count(fallback)
+             } == %{
+               refused: ["error:503:pinned_continuation_unavailable"],
+               refused_row_claim: nil,
+               resent: ["response.completed::"],
+               sticky: 2,
+               fallback: 0
+             }
+    end
+  end
+
+  defp claim_prefix(claim), do: Enum.find(["codex-turn:", "codex-request:", "codex-resume:", "codex-request-retry:", "client-retry-v1:"], &String.starts_with?(claim, &1))
+
   # Turn 1 binds the session to the sticky account and opens the live upstream
   # websocket there; a second account is eligible from then on.
-  defp opened_session!(forwarding, client) do
+  defp opened_session!(forwarding, client, sticky_later \\ []) do
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, nil)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, forwarding == :owner_forwarding)
 
-    sticky = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, completed_frames(@opening_response_id, 3, 1))]))
+    sticky = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, completed_frames(@opening_response_id, 3, 1)) | sticky_later]))
     # The fallback account must never be asked: the anchored request cannot move.
     fallback = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, completed_frames("resp_claimless_fallback_unused", 5, 2))]))
 
