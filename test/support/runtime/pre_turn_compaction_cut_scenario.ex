@@ -333,7 +333,7 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
   # A refused retry's own refusal lines (the replay preflight's or the claim's
   # bounded reason codes, info level) are logged again as a warning, so a
   # failing arm's captured log names why the retry was refused (findings#206
-  # row NEW in P127c: a peer arm's first retry refused once in about 120 runs
+  # row 206-580: a peer arm's first retry refused once in about 120 runs
   # under a busy machine, with nothing but `cleanup_deferred` in its log).
   defp full_history_resend!(ctx, port) do
     cleanups = WebsocketCleanupFence.listener_socket_cleanups()
