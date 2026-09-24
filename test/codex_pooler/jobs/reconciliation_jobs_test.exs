@@ -55,6 +55,10 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   # per-identity recovery decisions do not leak across identities.
   @stale_consuming_cohort_size 5
 
+  # Failure-detection budget for an expected message, task result or lock wait:
+  # a green run returns as soon as it is observed.
+  @detection_timeout_ms 15_000
+
   setup do
     Repo.delete_all(Oban.Job)
     Repo.delete_all(Settings)
@@ -2263,7 +2267,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert lifecycle_backend != reconciliation_backend
       release_upstream_barrier(first_barrier, release_ref)
 
-      assert {:ok, _result} = Task.await(reconciliation, 10_000)
+      assert {:ok, _result} = Task.await(reconciliation, @detection_timeout_ms)
 
       current_assignment =
         Sandbox.unboxed_run(Repo, fn ->
@@ -2429,7 +2433,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
           end)
         end)
 
-      assert_receive {:stale_cleanup_connection_ready, ^release_ref, cleanup_backend}, 5_000
+      assert_receive {:stale_cleanup_connection_ready, ^release_ref, cleanup_backend}, @detection_timeout_ms
       assert_backend_waiting_on_db_lock!(cleanup_backend)
 
       send(query_pid, {:release_assignment_update, release_ref})
@@ -4455,7 +4459,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         for role <- if(first == :sibling, do: [:sibling, :canonical], else: [:canonical, :sibling]) do
           {task, barrier} = Map.fetch!(in_flight, role)
           release_upstream_barrier(barrier, release_ref)
-          assert Task.await(task, 10_000) == :ok
+          assert Task.await(task, @detection_timeout_ms) == :ok
         end
 
         assert [job] = stale_consuming_recovery_jobs()
@@ -6629,7 +6633,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   defp assert_backend_waiting_on_db_lock!(backend_pid) do
     assert_backend_waiting_on_db_lock!(
       backend_pid,
-      System.monotonic_time(:millisecond) + 5_000
+      System.monotonic_time(:millisecond) + @detection_timeout_ms
     )
   end
 
@@ -6795,7 +6799,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   end
 
   defp await_upstream_barrier(release_ref) do
-    assert_receive {:fake_upstream_timeout_barrier, :before_headers, pid, ^release_ref}, 5_000
+    assert_receive {:fake_upstream_timeout_barrier, :before_headers, pid, ^release_ref}, @detection_timeout_ms
     pid
   end
 

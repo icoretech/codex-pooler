@@ -519,7 +519,10 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
           result = apply(module, function, args)
           send(parent, {:websocket_owner_harness_delayed_result, release_ref, result})
       after
-        5_000 ->
+        # A fixture timer like every other harness release: the test sends the
+        # release only after its own detection waits, so a shorter fallback
+        # answers `{:error, :timeout}` to a test that was merely slow to release.
+        @release_timeout_ms ->
           send(
             parent,
             {:websocket_owner_harness_delayed_result, release_ref, {:error, :timeout}}

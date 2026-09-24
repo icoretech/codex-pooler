@@ -9,7 +9,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   # boundary before its drain call returns. Keep the injected budget small
   # while leaving that boundary inside the coordinator's finish margin.
   @owner_post_deadline_call_budget_ms 1_000
-  @worker_join_timeout_ms 5_000
+  # Failure-detection budget for drain workers to exit after the drain returns;
+  # a green run observes their DOWN at once.
+  @worker_join_timeout_ms 15_000
 
   @type owner_context :: %{
           required(:codex_session_id) => String.t(),

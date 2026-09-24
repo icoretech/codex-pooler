@@ -144,7 +144,7 @@ defmodule CodexPooler.Telemetry.ReviewRegressionsTest do
     insert_old_rows(250)
     runtime = runtime(context, role: "web", cleanup_interval_ms: 60_000)
     send(runtime, :cleanup)
-    await_empty(System.monotonic_time(:millisecond) + 2_000)
+    await_empty(System.monotonic_time(:millisecond) + @detection_ms)
     assert Repo.aggregate(RelayEvent, :count) == 0
   end
 

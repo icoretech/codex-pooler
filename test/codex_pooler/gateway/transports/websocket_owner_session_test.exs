@@ -68,7 +68,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     end
   end
 
-  @pending_terminal_observation_timeout_ms 5_000
   # Scenario timer for the owner's terminal-delivery fallback in tests that
   # release the retained task result before the terminal frames: it outlasts
   # every detection wait, so a test stalled between the two releases cannot
@@ -1309,7 +1308,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       end)
 
     assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref},
-                   @pending_terminal_observation_timeout_ms
+                   @detection_timeout_ms
 
     assert %{compaction_retry_submit_hold: nil, draining?: true, active_turn: active} =
              :sys.get_state(owner)
@@ -1326,7 +1325,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
              )
 
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
-    assert :ok = Task.await(submit_task, @pending_terminal_observation_timeout_ms)
+    assert :ok = Task.await(submit_task, @detection_timeout_ms)
     assert [_single_request] = WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid)
     assert %{active_turn: nil, draining?: true} = :sys.get_state(owner)
   end
@@ -1352,7 +1351,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert :ok = WebsocketOwnerSession.drain_owner(owner)
 
     assert_receive {:DOWN, ^monitor, :process, ^owner, :normal},
-                   @pending_terminal_observation_timeout_ms
+                   @detection_timeout_ms
 
     assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
     assert :ok = WebsocketOwnerSession.cancel_compaction_retry_submit(hold)
@@ -2672,7 +2671,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     Process.exit(downstream_pid, :kill)
     assert_receive {:DOWN, ^downstream_monitor, :process, ^downstream_pid, :killed}
 
-    assert Task.await(submit_task, @pending_terminal_observation_timeout_ms * 3) ==
+    assert Task.await(submit_task, @detection_timeout_ms) ==
              interrupted_result()
 
     elapsed_ms = System.monotonic_time(:millisecond) - started_at_ms
@@ -2710,7 +2709,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     # The downstream stays alive and attached but deliberately never acks, so
     # the only exit is the (shortened) budget timer.
     assert_receive {:websocket_owner_frame, "commit-silent", ^epoch, ^owner_turn_id, {:error, :owner_forward_timeout, timeout_payload}},
-                   @pending_terminal_observation_timeout_ms
+                   @detection_timeout_ms
 
     assert timeout_payload.code == "owner_forward_timeout"
     assert_receive {:websocket_owner_frame, "commit-silent", ^epoch, ^owner_turn_id, :complete}
@@ -5882,45 +5881,49 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     refute logs =~ owner_lease_token
   end
 
-  defp await_owner_unavailable(codex_session_id, attempts \\ 100)
+  # Owner registration, retirement and turn clearing emit no message the test
+  # can await, so the helpers below poll authoritative state (the registry or
+  # the owner's own state) against one monotonic detection deadline and return
+  # the last observation when it expires, for the caller's assertion to report.
+  defp detection_deadline, do: System.monotonic_time(:millisecond) + @detection_timeout_ms
 
-  defp await_owner_unavailable(codex_session_id, attempts) when attempts > 0 do
+  defp poll_again?(deadline) do
+    if System.monotonic_time(:millisecond) < deadline do
+      receive do
+      after
+        1 -> true
+      end
+    else
+      false
+    end
+  end
+
+  defp await_owner_unavailable(codex_session_id, deadline \\ detection_deadline()) do
     case WebsocketOwnerSession.lookup(codex_session_id) do
       {:error, :owner_unavailable} = unavailable ->
         unavailable
 
-      {:ok, _pid} ->
-        yield_once({:await_owner_unavailable, codex_session_id, attempts})
-        await_owner_unavailable(codex_session_id, attempts - 1)
+      {:ok, _pid} = found ->
+        if poll_again?(deadline), do: await_owner_unavailable(codex_session_id, deadline), else: found
     end
   end
 
-  defp await_owner_unavailable(codex_session_id, 0),
-    do: WebsocketOwnerSession.lookup(codex_session_id)
-
-  defp await_fresh_owner(context, upstream, old_owner, attempts \\ 100)
-
-  defp await_fresh_owner(context, upstream, old_owner, attempts) when attempts > 0 do
+  defp await_fresh_owner(context, upstream, old_owner, deadline \\ detection_deadline()) do
     case start_owner(context, upstream: upstream) do
       {:ok, fresh_owner} when fresh_owner != old_owner ->
         {:ok, fresh_owner}
 
-      {:ok, owner, :existing} when owner != old_owner and is_pid(owner) ->
-        if Process.alive?(owner) do
-          {:ok, owner}
-        else
-          yield_once({:await_fresh_owner, context.codex_session_id, attempts})
-          await_fresh_owner(context, upstream, old_owner, attempts - 1)
+      {:ok, owner, :existing} = existing when owner != old_owner and is_pid(owner) ->
+        cond do
+          Process.alive?(owner) -> {:ok, owner}
+          poll_again?(deadline) -> await_fresh_owner(context, upstream, old_owner, deadline)
+          true -> existing
         end
 
-      _other ->
-        yield_once({:await_fresh_owner, context.codex_session_id, attempts})
-        await_fresh_owner(context, upstream, old_owner, attempts - 1)
+      other ->
+        if poll_again?(deadline), do: await_fresh_owner(context, upstream, old_owner, deadline), else: other
     end
   end
-
-  defp await_fresh_owner(context, upstream, _old_owner, 0),
-    do: start_owner(context, upstream: upstream)
 
   defp cleanup_owner_session(codex_session_id) do
     case WebsocketOwnerSession.lookup(codex_session_id) do
@@ -5941,67 +5944,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     :exit, _reason -> :ok
   end
 
-  defp yield_once(message) do
-    send(self(), message)
-
-    receive do
-      ^message -> :ok
-    end
-  end
-
-  defp await_active_turn_cleared(owner, attempts \\ 100)
-
-  defp await_active_turn_cleared(owner, attempts) when attempts > 0 do
+  defp await_active_turn_cleared(owner, deadline \\ detection_deadline()) do
     case :sys.get_state(owner) do
       %{active_turn: nil} = state ->
         state
 
-      _state ->
-        yield_once({:await_active_turn_cleared, owner, attempts})
-        await_active_turn_cleared(owner, attempts - 1)
+      state ->
+        if poll_again?(deadline), do: await_active_turn_cleared(owner, deadline), else: state
     end
   end
 
-  defp await_active_turn_cleared(owner, 0), do: :sys.get_state(owner)
-
-  defp await_owner_cleared(owner, attempts \\ 100)
-
-  defp await_owner_cleared(owner, attempts) when attempts > 0 do
+  defp await_owner_cleared(owner, deadline \\ detection_deadline()) do
     case :sys.get_state(owner) do
       %{active_turn: nil, downstream: nil} = state ->
         state
 
-      _state ->
-        yield_once({:await_owner_cleared, owner, attempts})
-        await_owner_cleared(owner, attempts - 1)
+      state ->
+        if poll_again?(deadline), do: await_owner_cleared(owner, deadline), else: state
     end
   end
 
-  defp await_owner_cleared(owner, 0), do: :sys.get_state(owner)
-
-  defp await_pending_terminal_result(owner) do
-    deadline =
-      System.monotonic_time(:millisecond) + @pending_terminal_observation_timeout_ms
-
-    await_pending_terminal_result_until(owner, deadline)
-  end
-
-  defp await_pending_terminal_result_until(owner, deadline) do
-    state = :sys.get_state(owner)
-
-    case state do
+  defp await_pending_terminal_result(owner, deadline \\ detection_deadline()) do
+    case :sys.get_state(owner) do
       %{active_turn: %{pending_result: pending_result}} = state when not is_nil(pending_result) ->
         state
 
-      _state ->
-        if System.monotonic_time(:millisecond) >= deadline do
-          state
-        else
-          receive do
-          after
-            1 -> await_pending_terminal_result_until(owner, deadline)
-          end
-        end
+      state ->
+        if poll_again?(deadline), do: await_pending_terminal_result(owner, deadline), else: state
     end
   end
 

@@ -117,7 +117,7 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
         WebsocketOwnerSession.admission_control(owner, control)
       end)
 
-    assert_capture(setup.pool.id, System.monotonic_time(:millisecond) + 1000)
+    assert_capture(setup.pool.id, System.monotonic_time(:millisecond) + @detection_timeout_ms)
     finish_control(fate, setup, task)
     assert {:ok, %{armed: false}} = Control.disarm(setup.pool.id)
     assert :ok = CodexResponsesSocket.terminate(:closed, socket)
@@ -126,7 +126,7 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
   defp finish_control(:release, %{pool: %{id: pool_id}}, task) do
     # Capture was observed before release; the held owner call must now finish.
     assert {:ok, %{released: true, compact_request_count: 0}} = Control.release(pool_id)
-    assert {:ok, _} = Task.await(task, 15_000)
+    assert {:ok, _} = Task.await(task, @detection_timeout_ms)
   end
 
   defp finish_control(:controller_death, _setup, task) do
@@ -135,7 +135,7 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
     assert {:ok, _} = Task.await(task, @detection_timeout_ms)
-    assert_no_control_handler(System.monotonic_time(:millisecond) + 1000)
+    assert_no_control_handler(System.monotonic_time(:millisecond) + @detection_timeout_ms)
   end
 
   defp finish_control(:watchdog, %{pool: %{id: pool_id}}, task) do
