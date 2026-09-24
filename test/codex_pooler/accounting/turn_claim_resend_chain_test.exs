@@ -18,7 +18,7 @@ defmodule CodexPooler.Accounting.TurnClaimResendChainTest do
   import CodexPooler.PoolerFixtures, only: [attempt_fixture: 3]
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{ClientRetry, Request, RequestClientRetryLink}
+  alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestClientRetryLink}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Repo
 
@@ -65,6 +65,27 @@ defmodule CodexPooler.Accounting.TurnClaimResendChainTest do
 
     assert {:error, %{code: :duplicate_request, resend_disposition: :active_predecessor}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
     assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
+  end
+
+  # The released client's retries of one turn are paced by its own backoff and
+  # by how long each successor ran before it was cut, so the whole chain can
+  # outlast the thirty-second retry window of its first request. A node the
+  # walk passes through already had its successor admitted inside its window;
+  # only the node the resend chains onto is held to it.
+  test "the retry window binds the node the resend chains onto, not the nodes the walk passes", %{setup: setup, session: session, opts: opts} do
+    assert {:ok, %{request: original}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+    previsible_cut!(setup, session, original)
+    assert {:ok, %{request: successor}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+    previsible_cut!(setup, session, successor)
+    expire_retry_window!(original)
+
+    assert {:ok, %{request: next, client_resend: %{predecessor_request_id: predecessor_id}}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+    assert predecessor_id == successor.id
+    previsible_cut!(setup, session, next)
+    expire_retry_window!(next)
+
+    assert {:error, %{code: :duplicate_request, resend_disposition: :retry_expired}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 3
   end
 
   test "a link to a successor admitted under another claim keeps the fence", %{setup: setup, session: session, opts: opts} do
@@ -141,6 +162,13 @@ defmodule CodexPooler.Accounting.TurnClaimResendChainTest do
     })
 
     Repo.update!(Ecto.Changeset.change(request, status: "failed", usage_status: "usage_unknown", response_status_code: 499, last_error_code: "client_disconnected", completed_at: now))
+  end
+
+  defp expire_retry_window!(%Request{id: id}) do
+    expired_at = DateTime.add(db_now(), -31, :second)
+    Repo.update_all(from(r in Request, where: r.id == ^id), set: [completed_at: expired_at])
+    Repo.update_all(from(a in Attempt, where: a.request_id == ^id), set: [completed_at: expired_at])
+    Repo.update_all(from(t in CodexTurn, where: t.request_id == ^id), set: [completed_at: expired_at])
   end
 
   defp foreign_request!(setup) do

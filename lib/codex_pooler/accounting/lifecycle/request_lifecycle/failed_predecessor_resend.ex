@@ -163,6 +163,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   end
 
   defp scope_for_predecessor(scope, %Request{} = successor) do
+    scope = Map.put(scope, :successor_admitted?, true)
+
     case successor.request_metadata["native_http_input_count"] do
       count when is_integer(count) and count >= 0 ->
         Map.put(scope, :native_http_validation_input_count, count)
@@ -302,7 +304,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       is_nil(shape) -> {:error, :terminal_predecessor}
       live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
       entitlement?(request.id) -> {:error, :entitlement_present}
-      true -> with :ok <- validate_retry_window(request, attempt, now), do: {:ok, shape}
+      true -> with :ok <- validate_retry_window(request, attempt, now, scope), do: {:ok, shape}
     end
   end
 
@@ -335,7 +337,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp admit_predecessor(request, family, scope, now) do
     with {:ok, shape} <- predecessor_shape(request, family, scope),
-         :ok <- validate_retry_window(request, request.id |> lock_turn() |> lock_final_attempt(request.id), now),
+         :ok <- validate_retry_window(request, request.id |> lock_turn() |> lock_final_attempt(request.id), now, scope),
          do: {:ok, shape}
   end
 
@@ -602,6 +604,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
         lock: "FOR UPDATE"
     )
   end
+
+  # A chain node the walk passes through already had its successor admitted
+  # inside its window, so only the node the resend chains onto is held to one.
+  # The released client's retries of a turn are paced by its own backoff and by
+  # how long each successor ran before it was cut, and with owner forwarding off
+  # a chain of pre-visible cuts could outlast its first request's window and
+  # meet `409 duplicate_turn` (findings#206 row 206-519).
+  defp validate_retry_window(_request, _attempt, _now, %{successor_admitted?: true}), do: :ok
+  defp validate_retry_window(request, attempt, now, _scope), do: validate_retry_window(request, attempt, now)
 
   # From the predecessor's completion, or from the failed downstream write its
   # final attempt's receipt names (`ClientRetry.retry_window_start/3`,
