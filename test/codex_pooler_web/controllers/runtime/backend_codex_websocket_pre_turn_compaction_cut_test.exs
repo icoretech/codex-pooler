@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_peer_window_owner!: 2]
 
   alias CodexPooler.Accounting.{LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
@@ -43,7 +44,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   # reply frames are synthetic. One node, owner forwarding on and off; the
   # resend is sent once the predecessor has settled (the released client
   # retries after about 200 ms), except in the `unobserved_cut` arm, where the
-  # Pooler has not seen the cut when the websocket resends arrive.
+  # Pooler has not seen the cut when the websocket resends arrive. The `peer`
+  # arms run the Full pre-turn shape with owner forwarding on and the session's
+  # owner and its provider connection on a second VM sharing the committed
+  # database, the socket on this node, as when a production turn lands on the
+  # other web pod (findings#206 row 206-334).
   @thread_id "019a0000-0000-7000-8000-00000000f001"
   @window_id "#{@thread_id}:0"
   @resumed_window_id "#{@thread_id}:1"
@@ -67,6 +72,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   for {mode, shape} <- @arms, topology <- [:forwarded, :direct], cut <- [:no_cut, :before_output, :after_output, :after_completion, :unobserved_cut] do
     @tag mode: mode, shape: shape, topology: topology, cut: cut
     test "#{mode} #{shape} #{topology} admitted compaction #{cut}: the released client's retries buy the compaction once per request and the turn completes",
+         %{mode: mode, shape: shape, topology: topology, cut: cut} do
+      assert run_scenario(mode, shape, topology, cut) == expected(cut, topology)
+    end
+  end
+
+  for cut <- [:no_cut, :before_output, :after_output, :after_completion, :unobserved_cut] do
+    @tag mode: "full", shape: :pre_turn, topology: :peer, cut: cut
+    test "full pre_turn peer admitted compaction #{cut}: the released client's retries buy the compaction once per request and the turn completes",
          %{mode: mode, shape: shape, topology: topology, cut: cut} do
       assert run_scenario(mode, shape, topology, cut) == expected(cut, topology)
     end
@@ -159,7 +172,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
 
   # With owner forwarding the first resend's socket takes the owner over and
   # the owner cuts the predecessor, so the second resend is its successor.
-  defp expected_unobserved(:forwarded),
+  defp expected_unobserved(topology) when topology in [:forwarded, :peer],
     do: %{
       retries: [{409, "duplicate_turn"}, :served],
       rows: [
@@ -174,12 +187,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     }
 
   defp run_scenario(mode, shape, topology, cut) do
-    put_owner_forwarding!(topology == :forwarded)
+    put_owner_forwarding!(topology != :direct)
     release_ref = make_ref()
     ctx = %{mode: mode, shape: shape}
 
     upstream = start_upstream(FakeUpstream.strict_sequence(upstream_sequence(ctx, cut, topology, release_ref)))
-    setup = gateway_setup(upstream, compact?: true)
+    setup = topology_setup!(topology, upstream)
     if mode == "lite", do: set_model_serving_mode!(model_serving_scope(), setup, "lite")
     ctx = Map.put(ctx, :setup, setup)
     port = start_public_endpoint!()
@@ -207,6 +220,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     assert :ok = FakeUpstream.verify!(upstream)
     measured
   end
+
+  # The peer shares the committed database, so its fixture is committed: the
+  # sandbox switches to auto mode before anything is written.
+  defp topology_setup!(:peer, upstream) do
+    enter_peer_owner_topology!()
+    setup = gateway_setup(upstream, compact?: true)
+    Map.put(setup, :peer_owner, start_peer_window_owner!(setup, @window_id))
+  end
+
+  defp topology_setup!(_topology, upstream), do: gateway_setup(upstream, compact?: true)
 
   defp cut_and_resend(:no_cut, ctx, client, _port, _upstream, _release_ref) do
     {client, frames} = receive_until_terminal(client, [])
@@ -548,10 +571,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   # The direct upstream session arms before its turn settles.
   defp await_armed!(:direct, setup), do: await!(fn -> match?([%Request{status: "succeeded"}], pool_requests(setup.pool.id)) end, "the first turn never settled")
 
+  defp await_armed!(:peer, setup), do: await_owner_armed!(setup.peer_owner.owner_pid)
+
   defp await_armed!(:forwarded, setup) do
     [session_id] = Repo.all(from(session in CodexSession, where: session.pool_id == ^setup.pool.id, select: session.id))
     assert {:ok, owner} = WebsocketOwnerSession.lookup(session_id)
+    await_owner_armed!(owner)
+  end
 
+  defp await_owner_armed!(owner) do
     await!(
       fn ->
         match?(
