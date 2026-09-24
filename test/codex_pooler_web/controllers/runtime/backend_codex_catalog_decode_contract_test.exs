@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogDecodeContractTest do
   alias CodexPooler.CodexCatalogShapes
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Metadata.CodexCatalog
+  alias CodexPooler.Gateway.Metadata.CodexModelDecodeContract
   alias CodexPooler.Repo
 
   @broken_slug "gpt-catalog-undecodable"
@@ -97,6 +98,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogDecodeContractTest do
       assert turn.status == 200
       assert get_resp_header(turn, "x-models-etag") == [catalog_etag]
     end)
+  end
+
+  # findings#206 row 206-444: the model every `gateway_setup/2` test routes to
+  # is a catalog entry the released client decodes, so a test sending an
+  # in-window `User-Agent` computes its ETag from a body that still lists it.
+  test "the default gateway fixture model is a decodable catalog entry for every client", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+
+    log =
+      capture_log(fn ->
+        for version <- ["0.156.1", "0.154.0", "0.157.0", "0.146.1"] do
+          body = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models", %{"client_version" => version}) |> json_response(200)
+
+          assert [entry] = body["models"], version
+          assert entry["slug"] == setup.model.exposed_model_id, version
+          assert CodexModelDecodeContract.violations(entry) == [], version
+        end
+      end)
+
+    refute log =~ "codex catalog entry left out"
   end
 
   defp catalog_setup(upstream) do

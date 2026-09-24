@@ -612,9 +612,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     ArgumentError -> :ok
   end
 
+  # A catalog entry the released Codex client decodes (findings#206 row
+  # 206-444): `priority`, `support_verbosity` and `experimental_supported_tools`
+  # are required by every client in `CodexModelDecodeContract`'s verified window,
+  # so an in-window client is served this model instead of having it left out.
   defp default_codex_source(exposed_model_id, upstream_model_id, display_name) do
     %{
       "slug" => exposed_model_id,
+      "priority" => 1,
+      "support_verbosity" => false,
+      "experimental_supported_tools" => [],
       "display_name" => display_name,
       "description" => display_name,
       "supported_reasoning_levels" => [
