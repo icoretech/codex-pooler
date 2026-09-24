@@ -3132,39 +3132,47 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
   end
 
+  # The upgrade deadline runs on a clock the test answers (the test-only
+  # `:upgrade_clock` timeout), so the session reads an expired deadline exactly
+  # when the terminal upgrade bytes already wait in its mailbox, however late
+  # the test runs. The 80 ms real deadline it replaces started before the test
+  # could suspend the session, so a late test lost the race (findings#206 row
+  # 206-320).
   test "queued terminal upgrade data wins at an expired monotonic deadline" do
     peer = start_raw_websocket_peer(upgrade_mode: :split_status)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    request = %{
-      raw_websocket_request(peer.url, self())
-      | timeouts: %{connect_timeout_ms: 80, receive_timeout_ms: 1_000}
-    }
-
     owner = self()
-    request = %{request | writer: fn text -> send(owner, {:upstream_websocket_frame, text}) end}
+    clock = answered_upgrade_clock(owner)
+    request = %{raw_websocket_request(peer.url, owner) | timeouts: Map.put(@held_timeouts, :upgrade_clock, clock)}
+    deadline_ms = @held_timeouts.connect_timeout_ms
 
     task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
+    # Deadline set, then the first receive's remaining time: nothing expired.
+    assert answer_upgrade_clock(0) == session
+    assert answer_upgrade_clock(0) == session
+
     assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
-                   @detection_timeout_ms
+                   @message_detection_timeout_ms
 
-    :erlang.suspend_process(session)
+    # The session folded the status line and asks for the remaining time of its
+    # next receive; it waits in the clock read until the test answers.
+    assert_receive {:upgrade_clock_read, ^session, read_ref}, @message_detection_timeout_ms
 
-    try do
-      send(peer_pid, :release_raw_upstream_websocket_upgrade)
+    send(peer_pid, :release_raw_upstream_websocket_upgrade)
 
-      assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :terminal_queued},
-                     @detection_timeout_ms
+    assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :terminal_queued},
+                   @message_detection_timeout_ms
 
-      await_test_timer(120)
-    after
-      :erlang.resume_process(session)
-    end
+    assert await_socket_data_delivered(session, System.monotonic_time(:millisecond) + @message_detection_timeout_ms)
 
-    assert {:ok, _result} = Task.await(task, @detection_timeout_ms)
-    assert_receive {:upstream_websocket_frame, _frame}, @detection_timeout_ms
+    send(session, {read_ref, deadline_ms + 1})
+
+    assert {:ok, _result} = Task.await(task, @message_detection_timeout_ms)
+    assert_receive {:upstream_websocket_frame, _frame}, @message_detection_timeout_ms
+    refute_received {:upgrade_clock_read, _reader, _ref}
   end
 
   test "queued nonterminal upgrade data folds once and then respects the expired deadline" do
@@ -6738,6 +6746,54 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       {conn, accumulated}
     else
       receive_mint_upgrade_until_done(conn, ref, deadline, accumulated)
+    end
+  end
+
+  # A clock for the test-only `:upgrade_clock` timeout: every read asks the
+  # test for the time and waits for its answer.
+  defp answered_upgrade_clock(test_pid) do
+    fn ->
+      ref = make_ref()
+      send(test_pid, {:upgrade_clock_read, self(), ref})
+
+      receive do
+        {^ref, now_ms} -> now_ms
+      after
+        @raw_peer_release_timeout_ms -> exit(:upgrade_clock_read_unanswered)
+      end
+    end
+  end
+
+  defp answer_upgrade_clock(now_ms) do
+    assert_receive {:upgrade_clock_read, reader, ref}, @message_detection_timeout_ms
+    send(reader, {ref, now_ms})
+    reader
+  end
+
+  # The peer has written the bytes; nothing signals their delivery to the
+  # session, so poll the session's upstream socket: after the session re-armed
+  # it (`active: :once`) for the status line, it turns passive only when the
+  # port has handed the next bytes to the session as a message.
+  # (`Process.info(session, :messages)` did not list that message while the
+  # session waited in the clock read, though its receive took it.)
+  defp await_socket_data_delivered(session, deadline) do
+    delivered? =
+      Enum.any?(Port.list(), fn port ->
+        Port.info(port, :connected) == {:connected, session} and :inet.getopts(port, [:active]) == {:ok, [active: false]}
+      end)
+
+    cond do
+      delivered? ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        receive do
+        after
+          1 -> await_socket_data_delivered(session, deadline)
+        end
     end
   end
 

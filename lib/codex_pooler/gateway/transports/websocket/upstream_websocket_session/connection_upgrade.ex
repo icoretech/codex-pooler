@@ -375,12 +375,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
 
   defp websocket_transport_opts(_target, timeouts), do: [timeout: timeouts.connect_timeout_ms]
 
+  # `timeouts` may carry a test-only `:upgrade_clock`, a zero-arity function
+  # returning monotonic milliseconds, read wherever the upgrade deadline is set
+  # or checked; runtime code never passes it and the monotonic clock is used
+  # (findings#206 row 206-320).
   defp await_upgrade(conn, ref, timeouts, request_caller) do
-    deadline = System.monotonic_time(:millisecond) + timeouts.connect_timeout_ms
+    clock = Map.get(timeouts, :upgrade_clock, &monotonic_ms/0)
+    deadline = {clock.() + timeouts.connect_timeout_ms, clock}
     await_upgrade(conn, ref, deadline, request_caller, %{status: nil, headers: []})
   end
 
-  defp await_upgrade(conn, ref, deadline, request_caller, response) do
+  defp monotonic_ms, do: System.monotonic_time(:millisecond)
+
+  defp await_upgrade(conn, ref, {deadline_ms, clock} = deadline, request_caller, response) do
     socket = mint_socket(conn)
     request_caller_pid = request_caller_pid(request_caller)
     request_caller_monitor = request_caller_monitor(request_caller)
@@ -408,7 +415,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
       {:ssl_error, ^socket, _reason} = message ->
         handle_upgrade_message(conn, ref, deadline, request_caller, response, message)
     after
-      max(deadline - System.monotonic_time(:millisecond), 0) ->
+      max(deadline_ms - clock.(), 0) ->
         {:error, :upstream_websocket_upgrade_timeout}
     end
   end
