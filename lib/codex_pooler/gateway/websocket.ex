@@ -902,27 +902,35 @@ defmodule CodexPooler.Gateway.Websocket do
   refused, was unreachable or predates the take-over; in that last case nothing
   changed and the request meets today's refusal.
   """
-  @spec take_over_inherited_websocket_owner_turn(CodexSession.t() | nil, String.t() | nil, map() | nil, opts()) ::
+  @spec take_over_inherited_websocket_owner_turn(CodexSession.t() | nil, String.t() | nil, map() | nil, opts(), <<_::256>> | nil) ::
           :taken_over | :unsettled | :not_taken_over
-  def take_over_inherited_websocket_owner_turn(%CodexSession{} = session, owner_lease_token, downstream, opts)
+  def take_over_inherited_websocket_owner_turn(session, owner_lease_token, downstream, opts, request_turn_digest \\ nil)
+
+  # `request_turn_digest` is the semantic turn of the request the socket is
+  # about to send: a resend of the inherited turn names it even when the owner
+  # could not key the turn it cancelled (findings#206 row 206-436), so both are
+  # waited on.
+  def take_over_inherited_websocket_owner_turn(%CodexSession{} = session, owner_lease_token, downstream, opts, request_turn_digest)
       when is_binary(owner_lease_token) and is_map(downstream) do
     opts = websocket_request_options(opts)
 
     case WebsocketOwnerForwarder.take_over_inherited_turn(session, owner_lease_token, downstream, owner_forwarder_opts(opts)) do
       {:ok, %{semantic_turn_digest: digest}} ->
-        input = %{pool_id: session.pool_id, api_key_id: session.api_key_id, semantic_turn_digest: digest}
-        await_inherited_turn_settled(input, System.monotonic_time(:millisecond) + @inherited_turn_settlement_budget_ms)
+        inputs =
+          for turn_digest <- Enum.uniq([digest, request_turn_digest]), is_binary(turn_digest) and byte_size(turn_digest) == 32, do: %{pool_id: session.pool_id, api_key_id: session.api_key_id, semantic_turn_digest: turn_digest}
+
+        await_inherited_turn_settled(inputs, System.monotonic_time(:millisecond) + @inherited_turn_settlement_budget_ms)
 
       {:error, _reason} ->
         :not_taken_over
     end
   end
 
-  def take_over_inherited_websocket_owner_turn(_session, _token, _downstream, _opts), do: :not_taken_over
+  def take_over_inherited_websocket_owner_turn(_session, _token, _downstream, _opts, _request_turn_digest), do: :not_taken_over
 
-  defp await_inherited_turn_settled(input, deadline_ms) do
+  defp await_inherited_turn_settled(inputs, deadline_ms) do
     cond do
-      not Accounting.replay_semantic_turn_in_flight?(input) ->
+      not Enum.any?(inputs, &Accounting.replay_semantic_turn_in_flight?/1) ->
         :taken_over
 
       System.monotonic_time(:millisecond) >= deadline_ms ->
@@ -930,7 +938,7 @@ defmodule CodexPooler.Gateway.Websocket do
 
       true ->
         Process.sleep(@inherited_turn_settlement_poll_ms)
-        await_inherited_turn_settled(input, deadline_ms)
+        await_inherited_turn_settled(inputs, deadline_ms)
     end
   end
 

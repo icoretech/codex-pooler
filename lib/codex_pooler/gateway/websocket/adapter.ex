@@ -109,8 +109,8 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   @spec cleanup_detached_owner_session(socket_state()) :: :ok
   def cleanup_detached_owner_session(state), do: DownstreamSession.cleanup_detached(state)
 
-  @spec take_over_inherited_owner_turn(socket_state()) :: :taken_over | :unsettled | :not_taken_over
-  def take_over_inherited_owner_turn(state), do: DownstreamSession.take_over_inherited_turn(state)
+  @spec take_over_inherited_owner_turn(socket_state(), <<_::256>> | nil) :: :taken_over | :unsettled | :not_taken_over
+  def take_over_inherited_owner_turn(state, request_turn_digest \\ nil), do: DownstreamSession.take_over_inherited_turn(state, request_turn_digest)
 
   @spec cancel_owner_turn(socket_state(), pid(), :owner_drained) :: :ok
   def cancel_owner_turn(state, owner_turn_id, reason) do

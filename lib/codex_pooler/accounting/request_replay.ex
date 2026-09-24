@@ -372,10 +372,13 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
   @doc """
   True while a turn of the key and Pool with this semantic digest is still
-  `in_progress` behind an open request: the state `preflight_snapshot/1` refuses
-  a same-turn post-visible resend for as `lifecycle_conflict`. A socket that
-  took over the turn it inherited waits on this before its request is judged
-  (findings#206 row 206-362).
+  `in_progress`: the state `preflight_snapshot/1` refuses a same-turn
+  post-visible resend for as `lifecycle_conflict`. A socket that took over the
+  turn it inherited waits on this before its request is judged (findings#206
+  row 206-362). The request row settles before its turn row, and a resend
+  judged in between closed that turn as orphaned instead of the
+  `client_disconnected` interruption a compaction's successor is chained to
+  (row 206-436), so the wait lasts until the turn row itself settled.
   """
   @spec semantic_turn_in_flight?(%{
           required(:pool_id) => Ecto.UUID.t(),
@@ -390,8 +393,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
         on: request.id == turn.request_id,
         where:
           request.pool_id == ^pool_id and request.api_key_id == ^api_key_id and
-            turn.semantic_turn_digest == ^digest and turn.status == "in_progress" and
-            request.status in ["accepted", "in_progress"]
+            turn.semantic_turn_digest == ^digest and turn.status == "in_progress"
     )
   end
 

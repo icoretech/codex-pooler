@@ -78,6 +78,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     end
   end
 
+  # The released client (Codex 0.156.1) retries a failed compaction stream on a
+  # new connection about 200 ms after the failure and again about 400 ms later,
+  # then falls back to HTTPS for the rest of its session. The Pooler's cleanup
+  # of the closed connection (its owner detach after a 250 ms drain, which the
+  # socket waits on for 100 ms only) can finish after that. Here it is held at
+  # its first query until the retries resolved, so the first websocket retry
+  # inherits, at its attach, a compaction whose socket already closed: with
+  # owner forwarding it takes that compaction over as its own close would and
+  # is served, where it used to be refused `409 duplicate_turn` and only the
+  # second retry was served (findings#206 row 206-436). In `observed_cut_exited`
+  # a first new connection inherits the compaction and drops before sending
+  # anything, its cleanup held too, and the owner has handled its exit when the
+  # retry attaches. The `unobserved_cut` arms above keep the refusal: there the
+  # compaction was handed on from a connection the Pooler has not seen close.
+  # With owner forwarding off (`direct_committed`: the direct topology on
+  # committed rows, so the held cleanup's transaction stalls no other
+  # connection; Full only, as the peer arms, since the Lite override commits an
+  # owner session) the retry carries the compaction's own claim; its claim waits,
+  # bounded, for the running request to settle, and the held cleanup is
+  # released once it waits. It used to be refused at once, twice, and the
+  # compaction was bought over HTTPS.
+  for {mode, shape} <- [{"full", :pre_turn}, {"lite", :pre_turn}, {"full", :mid_turn}],
+      topology <- [:forwarded, :peer, :direct_committed],
+      cut <- [:observed_cut, :observed_cut_exited],
+      mode == "full" or topology not in [:peer, :direct_committed],
+      shape == :pre_turn or cut == :observed_cut,
+      topology != :direct_committed or cut == :observed_cut do
+    @tag mode: mode, shape: shape, topology: topology, cut: cut
+    test "#{mode} #{shape} #{topology} admitted compaction #{cut} with the closed socket's cleanup held: the released client's first websocket retry is served",
+         %{mode: mode, shape: shape, topology: topology, cut: cut} do
+      assert run_scenario(mode, shape, topology, cut) == expected(cut, topology)
+    end
+  end
+
   for cut <- [:no_cut, :before_output, :after_output, :after_completion, :unobserved_cut] do
     @tag mode: "full", shape: :pre_turn, topology: :peer, cut: cut
     test "full pre_turn peer admitted compaction #{cut}: the released client's retries buy the compaction once per request and the turn completes",
@@ -90,6 +124,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   # admission order; `compaction_charges` lists each compaction request's
   # charges in the same order, so a request billed twice shows as a 2.
   defp expected(:unobserved_cut, topology), do: expected_unobserved(topology)
+  defp expected(cut, _topology) when cut in [:observed_cut, :observed_cut_exited], do: expected(:before_output)
   defp expected(cut, _topology), do: expected(cut)
 
   defp expected(:no_cut),
@@ -188,9 +223,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     }
 
   defp run_scenario(mode, shape, topology, cut) do
-    put_owner_forwarding!(topology != :direct)
+    put_owner_forwarding!(topology in [:forwarded, :peer])
     release_ref = make_ref()
-    ctx = %{mode: mode, shape: shape}
+    ctx = %{mode: mode, shape: shape, topology: topology}
 
     upstream = start_upstream(FakeUpstream.strict_sequence(upstream_sequence(ctx, cut, topology, release_ref)))
     setup = topology_setup!(topology, upstream)
@@ -230,6 +265,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     Map.put(setup, :peer_owner, start_peer_window_owner!(setup, @window_id))
   end
 
+  # Owner forwarding off on committed rows, like the peer topology's, so a held
+  # cleanup transaction holds its own connection only.
+  defp topology_setup!(:direct_committed, upstream) do
+    enter_peer_owner_topology!()
+    setup = gateway_setup(upstream, compact?: true)
+    register_unboxed_pool_cleanup!(setup)
+    setup
+  end
+
   defp topology_setup!(_topology, upstream), do: gateway_setup(upstream, compact?: true)
 
   defp cut_and_resend(:no_cut, ctx, client, _port, _upstream, _release_ref) do
@@ -258,6 +302,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
 
     retries = released_client_retries!(ctx, port, settle)
     if List.last(retries) == :served, do: settle.()
+    retries
+  end
+
+  defp cut_and_resend(cut, ctx, client, port, upstream, release_ref) when cut in [:observed_cut, :observed_cut_exited] do
+    await_barrier!(0, release_ref)
+    # The connection closes before the provider produced anything and the
+    # Pooler sees it close; its session cleanup is held.
+    hold = hold_session_cleanups!(if(cut == :observed_cut, do: 1, else: 2), ctx.topology)
+    Mint.HTTP.close(client.conn)
+    assert_receive {^hold, :held, cleanup}, @detection_timeout_ms
+    # The retries meet a predecessor that is still live.
+    assert Enum.any?(pool_requests(ctx.setup.pool.id), &(&1.endpoint == @compact_endpoint and &1.status == "in_progress"))
+    cleanups = [cleanup | if(cut == :observed_cut_exited, do: [drop_inheriting_connection!(ctx, port, hold)], else: [])]
+
+    release = fn ->
+      release_session_cleanups!(hold, cleanups)
+      await_compaction_settled!(ctx.setup.pool.id, ["succeeded", "failed"])
+    end
+
+    retries = released_client_retries!(ctx, port, release)
+    if List.last(retries) == :served, do: release.()
+    release_held_compaction!(upstream, release_ref, 1)
     retries
   end
 
@@ -518,6 +584,93 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     pool_requests(pool_id)
   end
 
+  # A new connection attaches and receives the running compaction, then drops
+  # before it sends anything; its cleanup is held as well, so the owner handles
+  # its exit (no downstream, the compaction still bound to it) before the retry
+  # attaches.
+  defp drop_inheriting_connection!(ctx, port, hold) do
+    owner = owner_pid!(ctx.setup)
+    inheriting = connect!(port, ctx.setup)
+    await!(fn -> match?(%{downstream: %{epoch: 2, active_turn_reconnect?: true}, active_turn: %{downstream: %{epoch: 2}}}, :sys.get_state(owner)) end, "the new connection never received the running compaction")
+    Mint.HTTP.close(inheriting.conn)
+    assert_receive {^hold, :held, cleanup}, @detection_timeout_ms
+    await!(fn -> match?(%{downstream: nil, active_turn: %{downstream: %{epoch: 2}}}, :sys.get_state(owner)) end, "the owner never handled the exit of the connection that received the compaction")
+    cleanup
+  end
+
+  defp owner_pid!(%{peer_owner: %{owner_pid: owner}}), do: owner
+
+  defp owner_pid!(setup) do
+    [session_id] = Repo.all(from(session in CodexSession, where: session.pool_id == ^setup.pool.id, select: session.id))
+    assert {:ok, owner} = WebsocketOwnerSession.lookup(session_id)
+    owner
+  end
+
+  # Holds the next `count` socket session cleanups that start from here on (the
+  # closed connections'; nothing else closes meanwhile) right after their first
+  # query made outside a transaction, whose connection is already back in the
+  # pool.
+  #
+  # With owner forwarding off the cleanup's first query opens the transaction
+  # that stops the direct task, so there it is held at that query (committed
+  # rows: the held connection stalls nobody else) and released as soon as a
+  # claim starts waiting for the running request (the claim's
+  # `live_predecessor_wait` event); nothing else releases it before the HTTPS
+  # fallback.
+  defp hold_session_cleanups!(count, topology) do
+    hold = make_ref()
+    held = :ets.new(:held_session_cleanups, [:public, :set])
+    handler_id = {__MODULE__, :session_cleanup_hold, hold}
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    config = %{hold: hold, test: self(), count: count, claimed: :atomics.new(1, []), held: held, any_query?: topology == :direct_committed}
+    :ok = :telemetry.attach(handler_id, [:codex_pooler, :repo, :query], &__MODULE__.hold_session_cleanup_query/4, config)
+
+    if topology == :direct_committed do
+      wait_handler_id = {__MODULE__, :claim_wait_release, hold}
+      on_exit(fn -> :telemetry.detach(wait_handler_id) end)
+      :ok = :telemetry.attach(wait_handler_id, [:codex_pooler, :accounting, :websocket_turn_claim, :live_predecessor_wait], &__MODULE__.release_on_claim_wait/4, config)
+    end
+
+    hold
+  end
+
+  @doc false
+  def release_on_claim_wait(_event, _measurements, _metadata, %{hold: hold, held: held}) do
+    for {cleanup} <- :ets.tab2list(held), do: send(cleanup, {hold, :release})
+    :ok
+  end
+
+  @doc false
+  def hold_session_cleanup_query(_event, _measurements, metadata, %{hold: hold, test: test, count: count, claimed: claimed, held: held, any_query?: any_query?}) do
+    if match?({CodexPoolerWeb.WebsocketControlPath, _function, _arity}, Process.get(:"$initial_call")) and (any_query? or (metadata[:query] not in ["begin", "commit"] and not Repo.in_transaction?())) and
+         is_nil(Process.get({__MODULE__, hold})) and :atomics.add_get(claimed, 1, 1) <= count do
+      Process.put({__MODULE__, hold}, :held)
+      :ets.insert(held, {self()})
+      send(test, {hold, :held, self()})
+
+      receive do
+        {^hold, :release} -> :ok
+      after
+        @detection_timeout_ms -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp release_session_cleanups!(hold, cleanups) do
+    :telemetry.detach({__MODULE__, :session_cleanup_hold, hold})
+    :telemetry.detach({__MODULE__, :claim_wait_release, hold})
+
+    for cleanup <- cleanups do
+      monitor = Process.monitor(cleanup)
+      send(cleanup, {hold, :release})
+      assert_receive {:DOWN, ^monitor, :process, ^cleanup, _reason}, @detection_timeout_ms
+    end
+
+    :ok
+  end
+
   defp await!(condition, message) do
     deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
 
@@ -580,7 +733,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   # The owner arms a forwarded admission after the terminal frame left it;
   # poll its authoritative state until it is armed for the attached socket.
   # The direct upstream session arms before its turn settles.
-  defp await_armed!(:direct, setup), do: await!(fn -> match?([%Request{status: "succeeded"}], pool_requests(setup.pool.id)) end, "the first turn never settled")
+  defp await_armed!(topology, setup) when topology in [:direct, :direct_committed], do: await!(fn -> match?([%Request{status: "succeeded"}], pool_requests(setup.pool.id)) end, "the first turn never settled")
 
   defp await_armed!(:peer, setup), do: await_owner_armed!(setup.peer_owner.owner_pid)
 

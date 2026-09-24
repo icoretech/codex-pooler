@@ -2539,7 +2539,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        )
        when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 do
     if WebsocketCodec.replay_eligible?(prepared) do
-      state = take_over_inherited_owner_turn(state)
+      state = take_over_inherited_owner_turn(state, semantic_turn_key)
 
       with {:ok, intent} <- Service.prepare_replay_intent(state.auth, prepared),
            {:ok, prepared} <- rebind_replay_claim(prepared, intent) do
@@ -2572,11 +2572,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # would, the predecessor settles, and the request is judged against settled
   # state. An owner that refuses or predates the take-over leaves everything as
   # it was, and the request meets the refusal it always met. A pre-visible
-  # inherited turn is not taken over: its same-turn resend reattaches to it.
-  defp take_over_inherited_owner_turn(state) do
+  # inherited turn is not taken over when a replay serves its same-turn resend;
+  # one no replay serves (a native compaction) is, when the socket it came from
+  # had already closed (findings#206 row 206-436). The wait covers this
+  # request's own semantic turn too, which is the one a resend of that turn
+  # carries even when the owner could not key the turn it cancelled.
+  defp take_over_inherited_owner_turn(state, semantic_turn_key) do
     if Map.get(state, :websocket_owner_active_turn_reconnect?, false) and
          not is_map(Map.get(state, :websocket_owner_pending_handoff)) do
-      case Adapter.take_over_inherited_owner_turn(state) do
+      case Adapter.take_over_inherited_owner_turn(state, semantic_turn_key) do
         :not_taken_over ->
           state
 

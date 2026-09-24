@@ -102,6 +102,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :forwarded_send_witness,
     :compaction_retry_submit_hold,
     :closed_downstream,
+    :closing_downstream,
+    :closed_inheritance,
     terminal_delivery_timeout_ms: @terminal_delivery_timeout_ms,
     provisional_issuances: [],
     pending_admissions: %{},
@@ -428,6 +430,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   `client_disconnected` through its submitter exactly as after the close. The
   answer carries the turn's semantic digest so the caller can wait for that
   settlement. Anything else answers an error and changes nothing.
+
+  A turn that has shown nothing yet and that no replay serves (a native
+  compaction is never armed for replay) is taken over the same way when this
+  downstream inherited it from a socket that had already closed: one that
+  announced its close (`detach_previsible_downstream/2`) or whose exit the
+  owner had handled. That socket's own detach cancels the turn only when its
+  cleanup gets there, and the released client retries on a new connection
+  about 200 ms after the cut, so the retry met the running turn and was
+  refused until its own close cancelled it (findings#206 row 206-436).
   """
   @spec take_over_inherited_turn(GenServer.server(), downstream()) ::
           {:ok, %{semantic_turn_digest: <<_::256>>}} | {:error, WebsocketOwnerContract.owner_error()}
@@ -1727,7 +1738,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       _not_replay_active ->
         if idle_closing_downstream?(state, requested_downstream),
           do: detach_idle_closing_downstream(state, requested_downstream),
-          else: {:reply, :not_previsible, state}
+          else: {:reply, :not_previsible, mark_closing_downstream(state, requested_downstream)}
     end
   end
 
@@ -1793,7 +1804,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_call({:take_over_inherited_turn, pid, epoch, correlation_id}, _from, state) do
     downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
 
-    case inherited_visible_turn(state, downstream) do
+    case inherited_turn(state, downstream) do
       {:ok, semantic_turn_digest} ->
         state =
           state
@@ -3047,6 +3058,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     downstream =
       Map.put(downstream, :active_turn_reconnect?, DownstreamState.active_turn?(state))
 
+    closed_inheritance = if inherits_from_closed_downstream?(state), do: Map.take(downstream, @restore_downstream_keys)
+
     state =
       case state.active_turn do
         %{descriptor: %{downstream_status: :lost}} -> state
@@ -3058,8 +3071,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
        state
        | downstream: downstream,
          downstream_monitor: monitor,
-         downstream_epoch: downstream.epoch
+         downstream_epoch: downstream.epoch,
+         closed_inheritance: closed_inheritance
      }}
+  end
+
+  # The attach hands the running turn to the new socket, and the socket it
+  # replaces had already closed: it announced its close before its drain
+  # (`closing_downstream`), or the owner had handled its exit (no downstream).
+  defp inherits_from_closed_downstream?(%{active_turn: %{descriptor: %{downstream_status: :lost}}}), do: false
+
+  defp inherits_from_closed_downstream?(%{active_turn: active_turn} = state) when is_map(active_turn),
+    do: not Map.has_key?(active_turn, :canceled_result) and (is_nil(state.downstream) or DownstreamState.downstream_status(state.closing_downstream, state.downstream) == :active)
+
+  defp inherits_from_closed_downstream?(_state), do: false
+
+  # A socket whose turn the owner still runs announces its close before its
+  # 250 ms response-task drain; its ordinary detach comes only from its session
+  # cleanup after that drain, which it waits on for 100 ms only (lease reads,
+  # the owner call, the interrupt write).
+  defp mark_closing_downstream(state, requested_downstream) do
+    if DownstreamState.downstream_status(state.downstream, requested_downstream) == :active and is_map(state.active_turn),
+      do: %{state | closing_downstream: Map.take(requested_downstream, @restore_downstream_keys)},
+      else: state
   end
 
   # A socket that attaches while another is still attached replaces it without
@@ -4587,24 +4621,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   # The turn a socket received through its attach (the attach's
-  # `active_turn_reconnect?`), already visible, still streaming to that socket,
-  # an ordinary relayed native turn with no terminal and nothing half-handed
-  # over. A pre-visible turn is left to its replay reattach, and a compaction or
-  # collected delivery to its own lifecycle.
-  defp inherited_visible_turn(%{draining?: true}, _requested_downstream), do: {:error, :owner_drained}
+  # `active_turn_reconnect?`), still bound to that socket, a native turn with no
+  # terminal and nothing half-handed over: either already visible (an ordinary
+  # relayed turn, findings#206 row 206-362), or showing nothing yet with no
+  # replay to serve its resend (a native compaction), inherited from a socket
+  # that had already closed (row 206-436). A pre-visible turn a replay serves is
+  # left to that replay (the attach hands such a socket only a candidate, and a
+  # lost turn stays detached); a turn taken from a socket that has not closed,
+  # and a visible compaction or collected delivery, keep their own lifecycle.
+  defp inherited_turn(%{draining?: true}, _requested_downstream), do: {:error, :owner_drained}
 
-  defp inherited_visible_turn(state, requested_downstream) do
+  defp inherited_turn(state, requested_downstream) do
     with :active <- DownstreamState.cancellation_status(state, requested_downstream),
          %{active_turn_reconnect?: true} <- state.downstream,
-         %{
-           visible_output?: true,
-           collect?: false,
-           admission_phase: nil,
-           terminal_forwarded?: false,
-           pending_result: nil,
-           descriptor: %{kind: :native, semantic_turn_key: semantic_turn_key}
-         } = active_turn
-         when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 <- state.active_turn,
+         %{terminal_forwarded?: false, pending_result: nil} = active_turn <- state.active_turn,
+         {:ok, semantic_turn_key} <- inherited_turn_key(state, active_turn, requested_downstream),
          true <- not Map.has_key?(active_turn, :canceled_result),
          nil <- state.pending_handoff,
          nil <- state.compaction_retry_submit_hold do
@@ -4614,6 +4645,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       _not_inherited -> {:error, :owner_busy}
     end
   end
+
+  # A turn submitted without a preflight descriptor (a compaction dispatched on
+  # its admission) keeps `:unknown` when the owner could not key its upstream
+  # body; the socket then waits on its own request's semantic turn, which is
+  # the one a resend of that turn carries, so the answer names no turn.
+  @unknown_turn_key <<0::256>>
+
+  defp inherited_turn_key(_state, %{visible_output?: true, collect?: false, admission_phase: nil, descriptor: %{kind: :native, semantic_turn_key: key}}, _requested_downstream)
+       when is_binary(key) and byte_size(key) == 32,
+       do: {:ok, key}
+
+  defp inherited_turn_key(state, %{visible_output?: false, descriptor: descriptor}, requested_downstream) do
+    if DownstreamState.downstream_status(state.closed_inheritance, requested_downstream) == :active and not replay_active?(state, requested_downstream) do
+      case descriptor do
+        %{kind: :native, semantic_turn_key: key} when is_binary(key) and byte_size(key) == 32 -> {:ok, key}
+        :unknown -> {:ok, @unknown_turn_key}
+        _public_or_other -> :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp inherited_turn_key(_state, _active_turn, _requested_downstream), do: :error
 
   defp detach_active_downstream(state, requested_downstream) do
     state =

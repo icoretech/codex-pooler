@@ -482,13 +482,14 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     end
   end
 
-  @spec take_over_inherited_turn(socket_state()) :: :taken_over | :unsettled | :not_taken_over
-  def take_over_inherited_turn(state) do
+  @spec take_over_inherited_turn(socket_state(), <<_::256>> | nil) :: :taken_over | :unsettled | :not_taken_over
+  def take_over_inherited_turn(state, request_turn_digest \\ nil) do
     Websocket.take_over_inherited_websocket_owner_turn(
       Map.get(state, :codex_session),
       Map.get(state, :websocket_owner_lease_token),
       Map.get(state, :websocket_owner_downstream),
-      Map.get(state, :opts, %{})
+      Map.get(state, :opts, %{}),
+      request_turn_digest
     )
   end
 

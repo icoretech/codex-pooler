@@ -56,7 +56,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       true ->
         case do_claim_websocket_turn(pool, api_key, model, opts, nil) do
           {:error, %{code: :duplicate_request}} ->
-            claim_failed_predecessor_resend(pool, api_key, model, opts)
+            pool
+            |> claim_failed_predecessor_resend(api_key, model, opts)
+            |> retry_after_live_claim_holder(pool, api_key, model, opts)
 
           result ->
             result
@@ -78,8 +80,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # a predecessor still live at the bound (its socket's close not seen yet) is
   # refused before anything is written, as the `409 duplicate_turn` a
   # byte-identical resend of a running request already gets. A resend carrying
-  # the running request's own claim keeps that immediate refusal. Nothing waits
-  # inside a caller's transaction.
+  # the running request's own claim waits the same way once the resend policy
+  # found that request still running (`retry_after_live_claim_holder/5`).
+  # Nothing waits inside a caller's transaction.
   @live_predecessor_wait_budget_ms 1_000
   @live_predecessor_poll_ms 20
 
@@ -95,9 +98,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           outcome =
             if Repo.in_transaction?(),
               do: :live,
-              else: poll_live_semantic_predecessor(scope, started_ms + @live_predecessor_wait_budget_ms)
+              else: poll_live_predecessor(&live_semantic_predecessor?/1, scope, started_ms + @live_predecessor_wait_budget_ms, :other_claim)
 
-          log_live_predecessor_wait(scope, outcome, System.monotonic_time(:millisecond) - started_ms)
+          log_live_predecessor_wait(scope, outcome, System.monotonic_time(:millisecond) - started_ms, :other_claim)
           outcome
         else
           :none
@@ -115,9 +118,50 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     end
   end
 
-  defp poll_live_semantic_predecessor(scope, deadline_ms) do
+  # The released client resends a request only after the connection that carried
+  # it failed: after about 200 ms on a new connection, then about 400 ms later,
+  # then over HTTPS for the rest of its session. A native compaction is resent
+  # under its own compaction claim, the running request's claim, so it met the
+  # immediate refusal whenever the closed socket's cleanup (a 250 ms drain, then
+  # the stop and its settlement) was still running: both websocket resends were
+  # refused `409 duplicate_turn` and the session moved to HTTPS (findings#206
+  # row 206-436, owner forwarding off). The resend policy's `active_predecessor`
+  # refusal therefore waits for that request with the same bound and asks the
+  # policy once more; a request still running at the bound (its socket's close
+  # not seen yet) keeps the refusal.
+  defp retry_after_live_claim_holder({:error, %{resend_disposition: :active_predecessor}} = refused, pool, api_key, model, opts) do
+    case await_live_claim_holder(opts) do
+      :settled -> claim_failed_predecessor_resend(pool, api_key, model, opts)
+      _live_or_none -> refused
+    end
+  end
+
+  defp retry_after_live_claim_holder(result, _pool, _api_key, _model, _opts), do: result
+
+  defp await_live_claim_holder(opts) do
+    with %{} = scope <- live_predecessor_scope(opts),
+         false <- Repo.in_transaction?(),
+         true <- live_semantic_turn?(scope) do
+      started_ms = System.monotonic_time(:millisecond)
+      outcome = poll_live_predecessor(&live_semantic_turn?/1, scope, started_ms + @live_predecessor_wait_budget_ms, :same_claim)
+      log_live_predecessor_wait(scope, outcome, System.monotonic_time(:millisecond) - started_ms, :same_claim)
+      outcome
+    else
+      _no_scope_or_not_live -> :none
+    end
+  end
+
+  # `[:codex_pooler, :accounting, :websocket_turn_claim, :live_predecessor_wait]`
+  # marks the start of a wait, so a test can hold the predecessor's settlement
+  # until the claim is waiting on it.
+  defp poll_live_predecessor(live?, scope, deadline_ms, claim_relation) do
+    :telemetry.execute([:codex_pooler, :accounting, :websocket_turn_claim, :live_predecessor_wait], %{count: 1}, %{claim_relation: claim_relation})
+    do_poll_live_predecessor(live?, scope, deadline_ms)
+  end
+
+  defp do_poll_live_predecessor(live?, scope, deadline_ms) do
     cond do
-      not live_semantic_predecessor?(scope) ->
+      not live?.(scope) ->
         :settled
 
       System.monotonic_time(:millisecond) >= deadline_ms ->
@@ -125,7 +169,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
       true ->
         Process.sleep(@live_predecessor_poll_ms)
-        poll_live_semantic_predecessor(scope, deadline_ms)
+        do_poll_live_predecessor(live?, scope, deadline_ms)
     end
   end
 
@@ -142,12 +186,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     )
   end
 
-  defp log_live_predecessor_wait(scope, outcome, waited_ms) do
+  # The running request of this turn whatever claim it holds, this one included.
+  defp live_semantic_turn?(scope) do
+    Repo.exists?(
+      from turn in CodexTurn,
+        join: request in Request,
+        on: request.id == turn.request_id,
+        where:
+          turn.codex_session_id == ^scope.codex_session_id and turn.semantic_turn_digest == ^scope.semantic_turn_digest and
+            turn.status == "in_progress" and request.status in ["accepted", "in_progress"]
+    )
+  end
+
+  defp log_live_predecessor_wait(scope, outcome, waited_ms, claim_relation) do
     require Logger
 
     Logger.info(
       "websocket turn claim met a live predecessor of the same turn " <>
-        "codex_session_id=#{scope.codex_session_id} outcome=#{outcome} waited_ms=#{waited_ms}"
+        "codex_session_id=#{scope.codex_session_id} outcome=#{outcome} waited_ms=#{waited_ms} claim_relation=#{claim_relation}"
     )
   end
 
