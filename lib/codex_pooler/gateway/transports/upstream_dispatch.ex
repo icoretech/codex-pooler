@@ -287,6 +287,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   # alias share one provider session. The released Codex client always sends
   # `session-id` (equal to its `prompt_cache_key` for a root agent), so it
   # never reaches the derivation (findings#206 row 206-557).
+  #
+  # Precedence: a usable client `session-id`, then the `prompt_cache_key`
+  # derivation, then a derivation from the accepted local continuity alias
+  # (`continuity.session_header`, whichever of `session_id`, `x-session-id`,
+  # `x-session-affinity`, `x-codex-session-id`, `x-codex-conversation-id` or
+  # `x-codex-window-id` keyed the local session) under its own Pool- and
+  # key-scoped namespace. The alias rung serves clients that name their
+  # conversation with an alias and send no `prompt_cache_key` at all, such as
+  # cline's `openai-codex` provider (findings#206 row 206-606). Neither the
+  # alias nor the derived value is ever logged or stored.
   @doc false
   @spec regular_runtime_forwarded_metadata_headers(RequestOptions.t(), map() | nil) ::
           [header()]
@@ -305,7 +315,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
     if List.keymember?(forwarded, "session-id", 0),
       do: forwarded,
-      else: forwarded ++ prompt_cache_session_header(request_options, payload)
+      else: forwarded ++ derived_native_session_header(request_options, payload)
   end
 
   # Public `/v1` origin: the client's continuity headers stay local, and the
@@ -341,6 +351,23 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp prompt_cache_session_header(%RequestOptions{}, _payload), do: []
+
+  defp derived_native_session_header(%RequestOptions{} = request_options, payload) do
+    case prompt_cache_session_header(request_options, payload) do
+      [] -> continuity_alias_session_header(request_options)
+      header -> header
+    end
+  end
+
+  defp continuity_alias_session_header(%RequestOptions{continuity: %{session_header: alias}} = request_options)
+       when is_binary(alias) do
+    case TransportEnvelope.continuity_alias_session_id(prompt_cache_tenant_scope(request_options), alias) do
+      session_id when is_binary(session_id) -> forwarded_metadata_header("session-id", session_id)
+      nil -> []
+    end
+  end
+
+  defp continuity_alias_session_header(%RequestOptions{}), do: []
 
   defp prompt_cache_tenant_scope(%RequestOptions{runtime: %{tenant_scope: scope}}), do: scope
   defp prompt_cache_tenant_scope(%RequestOptions{}), do: nil

@@ -6,7 +6,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPromptCacheSessionIdTest do
   `prompt_cache_key`, so consecutive full-history HTTP turns of a client that
   names its conversation only through a Pooler-local alias (`session_id`,
   `x-session-id` and the like) reach the replica holding the warm prompt
-  cache. A client `session-id` is forwarded unchanged, the alias still keys
+  cache. When the request carries no usable `prompt_cache_key` either (cline's
+  `openai-codex` provider sends none), the provider `session-id` derives from
+  the alias itself under its own Pool- and key-scoped namespace (findings#206
+  row 206-606). A client `session-id` is forwarded unchanged, the alias still keys
   the local CodexSession, the native websocket handshake keeps forwarding only
   what the upgrade carried, and the derived value is never stored or logged
   (findings#206 row 206-557).
@@ -195,7 +198,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPromptCacheSessionIdTest do
   end
 
   @tag :provider_session_headers
-  test "no session-id is derived without a usable prompt_cache_key, and two API keys never share one",
+  test "without a usable prompt_cache_key the alias is the source, without either nothing is sent, and two API keys never share one",
        %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(json_response_body("resp_native_key_scope")))
     setup = gateway_setup(upstream, compact?: true)
@@ -209,28 +212,103 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPromptCacheSessionIdTest do
       |> post("/backend-api/codex/responses", Map.delete(native_payload(setup, @cache_key), "prompt_cache_key")),
       build_conn()
       |> auth(setup)
-      |> put_req_header("session_id", "alias-with-overlong-cache-key")
-      |> post("/backend-api/codex/responses", native_payload(setup, String.duplicate("k", 513))),
+      |> put_req_header("x-session-id", "alias-with-overlong-cache-key")
+      |> post("/backend-api/codex/responses/compact", native_payload(setup, String.duplicate("k", 513))),
+      build_conn()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", Map.delete(native_payload(setup, @cache_key), "prompt_cache_key")),
       build_conn()
       |> auth(setup)
       |> post("/backend-api/codex/responses", native_payload(setup, "default")),
       build_conn()
       |> auth(other_key)
-      |> post("/backend-api/codex/responses", native_payload(setup, "default"))
+      |> post("/backend-api/codex/responses", native_payload(setup, "default")),
+      build_conn()
+      |> auth(other_key)
+      |> put_req_header("session_id", "alias-without-cache-key")
+      |> post("/backend-api/codex/responses", Map.delete(native_payload(setup, @cache_key), "prompt_cache_key"))
     ]
 
     assert Enum.all?(responses, &(&1.status == 200))
 
     this_key = session_id(setup, "default")
     that_key = session_id(other_key, "default")
-    assert is_binary(this_key) and is_binary(that_key) and this_key != that_key
+    this_alias = alias_session_id(setup, "alias-without-cache-key")
+    that_alias = alias_session_id(other_key, "alias-without-cache-key")
+    derived = [this_key, that_key, this_alias, that_alias, alias_session_id(setup, "alias-with-overlong-cache-key")]
+    assert Enum.all?(derived, &is_binary/1)
+    assert Enum.uniq(derived) == derived
 
     assert Enum.map(FakeUpstream.requests(upstream), &Map.new(&1.headers)["session-id"]) == [
-             nil,
+             this_alias,
+             alias_session_id(setup, "alias-with-overlong-cache-key"),
              nil,
              this_key,
-             that_key
+             that_key,
+             that_alias
            ]
+  end
+
+  for mode <- ["full", "lite"] do
+    @tag :provider_session_headers
+    test "a cline-shaped client with only a session_id alias and no prompt_cache_key sends one alias-derived session-id on both turns in #{mode}",
+         %{conn: conn} do
+      # provenance: cline `openai-codex` provider (sdk/packages/llms/src/providers/request-headers.ts
+      # buildOpenAICodexRequestHeaders; recorded request body in its provider VCR): headers
+      # originator, session_id (the task id), User-Agent; body without prompt_cache_key. Values invented.
+      upstream =
+        start_upstream(FakeUpstream.strict_sequence([completed_sse("resp_cline_turn_1"), completed_sse("resp_cline_turn_2")]))
+
+      setup = gateway_setup(upstream, compact?: false)
+
+      BackendCodexWebsocketSupport.set_model_serving_mode!(
+        BackendCodexWebsocketSupport.model_serving_scope(),
+        setup,
+        unquote(mode)
+      )
+
+      task_id = "cline-task-fixture-#{System.unique_integer([:positive])}"
+      expected = alias_session_id(setup, task_id)
+      assert is_binary(expected)
+      # A distinct namespace: the same text as a prompt_cache_key never gives the same id.
+      refute expected == session_id(setup, task_id)
+
+      {responses, logs} =
+        with_log(fn ->
+          for {text, c} <- [{"cline turn one", conn}, {"cline turn two", build_conn()}] do
+            c
+            |> auth(setup)
+            |> put_req_header("originator", "cline")
+            |> put_req_header("session_id", task_id)
+            |> put_req_header("user-agent", "Cline/1.0.0")
+            |> post("/backend-api/codex/responses", %{
+              "model" => setup.model.exposed_model_id,
+              "instructions" => "You are a concise assistant.",
+              "input" => native_text_input(text),
+              "include" => ["reasoning.encrypted_content"],
+              "store" => false,
+              "stream" => true
+            })
+          end
+        end)
+
+      assert Enum.all?(responses, &(&1.status == 200))
+      assert [turn_1, turn_2] = FakeUpstream.requests(upstream)
+
+      for captured <- [turn_1, turn_2] do
+        headers = Map.new(captured.headers)
+        assert headers["session-id"] == expected
+        refute Map.has_key?(headers, "session_id")
+        refute Enum.any?(captured.headers, fn {_name, value} -> value == task_id end)
+        refute Map.has_key?(captured.json, "prompt_cache_key")
+
+        assert headers[@lite_header] == if(unquote(mode) == "lite", do: "true", else: nil)
+      end
+
+      assert %CodexSession{} = Repo.get_by(CodexSession, session_key: task_id)
+      refute Repo.get_by(CodexSession, session_key: expected)
+      assert_session_id_absent_from_evidence!(expected, responses, logs)
+    end
   end
 
   @tag :provider_session_headers
@@ -287,6 +365,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPromptCacheSessionIdTest do
     TransportEnvelope.prompt_cache_session_id(
       %{pool_id: tenant.pool.id, api_key_id: tenant.api_key.id},
       cache_key
+    )
+  end
+
+  defp alias_session_id(tenant, alias) do
+    TransportEnvelope.continuity_alias_session_id(
+      %{pool_id: tenant.pool.id, api_key_id: tenant.api_key.id},
+      alias
     )
   end
 

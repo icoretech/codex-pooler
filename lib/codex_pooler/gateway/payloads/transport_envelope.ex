@@ -76,6 +76,20 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
                                         )
   @prompt_cache_session_key_max_bytes 512
 
+  # Fixed namespace for the `session-id` the Pooler synthesizes on native
+  # Codex-backend HTTP routes from the accepted local continuity alias
+  # (`session_id`, `x-session-id` and the others) when the request carries
+  # neither a usable client `session-id` nor a `prompt_cache_key`. A distinct
+  # namespace, so an alias and a `prompt_cache_key` with the same text never
+  # yield the same id. UUID v5 of the RFC 4122 URL namespace over
+  # `https://github.com/icoretech/codex-pooler/backend-api/continuity-alias/session-id`.
+  # Never change it, for the same reason as the one above.
+  @continuity_alias_session_namespace "60a80f24-3dd3-5aeb-be77-26ea7c41d36f"
+  @continuity_alias_session_namespace_bytes Base.decode16!(
+                                              String.replace(@continuity_alias_session_namespace, "-", ""),
+                                              case: :lower
+                                            )
+
   @type timeout_settings :: %{
           required(:connect_timeout_ms) => non_neg_integer(),
           required(:pool_timeout_ms) => non_neg_integer(),
@@ -265,14 +279,36 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   summaries.
   """
   @spec prompt_cache_session_id(term(), term()) :: String.t() | nil
-  def prompt_cache_session_id(%{pool_id: pool_id, api_key_id: api_key_id}, key)
-      when is_binary(pool_id) and byte_size(pool_id) > 0 and is_binary(api_key_id) and
-             byte_size(api_key_id) > 0 and is_binary(key) and
-             byte_size(key) in 1..@prompt_cache_session_key_max_bytes do
+  def prompt_cache_session_id(scope, key),
+    do: scoped_session_id(@prompt_cache_session_namespace_bytes, scope, key)
+
+  @doc """
+  The fixed namespace UUID behind `continuity_alias_session_id/2`.
+  """
+  @spec continuity_alias_session_namespace() :: String.t()
+  def continuity_alias_session_namespace, do: @continuity_alias_session_namespace
+
+  @doc """
+  The provider `session-id` synthesized for a native Codex-backend HTTP or
+  compact request from its accepted local continuity alias, when the request
+  carries neither a usable client `session-id` nor a `prompt_cache_key`
+  (findings#206 row 206-606). Same construction, scope, bounds and privacy
+  rules as `prompt_cache_session_id/2`, under its own namespace: the alias is
+  a client-local identifier with no tenant scope, so only this scoped digest
+  of it ever reaches the provider, never the alias itself.
+  """
+  @spec continuity_alias_session_id(term(), term()) :: String.t() | nil
+  def continuity_alias_session_id(scope, alias),
+    do: scoped_session_id(@continuity_alias_session_namespace_bytes, scope, alias)
+
+  defp scoped_session_id(namespace_bytes, %{pool_id: pool_id, api_key_id: api_key_id}, key)
+       when is_binary(pool_id) and byte_size(pool_id) > 0 and is_binary(api_key_id) and
+              byte_size(api_key_id) > 0 and is_binary(key) and
+              byte_size(key) in 1..@prompt_cache_session_key_max_bytes do
     name = [netstring(pool_id), netstring(api_key_id), key]
 
     <<time_low::32, time_mid::16, time_hi::16, clock_seq::16, node::48, _rest::binary>> =
-      :crypto.hash(:sha, [@prompt_cache_session_namespace_bytes, name])
+      :crypto.hash(:sha, [namespace_bytes, name])
 
     time_hi = Bitwise.bor(Bitwise.band(time_hi, 0x0FFF), 0x5000)
     clock_seq = Bitwise.bor(Bitwise.band(clock_seq, 0x3FFF), 0x8000)
@@ -287,7 +323,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
     |> IO.iodata_to_binary()
   end
 
-  def prompt_cache_session_id(_scope, _key), do: nil
+  defp scoped_session_id(_namespace_bytes, _scope, _key), do: nil
 
   defp netstring(value), do: [Integer.to_string(byte_size(value)), ":", value, ","]
 

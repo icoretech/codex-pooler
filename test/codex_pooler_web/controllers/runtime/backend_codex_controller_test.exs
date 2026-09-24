@@ -51,6 +51,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
@@ -5506,7 +5507,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     for captured <- [first_upstream_request, second_upstream_request] do
       captured_headers = Map.new(captured.headers)
 
-      refute Map.has_key?(captured_headers, "session-id")
+      # The alias stays local; the provider gets only its Pool- and
+      # key-scoped digest, since the body has no prompt_cache_key
+      # (findings#206 row 206-606).
+      assert captured_headers["session-id"] == continuity_alias_session_id(setup, session_header)
+      refute captured_headers["session-id"] == session_header
       refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
     end
@@ -5567,7 +5572,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     for captured <- [first_upstream_request, second_upstream_request] do
       captured_headers = Map.new(captured.headers)
 
-      refute Map.has_key?(captured_headers, "session-id")
+      # The alias stays local; the provider gets only its Pool- and
+      # key-scoped digest, since the body has no prompt_cache_key
+      # (findings#206 row 206-606).
+      assert captured_headers["session-id"] == continuity_alias_session_id(setup, session_header)
+      refute captured_headers["session-id"] == session_header
       refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
     end
@@ -12666,13 +12675,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     for {captured, forwarded_session_id} <-
           Enum.zip(
             [first_upstream_request, second_upstream_request, third_upstream_request],
-            [session_id_header, nil, nil]
+            [
+              session_id_header,
+              continuity_alias_session_id(setup, x_session_id_header),
+              continuity_alias_session_id(setup, affinity_header)
+            ]
           ) do
       assert captured.path == "/backend-api/codex/responses/compact"
       captured_headers = Map.new(captured.headers)
 
       # Only a non-blank client session-id is forwarded as the provider's
-      # sticky-routing key; blank values and Pooler-local headers stay local.
+      # sticky-routing key; blank values and Pooler-local headers stay local,
+      # and a Pooler-local alias reaches the provider only as its scoped digest
+      # (findings#206 row 206-606).
       assert Map.get(captured_headers, "session-id") == forwarded_session_id
       refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
@@ -16739,5 +16754,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
       if is_binary(decoded["type"]), do: [decoded], else: []
     end)
+  end
+
+  defp continuity_alias_session_id(setup, alias) do
+    TransportEnvelope.continuity_alias_session_id(%{pool_id: setup.pool.id, api_key_id: setup.api_key.id}, alias)
   end
 end
