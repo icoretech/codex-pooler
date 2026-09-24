@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.{NativeCompactionAdmission, WebsocketOwnerSession}
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
 
   # A client cut during an admitted anchored native compaction (findings#206
   # row 206-310). The released client (Codex 0.156.1, observed on the wire in
@@ -321,25 +322,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   end
 
   # One websocket retry: a new connection and the same compaction as full
-  # history; when it is served the turn continues on that connection.
+  # history; when it is served the turn continues on that connection. The
+  # released client waits about 200 ms before its next retry, and what that
+  # retry meets depends on the closed connection's session cleanup (its owner
+  # detach): the next retry is sent once that cleanup finished, not the moment
+  # the connection closed. Sent at once, it met the live predecessor whenever
+  # the cleanup outlasted the socket's 100 ms yield (findings#206 row 206-425).
   defp full_history_resend!(ctx, port) do
+    cleanups = WebsocketCleanupFence.listener_socket_cleanups()
     client = connect!(port, ctx.setup)
 
-    try do
-      client = send_frame!(client, full_history_compaction_frame(ctx))
+    outcome =
+      try do
+        client = send_frame!(client, full_history_compaction_frame(ctx))
 
-      case receive_frame!(client) do
-        {_client, %{"type" => "error", "status" => status, "error" => %{"code" => code}}} ->
-          {status, code}
+        case receive_frame!(client) do
+          {_client, %{"type" => "error", "status" => status, "error" => %{"code" => code}}} ->
+            {status, code}
 
-        {client, %{"type" => "response.output_item.done"}} ->
-          {client, ["response.completed"]} = receive_until_terminal(client, [])
-          client |> send_frame!(resume_frame(ctx, "resend")) |> ordinary_turn!()
-          :served
+          {client, %{"type" => "response.output_item.done"}} ->
+            {client, ["response.completed"]} = receive_until_terminal(client, [])
+            client |> send_frame!(resume_frame(ctx, "resend")) |> ordinary_turn!()
+            :served
+        end
+      after
+        Mint.HTTP.close(client.conn)
       end
-    after
-      Mint.HTTP.close(client.conn)
-    end
+
+    :ok = WebsocketCleanupFence.await_listener_socket_cleanups!(cleanups + 1)
+    outcome
   end
 
   defp https_retries!(_ctx, 0, outcomes), do: Enum.reverse(outcomes)

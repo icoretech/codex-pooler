@@ -1,7 +1,31 @@
 defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFence do
   @moduledoc """
-  Holds a test's teardown until every websocket termination cleanup it caused
-  has finished.
+  Holds a test's teardown until the sockets of the listeners it registered
+  have terminated and every session cleanup it saw deferred has finished.
+
+  That is narrower than "every cleanup the test caused" (findings#206 row
+  206-405). A cleanup is recorded only once its socket emits the
+  `cleanup_deferred` failure while the fence's handlers are attached, and a
+  socket is waited for only when a registered listener started it. The fence
+  therefore does not see:
+
+  - a socket of a listener that was never registered with `install!/1`
+    (`server:`) and is still inside the 100 ms yield of `terminate/2` when the
+    callback checks;
+  - a cleanup deferred before `install!/1` or after the callback detached its
+    handlers, such as one set off by an `on_exit` callback registered before
+    the fence (those run after it);
+  - a socket whose client outlives the 15 s budget, which is left to the
+    listener's own shutdown.
+
+  The handlers are global, so a cleanup another test deferred in the same
+  window is recorded and waited for too.
+
+  `await_session_cleanups!/0` is the barrier behind it: it waits for every
+  session cleanup task running when it is called, whoever started it, and
+  `DataCase.stop_sandbox/2` calls it in every test before the sandbox owner
+  stops, so these cleanups still finish under a live owner. The fence is still needed for the order of teardown and for its log
+  handling, which are described below.
 
   `CodexResponsesSocket.terminate/2` runs its owner or direct cleanup in a
   supervised task and waits for it only `WebsocketControlPath`'s 100 ms; a
@@ -318,6 +342,54 @@ defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFence do
       end
     after
       :telemetry.detach(handler_id)
+    end
+  end
+
+  @doc """
+  Counts the sockets of the calling test's registered listeners whose session
+  cleanup has finished (`cleanup_finished` with the socket as `caller`).
+
+  A wire socket's cleanup runs in its own process, after the client closed
+  it; read this before the socket that is about to close was opened, and wait
+  for one more with `await_listener_socket_cleanups!/1` (findings#206 row
+  206-425).
+  """
+  @spec listener_socket_cleanups() :: non_neg_integer()
+  def listener_socket_cleanups do
+    state = Agent.get(installed_fence!(), & &1)
+    state.sockets |> MapSet.intersection(state.finished) |> MapSet.size()
+  end
+
+  @doc """
+  Waits, within the detection budget, until at least `count` sockets of the
+  calling test's registered listeners have finished their session cleanup,
+  deferred or not, and fails the test otherwise.
+  """
+  @spec await_listener_socket_cleanups!(non_neg_integer()) :: :ok
+  def await_listener_socket_cleanups!(count) when is_integer(count) and count >= 0 do
+    await_listener_socket_cleanups(count, System.monotonic_time(:millisecond) + @budget_ms)
+  end
+
+  defp await_listener_socket_cleanups(count, deadline) do
+    cond do
+      listener_socket_cleanups() >= count ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("#{count - listener_socket_cleanups()} listener socket cleanup(s) did not finish within #{@budget_ms} ms")
+
+      true ->
+        receive do
+        after
+          @poll_ms -> await_listener_socket_cleanups(count, deadline)
+        end
+    end
+  end
+
+  defp installed_fence! do
+    case Process.get(@installed_key) do
+      fence when is_pid(fence) -> fence
+      nil -> flunk("the websocket cleanup fence is not installed in this process; start the listener with start_public_endpoint_with_server!/0")
     end
   end
 
