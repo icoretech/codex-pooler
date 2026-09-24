@@ -295,14 +295,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     end
   end
 
-  @spec supports_image_detail_original?(metadata()) :: boolean()
-  def supports_image_detail_original?(metadata) do
-    case metadata_value(metadata, "supports_image_detail_original") do
-      value when is_boolean(value) -> value
-      _value -> supports_image_input?(metadata)
-    end
-  end
-
   @spec has_capability_evidence?(metadata_input()) :: boolean()
   def has_capability_evidence?(%Model{} = model) do
     model

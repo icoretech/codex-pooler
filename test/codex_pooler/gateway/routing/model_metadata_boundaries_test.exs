@@ -127,7 +127,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
       assert ModelMetadata.supports_reasoning_summary_parameter?(value)
       assert ModelMetadata.metadata_map(value, "capabilities") == %{}
       assert ModelMetadata.input_modalities(value) == ["text"]
-      refute ModelMetadata.supports_image_detail_original?(value)
     end
 
     model = %Model{
