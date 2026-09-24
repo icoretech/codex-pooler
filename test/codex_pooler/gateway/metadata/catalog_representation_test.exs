@@ -89,6 +89,75 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentationTest do
       end
     end
 
+    # Only a Codex build's own `User-Agent` names the catalog decoder that will
+    # read the body (findings#206 row 206-447). A Codex build sends
+    # `<originator>/<package version> (<os> <os version>; <arch>) <terminal>`
+    # (`get_codex_user_agent`, rust-v0.156.1): the originator is `codex_cli_rs`,
+    # `codex_exec`, `codex_vscode`, `Codex Desktop` and the other first-party
+    # names, or whatever `clientInfo.name` an app-server host gives, and the
+    # platform block is always there. Any other agent keeps the verbatim entry,
+    # whatever version it reports.
+    #
+    # Every Codex `User-Agent` production sent to `/models` and
+    # `/backend-api/codex/responses` from 2026-09-21 to 2026-09-24, verbatim:
+    # the turn's `x-models-etag` is computed from this representation, so a
+    # change here changes the catalog ETag every real client holds.
+    @production_codex_user_agents [
+      "Codex Desktop/0.155.0-alpha.9 (Mac OS 26.3.1; arm64) unknown (codex_chatgpt_android_remote; dev)",
+      "Codex Desktop/0.155.0-alpha.9.2 (Mac OS 27.0.0; arm64) unknown (Codex Desktop; 26.915.31945)",
+      "Codex Desktop/0.155.0-alpha.9.2 (Mac OS 26.5.1; arm64) unknown (codex_chatgpt_android_remote; dev)",
+      "Codex Desktop/0.155.0-alpha.9.2 (Mac OS 26.5.1; arm64) unknown (Codex Desktop; 26.915.31945)",
+      "Codex Desktop/0.155.0-alpha.9.2 (Mac OS 27.0.0; arm64) unknown",
+      "Codex Desktop/0.155.0-alpha.16 (Mac OS 27.0.0; arm64) unknown (Codex Desktop; 26.917.51856)",
+      "Codex Desktop/0.155.0-alpha.16 (Mac OS 27.0.0; arm64) unknown",
+      "Codex Desktop/0.155.0-alpha.16.3 (Mac OS 27.0.0; arm64) unknown (Codex Desktop; 26.917.62051)",
+      "Codex Desktop/0.155.0-alpha.16.3 (Mac OS 27.0.0; arm64) unknown",
+      "codex_vscode/0.154.0-alpha.6.2 (Mac OS 26.3.1; arm64) unknown (VS Code; 26.908.40401)",
+      "codex_vscode/0.154.0-alpha.6.2 (Mac OS 26.3.1; arm64) unknown",
+      "codex_vscode/0.155.0-alpha.16 (Mac OS 26.3.1; arm64) unknown (VS Code; 26.917.51856)",
+      "codex_vscode/0.155.0-alpha.16 (Mac OS 26.3.1; arm64) unknown",
+      "codex_vscode/0.155.0-alpha.16.3 (Mac OS 26.3.1; arm64) unknown (VS Code; 26.917.62051)",
+      "codex_vscode/0.155.0-alpha.16.3 (Mac OS 26.3.1; arm64) unknown",
+      "codex_vscode/0.155.1 (Alpine Linux 3.24.1; aarch64) unknown (codex_vscode; 1)",
+      "codex_vscode/0.156.0 (Alpine Linux 3.24.1; aarch64) unknown (codex_vscode; 1)",
+      "codex_vscode/0.156.1 (Alpine Linux 3.24.1; aarch64) unknown (codex_vscode; 1)",
+      "codex_cli_rs/0.155.0-alpha.9.2 (Mac OS 27.0.0; arm64) unknown",
+      "codex_cli_rs/0.155.0-alpha.9.2 (Mac OS 26.5.1; arm64) unknown",
+      "codex_cli_rs/0.155.0-alpha.16 (Mac OS 27.0.0; arm64) unknown",
+      "codex_cli_rs/0.155.0-alpha.16.3 (Mac OS 27.0.0; arm64) unknown",
+      "codex_cli_rs/0.156.0 (Alpine Linux 3.24.1; aarch64) unknown",
+      "codex_cli_rs/0.156.1 (Alpine Linux 3.24.1; aarch64) unknown"
+    ]
+
+    test "every Codex user agent production sent keeps its decode-checked entry" do
+      for user_agent <- @production_codex_user_agents do
+        assert CatalogRepresentation.for_user_agent(user_agent) == :decode_checked, user_agent
+      end
+    end
+
+    test "a non-Codex agent keeps the verbatim entry whatever version it reports" do
+      # `curl/8.22.0` and `omp/18.2.8` were sent by production in the same
+      # window and selected `instructions_template`; `p23-catalog-measure`
+      # selected `decode_checked`.
+      for user_agent <- ["curl/8.22.0", "omp/18.2.8", "p23-catalog-measure/0.156.0", "OpenAI/Python 2.24.0", "node", "synthetic-agent/0.155.0 (compatible)"] do
+        assert CatalogRepresentation.for_user_agent(user_agent) == :verbatim, user_agent
+      end
+
+      assert CatalogRepresentation.for_user_agent("codexcli/0.156.1") == :verbatim
+    end
+
+    # An app-server host initializes with its own `clientInfo.name`, which the
+    # Codex build uses as the originator, while its catalog fetch sends the
+    # build's version as `client_version`; the platform block identifies it.
+    test "a Codex build under another originator is recognized by its platform block" do
+      assert CatalogRepresentation.for_user_agent("synthetic-app-server-host/0.156.1 (Linux 6.10.14-linuxkit; aarch64) unknown (synthetic-app-server-host; 1.0.0)") == :decode_checked
+      assert CatalogRepresentation.for_user_agent("synthetic-app-server-host/0.153.4 (Mac OS 26.0.0; arm64) unknown") == :instructions_template
+
+      for user_agent <- ["codex-tui/0.156.1", "codex_sdk_ts/0.156.1", "CODEX_EXEC/0.156.0"] do
+        assert CatalogRepresentation.for_user_agent(user_agent) == :decode_checked, user_agent
+      end
+    end
+
     test "for_request/1 reads the request's User-Agent" do
       template_request = RequestOptions.build(%{user_agent: "codex_cli_rs/0.156.0 (Linux; x86_64)"}, "/backend-api/codex/responses", %{})
       verbatim_request = RequestOptions.build(%{user_agent: "codex_cli_rs/0.146.1"}, "/backend-api/codex/responses", %{})

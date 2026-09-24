@@ -38,7 +38,18 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentation do
   @template_only_since {0, 148, 0}
 
   @client_version_pattern ~r/\A(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:[-+][0-9A-Za-z.+-]{0,64})?\z/
-  @user_agent_pattern ~r/\A[^\/\x00-\x1f\x7f]{1,64}\/(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?=[\s(+-]|\z)/
+  @user_agent_pattern ~r/\A([^\/\x00-\x1f\x7f]{1,64})\/(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?=[\s(+-]|\z)(.*)\z/s
+
+  # A Codex build's `User-Agent` (`get_codex_user_agent`, rust-v0.156.1) is
+  # `<originator>/<package version> (<os> <os version>; <arch>) <terminal>`.
+  # The originator is a first-party name (`codex_cli_rs`, `codex_exec`,
+  # `codex-tui`, `codex_vscode`, `codex_sdk_ts`, `Codex Desktop`, ...) or the
+  # `clientInfo.name` an app-server host initializes with, and the platform
+  # block is always present; the host's catalog fetch sends the same package
+  # version as `client_version`, so its turns must select the same
+  # representation (findings#206 row 206-447).
+  @codex_originator_pattern ~r/\Acodex(?:[ _-]|\z)/i
+  @codex_platform_block_pattern ~r/\A\S*\s\([^();]+;[^();]+\)/
 
   @spec template_only_since() :: String.t()
   def template_only_since do
@@ -57,12 +68,20 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentation do
 
   def for_client_version(_version), do: :verbatim
 
-  @doc "Representation for a request whose `User-Agent` is `<originator>/<version> ...`."
+  @doc """
+  Representation for a request whose `User-Agent` is a Codex build's
+  `<originator>/<version> ...`: a first-party Codex originator, or any
+  originator followed by Codex's `(<os> <os version>; <arch>)` platform block.
+  Every other agent (`curl/8.22.0`, an SDK, a probe) keeps the verbatim entry
+  whatever version it reports, because no Codex catalog decoder reads its body.
+  """
   @spec for_user_agent(term()) :: t()
   def for_user_agent(user_agent) when is_binary(user_agent) do
-    case Regex.run(@user_agent_pattern, user_agent, capture: :all_but_first) do
-      [major, minor, patch] -> for_whole_version(major, minor, patch)
-      nil -> :verbatim
+    with [originator, major, minor, patch, rest] <- Regex.run(@user_agent_pattern, user_agent, capture: :all_but_first),
+         true <- codex_user_agent?(originator, rest) do
+      for_whole_version(major, minor, patch)
+    else
+      _other -> :verbatim
     end
   end
 
@@ -96,6 +115,9 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentation do
   end
 
   def apply_to_model(model, :verbatim) when is_map(model), do: model
+
+  defp codex_user_agent?(originator, rest),
+    do: Regex.match?(@codex_originator_pattern, originator) or Regex.match?(@codex_platform_block_pattern, rest)
 
   defp for_whole_version(major, minor, patch) do
     version = {String.to_integer(major), String.to_integer(minor), String.to_integer(patch)}
