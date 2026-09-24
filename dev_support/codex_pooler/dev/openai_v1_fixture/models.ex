@@ -20,6 +20,8 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
                             {id, %{"service_tiers" => [@fast_tier], "default_service_tier" => nil, "additional_speed_tiers" => ["fast"]}}
                           end)
 
+  @synthetic_instructions "Synthetic OpenAI V1 fixture instructions."
+
   @type provisioned :: %{
           required(:text) => Model.t(),
           required(:alternate_text) => Model.t(),
@@ -165,9 +167,9 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
       metadata:
         %{
           "manual_smoke_provisioned" => true,
-          "upstream_model" => source_model_metadata(id, modalities, tools?, reasoning?),
+          "upstream_model" => source_model_metadata(id, display_name, modalities, tools?, reasoning?),
           "source_assignment_models" => %{
-            assignment.id => source_model_metadata(id, modalities, tools?, reasoning?)
+            assignment.id => source_model_metadata(id, display_name, modalities, tools?, reasoning?)
           },
           "input_modalities" => modalities
         }
@@ -175,11 +177,26 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
     }
   end
 
-  defp source_model_metadata(id, modalities, tools?, reasoning?) do
+  # A complete catalog entry: the Pool serves this source entry to Codex clients
+  # at `/backend-api/codex/models`, and a released client pointed at it with
+  # `model_catalog_url` discards the whole catalog when one entry lacks a field
+  # its decoder requires (findings#258 rows 258-34 and 258-42). The instructions
+  # are synthetic, like every other value the fixture serves.
+  defp source_model_metadata(id, display_name, modalities, tools?, reasoning?) do
     %{
       "slug" => id,
+      "display_name" => display_name,
+      "description" => display_name,
       "visibility" => "list",
       "priority" => 20,
+      "supported_in_api" => true,
+      "shell_type" => "shell_command",
+      "support_verbosity" => false,
+      "truncation_policy" => %{"mode" => "tokens", "limit" => 10_000},
+      "experimental_supported_tools" => [],
+      "supported_reasoning_levels" => [],
+      "base_instructions" => @synthetic_instructions,
+      "model_messages" => %{"instructions_template" => @synthetic_instructions},
       "input_modalities" => modalities,
       "supports_tools" => tools?
     }
@@ -192,7 +209,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
       "context_window" => 272_000,
       "effective_context_window_percent" => 95,
       "capabilities" => %{"reasoning" => true},
-      "supported_reasoning_levels" => ["none"],
+      "supported_reasoning_levels" => [%{"effort" => "none", "description" => "none"}],
       "default_reasoning_level" => "none"
     })
   end

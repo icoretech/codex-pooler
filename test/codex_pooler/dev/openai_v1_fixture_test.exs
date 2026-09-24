@@ -4,9 +4,12 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.OpenAIV1Fixture
+  alias CodexPooler.Gateway.Metadata
+  alias CodexPooler.Gateway.Metadata.CodexModelDecodeContract
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.{CandidateEligibility, ModelMetadata}
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
@@ -200,7 +203,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     source_metadata = ModelMetadata.selected_assignment_metadata(model, assignment.id)
 
     assert ModelMetadata.supports_reasoning?(source_metadata)
-    assert source_metadata["supported_reasoning_levels"] == ["none"]
+    assert source_metadata["supported_reasoning_levels"] == [%{"effort" => "none", "description" => "none"}]
 
     prechange_model =
       model |> prechange_fixture_model(assignment.id) |> Map.put(:supports_reasoning, false)
@@ -255,6 +258,35 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
       assert assignment_id == assignment.id
       source_metadata = ModelMetadata.selected_assignment_metadata(model, assignment.id)
       assert Enum.map(source_metadata["service_tiers"], & &1["id"]) == [@bundled_client_default_service_tier]
+    end
+
+    assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
+  end
+
+  # findings#258 row 258-42: a lane that points a released Codex client's
+  # `model_catalog_url` at this fixture Pool adopts what it serves, and one
+  # entry the client cannot decode makes it discard the whole catalog. Every
+  # representation therefore serves every model as a decodable entry and
+  # the decode-checked one leaves nothing out.
+  test "fixture catalog serves every model as an entry the released Codex client decodes", context do
+    assert {:ok, %{status: "ready"}} = OpenAIV1Fixture.acquire(context.options)
+
+    setup = context.receipt_path |> File.read!() |> CodexPooler.JSON.decode!()
+    {:ok, auth} = Access.authenticate_authorization_header("Bearer " <> setup["api_key"])
+    endpoint = "/backend-api/codex/models"
+    request_options = RequestOptions.build(%{}, endpoint, %{})
+
+    for representation <- [:verbatim, :instructions_template, :decode_checked] do
+      assert {:ok, snapshot} = Metadata.codex_catalog_snapshot(auth, endpoint, request_options, representation)
+      assert snapshot.undecodable_models == [], inspect(representation)
+
+      served = Map.new(snapshot.body["models"], &{&1["slug"], &1})
+      assert ["fixture-review-host", "gpt-4o-transcribe", "gpt-6-luna", "gpt-6-sol", "gpt-image-1"] -- Map.keys(served) == [], inspect(representation)
+
+      for {slug, entry} <- served do
+        violations = CodexModelDecodeContract.violations(entry)
+        assert violations == [], "#{representation} #{slug}: #{Enum.join(violations, ",")}"
+      end
     end
 
     assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
