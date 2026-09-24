@@ -891,13 +891,25 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
   defp native_rate_limit_relay?(_response, _request_options), do: false
 
+  # A relayed reset carries the house retry advice, `Retry-After` plus
+  # `x-should-retry: false` above a minute, as the Pooler's own usage-limit
+  # answer does (findings#206 row 206-597).
   defp native_rate_limit_result(response, headers) do
+    error = NativeRateLimitRelay.error(response)
+
     %{
       status: 429,
-      headers: json_content_type(headers),
-      raw_body: CodexPooler.JSON.encode!(%{"error" => NativeRateLimitRelay.error(response)})
+      headers: headers |> json_content_type() |> put_retry_advice(NativeRateLimitRelay.retry_after_seconds(error)),
+      raw_body: CodexPooler.JSON.encode!(%{"error" => error})
     }
   end
+
+  defp put_retry_advice(headers, nil), do: headers
+
+  # The provider's own `Retry-After` never reaches this point
+  # (`Metadata.response_headers/3` drops it), so the advice is appended.
+  defp put_retry_advice(headers, seconds),
+    do: headers ++ Contracts.usage_limit_response_headers(%{status: 429, usage_limit: %{resets_in_seconds: seconds}})
 
   defp json_content_type(headers) do
     headers

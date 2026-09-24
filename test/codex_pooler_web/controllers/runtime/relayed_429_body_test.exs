@@ -87,6 +87,62 @@ defmodule CodexPoolerWeb.Runtime.Relayed429BodyTest do
     assert FakeUpstream.count(sibling) == 0
   end
 
+  # The relayed answer's retry advice follows the house rule (findings#206
+  # row 206-597): `Retry-After` in seconds when the provider named a reset,
+  # plus `x-should-retry: false` once the wait exceeds 60 s; none without a
+  # reset, so a plain throttle keeps the SDKs' own backoff. The relay is the
+  # answer when the Pool's terminal advice is withheld: a sibling whose return
+  # is not known.
+  for mode <- ["full", "lite"],
+      stream? <- [true, false],
+      {label, fields, retry_after, should_retry} <- [
+        {"reset in an hour", %{"resets_in_seconds" => 3_600}, "3600", ["false"]},
+        {"reset within a minute", %{"resets_in_seconds" => 30}, "30", []},
+        {"no reset", %{}, nil, []}
+      ] do
+    @mode mode
+    @stream stream?
+    @fields fields
+    @retry_after retry_after
+    @should_retry should_retry
+
+    test "#{mode} stream=#{stream?} #{label}: the relayed usage limit carries the retry advice", %{conn: conn} do
+      error = Map.merge(%{"type" => "usage_limit_reached", "message" => @provider_message}, @fields)
+      pool = unknown_sibling_pool!({:json_headers, 429, %{"error" => error}, []}, @mode)
+
+      conn = post_native(conn, pool, @stream)
+
+      assert conn.status == 429
+      assert %{"error" => %{"type" => "usage_limit_reached", "message" => "upstream usage limit reached"}} = CodexPooler.JSON.decode!(conn.resp_body)
+      assert get_resp_header(conn, "retry-after") == List.wrap(@retry_after)
+      assert get_resp_header(conn, "x-should-retry") == @should_retry
+    end
+  end
+
+  # Pin: the provider's own `Retry-After` is not relayed, so the answer
+  # carries exactly one, the advice.
+  test "a provider's own Retry-After is replaced, not duplicated, when the reset is known", %{conn: conn} do
+    error = %{"type" => "usage_limit_reached", "message" => @provider_message, "resets_in_seconds" => 120}
+    pool = unknown_sibling_pool!({:json_headers, 429, %{"error" => error}, [{"retry-after", "7"}]}, "lite")
+
+    conn = post_native(conn, pool, true)
+
+    assert conn.status == 429
+    assert get_resp_header(conn, "retry-after") == ["120"]
+    assert get_resp_header(conn, "x-should-retry") == ["false"]
+  end
+
+  defp unknown_sibling_pool!(refusal, mode) do
+    refusing = start_upstream(refusal)
+    sibling = start_upstream(FakeUpstream.json_response(%{"output" => []}))
+    setup = gateway_setup(refusing, compact?: true)
+    other = gateway_upstream(setup.pool, sibling, "upstream-token-unknown-sibling-advice", compact?: true)
+    prime_resetless_routing_quota!(other.identity)
+    setup = %{setup | model: put_model_source_assignments!(setup.model, [setup.assignment, other.assignment])}
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, mode)
+    Map.put(setup, :mode, mode)
+  end
+
   defp pool!(upstream, mode) do
     setup = gateway_setup(upstream, compact?: true)
     _revision = set_model_serving_mode!(model_serving_scope(), setup, mode)

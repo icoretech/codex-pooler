@@ -51,6 +51,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.NativeRateLimitRelay do
     |> maybe_put("resets_in_seconds", resets_in_seconds(provider["resets_in_seconds"]))
   end
 
+  @doc """
+  The retry advice of a relayed error that names a reset, in whole seconds
+  (never zero), or `nil` (findings#206 row 206-597): the provider's
+  `resets_in_seconds`, else the time left until its `resets_at`.
+  """
+  @spec retry_after_seconds(map(), DateTime.t()) :: pos_integer() | nil
+  def retry_after_seconds(error, now \\ DateTime.utc_now())
+  def retry_after_seconds(%{"resets_in_seconds" => seconds}, _now) when is_integer(seconds) and seconds > 0, do: seconds
+
+  def retry_after_seconds(%{"resets_at" => resets_at}, now) when is_integer(resets_at),
+    do: max(resets_at - DateTime.to_unix(now), 1)
+
+  def retry_after_seconds(_error, _now), do: nil
+
   defp decode_error(body) when is_binary(body) and byte_size(body) <= @body_max_bytes do
     case CodexPooler.JSON.decode(body) do
       {:ok, %{"error" => %{} = error}} -> error
