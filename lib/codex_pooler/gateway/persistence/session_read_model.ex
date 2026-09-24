@@ -82,13 +82,21 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
     if pool_ids == [] do
       []
     else
+      # Each window turn probes its own request by primary key. `offset: 0` keeps
+      # the probe a per-turn SubPlan: with missing planner statistics a join (or an
+      # EXISTS PostgreSQL pulls up into one) became a nested loop that rescanned
+      # the Pools' requests for every turn, count^2 rows (findings#206).
+      visible_request =
+        from request in Request,
+          where: request.id == parent_as(:turn).request_id and request.pool_id in ^pool_ids,
+          select: 1,
+          offset: 0
+
       Repo.all(
         from turn in CodexTurn,
-          join: request in Request,
-          on: request.id == turn.request_id,
-          where:
-            request.pool_id in ^pool_ids and turn.started_at >= ^started_at and
-              turn.started_at <= ^ended_at,
+          as: :turn,
+          where: turn.started_at >= ^started_at and turn.started_at <= ^ended_at,
+          where: exists(visible_request),
           order_by: [desc: turn.started_at],
           select: %{status: turn.status}
       )
