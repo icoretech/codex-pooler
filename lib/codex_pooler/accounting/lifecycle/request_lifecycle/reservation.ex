@@ -13,6 +13,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     ClientRetry,
     LedgerEntry,
     Metadata,
+    NativeTurnProgress,
     PricingResolution,
     Request,
     RequestClientRetryLink,
@@ -38,7 +39,6 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # open to a generated id. See `walk_native_turn_chain/4` for why (findings#212,
   # row 212-50).
   @native_turn_chain_depth 16
-  @native_http_transports ["http_json", "http_sse", "http_compact_json"]
 
   @usage_pending "usage_pending"
   @usage_not_applicable "not_applicable"
@@ -368,15 +368,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # digest; a request whose digest differs from the one a native HTTP holder
   # recorded therefore cannot be that retry, and is claimed under its own
   # steered claim instead, which its own rebuilt retries derive again
-  # (findings#206 row 206-403). A holder without a recorded digest -- a
-  # websocket request, or a row from before this release -- keeps the bare claim
-  # and today's verdict.
+  # (findings#206 row 206-403). The holder may be a websocket opener that
+  # recorded its full-history progress, which is how a steer sent over HTTPS
+  # after the session fell back from the websocket is told apart (row 206-412).
+  # A holder without a recorded digest -- a row from before these releases, or a
+  # websocket request whose socket could not know its history -- keeps the bare
+  # claim and today's verdict.
   defp steered_continuation_claim(%{correlation_id: claim, opts: opts}) do
     with steered when is_binary(steered) <- attr(opts, :native_http_steered_claim),
          <<_::256>> = progress <- attr(opts, :native_http_turn_progress),
-         %Request{transport: transport, request_metadata: %{"native_http_turn_progress" => %{"digest" => recorded}}}
-         when transport in @native_http_transports and is_binary(recorded) <- native_turn_predecessor(claim) do
-      if recorded == Base.url_encode64(progress, padding: false), do: nil, else: steered
+         recorded = claim |> native_turn_predecessor() |> NativeTurnProgress.recorded(),
+         true <- NativeTurnProgress.differs?(recorded, progress) do
+      steered
     else
       _not_steered -> nil
     end

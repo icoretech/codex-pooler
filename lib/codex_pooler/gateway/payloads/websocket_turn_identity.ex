@@ -275,6 +275,26 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   end
 
   @doc """
+  The claim of a later request of a turn that the user steered in, derived from
+  the turn and its full-history progress digest
+  (`NativeTurnContinuation.turn_progress/1`) and from nothing else.
+
+  Every form of one steered request derives it: a native HTTP request, a
+  full-history frame on a new socket, and an anchored increment on the socket
+  that delivered the turn's previous response, so a resend of any of them in
+  any other form meets its predecessor (findings#206 rows 206-403 and 206-412).
+  The anchor is domain-separated from the compaction anchor, so a steered claim
+  can never equal a post-compaction resume claim of the same turn.
+  """
+  @spec steered_claim_key(<<_::256>>, <<_::256>>) :: String.t()
+  def steered_claim_key(semantic_turn_key, progress)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_binary(progress) and byte_size(progress) == 32 do
+    anchor = :crypto.hash(:sha256, :erlang.term_to_binary({"native_turn_steered_claim_v1", progress}, [:deterministic]))
+    resume_claim_key(semantic_turn_key, anchor)
+  end
+
+  @doc """
   A payload-scoped claim for a request that is *about* a turn rather than one of
   its model requests, domain separated by the declared `request_kind`.
 

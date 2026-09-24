@@ -396,6 +396,52 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
     end
   end
 
+  # findings#206 row 206-412: the socket reads an anchored frame in
+  # full-history terms from the progress of the request whose response it
+  # names, so the digest must equal `turn_progress/1` of the full history the
+  # client would resend (`client.rs` `get_incremental_items`: previous input,
+  # that response's output items, then the increment).
+  describe "websocket_frame_progress/2" do
+    test "an unanchored frame's progress digests to turn_progress/1 of the same payload" do
+      payload = %{"input" => [user_message("one"), assistant_message("a"), user_message("two")]}
+
+      assert {:ok, progress} = NativeTurnContinuation.websocket_frame_progress(payload, nil)
+      assert NativeTurnContinuation.progress_digest(progress) == NativeTurnContinuation.turn_progress(payload)
+    end
+
+    test "an anchored increment on the recorded response extends that request's progress to the full-history digest" do
+      opener = %{"input" => [user_message("one")]}
+      {:ok, opener_progress} = NativeTurnContinuation.websocket_frame_progress(opener, nil)
+      base = %{semantic_turn_key: @turn_key, response_digest: NativeCodexTurnMetadata.response_id_digest("resp_one"), progress: opener_progress}
+
+      increment = %{"previous_response_id" => "resp_one", "input" => [user_message("two")]}
+      full_history = %{"input" => [user_message("one"), assistant_message("a"), user_message("two")]}
+
+      assert {:ok, progress} = NativeTurnContinuation.websocket_frame_progress(increment, base)
+      assert NativeTurnContinuation.progress_digest(progress) == NativeTurnContinuation.turn_progress(full_history)
+      refute NativeTurnContinuation.progress_digest(progress) == NativeTurnContinuation.turn_progress(opener)
+    end
+
+    test "an increment carrying a compaction item restarts from that pivot" do
+      pivot = %{"type" => "compaction", "encrypted_content" => "synthetic-pivot"}
+      base = %{semantic_turn_key: @turn_key, response_digest: NativeCodexTurnMetadata.response_id_digest("resp_one"), progress: {nil, 4}}
+      increment = %{"previous_response_id" => "resp_one", "input" => [pivot, user_message("after")]}
+
+      assert {:ok, progress} = NativeTurnContinuation.websocket_frame_progress(increment, base)
+      assert NativeTurnContinuation.progress_digest(progress) == NativeTurnContinuation.turn_progress(%{"input" => [user_message("x"), pivot, user_message("after")]})
+    end
+
+    test "an anchor the socket has no progress for is unknown" do
+      base = %{semantic_turn_key: @turn_key, response_digest: NativeCodexTurnMetadata.response_id_digest("resp_one"), progress: {nil, 1}}
+      increment = %{"previous_response_id" => "resp_other", "input" => [user_message("two")]}
+
+      assert NativeTurnContinuation.websocket_frame_progress(increment, base) == :unknown
+      assert NativeTurnContinuation.websocket_frame_progress(increment, Map.delete(base, :progress)) == :unknown
+      assert NativeTurnContinuation.websocket_frame_progress(%{increment | "previous_response_id" => "resp_one"}, nil) == :unknown
+      assert NativeTurnContinuation.websocket_frame_progress(%{"input" => "not a list"}, nil) == :unknown
+    end
+  end
+
   defp steer_payload(anchor),
     do: %{
       "previous_response_id" => anchor,

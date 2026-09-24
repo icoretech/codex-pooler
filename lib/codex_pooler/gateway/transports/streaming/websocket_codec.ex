@@ -524,6 +524,51 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def rebind_replay_claim(_prepared, _replay_claim_digest), do: {:error, :binding_mismatch}
 
+  @doc """
+  A native turn frame that derived its turn's bare claim, re-keyed to the
+  steered claim of its full-history progress: the gateway found the bare claim
+  held by a request of the turn that recorded a DIFFERENT progress, which no
+  retry of that request can have, so this frame is a later request of the turn
+  the user steered in (findings#206 row 206-412). Only a frame whose own claim
+  is still the bare turn claim can be re-keyed.
+  """
+  @spec steered_turn_claim(PreparedWebsocketFrame.t()) :: {:ok, <<_::256>>, String.t()} | :none
+  def steered_turn_claim(%PreparedWebsocketFrame{
+        variant: :native_response_create,
+        payload: payload,
+        semantic_turn_key: <<_::256>> = semantic_turn_key,
+        turn_claim_key: turn_claim_key,
+        request_options:
+          %RequestOptions{
+            native_compaction_admission: nil,
+            transport: %{transport: "websocket"},
+            payload_context: %{compaction_trigger_bridge?: false},
+            openai_compatibility: %{public_openai_responses_stream: false},
+            continuity: %{request_claim_key: turn_claim_key},
+            extra: %{native_turn_progress: <<_::256>> = progress}
+          } = request_options
+      })
+      when is_binary(turn_claim_key) do
+    if NativeTurnContinuation.request_kind(payload, request_options) == "turn" and NativeTurnContinuation.turn_role(payload) == :opening,
+      do: {:ok, progress, WebsocketTurnIdentity.steered_claim_key(semantic_turn_key, progress)},
+      else: :none
+  end
+
+  def steered_turn_claim(%PreparedWebsocketFrame{}), do: :none
+
+  @spec rebind_steered_turn_claim(PreparedWebsocketFrame.t(), String.t()) ::
+          {:ok, PreparedWebsocketFrame.t()} | {:error, :consumed | :invalid | :binding_mismatch}
+  def rebind_steered_turn_claim(%PreparedWebsocketFrame{request_options: %RequestOptions{} = request_options} = prepared, steered_claim)
+      when is_binary(steered_claim) do
+    case steered_turn_claim(prepared) do
+      {:ok, _progress, ^steered_claim} ->
+        reseal_runtime_frame(prepared, RequestOptions.put_continuity(request_options, request_claim_key: steered_claim))
+
+      _other ->
+        {:error, :binding_mismatch}
+    end
+  end
+
   @spec reseal_runtime_frame(PreparedWebsocketFrame.t(), RequestOptions.t()) ::
           {:ok, PreparedWebsocketFrame.t()} | {:error, :consumed | :invalid}
   def reseal_runtime_frame(%PreparedWebsocketFrame{} = prepared, %RequestOptions{} = options) do
@@ -1122,11 +1167,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
 
       # A later request of the turn steered in by the user, anchored on the
-      # response its own turn just completed on this socket: claimed per payload
-      # like a tool-result continuation, so its identical resend is still met
-      # (findings#206 row 206-409).
+      # response its own turn just completed on this socket (findings#206 row
+      # 206-409). It takes the steered claim of its full-history progress, the
+      # claim its full-history resend on another socket and its HTTPS form
+      # derive too, so each of them meets it (row 206-412). Without a known
+      # progress it is claimed per payload like a tool-result continuation.
       NativeTurnContinuation.steered_continuation?(payload, request_options, semantic_turn_key) ->
-        WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
+        case request_options.extra do
+          %{native_turn_progress: <<_::256>> = progress} -> WebsocketTurnIdentity.steered_claim_key(semantic_turn_key, progress)
+          _unknown -> WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
+        end
 
       true ->
         prepared.turn_claim_key

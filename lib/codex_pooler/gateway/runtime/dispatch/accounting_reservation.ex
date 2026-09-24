@@ -381,6 +381,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     |> Map.merge(reservation_snapshot_metadata(route_state))
     |> Map.merge(compaction_bridge_metadata(request_options.payload_context))
     |> Map.merge(native_http_claim_metadata(native_http_claim))
+    |> Map.merge(native_websocket_turn_progress_metadata(request_options))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
     |> SessionContinuity.put_session_metadata(request_options)
@@ -463,6 +464,15 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     do: Map.put(metadata, "native_http_turn_progress", %{"version" => 1, "digest" => Base.url_encode64(progress, padding: false)})
 
   defp maybe_put_native_http_turn_progress(metadata, _progress), do: metadata
+
+  # The full-history progress digest of a native websocket request, when its
+  # socket knew it, so a later request of the same turn on another socket or
+  # over HTTPS is compared against this row (findings#206 row 206-412); an
+  # opaque digest, never the body.
+  defp native_websocket_turn_progress_metadata(%RequestOptions{transport: %{transport: "websocket"}, extra: %{native_turn_progress: <<_::256>> = progress}}),
+    do: %{"native_turn_progress" => %{"version" => 1, "digest" => Base.url_encode64(progress, padding: false)}}
+
+  defp native_websocket_turn_progress_metadata(%RequestOptions{}), do: %{}
 
   defp native_http_steered_claim({:ok, %{steered_claim: claim}}) when is_binary(claim), do: claim
   defp native_http_steered_claim(_native_http_claim), do: nil

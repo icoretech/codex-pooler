@@ -755,8 +755,40 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   @spec prepare_websocket_response(binary(), opts(), (binary() -> any())) ::
           {:ok, PreparedWebsocketFrame.t()} | {:error, gateway_error()}
-  def prepare_websocket_response(raw_payload, %RequestOptions{} = opts, push_frame),
-    do: WebsocketCodec.prepare_frame(raw_payload, opts, push_frame)
+  def prepare_websocket_response(raw_payload, %RequestOptions{} = opts, push_frame) do
+    with {:ok, prepared} <- WebsocketCodec.prepare_frame(raw_payload, opts, push_frame) do
+      before_dispatch("steered_turn_claim", fn -> maybe_rebind_steered_turn_claim(prepared) end)
+    end
+  end
+
+  # The released client drains user input steered into a running turn into the
+  # same turn once a request of it completed. When the connection that
+  # delivered that response is gone (or the session fell back to HTTPS) the
+  # steer goes out as full history and derives the turn's bare claim, which the
+  # turn's opener holds (findings#206 row 206-412). A frame whose full-history
+  # progress differs from the progress the holder recorded cannot be a retry of
+  # it -- a retry only appends model output -- so it takes the steered claim of
+  # its own progress, the claim every other form of that steer derives too. A
+  # holder that recorded no progress, and a frame whose progress its socket
+  # could not know, keep the bare claim and today's verdict.
+  defp maybe_rebind_steered_turn_claim(%PreparedWebsocketFrame{} = prepared) do
+    with {:ok, progress, steered_claim} <- WebsocketCodec.steered_turn_claim(prepared),
+         recorded = Accounting.native_turn_recorded_progress(prepared.turn_claim_key),
+         true <- Accounting.native_turn_progress_differs?(recorded, progress),
+         {:ok, rebound} <- WebsocketCodec.rebind_steered_turn_claim(prepared, steered_claim) do
+      log_steered_turn_claim_rebound(rebound)
+      {:ok, rebound}
+    else
+      {:error, _reason} -> {:error, prepared_frame_provenance_breach(prepared, "steered_turn_claim")}
+      _not_steered -> {:ok, prepared}
+    end
+  end
+
+  defp log_steered_turn_claim_rebound(%PreparedWebsocketFrame{request_options: request_options}) do
+    session = Map.get(request_options.continuity, :codex_session)
+    session_id = if is_struct(session, CodexSession), do: session.id
+    Logger.info("native websocket steered turn claim rebound codex_session_id=#{session_id} claim_class=steered_continuation")
+  end
 
   @spec prepare_replay_intent(auth(), PreparedWebsocketFrame.t()) ::
           {:ok, replay_intent_result()} | {:error, gateway_error() | term()}

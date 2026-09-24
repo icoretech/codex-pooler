@@ -90,6 +90,16 @@ defmodule CodexPooler.Accounting do
   @spec replay_semantic_turn_in_flight?(map()) :: boolean()
   defdelegate replay_semantic_turn_in_flight?(input), to: RequestReplay, as: :semantic_turn_in_flight?
 
+  @doc """
+  The full-history progress digest recorded by the row holding a native turn
+  claim, or `nil` when it recorded none (findings#206 row 206-412).
+  """
+  @spec native_turn_recorded_progress(String.t()) :: String.t() | nil
+  defdelegate native_turn_recorded_progress(claim), to: CodexPooler.Accounting.NativeTurnProgress, as: :recorded_for_claim
+
+  @spec native_turn_progress_differs?(String.t() | nil, <<_::256>>) :: boolean()
+  defdelegate native_turn_progress_differs?(recorded, progress), to: CodexPooler.Accounting.NativeTurnProgress, as: :differs?
+
   @spec replay_provisional_binding_status(RequestReplay.provisional_reference()) ::
           :armed
           | {:consumed, map(), atom(), DateTime.t()}

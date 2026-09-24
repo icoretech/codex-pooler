@@ -284,20 +284,68 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   the body and is identical across rebuilt retries (findings#206 row 206-403).
   """
   @spec turn_progress(map()) :: <<_::256>>
-  def turn_progress(%{"input" => input}) when is_list(input) do
-    {pivot, tail} =
-      case last_compaction_index(input) do
-        nil -> {nil, input}
-        index -> {Enum.at(input, index), Enum.drop(input, index + 1)}
-      end
+  def turn_progress(%{"input" => input}) when is_list(input), do: input |> progress_state() |> progress_digest()
 
-    :crypto.hash(
-      :sha256,
-      :erlang.term_to_binary({@progress_domain, pivot, Enum.count(tail, &user_message?/1)}, [:deterministic])
-    )
+  def turn_progress(_payload), do: progress_digest({nil, 0})
+
+  @typedoc """
+  What `turn_progress/1` digests, kept in the clear so it can be carried
+  forward: the latest compaction pivot item (or `nil`) and the number of user
+  messages after it. It holds the pivot item itself, so it lives only in the
+  process that saw the frame and is never persisted or sent anywhere.
+  """
+  @type progress_state :: {map() | nil, non_neg_integer()}
+
+  @doc """
+  The progress a native websocket frame stands for in full-history terms, or
+  `:unknown`.
+
+  An unanchored frame carries its whole history, so its progress is read from
+  it. An anchored frame carries only the items the client added since the
+  response it names (`client.rs` `get_incremental_items`: the previous
+  request's input, then that response's output items, then the increment), so
+  its progress is the progress of the request that produced that response,
+  extended by the increment -- known only when `base` is this socket's record of
+  exactly that response. Model output items are never user messages, and a
+  compaction replaces the history, after which the client sends full history
+  again (findings#206 row 206-412). Anything else is `:unknown`, which leaves
+  the frame's claim as it was.
+  """
+  @spec websocket_frame_progress(map(), map() | nil) :: {:ok, progress_state()} | :unknown
+  def websocket_frame_progress(%{"input" => input} = payload, base) when is_list(input) do
+    case Map.get(payload, "previous_response_id") do
+      anchor when is_binary(anchor) and anchor != "" -> extend_anchored_progress(input, anchor, base)
+      _unanchored -> {:ok, progress_state(input)}
+    end
   end
 
-  def turn_progress(_payload), do: :crypto.hash(:sha256, :erlang.term_to_binary({@progress_domain, nil, 0}, [:deterministic]))
+  def websocket_frame_progress(_payload, _base), do: :unknown
+
+  @doc "The opaque digest of a `progress_state/0`, identical to `turn_progress/1` of the full history."
+  @spec progress_digest(progress_state()) :: <<_::256>>
+  def progress_digest({pivot, user_messages}) when is_integer(user_messages) and user_messages >= 0,
+    do: :crypto.hash(:sha256, :erlang.term_to_binary({@progress_domain, pivot, user_messages}, [:deterministic]))
+
+  defp extend_anchored_progress(increment, anchor, %{response_digest: response_digest, progress: {pivot, user_messages}})
+       when is_binary(response_digest) do
+    if NativeCodexTurnMetadata.response_id_digest(anchor) == response_digest do
+      case last_compaction_index(increment) do
+        nil -> {:ok, {pivot, user_messages + Enum.count(increment, &user_message?/1)}}
+        _index -> {:ok, progress_state(increment)}
+      end
+    else
+      :unknown
+    end
+  end
+
+  defp extend_anchored_progress(_increment, _anchor, _base), do: :unknown
+
+  defp progress_state(input) do
+    case last_compaction_index(input) do
+      nil -> {nil, Enum.count(input, &user_message?/1)}
+      index -> {Enum.at(input, index), input |> Enum.drop(index + 1) |> Enum.count(&user_message?/1)}
+    end
+  end
 
   defp compacted_turn_role(input, index) do
     tail = Enum.drop(input, index + 1)

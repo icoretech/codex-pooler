@@ -272,15 +272,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
 
     claim
     |> Map.put(:turn_progress, progress)
-    |> Map.put(:steered_claim, WebsocketTurnIdentity.resume_claim_key(identity.semantic_turn_key, steered_anchor(progress)))
+    |> Map.put(:steered_claim, WebsocketTurnIdentity.steered_claim_key(identity.semantic_turn_key, progress))
   end
 
   defp put_steered_claim(claim, _identity, _payload), do: claim
-
-  # Domain-separated from the compaction anchor, so a steered claim can never
-  # equal a post-compaction resume claim of the same turn.
-  defp steered_anchor(progress),
-    do: :crypto.hash(:sha256, :erlang.term_to_binary({"native_turn_steered_claim_v1", progress}, [:deterministic]))
 
   defp kind_claim(identity, request_options, payload) do
     case NativeTurnContinuation.request_kind(payload, request_options) do

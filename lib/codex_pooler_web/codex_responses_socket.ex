@@ -1829,13 +1829,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp prepare_websocket_frame(payload, state) do
     parent = self()
+    decoded = WebsocketCodec.decode_payload(payload)
 
     opts =
       state
       |> Adapter.response_options(true, nil)
       |> RequestOptions.capture_api_key_runtime_epoch(Map.get(state, :auth))
-      |> maybe_put_native_turn_metadata(payload)
+      |> maybe_put_native_turn_metadata(decoded)
       |> put_last_completed_native_response(state)
+      |> put_native_turn_progress(decoded, state)
 
     Websocket.prepare_websocket_response(
       payload,
@@ -1845,12 +1847,35 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp put_last_completed_native_response(%RequestOptions{} = options, %{last_completed_native_response: %{} = record}),
-    do: %{options | extra: Map.put(options.extra, :socket_last_completed_native_response, record)}
+    do: %{options | extra: Map.put(options.extra, :socket_last_completed_native_response, Map.delete(record, :progress))}
 
   defp put_last_completed_native_response(%RequestOptions{} = options, _state), do: options
 
-  defp maybe_put_native_turn_metadata(%RequestOptions{} = options, raw_payload) do
-    with {:ok, payload} <- WebsocketCodec.decode_payload(raw_payload),
+  # The full-history progress digest of this frame, when the socket can know it
+  # (`NativeTurnContinuation.websocket_frame_progress/2`). Only the 32-byte
+  # digest leaves the socket: the reservation records it on the row, and the
+  # claim of a later request of the same turn is compared against it on any
+  # socket or transport (findings#206 row 206-412).
+  defp put_native_turn_progress(%RequestOptions{} = options, decoded, state) do
+    with {:ok, payload} <- decoded,
+         {:ok, progress} <- native_turn_frame_progress(payload, options, state) do
+      %{options | extra: Map.put(options.extra, :native_turn_progress, NativeTurnContinuation.progress_digest(progress))}
+    else
+      _unknown -> options
+    end
+  end
+
+  # Only a model request of a turn carries its turn's progress forward: a
+  # compaction's response replaces the history, and the client sends full
+  # history after it.
+  defp native_turn_frame_progress(payload, %RequestOptions{} = options, state) do
+    if NativeTurnContinuation.request_kind(payload, options) == "turn",
+      do: NativeTurnContinuation.websocket_frame_progress(payload, Map.get(state, :last_completed_native_response)),
+      else: :unknown
+  end
+
+  defp maybe_put_native_turn_metadata(%RequestOptions{} = options, decoded) do
+    with {:ok, payload} <- decoded,
          true <- canonical_native_turn_metadata?(payload),
          {:ok, metadata} <-
            NativeCodexTurnMetadata.parse(payload, native_metadata_scope(payload, options)),
@@ -3405,15 +3430,35 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   # The turn a native request belongs to, so the response it completes on this
   # socket is known to be that turn's (findings#206 row 206-409).
-  defp put_response_task_turn(state, pid, %PreparedWebsocketFrame{variant: :native_response_create, semantic_turn_key: <<_::256>> = key}),
-    do: Map.update(state, :response_task_turns, %{pid => key}, &Map.put(&1, pid, key))
+  defp put_response_task_turn(
+         state,
+         pid,
+         %PreparedWebsocketFrame{variant: :native_response_create, semantic_turn_key: <<_::256>> = key, payload: payload, request_options: %RequestOptions{} = options}
+       ) do
+    state = Map.update(state, :response_task_turns, %{pid => key}, &Map.put(&1, pid, key))
+
+    # Carried forward only when it is the very progress this frame's row
+    # records, so the socket never knows a turn's history its rows do not.
+    with {:ok, progress} <- native_turn_frame_progress(payload, options, state),
+         %{native_turn_progress: recorded} <- options.extra,
+         true <- NativeTurnContinuation.progress_digest(progress) == recorded do
+      Map.update(state, :response_task_progress, %{pid => progress}, &Map.put(&1, pid, progress))
+    else
+      _unknown_or_diverged -> state
+    end
+  end
 
   defp put_response_task_turn(state, _pid, _prepared), do: state
 
   defp forget_response_task_turn(%{response_task_turns: turns} = state, pid),
-    do: %{state | response_task_turns: Map.delete(turns, pid)}
+    do: %{state | response_task_turns: Map.delete(turns, pid)} |> forget_response_task_progress(pid)
 
-  defp forget_response_task_turn(state, _pid), do: state
+  defp forget_response_task_turn(state, pid), do: forget_response_task_progress(state, pid)
+
+  defp forget_response_task_progress(%{response_task_progress: progress} = state, pid),
+    do: %{state | response_task_progress: Map.delete(progress, pid)}
+
+  defp forget_response_task_progress(state, _pid), do: state
 
   # The released client drains user input steered into a running turn into the
   # same turn, right after a request of it completed, and sends it on this
@@ -3427,7 +3472,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     with {:ok, %{kind: :completed}} <- StreamProtocol.terminal_outcome(data),
          <<_::256>> = key <- state |> Map.get(:response_task_turns, %{}) |> Map.get(pid),
          {:ok, %{"response" => %{"id" => id}}} when is_binary(id) and id != "" <- CodexPooler.JSON.decode(data) do
-      Map.put(state, :last_completed_native_response, %{semantic_turn_key: key, response_digest: NativeCodexTurnMetadata.response_id_digest(id)})
+      record = %{semantic_turn_key: key, response_digest: NativeCodexTurnMetadata.response_id_digest(id)}
+
+      # The progress of the request that produced this response, so the next
+      # frame anchored on it can be read in full-history terms (row 206-412).
+      record =
+        case state |> Map.get(:response_task_progress, %{}) |> Map.get(pid) do
+          {_pivot, _user_messages} = progress -> Map.put(record, :progress, progress)
+          nil -> record
+        end
+
+      Map.put(state, :last_completed_native_response, record)
     else
       _not_a_completed_native_turn_response -> Map.delete(state, :last_completed_native_response)
     end
