@@ -107,6 +107,42 @@ defmodule CodexPoolerWeb.Admin.RemainingAdminPagesViewerVisibilityTest do
     assert assigns(view).rule_form.params["pool_id"] == kept.id
   end
 
+  # The incident filter on a Pool or rule the viewer lost left the address
+  # bar naming it while the page answered with a filter error and no incidents
+  # (findings#206 row 206-416): the page patches the lost filters away and keeps
+  # the rest.
+  test "alerts patch an incident filter on a revoked Pool and its rule out of the URL", %{scope: scope} do
+    [kept, revoked] = for label <- ["alerts-filter-kept", "alerts-filter-revoked"], do: pool!(scope, label)
+    revoked_rule = alert_rule_fixture(revoked, %{display_name: "Revoked filter"})
+    %{user: admin, conn: conn} = operator_conn!(scope, "instance_admin", [kept, revoked])
+
+    view = open!(conn, ~p"/admin/alerts?#{%{"tab" => "incidents", "pool_id" => revoked.id, "rule_id" => revoked_rule.id, "severity" => "critical"}}")
+    assert assigns(view).incident_filter_values["pool_id"] == revoked.id
+    assert assigns(view).incident_filter_errors == []
+
+    assert {:ok, _admin} = Accounts.update_operator(scope, admin, %{"pool_ids" => [kept.id]})
+
+    settle!(view)
+    assert patched_query(view, "/admin/alerts") == %{"tab" => "incidents", "severity" => "critical"}
+    settle!(view)
+    assert assigns(view).current_params == %{"tab" => "incidents", "severity" => "critical"}
+    assert assigns(view).incident_filter_errors == []
+    assert assigns(view).incident_filter_values["severity"] == "critical"
+  end
+
+  test "alerts keep an incident filter on a Pool the viewer still sees", %{scope: scope} do
+    [kept, revoked] = for label <- ["alerts-filter-stay", "alerts-filter-gone"], do: pool!(scope, label)
+    %{user: admin, conn: conn} = operator_conn!(scope, "instance_admin", [kept, revoked])
+
+    view = open!(conn, ~p"/admin/alerts?#{%{"tab" => "incidents", "pool_id" => kept.id}}")
+
+    assert {:ok, _admin} = Accounts.update_operator(scope, admin, %{"pool_ids" => [kept.id]})
+
+    settle!(view)
+    assert assigns(view).current_params == %{"tab" => "incidents", "pool_id" => kept.id}
+    assert assigns(view).incident_filter_values["pool_id"] == kept.id
+  end
+
   test "invites drop a revoked Pool's invites and close the revoke dialog on one", %{scope: scope} do
     [kept, revoked] = for label <- ["invites-kept", "invites-revoked"], do: pool!(scope, label)
     kept_invite = invite!(scope, kept)
@@ -141,6 +177,28 @@ defmodule CodexPoolerWeb.Admin.RemainingAdminPagesViewerVisibilityTest do
     settle!(view)
     refute assigns(view).creating_invite
     assert has_element?(view, "#flash-info", "Your Pool access changed")
+  end
+
+  # The Pool filter on a revoked Pool left the address bar naming it while the
+  # page listed every visible invite (findings#206 row 206-416).
+  test "invites patch a Pool filter on a revoked Pool out of the URL", %{scope: scope} do
+    [kept, revoked] = for label <- ["invites-filter-kept", "invites-filter-revoked"], do: pool!(scope, label)
+    kept_invite = invite!(scope, kept)
+    revoked_invite = invite!(scope, revoked)
+    %{user: admin, conn: conn} = operator_conn!(scope, "instance_admin", [kept, revoked])
+
+    view = open!(conn, ~p"/admin/invites?#{%{"pool_id" => revoked.id, "status" => "active"}}")
+    assert has_element?(view, "#invite-row-#{revoked_invite.id}")
+    refute has_element?(view, "#invite-row-#{kept_invite.id}")
+
+    assert {:ok, _admin} = Accounts.update_operator(scope, admin, %{"pool_ids" => [kept.id]})
+
+    settle!(view)
+    assert patched_query(view, "/admin/invites") == %{"status" => "active"}
+    settle!(view)
+    assert assigns(view).filter_values == %{"pool_id" => "", "status" => "active"}
+    assert has_element?(view, "#invite-row-#{kept_invite.id}")
+    refute has_element?(view, "#invite-row-#{revoked_invite.id}")
   end
 
   test "the upstream cockpit drops a revoked Pool's assignment of the account and closes what showed that Pool", %{scope: scope} do
@@ -237,6 +295,15 @@ defmodule CodexPoolerWeb.Admin.RemainingAdminPagesViewerVisibilityTest do
     settle!(view)
     assert has_element?(view, "#operator-management-denied")
     refute has_element?(view, "#flash-error")
+  end
+
+  # The page's own patch: its path and decoded query, so the assertion does not
+  # depend on how the query string orders its keys.
+  defp patched_query(view, path) do
+    patched = assert_patch(view)
+    uri = URI.parse(patched)
+    assert uri.path == path
+    URI.decode_query(uri.query || "")
   end
 
   defp pool!(scope, label) do

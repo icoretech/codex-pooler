@@ -183,9 +183,11 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   # this page may show. It re-reads them at once, closes the revoke dialog of
   # an invite the viewer can no longer see, and closes the create dialog when
   # the Pool it names is gone; an invite link already shown stays
-  # (findings#206 row 206-410).
+  # (findings#206 row 206-410). A Pool filter the viewer lost leaves the address
+  # bar too, so the URL names the list the page shows (206-416).
   def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
-    socket = load_invites(socket, socket.assigns.filter_values)
+    filtered_pool_id = socket.assigns.filter_values["pool_id"]
+    socket = socket |> load_invites(socket.assigns.filter_values) |> drop_lost_pool_filter(filtered_pool_id)
 
     {socket, closed?} =
       {socket, false}
@@ -197,6 +199,13 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
 
   defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
   defp close_if({socket, closed?}, false, _close), do: {socket, closed?}
+
+  # The filter holds only a Pool the page accepted, so one set before the change
+  # and blank after it is a Pool the viewer lost.
+  defp drop_lost_pool_filter(%{assigns: %{filter_values: %{"pool_id" => ""} = filter_values}} = socket, pool_id) when pool_id not in [nil, ""],
+    do: push_patch(socket, to: ~p"/admin/invites?#{query_params(filter_values)}")
+
+  defp drop_lost_pool_filter(socket, _pool_id), do: socket
 
   defp lost_revoke_target?(%{assigns: %{revoking_invite: %{id: invite_id}}} = socket), do: is_nil(find_invite_row(socket, invite_id))
   defp lost_revoke_target?(_socket), do: false

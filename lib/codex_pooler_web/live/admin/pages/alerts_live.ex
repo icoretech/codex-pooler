@@ -116,10 +116,14 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   # channels and incidents this page may show. It re-reads them at once and
   # closes a rule or channel editor or delete dialog on one the viewer can no
   # longer see; a new rule's form moves off a Pool the viewer lost
-  # (findings#206 row 206-410).
+  # (findings#206 row 206-410). An incident filter on a Pool, rule or channel
+  # the viewer lost leaves the address bar too, so the URL keeps naming what the
+  # page shows instead of an error for a filter the operator did not change
+  # (206-416).
   @impl true
   def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
-    socket = assign_alert_state(socket)
+    previous_filter_values = socket.assigns.incident_filter_values
+    socket = socket |> assign_alert_state() |> drop_lost_incident_filters(previous_filter_values)
     %{rules: rules, channels: channels} = socket.assigns
     lost_rule? = &(match?(%AlertRule{}, &1) and is_nil(find_visible_rule(rules, &1.id)))
     lost_channel? = &(match?(%{id: _id}, &1) and is_nil(find_visible_channel(channels, &1.id)))
@@ -137,6 +141,18 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
   defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
   defp close_if({socket, closed?}, false, _close), do: {socket, closed?}
+
+  # The filter values hold only what the page accepted, so a value set before
+  # the change and blank after it names something the viewer can no longer see.
+  defp drop_lost_incident_filters(socket, previous_filter_values) do
+    lost = for {key, value} <- previous_filter_values, value != "", socket.assigns.incident_filter_values[key] == "", do: key
+
+    if lost == [] do
+      socket
+    else
+      push_patch(socket, to: ~p"/admin/alerts?#{Map.drop(socket.assigns.current_params, lost)}")
+    end
+  end
 
   defp new_rule_on_lost_pool?(%{assigns: %{rule_form_mode: :create, rule_form: form, pool_lookup: pool_lookup}}),
     do: not Map.has_key?(pool_lookup, form.params["pool_id"])
