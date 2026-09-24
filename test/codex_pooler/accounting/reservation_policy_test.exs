@@ -14,8 +14,13 @@ defmodule CodexPooler.Accounting.ReservationPolicyTest do
     later = DateTime.add(as_of, 1, :second)
     estimate = %{input_tokens: 0, output_tokens: 1, total_tokens: 1}
 
-    for kind <- ["settlement", "reservation"] do
-      request = request_fixture(fixture.auth, %{model_id: fixture.model.id})
+    # The settlement ends a finished request; the reservation holds a live one,
+    # because only a live request's reservation is pending (findings#206 row
+    # 206-461): a finished request's reservation that nothing released is not.
+    live = %{status: "in_progress", usage_status: "usage_pending", completed_at: nil, response_status_code: nil}
+
+    for {kind, request_attrs} <- [{"settlement", %{}}, {"reservation", live}] do
+      request = request_fixture(fixture.auth, Map.put(request_attrs, :model_id, fixture.model.id))
 
       ledger_entry_fixture(request, %{
         entry_kind: kind,
