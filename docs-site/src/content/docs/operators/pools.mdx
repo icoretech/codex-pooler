@@ -181,7 +181,7 @@ The current actions are:
     </tr>
     <tr>
       <td>Delete</td>
-      <td>Hard-deletes a Pool only after it is archived. Active and disabled Pools cannot be hard-deleted from the card menu.</td>
+      <td>Hard-deletes a Pool only after it is archived and you have typed its slug, together with its request history, sessions, API keys and upstream assignments. Active and disabled Pools cannot be hard-deleted from the card menu. A Pool with a small history is deleted at once. A Pool with a large history is handed to a background job: the card shows <code>deleting</code>, Delete and Reactivate stay disabled, and the Pool disappears when the job has removed its history. If the job gives up, the card shows <code>deletion failed</code>, and deleting again resumes where it stopped. The <code>Pool deleted</code> audit event is recorded only when the Pool is actually gone.</td>
     </tr>
   </tbody>
 </table>
