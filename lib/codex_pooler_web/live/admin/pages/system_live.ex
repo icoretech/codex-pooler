@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
 
   alias CodexPooler.{Accounts, Catalog, Dev, InstanceSettings, MCP, Pools}
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.SystemPageComponents
   alias CodexPoolerWeb.Admin.SystemSettingsForm
   alias CodexPoolerWeb.DateTimeDisplay
@@ -62,9 +63,13 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
              socket.assigns[:user_session_id]
            )
        )
-       |> assign_forms()}
+       |> assign_forms()
+       |> NotificationCenterHooks.follow_viewer_visibility()}
     else
-      {:ok, assign(socket, page_title: "System", owner_authorized?: false)}
+      {:ok,
+       socket
+       |> assign(page_title: "System", owner_authorized?: false)
+       |> NotificationCenterHooks.follow_viewer_visibility()}
     end
   end
 
@@ -295,6 +300,22 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       _status -> {:noreply, socket}
     end
   end
+
+  # Instance settings belong to owners. A viewer who lost or gained the owner
+  # role reloads the page, which mounts it again with the role it has now: a
+  # demoted owner's settings forms go, a promoted admin's appear. Any other
+  # change of the viewer's Pools leaves an owner's open forms alone (findings#206
+  # row 206-329).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    if Pools.owner?(socket.assigns.current_scope) == socket.assigns.owner_authorized? do
+      {:noreply, socket}
+    else
+      {:noreply, push_navigate(socket, to: system_path(socket.assigns[:selected_tab]))}
+    end
+  end
+
+  defp system_path(tab) when is_binary(tab), do: ~p"/admin/system?#{%{tab: tab}}"
+  defp system_path(_tab), do: ~p"/admin/system"
 
   @impl true
   def render(assigns) do

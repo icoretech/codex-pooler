@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.InviteCreationDialog
   alias CodexPoolerWeb.Admin.LiveUpdatesHooks
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.PoolWizardComponents
@@ -84,6 +85,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         chunk_timeout: 5_000,
         auto_upload: true
       )
+      |> NotificationCenterHooks.follow_viewer_visibility()
 
     {:ok, socket}
   end
@@ -119,6 +121,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   def handle_info(:live_updates_resumed, socket) do
     {:noreply, resume_upstreams_reload(socket)}
+  end
+
+  # A role change or a Pool granted or revoked changes which accounts, Pools
+  # and management controls this page may show. It re-reads them at once, even
+  # behind an open dialog (an ordinary reload waits for it to close), and
+  # closes a dialog on an account the viewer can no longer see, the Pool editor
+  # the viewer may no longer use, and a dialog that needs a Pool when none is
+  # left (findings#206 row 206-329).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    {socket, closed?} = socket |> reload_upstreams() |> close_lost_account_dialogs()
+
+    # The Pool editor and the invite dialog live in the URL: closing them is a
+    # patch to the page without their parameters.
+    url_dialog_lost? = url_dialog_lost?(socket)
+    socket = if url_dialog_lost?, do: push_patch(socket, to: upstreams_path(socket)), else: socket
+    {:noreply, if(closed? or url_dialog_lost?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
   end
 
   @impl true
@@ -947,6 +965,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     |> OAuthWorkflow.close()
     |> close_saved_reset_policy_dialog()
   end
+
+  defp close_lost_account_dialogs(socket) do
+    visible_account_ids = MapSet.new(socket.assigns.upstream_accounts, & &1.identity.id)
+    lost? = &(match?(%{identity: %{id: _id}}, &1) and not MapSet.member?(visible_account_ids, &1.identity.id))
+    no_pools? = socket.assigns.pools == []
+
+    {socket, false}
+    |> close_if(lost?.(socket.assigns.renaming_account), &close_rename_account_dialog/1)
+    |> close_if(lost?.(socket.assigns.deleting_account), &AccountLifecycleWorkflow.close_delete/1)
+    |> close_if(lost?.(socket.assigns.editing_saved_reset_policy), &close_saved_reset_policy_dialog/1)
+    |> close_if(lost?.(socket.assigns.confirming_saved_reset_redemption), &assign(&1, :confirming_saved_reset_redemption, nil))
+    |> close_if(socket.assigns.oauth_linking and (lost?.(socket.assigns.oauth_link_target_account) or no_pools?), &OAuthWorkflow.close/1)
+    |> close_if(socket.assigns.importing_auth_json and no_pools?, &AuthJsonWorkflow.close/1)
+  end
+
+  defp url_dialog_lost?(%{assigns: %{editing_pool: %{id: pool_id}, current_scope: scope}}),
+    do: match?({:error, _reason}, PoolEditorWorkflow.find_editable_pool(scope, pool_id))
+
+  defp url_dialog_lost?(%{assigns: %{creating_invite: true, pools: []}}), do: true
+  defp url_dialog_lost?(_socket), do: false
+
+  defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
+  defp close_if({socket, closed?}, false, _close), do: {socket, closed?}
 
   defp close_rename_account_dialog(socket) do
     assign(socket,

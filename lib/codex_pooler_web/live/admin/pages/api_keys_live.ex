@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   alias CodexPoolerWeb.Admin.ApiKeyWizardComponents
   alias CodexPoolerWeb.Admin.ApiKeyWizardComponents.{Limits, Review}
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -45,7 +46,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
        created_secret: nil,
        pool_options: [],
        data_load_warnings: []
-     )}
+     )
+     |> NotificationCenterHooks.follow_viewer_visibility()}
   end
 
   @impl true
@@ -141,18 +143,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   end
 
   def handle_event("cancel_edit", _params, socket) do
-    params = ApiKeyPolicyForm.empty_params(socket.assigns.pools)
-
-    {:noreply,
-     socket
-     |> cancel_api_key_budget_usage()
-     |> assign(
-       creating_api_key: false,
-       editing_api_key: nil,
-       created_secret: nil,
-       api_key_wizard_step: "basics"
-     )
-     |> assign_api_key_wizard_state(params)}
+    {:noreply, close_edit_dialog(socket)}
   end
 
   def handle_event("close_secret", _params, socket) do
@@ -263,6 +254,29 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   def handle_info(:live_updates_resumed, socket) do
     {:noreply, load_api_keys(socket, reset_form: false, clear_secret: false)}
   end
+
+  # A role change or a Pool granted or revoked changes which Pools and keys this
+  # page may show. It re-reads them at once, and closes an open dialog on a key
+  # or a Pool the viewer can no longer see; a secret already shown stays
+  # (findings#206 row 206-329).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    socket = load_api_keys(socket, reset_form: false, clear_secret: false)
+    visible? = &Map.has_key?(socket.assigns.pool_lookup, &1)
+
+    {socket, closed?} =
+      {socket, false}
+      |> close_if(match?(%APIKey{}, socket.assigns.editing_api_key) and not visible?.(socket.assigns.editing_api_key.pool_id), &close_edit_dialog/1)
+      |> close_if(match?(%{pool_id: _}, socket.assigns.deleting_api_key) and not visible?.(socket.assigns.deleting_api_key.pool_id), &clear_deleting_api_key/1)
+      |> close_if(
+        socket.assigns.creating_api_key and is_nil(socket.assigns.created_secret) and not visible?.(socket.assigns.api_key_params["pool_id"]),
+        &close_create_dialog/1
+      )
+
+    {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+  end
+
+  defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
+  defp close_if({socket, closed?}, false, _close), do: {socket, closed?}
 
   @impl true
   def handle_async(
@@ -513,6 +527,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
   defp find_api_key(socket, api_key_id) do
     Enum.find(socket.assigns.api_keys, &(&1.id == api_key_id))
+  end
+
+  defp close_edit_dialog(socket) do
+    params = ApiKeyPolicyForm.empty_params(socket.assigns.pools)
+
+    socket
+    |> cancel_api_key_budget_usage()
+    |> assign(
+      creating_api_key: false,
+      editing_api_key: nil,
+      created_secret: nil,
+      api_key_wizard_step: "basics"
+    )
+    |> assign_api_key_wizard_state(params)
   end
 
   defp close_create_dialog(socket) do

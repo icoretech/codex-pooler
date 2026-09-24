@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.LogPagination
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.RequestLogDetailDrawer
@@ -80,7 +81,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        request_log_newer_count: 0,
        request_log_newer_count_exact?: true,
        selected_request_log: nil
-     )}
+     )
+     |> NotificationCenterHooks.follow_viewer_visibility()}
   end
 
   @impl true
@@ -180,6 +182,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
   def handle_info(:live_updates_resumed, socket) do
     {:noreply, request_request_logs_refresh(socket)}
+  end
+
+  # A role change or a Pool granted or revoked changes which Pools this page
+  # may read. It re-reads them with the rows, the filter options and its Pool
+  # subscriptions at once, not at the next navigation, and an open request the
+  # viewer can no longer see closes (findings#206 row 206-329).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    {:noreply, request_request_logs(socket, socket.assigns.current_params, :filter_patch)}
   end
 
   @impl true

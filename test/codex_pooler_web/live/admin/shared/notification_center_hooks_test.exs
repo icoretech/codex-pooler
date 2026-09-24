@@ -409,7 +409,10 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     [assigned_pool, other_pool] = for label <- ["assigned", "other"], do: pool!(owner_scope, label)
     other_id = record_bell_incident!(other_pool).id
     %{user: admin, conn: admin_conn} = assigned_admin!(owner_scope, [assigned_pool])
-    [_owner_view, admin_view] = views = open_pages!([owner_conn, admin_conn])
+    # The Jobs page remounts when its viewer gains or loses the owner role
+    # (findings#206 row 206-329), so the role change is watched from a page that
+    # does not follow the viewer.
+    [_owner_view, admin_view] = views = open_pages!([owner_conn, admin_conn], ~p"/admin/audit-logs")
 
     assert %{badge_count: 0} = notification_center(admin_view)
 
@@ -686,9 +689,9 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     end
   end
 
-  defp open_pages!(conns) do
+  defp open_pages!(conns, path \\ ~p"/admin/jobs") do
     for conn <- conns do
-      {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+      {:ok, view, _html} = live(conn, path)
       trace_notification_reloads!(view)
       view
     end

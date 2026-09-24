@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.LiveUpdatesHooks
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.OperatorComponents
   alias CodexPoolerWeb.Admin.OperatorComponents.Dialogs
   alias CodexPoolerWeb.Admin.OperatorForm
@@ -34,6 +35,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
        temporary_password_receipt: nil
      )
      |> maybe_subscribe_operator_events()
+     |> NotificationCenterHooks.follow_viewer_visibility()
      |> assign_operator_management()
      |> operator_management_socket()}
   end
@@ -279,6 +281,28 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   def handle_info(:live_updates_resumed, socket) do
     {:noreply, reload_operators(socket)}
   end
+
+  # Operator management belongs to owners. When the viewer's own role changes
+  # the page re-reads at once, even while live updates are paused, and a
+  # demoted owner's create, edit and password dialogs close with the list; a
+  # temporary password already shown stays (findings#206 row 206-329).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    case assign_operator_management(socket) do
+      {:ok, socket} ->
+        {:noreply, socket}
+
+      {:error, :operator_management_denied, socket} ->
+        socket = socket |> clear_editing() |> close_reset_form()
+
+        if is_nil(socket.assigns.temporary_password_receipt),
+          do: {:noreply, close_create_dialog(socket)},
+          else: {:noreply, socket}
+    end
+  end
+
+  # The password dialog closes unless it already shows a temporary password.
+  defp close_reset_form(%{assigns: %{password_dialog_receipt: nil}} = socket), do: clear_resetting(socket)
+  defp close_reset_form(socket), do: socket
 
   @impl true
   def render(assigns) do

@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   alias CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards
   alias CodexPoolerWeb.Admin.JobsReadModel
   alias CodexPoolerWeb.Admin.LiveUpdatesHooks
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -41,6 +42,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
       )
       |> assign_page_state(empty_page_state, %{})
       |> assign(:jobs_page_loaded?, false)
+      |> NotificationCenterHooks.follow_viewer_visibility()
 
     if socket.assigns.owner_authorized? do
       {:ok, maybe_start_connected_refresh(socket)}
@@ -167,6 +169,18 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   def handle_info(:fallback_refresh_jobs, socket) do
     schedule_fallback_refresh()
     LiveUpdatesHooks.unless_paused(socket, &refresh_jobs/1)
+  end
+
+  # Jobs belong to owners. A viewer who lost or gained the owner role reloads
+  # the page, which mounts it again with the role it has now; any other change
+  # of the viewer's Pools does not change what an owner sees here (findings#206
+  # row 206-329).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    if Pools.owner?(socket.assigns.current_scope) == socket.assigns.owner_authorized? do
+      {:noreply, socket}
+    else
+      {:noreply, push_navigate(socket, to: ~p"/admin/jobs?#{socket.assigns[:current_params] || %{}}")}
+    end
   end
 
   def handle_info(:live_updates_resumed, socket) do
