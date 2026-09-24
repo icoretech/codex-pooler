@@ -130,10 +130,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendChainSecondHopTest 
   end
 
   # Owner forwarding switched on in the middle of a turn whose chain was built
-  # with it off: the forwarded resend meets the cut websocket resend, a
-  # turn-claim successor, and is refused (a mixed chain is not resumed across
-  # the switch); the released client's HTTPS fallback then finishes the turn,
-  # chained onto the cut resend and served once.
+  # with it off (findings#206 row 206-533). The owner's client-retry preflight
+  # judges the newest websocket request of the turn. After an HTTPS fallback
+  # that request is the cut websocket resend, which carries both the link from
+  # the request before it and the link to the fallback (a native HTTP turn
+  # records no semantic digest, so the preflight never picks it), and the
+  # preflight's single-row lineage read raised on it and closed the socket
+  # `1011`. A request that is itself a successor keeps the preflight's fence:
+  # the forwarded resend gets `409 duplicate_turn` and nothing is dispatched.
+  for mode <- ["full", "lite"] do
+    @tag serving_mode: mode
+    test "websocket #{mode}: a forwarded resend after a direct chain that ended in an HTTPS fallback is refused, not failed", ctx do
+      measured = run_direct_chain(ctx.serving_mode, :lifecycle_cut, :https_then_forwarded_websocket)
+      CodexPooler.TestDiagnostics.puts(fn -> "mode switch after https #{ctx.serving_mode}: #{inspect(measured)}" end)
+
+      assert measured.first_resend == {200, "response.completed"}
+      assert measured.second_resend == {"error", "duplicate_turn"}
+      assert measured.requests == [{"failed", "upstream_stream_error", "websocket"}, {"failed", "client_disconnected", "websocket"}, {"succeeded", nil, "http_sse"}]
+      assert measured.links == [{0, 1}, {1, 2}]
+      assert measured.upstream_requests_after_second == 3
+    end
+  end
+
+  # The same switch before the fallback: the forwarded resend meets the cut
+  # websocket resend, a turn-claim successor, and is refused (a mixed chain is
+  # not resumed across the switch); the released client's HTTPS fallback then
+  # finishes the turn, chained onto the cut resend and served once.
   for mode <- ["full", "lite"] do
     @tag serving_mode: mode
     test "websocket #{mode}: a forwarded resend after a direct chain is refused and its HTTPS fallback is served once", ctx do
@@ -231,6 +253,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendChainSecondHopTest 
     count = FakeUpstream.count(upstream)
     {{type, code}, log} = with_info_log(fn -> websocket_outcome(port, setup, thread, frame) end)
     {first, {type, code, resend_disposition(log, "websocket_turn_claim")}, count}
+  end
+
+  defp resend_tail!(:https_then_forwarded_websocket, port, setup, thread, frame, upstream) do
+    first = https_outcome(post_https_fallback!(setup, thread, frame))
+    _rows = await_rows!(setup, 3)
+    count = FakeUpstream.count(upstream)
+    put_owner_forwarding!(true)
+    {first, websocket_outcome(port, setup, thread, frame), count}
   end
 
   defp resend_tail!(:forwarded_websocket_then_https, port, setup, thread, frame, upstream) do

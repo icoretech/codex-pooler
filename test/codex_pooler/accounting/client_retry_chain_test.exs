@@ -105,6 +105,23 @@ defmodule CodexPooler.Accounting.ClientRetryChainTest do
     assert {:error, :retry_expired} = Accounting.claim_client_retry_successor(ctx.setup.auth, ctx.setup.model, ctx.payload, ctx.opts)
   end
 
+  # The shape a direct chain leaves after an HTTPS fallback when owner
+  # forwarding is then switched on: the newest websocket request of the turn is
+  # a turn-claim successor linked from the request before it and to the native
+  # HTTP fallback, which records no semantic digest (findings#206 row 206-533).
+  # A request that is itself a successor keeps the fence, and the lineage read
+  # must not raise on two links.
+  test "a request with both a predecessor and a successor link is refused, not raised", ctx do
+    successor = foreign_request!(ctx.setup)
+    predecessor = foreign_request!(ctx.setup)
+    _incoming = ClientRetry.insert_link!(predecessor, ctx.original, db_now())
+    _outgoing = ClientRetry.insert_link!(ctx.original, successor, db_now())
+
+    assert {:error, :retry_exhausted} = preflight(ctx)
+    assert {:error, :retry_exhausted} = Accounting.claim_client_retry_successor(ctx.setup.auth, ctx.setup.model, ctx.payload, ctx.opts)
+    assert Repo.aggregate(RequestClientRetryLink, :count) == 2
+  end
+
   defp preflight(ctx), do: Accounting.client_retry_preflight_snapshot(ctx.session, ctx.setup.api_key, ctx.setup.model, ctx.opts)
 
   defp claim_and_cut!(ctx) do

@@ -2163,12 +2163,22 @@ defmodule CodexPooler.Accounting.ClientRetry do
     lock_lineage(request_id, %{})
   end
 
+  # A request carries at most one link on each side (both sides of
+  # `request_client_retry_links` are unique), so it can carry two: a
+  # turn-claim successor whose own successor is a native HTTP fallback, which
+  # records no semantic digest and is never the preflight's predecessor, is
+  # the newest websocket request of its turn once owner forwarding is switched
+  # on (findings#206 row 206-533). The link naming it as a successor decides:
+  # it has spent its retry (`validate_policy_lineage/3`).
   defp lock_lineage(request_id, _input) do
-    Repo.one(
-      from link in RequestClientRetryLink,
-        where: link.predecessor_request_id == ^request_id or link.successor_request_id == ^request_id,
-        lock: "FOR UPDATE"
-    )
+    links =
+      Repo.all(
+        from link in RequestClientRetryLink,
+          where: link.predecessor_request_id == ^request_id or link.successor_request_id == ^request_id,
+          lock: "FOR UPDATE"
+      )
+
+    Enum.find(links, &(&1.successor_request_id == request_id)) || List.first(links)
   end
 
   # A request that is itself a successor has spent its retry. A request with a
