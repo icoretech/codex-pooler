@@ -196,10 +196,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
            socket.assigns.deleting_api_key,
          true <- deleting_api_key_id == api_key_id,
          true <- deleting_api_key_prefix == confirmation_prefix,
-         {:ok, _api_key} <- Access.delete_api_key(socket.assigns.current_scope, api_key_id) do
+         {status, _api_key} when status in [:ok, :deleting] <- Access.delete_api_key(socket.assigns.current_scope, api_key_id) do
+      # A key with a large history is revoked at once and deleted by a background job; its row
+      # shows it as deleting until the job removes it (findings#206 row 206-561).
+      message =
+        if status == :ok,
+          do: "API key deleted",
+          else: "API key revoked. Its deletion started; the key disappears once its request history has been detached."
+
       {:noreply,
        socket
-       |> put_flash(:info, "API key deleted")
+       |> put_flash(:info, message)
        |> clear_deleting_api_key()
        |> load_api_keys(reset_form: true)}
     else

@@ -1,5 +1,6 @@
 defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
   use CodexPoolerWeb.ConnCase, async: false
+  use Oban.Testing, repo: CodexPooler.Repo
 
   import Phoenix.LiveViewTest
   import CodexPooler.PoolerFixtures
@@ -224,6 +225,40 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
     assert retained.api_key_id == nil
     assert retained.pool_id == pool.id
     assert retained.status == "succeeded"
+  end
+
+  test "a key with a large history is revoked and shows as deleting until its deletion job removes it", %{
+    conn: conn,
+    scope: scope
+  } do
+    CodexPooler.TestAppEnv.restore_on_exit(:api_key_deletion_immediate_request_limit)
+    Application.put_env(:codex_pooler, :api_key_deletion_immediate_request_limit, 1)
+
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "key-large-history", name: "Key Large History"})
+    {:ok, %{api_key: api_key}} = Access.create_api_key(scope, pool, %{display_name: "Large history key"})
+    history = CodexPooler.PoolerFixtures.request_fixture(%{pool: pool, api_key: api_key})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+
+    view |> element("#delete-api-key-#{api_key.id}") |> render_click()
+
+    view
+    |> element("#api-key-delete-form")
+    |> render_submit(%{"api_key_delete" => %{"id" => api_key.id, "confirmation_prefix" => api_key.key_prefix}})
+
+    assert has_element?(view, "#flash-info", "Its deletion started")
+    refute has_element?(view, "#flash-info", "API key deleted")
+    assert has_element?(view, "#api-key-row-#{api_key.id}-status", "revoked")
+    assert has_element?(view, "#api-key-row-#{api_key.id}-deletion", "deleting")
+    assert has_element?(view, "#delete-api-key-#{api_key.id}[disabled]")
+    assert Repo.get!(APIKey, api_key.id).status == "revoked"
+
+    assert [job] = all_enqueued(worker: CodexPooler.Jobs.APIKeyDeletionWorker, args: %{"api_key_id" => api_key.id})
+    assert :ok = perform_job(CodexPooler.Jobs.APIKeyDeletionWorker, job.args)
+
+    refute Repo.get(APIKey, api_key.id)
+    assert Repo.get!(CodexPooler.Accounting.Request, history.id).api_key_id == nil
+    refute has_element?(view, "#api-key-row-#{api_key.id}")
   end
 
   defp extract_raw_key!(html) do

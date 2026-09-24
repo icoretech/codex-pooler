@@ -383,6 +383,22 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
               >
                 {api_key.status}
               </span>
+              <span
+                :if={Map.get(api_key, :deletion) == :in_progress}
+                id={"api-key-row-#{api_key.id}-deletion"}
+                class={[AdminBadges.lifecycle_chip_class("paused"), "shrink-0"]}
+                title="A background job is detaching this key's request history; the key disappears when it finishes"
+              >
+                deleting
+              </span>
+              <span
+                :if={Map.get(api_key, :deletion) == :failed}
+                id={"api-key-row-#{api_key.id}-deletion"}
+                class={[AdminBadges.lifecycle_chip_class("deleted"), "shrink-0"]}
+                title="The last deletion attempt gave up; delete the key again to resume"
+              >
+                deletion failed
+              </span>
               <.api_key_actions_menu api_key={api_key} />
             </div>
           </article>
@@ -498,6 +514,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             variant={:danger}
             phx-click="delete_api_key"
             phx-value-id={@api_key.id}
+            disabled={Map.get(@api_key, :deletion) == :in_progress}
           />
         </li>
       </ul>

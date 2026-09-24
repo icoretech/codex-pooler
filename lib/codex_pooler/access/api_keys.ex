@@ -11,6 +11,7 @@ defmodule CodexPooler.Access.APIKeys do
     Assignment,
     AuditLog,
     Authentication,
+    Deletion,
     Errors,
     Material,
     Notifications,
@@ -488,8 +489,13 @@ defmodule CodexPooler.Access.APIKeys do
   def revoke_api_key(_scope, _api_key),
     do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
 
+  @doc """
+  Deletes an API key. A key with a small history is deleted at once (`{:ok, api_key}`); a larger
+  one is revoked at once and deleted by a background job (`{:deleting, api_key}`), see
+  `CodexPooler.Access.APIKeys.Deletion` (findings#206 row 206-561).
+  """
   @spec delete_api_key(Scope.t(), APIKey.t() | Ecto.UUID.t()) ::
-          {:ok, APIKey.t()} | {:error, term()}
+          {:ok, APIKey.t()} | {:deleting, APIKey.t()} | {:error, term()}
   def delete_api_key(%Scope{} = scope, %APIKey{} = api_key) do
     with {:ok, _decision} <-
            PoolAuthorization.require_capability(
@@ -497,16 +503,7 @@ defmodule CodexPooler.Access.APIKeys do
              PoolAuthorization.capability(:pool_api_key_manage),
              pool_id: api_key.pool_id
            ) do
-      delete_api_key_serialized(api_key)
-      |> tap(fn
-        {:ok, deleted_api_key} ->
-          DashboardSessions.broadcast_invalidation(deleted_api_key, "api_key_deleted")
-
-        {:error, _reason} ->
-          :ok
-      end)
-      |> Notifications.notify_api_key_change("api_key_deleted")
-      |> AuditLog.audit_api_key_change(scope, "api_key.delete")
+      Deletion.request(scope, api_key)
     end
   end
 
@@ -519,48 +516,68 @@ defmodule CodexPooler.Access.APIKeys do
   def delete_api_key(_scope, _api_key),
     do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
 
-  defp delete_api_key_serialized(%APIKey{} = api_key) do
-    delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), 3)
+  @doc """
+  Deletes the key row under `statement_timeout_ms` and writes its `api_key.delete` audit event in
+  the same transaction, for `delete_api_key/2` and the deletion job. `{:error, :statement_timeout}`
+  when the delete ran out of its bound; nothing was deleted then.
+  """
+  @spec delete_api_key_row(Scope.t(), APIKey.t(), pos_integer()) ::
+          {:ok, APIKey.t()} | {:error, :statement_timeout | term()}
+  def delete_api_key_row(%Scope{} = scope, %APIKey{} = api_key, statement_timeout_ms) do
+    delete_context = %{scope: scope, statement_timeout_ms: statement_timeout_ms}
+
+    api_key
+    |> delete_api_key_serialized(session_ids_for_api_key(api_key.id), 3, delete_context)
+    |> tap(fn
+      {:ok, deleted_api_key} ->
+        DashboardSessions.broadcast_invalidation(deleted_api_key, "api_key_deleted")
+
+      {:error, _reason} ->
+        :ok
+    end)
+    |> Notifications.notify_api_key_change("api_key_deleted")
   end
 
-  defp delete_api_key_serialized(api_key, session_ids, attempts_left) do
+  defp delete_api_key_serialized(api_key, session_ids, attempts_left, delete_context) do
     maybe_wait_after_api_key_delete_snapshot(api_key.id, session_ids, attempts_left)
 
-    result = Repo.transact(fn -> delete_api_key_with_locked_sessions(api_key, session_ids) end)
+    result = Repo.transact(fn -> delete_api_key_with_locked_sessions(api_key, session_ids, delete_context) end)
 
     case normalize_api_key_delete_result(result) do
       {:error, %{code: :api_key_delete_conflict}} when attempts_left > 1 ->
-        delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), attempts_left - 1)
+        delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), attempts_left - 1, delete_context)
 
       normalized ->
         normalized
     end
   rescue
     exception in Postgrex.Error ->
-      if api_key_delete_retryable_postgres_error?(exception) do
-        retry_api_key_delete_after_conflict(api_key, attempts_left)
-      else
-        reraise exception, __STACKTRACE__
+      cond do
+        match?(%{postgres: %{code: :query_canceled}}, exception) -> {:error, :statement_timeout}
+        api_key_delete_retryable_postgres_error?(exception) -> retry_api_key_delete_after_conflict(api_key, attempts_left, delete_context)
+        true -> reraise exception, __STACKTRACE__
       end
 
     exception in Ecto.ConstraintError ->
       if exception.type == :foreign_key do
-        retry_api_key_delete_after_conflict(api_key, attempts_left)
+        retry_api_key_delete_after_conflict(api_key, attempts_left, delete_context)
       else
         reraise exception, __STACKTRACE__
       end
   end
 
-  defp delete_api_key_with_locked_sessions(api_key, session_ids) do
+  defp delete_api_key_with_locked_sessions(api_key, session_ids, %{scope: scope, statement_timeout_ms: statement_timeout_ms}) do
+    Repo.query!("SELECT set_config('statement_timeout', $1, true)", ["#{statement_timeout_ms}ms"])
     lock_api_key_sessions(session_ids)
 
     with %APIKey{} = locked_api_key <- lock_api_key(api_key.id),
          :ok <- require_current_api_key_sessions(locked_api_key.id, session_ids),
          :ok <- close_api_key_replays(locked_api_key.id) do
+      # The audit event commits with the delete or not at all (findings#206 row 206-561).
       DashboardSessionLifecycle.run_in_transaction(
         locked_api_key,
         "api_key_deleted",
-        fn -> Repo.delete(locked_api_key) end
+        fn -> locked_api_key |> Repo.delete() |> AuditLog.audit_api_key_change(scope, "api_key.delete") end
       )
     else
       nil -> {:error, Errors.access_error(:api_key_not_found, "api key was not found")}
@@ -568,10 +585,10 @@ defmodule CodexPooler.Access.APIKeys do
     end
   end
 
-  defp retry_api_key_delete_after_conflict(api_key, attempts_left) when attempts_left > 1,
-    do: delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), attempts_left - 1)
+  defp retry_api_key_delete_after_conflict(api_key, attempts_left, delete_context) when attempts_left > 1,
+    do: delete_api_key_serialized(api_key, session_ids_for_api_key(api_key.id), attempts_left - 1, delete_context)
 
-  defp retry_api_key_delete_after_conflict(_api_key, _attempts_left),
+  defp retry_api_key_delete_after_conflict(_api_key, _attempts_left, _delete_context),
     do: api_key_delete_conflict()
 
   defp api_key_delete_retryable_postgres_error?(%Postgrex.Error{

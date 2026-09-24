@@ -80,7 +80,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     visible_api_keys =
       filter_model_policy(pool_filtered_api_keys, model_policy_filter, model_policy_summaries)
 
-    visible_api_key_rows = Enum.map(visible_api_keys, &api_key_row/1)
+    deletion_states = Access.api_key_deletion_states(for api_key <- visible_api_keys, api_key.status == "revoked", do: api_key.id)
+    visible_api_key_rows = Enum.map(visible_api_keys, &api_key_row(&1, deletion_states))
 
     %{
       pools: pools,
@@ -425,8 +426,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     end
   end
 
-  defp api_key_row(%APIKey{} = api_key) do
-    Map.take(api_key, [
+  defp api_key_row(%APIKey{} = api_key, deletion_states) do
+    api_key
+    |> Map.take([
       :id,
       :pool_id,
       :display_name,
@@ -439,6 +441,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
       :metadata,
       :created_at
     ])
+    |> Map.put(:deletion, Map.get(deletion_states, api_key.id))
   end
 
   defp dom_token(value) do
