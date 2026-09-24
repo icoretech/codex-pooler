@@ -43,6 +43,18 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimitTest do
     assert UsageLimit.earliest_reset([], @now) == :unknown
   end
 
+  test "a provider-denied candidate returns at its advice, not at the marked row's reset" do
+    denied = %{
+      "code" => "quota_window_unusable",
+      "reason_codes" => ["exhausted", "provider_denied"],
+      "reset_at" => DateTime.to_iso8601(in_seconds(30 * 3_600)),
+      "hint_reset_at" => DateTime.to_iso8601(in_seconds(3_600))
+    }
+
+    assert {:ok, %{resets_in_seconds: 3_600}} = UsageLimit.earliest_reset([candidate([denied])], @now)
+    assert UsageLimit.earliest_reset([candidate([Map.delete(denied, "hint_reset_at")])], @now) == :unknown
+  end
+
   test "retryable/1 turns the terminal answer back into the 503" do
     error = %{status: 429, code: "quota_exhausted", usage_limit: %{resets_at: 1, resets_in_seconds: 1}}
 

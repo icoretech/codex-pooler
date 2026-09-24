@@ -39,6 +39,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.AccountDenial do
           reached_type: String.t(),
           observed_at: DateTime.t(),
           reset_at: DateTime.t() | nil,
+          hint_reset_at: DateTime.t() | nil,
           source: String.t() | nil
         }
 
@@ -47,12 +48,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.AccountDenial do
 
   @spec active(RoutingQuotaSnapshot.t() | nil) :: t() | nil
   def active(%RoutingQuotaSnapshot{as_of: %DateTime{} = as_of} = snapshot) do
-    snapshot
-    |> RoutingQuotaSnapshot.time_visible_raw_windows()
+    windows = RoutingQuotaSnapshot.time_visible_raw_windows(snapshot)
+
+    windows
     |> Enum.filter(&account_denial_window?/1)
     |> Enum.reject(&superseded?(&1, snapshot))
     |> latest_observation()
     |> in_force(as_of)
+    |> put_hint_reset_at(windows, as_of)
   end
 
   def active(_snapshot), do: nil
@@ -99,6 +102,35 @@ defmodule CodexPooler.Upstreams.Quota.Windows.AccountDenial do
       }
     end
   end
+
+  # The retry advice for a client refused because of the denial
+  # (findings#206 rows 206-508, 206-522). The marker rides whichever rows the
+  # refusing response refreshed: a refusal that refreshed only the weekly row
+  # (96% used, carrying the workspace marker) names the next day as the
+  # denial's own reset, while the block can clear with the 5-hour window
+  # about an hour later. Which window the workspace block follows is not on
+  # the wire, so the advice is the earliest future reset among the account's
+  # fresh windows, never later than the denial's own: a hint too early costs
+  # the client one more refused request, one too late keeps it away for
+  # hours. A resetless denial gives no advice.
+  defp put_hint_reset_at(nil, _windows, _as_of), do: nil
+  defp put_hint_reset_at(%{reset_at: nil} = denial, _windows, _as_of), do: Map.put(denial, :hint_reset_at, nil)
+
+  defp put_hint_reset_at(%{reset_at: %DateTime{} = reset_at} = denial, windows, as_of) do
+    hint_reset_at =
+      windows
+      |> Enum.filter(&fresh_account_reset_ahead?(&1, as_of))
+      |> Enum.map(& &1.reset_at)
+      |> Enum.min(DateTime, fn -> reset_at end)
+      |> then(&Enum.min([&1, reset_at], DateTime))
+
+    Map.put(denial, :hint_reset_at, hint_reset_at)
+  end
+
+  defp fresh_account_reset_ahead?(%AccountQuotaWindow{quota_scope: "account", reset_at: %DateTime{} = reset_at} = window, as_of),
+    do: DateTime.compare(reset_at, as_of) == :gt and Evidence.current_freshness_state(window, as_of) == "fresh"
+
+  defp fresh_account_reset_ahead?(%AccountQuotaWindow{}, _as_of), do: false
 
   defp in_force?(%DateTime{} = reset_at, _observed_at, as_of), do: DateTime.compare(reset_at, as_of) == :gt
 

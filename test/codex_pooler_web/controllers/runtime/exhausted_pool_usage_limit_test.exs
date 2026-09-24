@@ -163,8 +163,9 @@ defmodule CodexPoolerWeb.Runtime.ExhaustedPoolUsageLimitTest do
   # weekly header row (96%, resetting the next day), while its 5-hour row, not
   # exhausted, resets about an hour later, next to an exhausted sibling. The
   # Pool's hint is its earliest return: the sibling's reset (findings#206 row
-  # 206-508).
-  for {label, sibling_reset, expected} <- [{"the exhausted sibling resets first", 2_700, 2_700}] do
+  # 206-508), or the denied account's earliest fresh reset rather than the
+  # marked row's, which stays the denial's deadline (row 206-522).
+  for {label, sibling_reset, expected} <- [{"the exhausted sibling resets first", 2_700, 2_700}, {"the denied account's 5-hour window resets first", 10_800, 3_600}] do
     @sibling_reset sibling_reset
     @expected expected
 

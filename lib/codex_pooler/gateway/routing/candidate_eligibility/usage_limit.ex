@@ -59,7 +59,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit do
 
   defp exhaustion_reset(reason, now) when is_map(reason) do
     with true <- exhaustion?(reason),
-         %DateTime{} = reset_at <- reset_at(field(reason, :reset_at)),
+         %DateTime{} = reset_at <- reset_at(reset_field(reason)),
          :gt <- DateTime.compare(reset_at, now) do
       reset_at
     else
@@ -68,6 +68,15 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit do
   end
 
   defp exhaustion_reset(_reason, _now), do: nil
+
+  # A workspace-level provider denial names its own advice, the earliest
+  # fresh account reset (findings#206 row 206-522); every other exhaustion
+  # returns with its window.
+  defp reset_field(reason) do
+    if provider_denied?(reason), do: field(reason, :hint_reset_at), else: field(reason, :reset_at)
+  end
+
+  defp provider_denied?(reason), do: is_list(field(reason, :reason_codes)) and "provider_denied" in field(reason, :reason_codes)
 
   defp exhaustion?(reason) do
     field(reason, :code) == "quota_weekly_exhausted" or

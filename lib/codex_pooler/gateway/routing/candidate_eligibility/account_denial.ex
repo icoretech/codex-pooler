@@ -82,7 +82,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.AccountDenial do
           "quota_family" => "account",
           "source" => denial.source,
           "rate_limit_reached_type" => denial.reached_type,
-          "reset_at" => iso8601_or_nil(denial.reset_at)
+          "reset_at" => iso8601_or_nil(denial.reset_at),
+          "hint_reset_at" => iso8601_or_nil(Map.get(denial, :hint_reset_at))
         }
       ]
     }
