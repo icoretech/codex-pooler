@@ -4,6 +4,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Admin.UpstreamCockpitMetrics
   alias CodexPooler.Pools
@@ -247,6 +248,39 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
     assert hd(contribution.items).successful_request_count_7d == 4
   end
 
+  # Pool contribution probes each successful request of the 7-day window once
+  # for an attempt of the identity. With the statistics of tables nobody has
+  # analyzed yet, the join it replaced (against the identity's grouped request
+  # ids) and an EXISTS the planner may unnest both expect one window request
+  # and rescan the identity's attempts for every request: 6,011,005 and
+  # 4,008,004 plan rows here, about 4 s over 10k fresh rows (findings#206 row
+  # 206-452). The probe handles 4,003 with missing and with fresh statistics.
+  test "pool contribution work stays linear in the window with missing and fresh planner statistics" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    scope = Scope.for_user(owner)
+    {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug("contribution-plan"), name: "Contribution Plan"})
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    count = 2_000
+    insert_contribution_history!(pool, assignment, count, now)
+    assignments = [assignment_summary(assignment, pool)]
+
+    for statistics <- [:missing, :fresh] do
+      put_statistics!(statistics)
+
+      {contribution, queries} = capture_queries(fn -> UpstreamCockpitMetrics.pool_contribution(scope, identity, assignments) end)
+      assert contribution.kpis.successful_requests_7d == count + 1
+      assert [{query, params}] = Enum.filter(queries, fn {query, _params} -> String.contains?(query, "\"attempts\"") end)
+
+      %{rows: [[[explain]]]} = Repo.query!("EXPLAIN (ANALYZE, FORMAT JSON) " <> query, params)
+      handled = handled_rows(explain["Plan"])
+
+      # A handful of plan nodes each handling the window once (a bitmap scan, a sort, the
+      # grouped join's hash at 10,006 with fresh statistics); a rescan per request is count^2 / 2.
+      assert handled <= 6 * (count + 1), "pool contribution handled #{handled} plan rows for #{count} window requests with #{statistics} statistics: #{inspect(explain)}"
+    end
+  end
+
   test "recent request event rows return only safe metadata for visible retried and failed requests" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     scope = Scope.for_user(owner)
@@ -356,6 +390,81 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
     })
 
     request
+  end
+
+  # A seed plus one succeeded request per ten seconds, each with one attempt of the assignment.
+  defp insert_contribution_history!(pool, assignment, count, now) do
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    seed = request_fixture(%{pool: pool, api_key: api_key}, %{status: "succeeded"})
+    seed_attempt = attempt_fixture(seed, assignment, %{status: "succeeded"})
+    request_fields = Request.__schema__(:fields)
+    attempt_fields = Attempt.__schema__(:fields)
+
+    requests =
+      for ordinal <- 1..count do
+        seed
+        |> Map.take(request_fields)
+        |> Map.merge(%{id: Ecto.UUID.generate(), correlation_id: "contribution-plan-#{System.unique_integer([:positive])}", admitted_at: DateTime.add(now, -10 * ordinal, :second)})
+      end
+
+    requests |> Enum.chunk_every(1_000) |> Enum.each(&Repo.insert_all(Request, &1))
+
+    requests
+    |> Enum.map(&(seed_attempt |> Map.take(attempt_fields) |> Map.merge(%{id: Ecto.UUID.generate(), request_id: &1.id, started_at: &1.admitted_at})))
+    |> Enum.chunk_every(1_000)
+    |> Enum.each(&Repo.insert_all(Attempt, &1))
+  end
+
+  # Missing: what the planner sees before a table's first ANALYZE, in a fresh
+  # database or right after a bulk load.
+  defp put_statistics!(:missing) do
+    for table <- ["requests", "attempts"] do
+      Repo.query!("SELECT pg_clear_relation_stats('public', $1)", [table])
+      Repo.query!("SELECT pg_clear_attribute_stats('public', $1, attname, false) FROM pg_attribute WHERE attrelid = $1::text::regclass AND attnum > 0 AND NOT attisdropped", [table])
+    end
+
+    assert %{rows: [[0, [-1.0, -1.0]]]} =
+             Repo.query!("SELECT (SELECT count(*) FROM pg_stats WHERE schemaname = 'public' AND tablename IN ('requests', 'attempts')), array_agg(reltuples) FROM pg_class WHERE oid IN ('public.requests'::regclass, 'public.attempts'::regclass)")
+  end
+
+  defp put_statistics!(:fresh) do
+    Repo.query!("ANALYZE requests")
+    Repo.query!("ANALYZE attempts")
+  end
+
+  # Every row each plan node handled: the rows it returned and the rows its filters removed, over all its loops.
+  defp handled_rows(node) do
+    own = (node["Actual Rows"] + Map.get(node, "Rows Removed by Filter", 0) + Map.get(node, "Rows Removed by Join Filter", 0)) * node["Actual Loops"]
+    own + (node |> Map.get("Plans", []) |> Enum.sum_by(&handled_rows/1))
+  end
+
+  # Every query the call makes from this process, with its parameters.
+  defp capture_queries(fun) do
+    handler = {__MODULE__, :capture_queries, self()}
+    test_pid = self()
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {:captured_query, metadata.query, metadata.params})
+        end,
+        nil
+      )
+
+    result = fun.()
+    :telemetry.detach(handler)
+    {result, drain_queries([])}
+  end
+
+  defp drain_queries(acc) do
+    receive do
+      {:captured_query, query, params} -> drain_queries([{query, params} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp assignment_summary(assignment, pool) do

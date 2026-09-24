@@ -121,18 +121,28 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
 
   defp pool_contribution_rows(_identity_id, _pool_ids, _start_7d, _as_of), do: []
 
+  # Each successful request of the window is probed once for an attempt of
+  # this identity through `attempts_upstream_identity_request_idx`, so the
+  # rows read stay linear in the window whatever the planner statistics say.
+  # `offset: 0` keeps the probe a per-request subplan: the planner may not turn
+  # it into a join. A join against the identity's grouped request ids, or a
+  # plain EXISTS it is free to unnest, took a nested loop that rescans the
+  # identity's attempts for every request when a table had no statistics yet
+  # (about 4 s over 10k fresh rows), and with production statistics the
+  # grouped join read the identity's whole history on every cockpit load
+  # (findings#206 row 206-452).
   defp pool_contribution_rows_for_pools(identity_id, pool_ids, start_7d, as_of) do
-    target_request_ids =
+    identity_attempt =
       from attempt in Attempt,
-        where: attempt.upstream_identity_id == ^identity_id,
-        group_by: attempt.request_id,
-        select: attempt.request_id
+        where: attempt.request_id == parent_as(:request).id and attempt.upstream_identity_id == ^identity_id,
+        select: 1,
+        offset: 0
 
-    Request
-    |> join(:inner, [request], target in subquery(target_request_ids), on: target.request_id == request.id)
+    from(request in Request, as: :request)
     |> where([request], request.pool_id in ^pool_ids)
     |> where([request], request.status == "succeeded")
     |> where([request], request.admitted_at >= ^start_7d and request.admitted_at <= ^as_of)
+    |> where([request], exists(identity_attempt))
     |> group_by([request], request.pool_id)
     |> select([request], %{
       pool_id: request.pool_id,

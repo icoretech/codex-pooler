@@ -5360,11 +5360,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       %{status: if(ordinal == depth + 50, do: "failed", else: "succeeded"), admitted_at: DateTime.add(now, -10 * ordinal, :second)}
     end)
 
-    # Fresh statistics, as autovacuum keeps them: with none, the Pool-contribution
-    # query picks a plan that takes about 3 s over these rows, the walk 25 ms.
-    Repo.query!("ANALYZE requests")
-    Repo.query!("ANALYZE attempts")
-
     assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
     assert cockpit.recent_events.items == []
     assert cockpit.recent_events.searched_attempt_limit == depth
