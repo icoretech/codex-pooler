@@ -162,6 +162,18 @@ it after ten seconds. If it fails with a message that names blocking sessions,
 end those sessions or let them finish, then run `docker compose run --rm migrate`
 again. An interrupted index build is rebuilt on the next run.
 
+## Restore a database backup
+
+A `pg_dump` backup leaves out planner statistics unless it was taken with
+`--statistics`, so a restored database has no column statistics until
+autovacuum analyzes each table. After restoring with `psql` or `pg_restore`,
+analyze the database before Codex Pooler serves traffic again:
+
+```bash
+docker compose exec db sh -c 'vacuumdb --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --analyze-in-stages'
+docker compose up -d
+```
+
 ## Stop or reset
 
 Stop the stack while keeping the database volume:
