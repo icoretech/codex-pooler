@@ -19,6 +19,8 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
   alias CodexPooler.SavedResetConfirmationFixtures
+  alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
+  alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -26,10 +28,32 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
 
   # {mode, target quota, sibling quota, marker on, expected consume count}. The
   # counts were read from the tree before the filter (P124 baseline-2.log) and
-  # are unchanged after it. Two facts they record predate the filter: a
-  # workspace marker observed on the target already keeps it from being
-  # redeemed, and two 97% weekly candidates never reach threshold pressure in
-  # this arrangement.
+  # are unchanged after it. Two 97% weekly candidates never reach threshold
+  # pressure in this arrangement.
+  #
+  # A workspace marker on the target does not decide a redemption either way
+  # (findings#206 row 206-521). The zeros in the `target*` rows of a
+  # `weekly_exhausted` target come from two gates that ignore the marker, and
+  # the `*_header` controls show the same zeros without one:
+  #   * a primary 5h row next to the exhausted weekly turns the exclusion into
+  #     `quota_window_unusable`/`secondary`, which the after-exhaustion scan
+  #     does not open on; only the provider-blocked availability exclusion
+  #     does, and
+  #   * a newer header row of the weekly window outranks the confirmed Usage
+  #     API row, which alone carries the automatic confirmation.
+  # In the reset-eligible shape (`two_window_provider_blocked`, a fixture: the
+  # Usage API reported the account blocked, the weekly is confirmed exhausted
+  # and the 5h primary is usable at 40%) a `workspace_*` marker still redeems.
+  # That is the decision: the reached type names the credit or spend-cap
+  # fallback that applies once an included window is spent, and a reset
+  # restores the included windows. A workspace guard must change these rows
+  # on purpose.
+  #
+  # The `observed_*` rows are account states measured on a real install
+  # (findings#206 rows 206-521/206-523, read-only): two Team accounts in one
+  # Pool, a Pro account with the weekly spent, and a routable Pro account.
+  # Their 5h values are fixture values where the install did not report one.
+  # They record what auto-redeem would have done had it been enabled.
   @cases [
     {"blocked", :weekly_exhausted, :missing, :none, 1},
     {"blocked", :weekly_exhausted, :missing, :target, 0},
@@ -49,7 +73,24 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
     {"threshold", :weekly_pressure, :weekly_pressure, :none, 0},
     {"threshold", :weekly_pressure, :weekly_pressure, :target, 0},
     {"threshold", :weekly_pressure, :weekly_pressure, :target_first, 0},
-    {"threshold", :weekly_pressure, :weekly_pressure, :sibling, 0}
+    {"threshold", :weekly_pressure, :weekly_pressure, :sibling, 0},
+    {"blocked", :weekly_exhausted, :missing, :primary_header, 0},
+    {"blocked", :weekly_exhausted, :missing, :weekly_header, 0},
+    {"blocked", :two_window, :missing, :none, 0},
+    {"blocked", :two_window_provider_blocked, :missing, :none, 1},
+    {"blocked", :two_window_provider_blocked, :missing, :target, 1},
+    {"blocked", :two_window_provider_blocked, :missing, :target_first, 1},
+    {"threshold", :two_window_provider_blocked, :missing, :none, 1},
+    {"threshold", :two_window_provider_blocked, :missing, :target, 1},
+    {"blocked", :two_window_provider_blocked, :missing, :weekly_header, 0},
+    {"blocked", :two_window_provider_blocked, :missing, :target_weekly, 0},
+    {"blocked", :observed_team_weekly_96_denied, :observed_team_five_hour_spent, :none, 0},
+    {"blocked", :observed_team_five_hour_spent, :observed_team_weekly_96_denied, :none, 0},
+    {"threshold", :observed_team_weekly_96_denied, :observed_team_five_hour_spent, :none, 0},
+    {"threshold", :observed_team_five_hour_spent, :observed_team_weekly_96_denied, :none, 0},
+    {"threshold", :observed_pro_weekly_spent, :observed_pro_weekly_81, :none, 0},
+    {"blocked", :observed_pro_weekly_spent, :observed_pro_weekly_spent, :none, 0},
+    {"threshold", :observed_pro_weekly_spent, :observed_pro_weekly_spent, :none, 0}
   ]
 
   for {mode, target_quota, sibling_quota, marker, expected} <- @cases do
@@ -91,6 +132,8 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
       :target -> put_workspace_marker!(target.identity)
       :target_weekly -> put_workspace_marker!(target.identity, :weekly)
       :sibling -> put_workspace_marker!(sibling.identity)
+      :primary_header -> put_workspace_marker!(target.identity, :primary, nil)
+      :weekly_header -> put_workspace_marker!(target.identity, :weekly, nil)
       _none_or_first -> :ok
     end
 
@@ -98,6 +141,13 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
       {sibling.assignment, Repo.reload!(sibling.identity)},
       {target.assignment, Repo.reload!(target.identity)}
     ]
+
+    if marker in [:target, :target_first, :target_weekly] do
+      # The marker is live: the account-denial reader holds the target denied.
+      now = DateTime.utc_now()
+      snapshot = [target.identity.id] |> RoutingQuotaSnapshot.load_by_identity_ids(now) |> Map.fetch!(target.identity.id)
+      assert %{} = QuotaWindows.routing_account_denial(snapshot)
+    end
 
     %{upstream: upstream, target: target, input: filter_input(pool, api_key, candidates)}
   end
@@ -122,6 +172,48 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
     SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
   end
 
+  defp put_quota!(identity, :two_window) do
+    put_quota!(identity, :weekly_exhausted)
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_attrs(Decimal.new("40"))])
+  end
+
+  defp put_quota!(identity, :two_window_provider_blocked) do
+    put_quota!(identity, :two_window)
+    block_availability!(identity)
+  end
+
+  # A Team account with the 5h spent, the weekly at 96%, and the 429s' weekly
+  # header row carrying `workspace_member_credits_depleted`.
+  defp put_quota!(identity, :observed_team_weekly_96_denied) do
+    put_usage!(identity, "100", "96")
+    put_header!(identity, :primary, "97", nil)
+    put_header!(identity, :weekly, "96", "workspace_member_credits_depleted")
+    block_availability!(identity)
+  end
+
+  # A Team account with the 5h spent, the weekly at 75%, no marker.
+  defp put_quota!(identity, :observed_team_five_hour_spent) do
+    put_usage!(identity, "100", "75")
+    put_header!(identity, :primary, "100", nil)
+    put_header!(identity, :weekly, "75", nil)
+    block_availability!(identity)
+  end
+
+  # A Pro account with the weekly at 81%, routing ready (5h value is a fixture).
+  defp put_quota!(identity, :observed_pro_weekly_81) do
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [weekly_attrs(Decimal.new("81"))])
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_attrs(Decimal.new("10"))])
+  end
+
+  # A Pro account with the weekly spent, confirmed by the Usage
+  # API and last seen on a response header; the 5h value is a fixture.
+  defp put_quota!(identity, :observed_pro_weekly_spent) do
+    put_quota!(identity, :weekly_exhausted)
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_attrs(Decimal.new("40"))])
+    put_header!(identity, :weekly, "100", nil)
+    block_availability!(identity)
+  end
+
   defp put_quota!(identity, :primary_exhausted) do
     assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_attrs(Decimal.new("100"))])
   end
@@ -130,8 +222,38 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
     assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_attrs(Decimal.new("10"))])
   end
 
-  # The real header path, as a provider 429 records it.
-  defp put_workspace_marker!(identity, shape \\ :primary) do
+  # The Usage API's `allowed=false` receipt records the account as blocked.
+  defp block_availability!(identity) do
+    identity = Repo.reload!(identity)
+    metadata = Map.put(identity.metadata, AccountAvailabilityStore.metadata_key(), AccountAvailabilityStore.encode!(:blocked, DateTime.utc_now(), 1))
+    identity |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
+  end
+
+  defp put_usage!(identity, primary_percent, weekly_percent) do
+    denied = %{metadata: %{"rate_limit_allowed" => false, "rate_limit_reached" => true}}
+
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [Map.merge(weekly_attrs(Decimal.new(weekly_percent)), denied)])
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [Map.merge(primary_attrs(Decimal.new(primary_percent)), denied)])
+  end
+
+  defp put_header!(identity, kind, used_percent, reached_type) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    {prefix, minutes, reset_at} = if kind == :primary, do: {"primary", "300", DateTime.add(now, 1, :hour)}, else: {"secondary", "10080", DateTime.add(now, 2, :hour)}
+
+    headers =
+      [
+        {"x-codex-#{prefix}-used-percent", used_percent},
+        {"x-codex-#{prefix}-window-minutes", minutes},
+        {"x-codex-#{prefix}-reset-at", Integer.to_string(DateTime.to_unix(reset_at))}
+      ] ++ if(reached_type, do: [{"x-codex-rate-limit-reached-type", reached_type}], else: [])
+
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers, now)
+  end
+
+  # The real header path, as a provider 429 records it. A nil reached type is
+  # the same header observation without a marker.
+  defp put_workspace_marker!(identity, shape \\ :primary, reached_type \\ "workspace_member_credits_depleted") do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     window_headers =
@@ -152,10 +274,10 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
           ]
       end
 
-    headers = window_headers ++ [{"x-codex-rate-limit-reached-type", "workspace_member_credits_depleted"}]
+    headers = window_headers ++ if(reached_type, do: [{"x-codex-rate-limit-reached-type", reached_type}], else: [])
 
     assert {:ok, [window]} = QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers, now)
-    assert window.metadata["rate_limit_reached_type"] == "workspace_member_credits_depleted"
+    assert window.metadata["rate_limit_reached_type"] == reached_type
   end
 
   defp weekly_attrs(used_percent) do
