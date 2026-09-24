@@ -64,7 +64,12 @@ Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/mo
 
 Hermes generates session titles with a separate auxiliary call that sends no reasoning effort, so the model's default effort applies. Set `auxiliary.title_generation.reasoning_effort: low` to keep those short calls on a fixed, cheap effort.
 
-Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends `service_tier: priority` only when the provider is `openai` on `api.openai.com` or `openai-codex` on `chatgpt.com`. Since the Hermes 0.21 releases, an `openai-api` provider pointed at Codex Pooler never sends it, even though `/fast` and its tip still report fast mode as on. Codex Pooler accepts `service_tier: priority` (and `fast` as an alias) whenever a client sends it, so this is a Hermes routing rule, not a Pooler limitation.
+Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends `service_tier: priority` only when the provider is `openai` on `api.openai.com` or `openai-codex` on `chatgpt.com`. Since the Hermes 0.21 releases, an `openai-api` provider pointed at Codex Pooler never sends it, even though `/fast` and its tip still report fast mode as on. Codex Pooler accepts `service_tier: priority` (and `fast` as an alias) whenever a client sends it, so this is a Hermes routing rule, not a Pooler limitation. In that setup the request log shows `tier default` with no requested tier, because nothing was requested. To get priority processing, use one of these:
+
+- In Hermes, declare a named provider under `providers:` with your Pooler `base_url` and `extra_body: {service_tier: priority}`, then point `model.provider` at it. Hermes merges `extra_body` into every request it sends to that provider. Check the rest of your setup after you switch providers, because a named provider can resolve its API mode and settings differently from `openai-api`.
+- In Codex Pooler, set the API key's [enforced service tier](/operators/api-keys/) to `priority`. This needs no client change, but it only routes when the Pool's model declares that tier.
+
+Either way the request log then shows `tier default` next to `priority requested`, since the Codex backend reports `default` even for priority requests (see [service tiers](/operators/request-logs/#service-tiers)). Priority processing uses included quota faster.
 
 ## Verify the connection
 
