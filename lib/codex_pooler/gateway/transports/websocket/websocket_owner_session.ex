@@ -4494,22 +4494,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp native_collection_active?(_state), do: false
 
+  # A native compaction is never armed for replay (findings#206 row 206-333).
+  # The released client resends a compaction it did not complete as full
+  # history on new connections, then over HTTPS, and none of those resends
+  # redeemed a replay armed for it: with owner forwarding on, a full-history
+  # compaction cut before any output stayed `in_progress` for more than 118 s
+  # while both websocket resends met `409 duplicate_turn` and the HTTPS
+  # fallback bought it again. Left unarmed, it is settled when its socket's
+  # detach arrives (about 300 ms after the cut, measured), `client_disconnected`
+  # or `succeeded` if the provider finished first, and the resend is chained to
+  # it by the compaction retry policy
+  # (`ClientRetry.verified_unreceived_compaction?/3`), as with forwarding off.
   defp replay_active?(
          %{
            active_turn: %{
-             descriptor: %{
-               downstream_status: :attached,
-               replay_claim_digest: digest,
-               authorization_snapshot: authorization,
-               visible_output?: false
-             }
+             descriptor:
+               %{
+                 downstream_status: :attached,
+                 replay_claim_digest: digest,
+                 authorization_snapshot: authorization,
+                 visible_output?: false
+               } = descriptor
            }
          },
          downstream
        )
        when is_binary(digest) and byte_size(digest) == 32 and is_map(authorization) and
               is_map(downstream),
-       do: DownstreamState.downstream_status(downstream, downstream) == :active
+       do: Map.get(descriptor, :endpoint) != "/backend-api/codex/responses/compact" and DownstreamState.downstream_status(downstream, downstream) == :active
 
   defp replay_active?(_state, _downstream), do: false
 
