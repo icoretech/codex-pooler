@@ -27,20 +27,25 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
   @consume_path "/api/codex/rate-limit-reset-credits/consume"
 
   # {mode, target quota, sibling quota, marker on, expected consume count}. The
-  # counts were read from the tree before the filter (P124 baseline-2.log) and
-  # are unchanged after it. Two 97% weekly candidates never reach threshold
-  # pressure in this arrangement.
+  # counts were read from the tree before the filter and are unchanged after
+  # it. Two 97% weekly candidates never reach threshold pressure in this
+  # arrangement.
   #
   # A workspace marker on the target does not decide a redemption either way
-  # (findings#206 row 206-521). The zeros in the `target*` rows of a
-  # `weekly_exhausted` target come from two gates that ignore the marker, and
-  # the `*_header` controls show the same zeros without one:
-  #   * a primary 5h row next to the exhausted weekly turns the exclusion into
-  #     `quota_window_unusable`/`secondary`, which the after-exhaustion scan
-  #     does not open on; only the provider-blocked availability exclusion
-  #     does, and
-  #   * a newer header row of the weekly window outranks the confirmed Usage
-  #     API row, which alone carries the automatic confirmation.
+  # (findings#206 row 206-521). The zeros in the `target` and `target_first`
+  # rows of a `weekly_exhausted` target come from a gate that ignores the
+  # marker, and the `primary_header` control shows the same zero without one:
+  # a primary 5h row next to the exhausted weekly turns the exclusion into
+  # `quota_window_unusable`/`secondary`, which the after-exhaustion scan does
+  # not open on; only the provider-blocked availability exclusion does.
+  #
+  # The `target_weekly`, `weekly_header` and `observed_pro_weekly_spent` rows
+  # add a fresh weekly header row at the percentage the confirmed Usage API
+  # row reports. They were 0 until the trigger scan read the lock's Usage API
+  # view: over all sources the header row outranked the only row carrying the
+  # automatic confirmation (findings#206). They consume once now, as the same
+  # arrangement without the header row always did.
+  #
   # In the reset-eligible shape (`two_window_provider_blocked`, a fixture: the
   # Usage API reported the account blocked, the weekly is confirmed exhausted
   # and the 5h primary is usable at 40%) a `workspace_*` marker still redeems.
@@ -61,8 +66,8 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
     {"threshold", :weekly_exhausted, :missing, :none, 1},
     {"threshold", :weekly_exhausted, :missing, :target, 0},
     {"threshold", :weekly_exhausted, :missing, :target_first, 0},
-    {"blocked", :weekly_exhausted, :missing, :target_weekly, 0},
-    {"threshold", :weekly_exhausted, :missing, :target_weekly, 0},
+    {"blocked", :weekly_exhausted, :missing, :target_weekly, 1},
+    {"threshold", :weekly_exhausted, :missing, :target_weekly, 1},
     {"blocked", :weekly_exhausted, :primary_exhausted, :none, 1},
     {"blocked", :weekly_exhausted, :primary_exhausted, :sibling, 1},
     {"threshold", :weekly_exhausted, :usable, :none, 0},
@@ -75,33 +80,37 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
     {"threshold", :weekly_pressure, :weekly_pressure, :target_first, 0},
     {"threshold", :weekly_pressure, :weekly_pressure, :sibling, 0},
     {"blocked", :weekly_exhausted, :missing, :primary_header, 0},
-    {"blocked", :weekly_exhausted, :missing, :weekly_header, 0},
+    {"blocked", :weekly_exhausted, :missing, :weekly_header, 1},
     {"blocked", :two_window, :missing, :none, 0},
     {"blocked", :two_window_provider_blocked, :missing, :none, 1},
     {"blocked", :two_window_provider_blocked, :missing, :target, 1},
     {"blocked", :two_window_provider_blocked, :missing, :target_first, 1},
     {"threshold", :two_window_provider_blocked, :missing, :none, 1},
     {"threshold", :two_window_provider_blocked, :missing, :target, 1},
-    {"blocked", :two_window_provider_blocked, :missing, :weekly_header, 0},
-    {"blocked", :two_window_provider_blocked, :missing, :target_weekly, 0},
+    {"blocked", :two_window_provider_blocked, :missing, :weekly_header, 1},
+    {"blocked", :two_window_provider_blocked, :missing, :target_weekly, 1},
     {"blocked", :observed_team_weekly_96_denied, :observed_team_five_hour_spent, :none, 0},
     {"blocked", :observed_team_five_hour_spent, :observed_team_weekly_96_denied, :none, 0},
     {"threshold", :observed_team_weekly_96_denied, :observed_team_five_hour_spent, :none, 0},
     {"threshold", :observed_team_five_hour_spent, :observed_team_weekly_96_denied, :none, 0},
     {"threshold", :observed_pro_weekly_spent, :observed_pro_weekly_81, :none, 0},
-    {"blocked", :observed_pro_weekly_spent, :observed_pro_weekly_spent, :none, 0},
-    {"threshold", :observed_pro_weekly_spent, :observed_pro_weekly_spent, :none, 0}
+    {"blocked", :observed_pro_weekly_spent, :observed_pro_weekly_spent, :none, 1},
+    {"threshold", :observed_pro_weekly_spent, :observed_pro_weekly_spent, :none, 1}
   ]
 
   for {mode, target_quota, sibling_quota, marker, expected} <- @cases do
     test "#{mode} mode, #{target_quota} target, #{sibling_quota} sibling, #{marker} marker: #{expected} consume" do
-      %{upstream: upstream, input: input, target: target} =
+      %{upstream: upstream, input: input, target: target, sibling: sibling} =
         arrangement(unquote(mode), unquote(target_quota), unquote(sibling_quota), unquote(marker))
 
       capture_log(fn -> filter(input) end)
 
       assert consume_count(upstream) == unquote(expected)
-      redeemed? = get_in(Repo.reload!(target.identity).metadata, ["saved_reset_redemption", "result", "code"]) == "reset"
+
+      # Twin accounts spend one reset on the first candidate in order, which
+      # is the sibling.
+      spent = if unquote(target_quota) == unquote(sibling_quota), do: sibling, else: target
+      redeemed? = get_in(Repo.reload!(spent.identity).metadata, ["saved_reset_redemption", "result", "code"]) == "reset"
       assert redeemed? == (unquote(expected) == 1)
     end
   end
@@ -149,7 +158,7 @@ defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
       assert %{} = QuotaWindows.routing_account_denial(snapshot)
     end
 
-    %{upstream: upstream, target: target, input: filter_input(pool, api_key, candidates)}
+    %{upstream: upstream, target: target, sibling: sibling, input: filter_input(pool, api_key, candidates)}
   end
 
   defp filter(%FilterInput{} = input) do

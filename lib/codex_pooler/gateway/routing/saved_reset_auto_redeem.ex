@@ -732,8 +732,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
          policy,
          timestamp
        ) do
-    identity
-    |> Windows.list_quota_windows(timestamp)
+    [identity.id]
+    |> AutoEligibility.trigger_windows_by_identity_ids(identity, timestamp)
+    |> Map.get(identity.id, [])
     |> AutoEligibility.corroborated_blocked_exhaustion?(identity, policy, timestamp)
   end
 
@@ -760,7 +761,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     windows_by_identity_id =
       active_candidates
       |> Enum.map(fn {_assignment, identity} -> identity.id end)
-      |> Windows.list_quota_windows_by_identity_ids(timestamp)
+      |> AutoEligibility.trigger_windows_by_identity_ids(target_identity, timestamp)
 
     active_candidates != [] and
       Enum.all?(active_candidates, fn {_assignment, identity} ->

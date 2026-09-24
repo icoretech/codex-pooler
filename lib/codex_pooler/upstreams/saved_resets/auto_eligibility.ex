@@ -111,6 +111,26 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     end
   end
 
+  @doc """
+  The windows the gateway trigger scan reads for `identity_ids`: the same
+  source-filtered logical view the locked fences build in `gateway_auto_state/3`,
+  keyed on `target`'s saved-reset snapshot source.
+
+  Only Usage API rows carry the automatic confirmation marker. Over all sources,
+  a fresh response-header or rate-limit-event row of the same window at an equal
+  or higher percentage outranks the confirmed row, so the scan saw no
+  corroboration until that row went stale, and a threshold target serving
+  traffic refreshed it on every response (findings#206).
+  """
+  @spec trigger_windows_by_identity_ids([Ecto.UUID.t()], UpstreamIdentity.t(), DateTime.t()) ::
+          %{optional(Ecto.UUID.t()) => [AccountQuotaWindow.t()]}
+  def trigger_windows_by_identity_ids(identity_ids, %UpstreamIdentity{} = target, %DateTime{} = timestamp)
+      when is_list(identity_ids) do
+    identity_ids
+    |> Windows.list_evidence_by_identity_ids()
+    |> compatible_source_windows_by_identity(SavedResets.snapshot(target, timestamp), timestamp)
+  end
+
   @doc "Checks the target's request-scoped windows without collapsing them into account availability."
   @spec target_windows_resettable?(UpstreamIdentity.t(), map() | nil, DateTime.t()) :: boolean()
   def target_windows_resettable?(
