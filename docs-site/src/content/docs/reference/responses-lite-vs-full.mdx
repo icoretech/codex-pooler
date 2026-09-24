@@ -98,7 +98,7 @@ On the ordinary Responses lanes — HTTP, SSE, and the websocket `response.creat
     </tr>
     <tr>
       <td><code>input_image</code> detail</td>
-      <td>Preserved in message content and tool outputs, on native routes and <code>/v1/responses</code> alike. <code>/v1/responses</code> refuses a value other than <code>low</code>, <code>high</code>, <code>auto</code> or <code>original</code> in either mode with <code>400 invalid_value</code> and the field path as <code>param</code>, before anything is sent upstream</td>
+      <td>Preserved in message content and tool outputs, on native routes and <code>/v1/responses</code> alike; <code>/v1/chat/completions</code> carries <code>image_url.detail</code> into the same field. A <code>null</code> detail is dropped on both <code>/v1</code> routes. They refuse a value other than <code>low</code>, <code>high</code>, <code>auto</code> or <code>original</code> in either mode with <code>400 invalid_value</code> and the field path the client sent as <code>param</code>, before anything is sent upstream</td>
       <td>The <code>detail</code> field is removed from <code>input_image</code> entries in typed <code>message</code> content and in <code>function_call_output</code> and <code>custom_tool_call_output</code> outputs</td>
     </tr>
     <tr>

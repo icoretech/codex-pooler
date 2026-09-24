@@ -1150,6 +1150,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "400 invalid_value on the provider's field path"
       assert fixture.v1_image_details == ["low", "high", "auto", "original"]
       assert fixture.v1_invalid_image_detail.param == "input[2].output[1].detail"
+
+      # Chat carries image_url.detail under the same rules and refuses an
+      # invalid one under the Chat field path.
+      assert %{method: :post, path: "/v1/chat/completions"} in feature.routes
+      assert feature.contract =~ "carries image_url.detail into the rebuilt input_image detail"
+      assert fixture.v1_chat_invalid_image_detail.param == "messages[0].content[1].image_url.detail"
     end
 
     test "documents non-strict function tool schema lowering scope" do

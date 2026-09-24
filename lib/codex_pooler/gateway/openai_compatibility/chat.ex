@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   @moduledoc false
 
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Responses, Validation}
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.ServiceTier
 
@@ -133,6 +134,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          :ok <- validate_token_limits(payload),
          :ok <- validate_verbosity(payload),
          :ok <- validate_translatable_prompt_cache_breakpoints(payload),
+         :ok <- validate_image_details(payload),
          :ok <- reject_namespaced_custom_tool_definitions(payload),
          :ok <- validate_custom_tool_choice_shape(payload),
          {:ok, response_payload} <- response_payload(payload) do
@@ -466,12 +468,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          |> maybe_put_prompt_cache_breakpoint(part)
 
   defp normalize_content_part(
-         %{"type" => "image_url", "image_url" => %{"url" => image_url}} = part,
+         %{"type" => "image_url", "image_url" => %{"url" => image_url} = image} = part,
          _role
        )
        when is_binary(image_url),
        do:
          %{"type" => "input_image", "image_url" => image_url}
+         |> maybe_put_image_detail(image)
          |> maybe_put_prompt_cache_breakpoint(part)
 
   defp normalize_content_part(
@@ -653,6 +656,49 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     do: Map.put(acc, "prompt_cache_breakpoint", breakpoint)
 
   defp maybe_put_prompt_cache_breakpoint(acc, _part), do: acc
+
+  # `image_url.detail` becomes the `input_image` detail, as the Responses
+  # adapter forwards it; a null detail stays absent and Lite strips the rest
+  # in the payload normalizer. Only an enum value reaches here
+  # (`validate_image_details/1`).
+  defp maybe_put_image_detail(acc, %{"detail" => detail}) when is_binary(detail),
+    do: Map.put(acc, "detail", detail)
+
+  defp maybe_put_image_detail(acc, _image), do: acc
+
+  # The public Chat Completions API accepts `image_url.detail` (gpt-6-luna,
+  # probed 2026-09-24), and the Codex backend refuses a value outside low,
+  # high, auto and original on the `input_image` the rebuild produces
+  # (findings#206 row 206-476). Such a value is refused here, before
+  # reservation or dispatch and on every serving mode, under the Chat field
+  # the client sent rather than a rebuilt `input` path. A Responses-shaped
+  # `input_image` part in a Chat message is checked under its own `detail`.
+  defp validate_image_details(%{"messages" => messages}) when is_list(messages) do
+    messages
+    |> Enum.with_index()
+    |> Enum.find_value(:ok, fn
+      {%{"content" => content}, index} when is_list(content) ->
+        content
+        |> Enum.with_index()
+        |> Enum.find_value(fn {part, part_index} -> invalid_image_detail(part, "messages[#{index}].content[#{part_index}]") end)
+
+      {%{"content" => %{} = part}, index} ->
+        invalid_image_detail(part, "messages[#{index}].content")
+
+      _message ->
+        nil
+    end)
+  end
+
+  defp validate_image_details(_payload), do: :ok
+
+  defp invalid_image_detail(%{"type" => "image_url", "image_url" => %{"detail" => detail}}, path),
+    do: unless(Normalization.valid_image_detail?(detail), do: {:error, Normalization.invalid_image_detail(path <> ".image_url.detail")})
+
+  defp invalid_image_detail(%{"type" => "input_image", "detail" => detail}, path),
+    do: unless(Normalization.valid_image_detail?(detail), do: {:error, Normalization.invalid_image_detail(path <> ".detail")})
+
+  defp invalid_image_detail(_part, _path), do: nil
 
   defp valid_content?(content) when is_binary(content), do: true
 
