@@ -26,6 +26,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     max_output_tokens_per_request
   )
 
+  # Stored values the form carries unedited from `params_for/2` to `attrs/1`:
+  # the key's metadata (its labels) and every model override after the one
+  # the form edits. They never come from a submission (findings#206 row
+  # 206-504).
+  @carried_keys ~w(stored_metadata retained_model_policies)
+
   @spec limit_fields() :: [String.t()]
   def limit_fields, do: @limit_fields
 
@@ -36,7 +42,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   @spec params_for(APIKey.t(), [APIKeyPolicyBinding.t()]) :: params()
   def params_for(%APIKey{} = api_key, policy_bindings) do
     default_binding = Enum.find(policy_bindings, &(&1.binding_scope == "default"))
-    model_binding = Enum.find(policy_bindings, &(&1.binding_scope == "model"))
+    {model_binding, retained_model_bindings} = split_model_bindings(policy_bindings)
 
     default_params(%{
       "id" => api_key.id,
@@ -53,7 +59,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       "maximum_reasoning_effort" => api_key.maximum_reasoning_effort || "",
       "reasoning_policy_mode" => reasoning_policy_mode(api_key),
       "enforced_service_tier" => api_key.enforced_service_tier || "",
-      "operator_notes" => operator_notes(api_key)
+      "operator_notes" => operator_notes(api_key),
+      "stored_metadata" => stored_metadata(api_key),
+      "retained_model_policies" => Enum.map(retained_model_bindings, &retained_model_policy/1)
     })
     |> merge_binding_params("default", default_binding)
     |> merge_binding_params("model", model_binding)
@@ -97,7 +105,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
   @spec merge_params(params() | nil, params() | nil) :: params()
   def merge_params(current_params, incoming_params),
-    do: Map.merge(current_params || %{}, incoming_params || %{})
+    do: Map.merge(current_params || %{}, Map.drop(incoming_params || %{}, @carried_keys))
 
   @spec attrs(params()) :: attrs()
   def attrs(params) do
@@ -118,13 +126,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       maximum_reasoning_effort: reasoning_effort_attrs.maximum_reasoning_effort,
       enforced_service_tier: canonicalize_service_tier(params["enforced_service_tier"]),
       default_policy: default_policy_attrs(params),
-      model_policies: model_policy_attrs(params),
-      metadata: %{
-        "labels" => [],
-        "operator_notes" => blank_to_nil(params["operator_notes"])
-      }
+      model_policies: model_policy_attrs(params) ++ retained_model_policies(params),
+      metadata: metadata_attrs(params)
     }
   end
+
+  @doc """
+  The stored model overrides the form keeps unedited: every model binding
+  after the one it shows, in the order `params_for/2` read them.
+  """
+  @spec retained_model_policies(params()) :: [params()]
+  def retained_model_policies(%{"retained_model_policies" => policies}) when is_list(policies),
+    do: Enum.filter(policies, &is_map/1)
+
+  def retained_model_policies(_params), do: []
 
   @spec review_errors(params()) :: [String.t()]
   def review_errors(params) do
@@ -148,6 +163,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       "Selected model mode needs at least one model"
     )
     |> maybe_add_error(enforced_model_conflict?(params), "Enforced model must be allowed")
+    |> add_duplicate_model_override_error(params)
     |> maybe_add_error(
       incomplete_reasoning_policy?(params),
       "Allow up to needs a maximum reasoning effort"
@@ -233,6 +249,54 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     end)
   end
 
+  defp split_model_bindings(policy_bindings) do
+    case Enum.filter(policy_bindings, &(&1.binding_scope == "model")) do
+      [] -> {nil, []}
+      [shown | retained] -> {shown, retained}
+    end
+  end
+
+  defp retained_model_policy(%APIKeyPolicyBinding{} = binding) do
+    Map.new(["model_identifier", "status" | @limit_fields], fn field ->
+      {field, Map.get(binding, String.to_existing_atom(field))}
+    end)
+  end
+
+  defp stored_metadata(%APIKey{metadata: metadata}) when is_map(metadata),
+    do: Map.new(metadata, fn {key, value} -> {to_string(key), value} end)
+
+  defp stored_metadata(_api_key), do: %{}
+
+  # The stored metadata with the edited note: a key's labels and any other
+  # stored entry stay as they are, and a key that never had a note keeps no
+  # note entry, so an unchanged edit writes the metadata it read.
+  defp metadata_attrs(params) do
+    notes = blank_to_nil(params["operator_notes"])
+
+    metadata =
+      case params["stored_metadata"] do
+        metadata when is_map(metadata) -> metadata
+        _other -> %{}
+      end
+
+    if notes || Map.has_key?(metadata, "operator_notes"),
+      do: Map.put(metadata, "operator_notes", notes),
+      else: metadata
+  end
+
+  defp add_duplicate_model_override_error(errors, params) do
+    shown_model = normalize_model_for_compare(params["model_policy_model_identifier"])
+
+    duplicate =
+      shown_model &&
+        Enum.find(retained_model_policies(params), &(normalize_model_for_compare(&1["model_identifier"]) == shown_model))
+
+    case duplicate do
+      nil -> errors
+      policy -> ["#{policy["model_identifier"]} already has its own model override" | errors]
+    end
+  end
+
   defp model_policy_attrs(params) do
     model_identifier = blank_to_nil(params["model_policy_model_identifier"])
 
@@ -316,7 +380,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       "reasoning_policy_mode" => "unrestricted",
       "enforced_service_tier" => "",
       "operator_notes" => "",
-      "model_policy_model_identifier" => ""
+      "model_policy_model_identifier" => "",
+      "stored_metadata" => %{"labels" => []},
+      "retained_model_policies" => []
     }
 
     limit_defaults =
@@ -476,6 +542,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
     model = blank_to_nil(form[:model_policy_model_identifier].value)
     model_rows = if model, do: [{"Model override", model}], else: []
+
+    model_rows =
+      case form.params |> retained_model_policies() |> Enum.map(& &1["model_identifier"]) do
+        [] -> model_rows
+        models -> model_rows ++ [{"Other model overrides", Enum.join(models, ", ") <> " (kept as saved)"}]
+      end
 
     case values do
       [] -> [key_wide | model_rows] ++ [{"Token and rate limits", "No caps configured"}]

@@ -3,12 +3,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPoolerWeb.Admin.ApiKeyPolicyForm
+
   attr :form, :any, required: true
   attr :limit_fields, :list, required: true
   attr :budget_usage, :map, default: nil
   attr :budget_usage_loading?, :boolean, default: false
 
   def api_key_limits_step(assigns) do
+    assigns = assign(assigns, :retained_model_policies, ApiKeyPolicyForm.retained_model_policies(assigns.form.params))
+
     ~H"""
     <section id="api-key-step-limits-panel" class="grid min-w-0 gap-3">
       <section
@@ -77,6 +81,30 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
         />
       </section>
 
+      <section
+        :if={@retained_model_policies != []}
+        id="api-key-retained-model-limits"
+        aria-labelledby="api-key-retained-model-limits-title"
+        class="grid min-w-0 gap-2 border-t border-base-300 px-3 pt-3"
+      >
+        <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h3 id="api-key-retained-model-limits-title" class="text-sm font-semibold text-base-content">
+            Other model overrides
+          </h3>
+          <p class="text-xs text-base-content/60">Kept as saved when this key is updated.</p>
+        </div>
+        <ul class="grid gap-1 text-xs">
+          <li
+            :for={{policy, index} <- Enum.with_index(@retained_model_policies)}
+            id={"api-key-retained-model-limit-#{index}"}
+            class="flex min-w-0 flex-wrap gap-x-3 gap-y-1"
+          >
+            <span class="font-mono text-base-content">{policy["model_identifier"]}</span>
+            <span class="text-base-content/65">{retained_limit_summary(policy, @limit_fields)}</span>
+          </li>
+        </ul>
+      </section>
+
       <p id="api-key-admission-estimate-hint" class="px-3 text-xs leading-5 text-base-content/60">
         Output estimate floors are 512 tokens for ordinary requests and 2,048 tokens for opaque-context requests.
         Output limits are admission checks, not guaranteed provider output caps.
@@ -134,6 +162,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
       step="1"
     />
     """
+  end
+
+  defp retained_limit_summary(policy, fields) do
+    fields
+    |> Enum.flat_map(fn field ->
+      case policy[field] do
+        value when is_integer(value) -> ["#{limit_field_label(field)} #{format_tokens(value)}"]
+        _blank -> []
+      end
+    end)
+    |> case do
+      [] -> "No caps"
+      limits -> Enum.join(limits, " · ")
+    end
   end
 
   def limit_field_label("max_requests_per_minute"), do: "Requests per minute"
