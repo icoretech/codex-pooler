@@ -44,6 +44,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   # gone and the next request on a new connection (findings#206 row 206-291).
   @raw_peer_idle_timeout_ms 60_000
 
+  # How long a split-upgrade peer holds its next fragment for the test's
+  # release. A fixture timer, not a detection budget: the test releases it after
+  # its own detection waits, so it stays beyond them (findings#206 row 206-320).
+  @raw_peer_release_timeout_ms 60_000
+
   @raw_websocket_peer_terminal_then_control_modes [
     :terminal_then_coalesced_close,
     :terminal_then_coalesced_ping,
@@ -695,18 +700,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     owner = self()
 
-    request_pid =
-      spawn(fn ->
-        UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, owner))
-      end)
-
+    # Held timeouts: with the 1 s receive timeout a late kill found the request
+    # already timed out, so its DOWN carried `:normal` and the caller-death
+    # path was never taken (findings#206 row 206-320 (e)).
+    held_request = %{raw_websocket_request(peer.url, owner) | timeouts: @held_timeouts}
+    request_pid = spawn(fn -> UpstreamWebsocketSession.request(session, held_request) end)
     request_monitor = Process.monitor(request_pid)
 
-    assert_receive {:raw_upstream_websocket_request, 2, 2}, @detection_timeout_ms
+    assert_receive {:raw_upstream_websocket_request, 2, 2}, @message_detection_timeout_ms
     Process.exit(request_pid, :kill)
 
     assert_receive {:DOWN, ^request_monitor, :process, ^request_pid, :killed},
-                   @detection_timeout_ms
+                   @message_detection_timeout_ms
 
     _ = :sys.get_state(session)
     assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
@@ -3029,18 +3034,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     initial_lifecycle = lifecycle_state(session)
     owner = self()
 
-    request_task =
-      Task.async(fn ->
-        UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, owner))
-      end)
+    # The test releases the held upgrade itself, so the connect deadline is not
+    # the claim: held timeouts keep a stalled test from timing the upgrade out.
+    request = %{raw_websocket_request(peer.url, owner) | timeouts: @held_timeouts}
+    request_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
     assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
-                   @detection_timeout_ms
+                   @message_detection_timeout_ms
 
     assert_stack_eventually_in(session, ConnectionUpgrade, :await_upgrade, 5)
     send(peer_pid, :release_raw_upstream_websocket_upgrade)
 
-    assert {:ok, result} = Task.await(request_task, @detection_timeout_ms)
+    assert {:ok, result} = Task.await(request_task, @message_detection_timeout_ms)
     assert_connection_metadata(result, %{initial_lifecycle | generation: 1}, false, false)
     assert_receive {:upstream_websocket_frame, _frame}, @detection_timeout_ms
 
@@ -3055,16 +3060,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
     owner = self()
 
-    task =
-      Task.async(fn ->
-        UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, owner))
-      end)
+    request = %{raw_websocket_request(peer.url, owner) | timeouts: @held_timeouts}
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
     assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :partial_headers, peer_pid},
-                   @detection_timeout_ms
+                   @message_detection_timeout_ms
 
     send(peer_pid, :release_raw_upstream_websocket_upgrade)
-    assert {:ok, _result} = Task.await(task, @detection_timeout_ms)
+    assert {:ok, _result} = Task.await(task, @message_detection_timeout_ms)
     assert_receive {:upstream_websocket_frame, _frame}, @detection_timeout_ms
   end
 
@@ -3091,18 +3094,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     peer = start_raw_websocket_peer(upgrade_mode: :split_forbidden)
     owner = self()
 
-    result_task =
-      Task.async(fn ->
-        UpstreamWebsocketSession.request_once(raw_websocket_request(peer.url, owner))
-      end)
+    request = %{raw_websocket_request(peer.url, owner) | timeouts: @held_timeouts}
+    result_task = Task.async(fn -> UpstreamWebsocketSession.request_once(request) end)
 
     assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :forbidden_status, peer_pid},
-                   @detection_timeout_ms
+                   @message_detection_timeout_ms
 
     send(peer_pid, :release_raw_upstream_websocket_upgrade)
 
     assert {:error, %{body: "", reason: {:websocket_upgrade_failed, 403, headers}}} =
-             Task.await(result_task, @detection_timeout_ms)
+             Task.await(result_task, @message_detection_timeout_ms)
 
     assert {"content-length", "0"} in headers
     refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
@@ -3114,17 +3115,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
     owner = self()
 
-    task =
-      Task.async(fn ->
-        UpstreamWebsocketSession.request(session, raw_websocket_request(peer.url, owner))
-      end)
+    # Held timeouts: only the caller's death, never the connect deadline, can
+    # close the connection here.
+    request = %{raw_websocket_request(peer.url, owner) | timeouts: @held_timeouts}
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
     assert_receive {:raw_upstream_websocket_upgrade_fragment, 1, :status, peer_pid},
-                   @detection_timeout_ms
+                   @message_detection_timeout_ms
 
     assert Task.shutdown(task, :brutal_kill) == nil
     send(peer_pid, :release_raw_upstream_websocket_upgrade)
-    assert :closed = wait_for_raw_websocket_connection_closed(1, 500)
+
+    assert :closed =
+             wait_for_raw_websocket_connection_closed(1, @message_detection_timeout_ms)
+
     refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
   end
 
@@ -4193,7 +4197,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    request = raw_websocket_request(peer.url, self())
+    # Held timeouts: the in-flight request can end only through the injected
+    # pong deadline, which the reason below names, never through its own
+    # receive timeout while the test is late to deliver the deadline.
+    request = %{raw_websocket_request(peer.url, self()) | timeouts: @held_timeouts}
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              UpstreamWebsocketSession.request(session, request)
@@ -4214,11 +4221,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert %{"type" => "response.created"} = CodexPooler.JSON.decode!(created_frame)
 
     # The request is in the session's receive loop; the idle-armed deadline
-    # fires there and must end it well before its 1 s receive timeout.
-    fired_at = System.monotonic_time(:millisecond)
+    # fires there and ends it, long before its held receive timeout could.
     send(session, {:upstream_websocket_pong_deadline, pong_token})
-    result = Task.await(request_task, @detection_timeout_ms)
-    elapsed_ms = System.monotonic_time(:millisecond) - fired_at
+    result = Task.await(request_task, @message_detection_timeout_ms)
 
     assert {:error,
             %{
@@ -4232,7 +4237,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
               }
             }} = result
 
-    assert elapsed_ms < @timeouts.receive_timeout_ms
     assert body =~ "response.created"
     assert Process.alive?(session)
     assert :closed = wait_for_raw_websocket_connection_closed(1, @detection_timeout_ms)
@@ -6166,7 +6170,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         send(owner, {:raw_upstream_websocket_upgrade_fragment, connection_id, :terminal_queued})
         result
     after
-      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+      @raw_peer_release_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
     end
   end
 
@@ -6195,7 +6199,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
           "\r\n\r\n"
         ])
     after
-      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+      @raw_peer_release_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
     end
   end
 
@@ -6228,7 +6232,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       :release_raw_upstream_websocket_upgrade ->
         :gen_tcp.send(socket, "content-length: 0\r\n\r\n")
     after
-      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+      @raw_peer_release_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
     end
   end
 
@@ -6254,7 +6258,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
         result
     after
-      @detection_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
+      @raw_peer_release_timeout_ms -> {:error, :upgrade_fragment_release_timeout}
     end
   end
 
