@@ -63,6 +63,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
     end
   end
 
+  # A key that enforces a model the Pool does not serve: the client asks for
+  # the Pool's model, the key's policy substitutes the enforced one, and the
+  # catalog refuses it (findings#206 row 206-604). HTTP answers `400
+  # invalid_model` and records the requested, effective and enforced model;
+  # the websocket answers and records the same on both forwarding modes, in
+  # both serving modes, with one refusal line: the replay preflight's with
+  # forwarding on, the failed turn's with it off.
+  for mode <- ["full", "lite"] do
+    @tag serving_mode: mode
+    test "websocket #{mode}: a key enforcing a model the Pool does not serve is refused and recorded as HTTP refuses and records it", %{serving_mode: mode, conn: conn} do
+      {forwarded, forwarded_lines} = logged_websocket_row(:enforced_model_not_served, :forwarded, mode)
+      {direct, direct_lines} = logged_websocket_row(:enforced_model_not_served, :direct, mode)
+      http = http_row(:enforced_model_not_served, mode, conn)
+
+      CodexPooler.TestDiagnostics.puts(fn -> "206-604 enforced unserved #{mode}: #{inspect(%{forwarded: forwarded, direct: direct, http: http, lines: {forwarded_lines, direct_lines}})}" end)
+
+      assert http.refused == {400, "invalid_model"}
+      assert %{status: "rejected", response_status_code: 400, last_error_code: "invalid_model", pool_model?: false, upstream_requests: 0} = http
+
+      assert Map.take(http.metadata, ["requested_model", "effective_model", "enforced_model"]) == %{
+               "requested_model" => requested_model(:enforced_model_not_served),
+               "effective_model" => @enforced_model,
+               "enforced_model" => @enforced_model
+             }
+
+      assert forwarded == http
+      assert direct == http
+      assert forwarded_lines == [:replay_preflight]
+      assert direct_lines == [:native_turn_failed]
+    end
+  end
+
   # Forwarding off, the socket keeps the policy its upgrade read and serves
   # the turn (a malformed policy is stored only once the socket is open), so
   # this refusal compares with HTTP alone.
@@ -76,7 +108,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
     assert forwarded == http
   end
 
-  defp websocket_row(arm, forwarding, mode) do
+  defp websocket_row(arm, forwarding, mode), do: arm |> logged_websocket_row(forwarding, mode) |> elem(0)
+
+  # The row projection with what the client received, and which refusal line
+  # the socket logged.
+  defp logged_websocket_row(arm, forwarding, mode) do
     put_owner_forwarding!(forwarding)
     thread_id = Ecto.UUID.generate()
     upstream = start_upstream(FakeUpstream.json_response(%{"output" => []}))
@@ -84,9 +120,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
     put_serving_mode!(setup, mode)
     {_server, port} = start_public_endpoint_with_server!()
     {model, after_upgrade} = impose!(arm, setup)
-    terminal = send_once!(port, setup, thread_id, model, after_upgrade)
-    assert %{"type" => "error"} = terminal
-    project(await_settled!(setup.pool.id, 1), setup, upstream)
+    {terminal, log} = with_info_log(fn -> send_once!(port, setup, thread_id, model, after_upgrade) end)
+    assert %{"type" => "error", "status" => status, "error" => %{"code" => code}} = terminal
+    {Map.put(project(await_settled!(setup.pool.id, 1), setup, upstream), :refused, {status, code}), refusal_lines(log, code)}
+  end
+
+  defp refusal_lines(log, code) do
+    log
+    |> String.split("\n")
+    |> Enum.flat_map(fn line ->
+      cond do
+        line =~ "stage=runtime_replay_preflight reason_code=#{code}" and line =~ "public_code=#{code}" -> [:replay_preflight]
+        line =~ ~r/websocket native turn failed .*error_code=#{code}/ -> [:native_turn_failed]
+        true -> []
+      end
+    end)
+  end
+
+  defp with_info_log(fun) do
+    previous = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      ExUnit.CaptureLog.with_log([level: :info], fun)
+    after
+      Logger.configure(level: previous)
+    end
   end
 
   defp http_row(arm, mode, conn) do
@@ -103,7 +162,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
       |> post(@turn_endpoint, CodexPooler.JSON.encode!(%{"model" => model, "instructions" => "synthetic instructions", "input" => [prompt()], "tools" => [], "store" => false, "stream" => true}))
 
     assert conn.status in 400..499
-    project(await_settled!(setup.pool.id, 1), setup, upstream)
+    code = conn.resp_body |> CodexPooler.JSON.decode!() |> get_in(["error", "code"])
+    Map.put(project(await_settled!(setup.pool.id, 1), setup, upstream), :refused, {conn.status, code})
   end
 
   defp project(rows, setup, upstream) do
