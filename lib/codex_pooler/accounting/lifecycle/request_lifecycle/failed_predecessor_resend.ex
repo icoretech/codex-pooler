@@ -458,6 +458,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
        when transport in ["http_sse", "http_json"],
        do: true
 
+  # A native HTTP compaction is met again only by a request deriving its own
+  # compaction-domain claim, i.e. the same compaction resent over native HTTP;
+  # whether it may be chained is `ClientRetry.verified_unreceived_compaction?/3`'s
+  # verdict (findings#206 row 206-404).
+  defp transport_scoped?(
+         %Request{transport: transport, request_metadata: %{"native_http_claim_arm" => "compaction"}},
+         %{semantic_claim?: false, resume_claim?: false}
+       )
+       when transport in ["http_json", "http_sse", "http_compact_json"],
+       do: true
+
   defp transport_scoped?(%Request{}, _scope), do: false
 
   defp advanced_http_resume?(%Request{} = request, scope) do

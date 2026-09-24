@@ -683,22 +683,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     end
   end
 
-  # The compaction arm is a different claim, not an absent one: a compaction
-  # resent identically is still fenced, under its own HMAC domain.
-  test "an identical compaction resend is refused", %{conn: conn} do
-    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_compaction"}))
+  # The compaction arm is a different claim, not an absent one. A compaction
+  # resent identically meets its own predecessor under its own HMAC domain and is
+  # chained as one successor with its own settlement, never generated as an
+  # unlinked second request: the released client resends a remote compaction
+  # only when it never read its `response.completed`, retries it twice with the
+  # same prompt, and three refusals failed the turn and lost the compaction
+  # (findings#206 row 206-404; it was refused `409` here before).
+  test "an identical compaction resend is chained as one successor", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_compaction"}),
+          FakeUpstream.json_response(%{"id" => "resp_compaction_resent"})
+        ])
+      )
+
     setup = gateway_setup(upstream, compact?: true)
     session = session_id()
 
     assert json_response(post_kind(conn, setup, session, :compaction), 200)
+    assert json_response(post_kind(conn, setup, session, :compaction), 200)
 
-    assert %{"error" => %{"code" => "duplicate_turn"}} =
-             json_response(post_kind(conn, setup, session, :compaction), 409)
-
-    assert FakeUpstream.count(upstream) == 1
-    assert [request] = pool_requests(setup)
+    assert FakeUpstream.count(upstream) == 2
+    assert [request, resent] = pool_requests(setup)
     assert String.starts_with?(request.correlation_id, "codex-request:")
     assert request.request_metadata["native_http_claim_arm"] == "compaction"
+    assert resent.correlation_id != request.correlation_id
+    assert resent.request_metadata["client_resend"] == %{"predecessor_request_id" => request.id, "reason" => "failed_predecessor"}
   end
 
   # KNOWN MISS, documented deliberately: the compaction arm's own copy of the
@@ -839,36 +851,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     end
   end
 
-  # THE ONE SHAPE THIS RULE DOES NOT SERVE, pinned so it cannot change silently.
-  # A user message after the last compaction output item is a turn's OPENING
-  # request: in the released client a user message starts a new turn with a new
-  # `turn_id` (`turn_metadata.rs` mints one per `TurnMetadataState`), and it is
-  # what lets every turn of a compacted session keep the payload-independent
-  # claim -- which is what agrees with the websocket codec and what survives a
-  # rebuilt retry body. A caller that reuses ONE `turn_id` across a user message
-  # is therefore refused rather than served, because the fence cannot tell that
-  # request from a rebuilt retry of the turn's own opener.
-  test "one turn id reused across a user message after a compaction is refused", %{conn: conn} do
-    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reused_turn_id"}))
+  # A user message after the last compaction output item under the turn id of a
+  # request already recorded. This test used to pin a refusal on the premise
+  # that a user message always opens a new turn with a new `turn_id`; the
+  # released client (0.156.1) drains user input steered into a running turn into
+  # the SAME turn, right after a mid-turn compaction included
+  # (`session/turn.rs` `can_drain_pending_input`), so the refusal failed a real
+  # steered turn (findings#206 row 206-403). The opener's row records its
+  # progress (the latest pivot and the user messages after it); this request's
+  # differs, so it is not a rebuilt retry of the opener and is claimed as a
+  # steered continuation, whose own identical resend stays refused.
+  test "one turn id reused across a user message after a compaction is served as a steered continuation", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_reused_turn_id"}),
+          FakeUpstream.json_response(%{"id" => "resp_steered_turn_id"})
+        ])
+      )
+
     setup = gateway_setup(upstream, compact?: true)
     session = session_id()
 
     assert json_response(post_turn(conn, setup, session, @turn_id, where: :body), 200)
 
-    assert %{"error" => %{"code" => "duplicate_turn"}} =
-             json_response(
-               post_turn(conn, setup, session, @turn_id,
-                 where: :body,
-                 input:
-                   native_text_input("before compaction") ++
-                     [%{"type" => "compaction"}, trailing_item(:user)]
-               ),
-               409
-             )
+    steered = fn ->
+      post_turn(conn, setup, session, @turn_id,
+        where: :body,
+        input: native_text_input("before compaction") ++ [%{"type" => "compaction"}, trailing_item(:user)]
+      )
+    end
 
-    assert FakeUpstream.count(upstream) == 1
-    assert [request] = pool_requests(setup)
-    assert String.starts_with?(request.correlation_id, "codex-turn:")
+    assert json_response(steered.(), 200)
+    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(steered.(), 409)
+
+    assert FakeUpstream.count(upstream) == 2
+    assert [opener, steer] = pool_requests(setup)
+    assert String.starts_with?(opener.correlation_id, "codex-turn:")
+    assert String.starts_with?(steer.correlation_id, "codex-resume:")
+    assert steer.request_metadata["native_http_claim_arm"] == "steered_continuation"
   end
 
   # THE COST OF GETTING THE PREVIOUS TEST WRONG (findings#212, 212-48). Remote
@@ -1147,16 +1168,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
     before_refusals = pool_accounting_counts(setup)
 
-    assert %{"error" => %{"code" => "duplicate_turn"}} =
-             json_response(
-               post_turn(conn, setup, session, @turn_id,
-                 where: :body,
-                 input: resume_input ++ [trailing_item(:user)],
-                 stream: true
-               ),
-               409
-             )
-
+    # The resume followed by a user message is no longer probed here: that is a
+    # steered continuation of the turn, served under its own claim (findings#206
+    # row 206-403, `backend_codex_http_steer_and_compaction_retry_test.exs`),
+    # not a changed suffix of this resume.
     assert %{"error" => %{"code" => "duplicate_turn"}} =
              json_response(
                post_turn(conn, setup, session, @turn_id,

@@ -1686,6 +1686,28 @@ defmodule CodexPooler.Accounting.ClientRetry do
       when is_binary(attempt_id),
       do: unreceived_compaction_settlement?(turn, request, attempt)
 
+  # The same compaction over native HTTP, which the released client uses for the
+  # rest of a session once a websocket request fell back to HTTPS: it retries a
+  # remote compaction whose `response.completed` it never read with the same
+  # prompt, up to twice (`compact_remote_v2.rs` `run_remote_compaction_request_v2`,
+  # `MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES`), and three refusals fail the turn
+  # and lose the compaction. The HTTP compaction claim is its own domain over the
+  # compacted payload, and a completed compaction replaces the history the next
+  # one would be built from, so the claim is only ever met again by a resend of
+  # a compaction the client did not complete (findings#206 row 206-404).
+  def verified_unreceived_compaction?(
+        %CodexTurn{final_attempt_id: attempt_id, transport_kind: turn_transport, completed_at: %DateTime{}} = turn,
+        %Request{
+          transport: transport,
+          request_metadata: %{"native_http_claim_arm" => "compaction"},
+          completed_at: %DateTime{}
+        } = request,
+        %Attempt{id: attempt_id, replay_generation: 0, completed_at: %DateTime{}} = attempt
+      )
+      when is_binary(attempt_id) and turn_transport in ["http_json", "http_sse"] and
+             transport in ["http_json", "http_sse", "http_compact_json"],
+      do: unreceived_compaction_settlement?(turn, request, attempt)
+
   def verified_unreceived_compaction?(_turn, _request, _attempt), do: false
 
   defp unreceived_compaction_settlement?(%CodexTurn{status: "succeeded"}, %Request{status: "succeeded"}, %Attempt{status: "succeeded"}), do: true

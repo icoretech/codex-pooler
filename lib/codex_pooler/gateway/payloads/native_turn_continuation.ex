@@ -96,6 +96,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   @final_compaction_item_types ["compaction", "compaction_summary"]
 
   @anchor_domain "native_turn_compaction_anchor_v1"
+  @progress_domain "native_turn_user_progress_v1"
 
   @type turn_role :: :opening | :tool_continuation | {:post_compaction_resume, <<_::256>>}
 
@@ -184,10 +185,12 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
 
     * a tool result there -> `:tool_continuation`. A previous request of this
       turn produced the call.
-    * a user message there -> `:opening`. The user started something, which in
-      the released client means a new turn with a new `turn_id`
-      (`turn_metadata.rs` mints one per `TurnMetadataState`), so this is that
-      turn's first request and it keeps the payload-independent claim. This is
+    * a user message there -> `:opening`. The user started something: usually a
+      new turn with a new `turn_id` (`turn_metadata.rs` mints one per
+      `TurnMetadataState`), whose first request keeps the payload-independent
+      claim; but also user input steered into the running turn under the same
+      `turn_id`, which the native HTTP reservation tells apart through
+      `turn_progress/1` (findings#206 row 206-403). This is
       what makes a turn in a compacted session behave exactly like a turn in an
       uncompacted one -- including agreeing with the websocket codec, which
       gives such a frame the bare claim too.
@@ -220,6 +223,40 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   end
 
   def turn_role(_payload), do: :opening
+
+  @doc """
+  An opaque digest of how far the user has taken a turn: the latest compaction
+  pivot (or none) and the number of user messages after it.
+
+  An `:opening` request is not always the turn's opener. The released client
+  drains user input steered into a running turn into the SAME turn, under the
+  same `turn_id`, before its next model request (`session/turn.rs`
+  `can_drain_pending_input`; `turn_input.rs` `steer_input` returns the active
+  turn's id), and right after a mid-turn compaction when the model needed no
+  follow-up (`can_drain_pending_input = !model_needs_follow_up`). Such a request
+  ends with a user message and so reads `:opening`, although it is a later
+  request of the turn.
+
+  A retry of a request only appends model output, never a user message, so it
+  keeps this digest; a steered request moves it (one more user message, or a new
+  pivot). That is the whole discriminator; the digest carries nothing else of
+  the body and is identical across rebuilt retries (findings#206 row 206-403).
+  """
+  @spec turn_progress(map()) :: <<_::256>>
+  def turn_progress(%{"input" => input}) when is_list(input) do
+    {pivot, tail} =
+      case last_compaction_index(input) do
+        nil -> {nil, input}
+        index -> {Enum.at(input, index), Enum.drop(input, index + 1)}
+      end
+
+    :crypto.hash(
+      :sha256,
+      :erlang.term_to_binary({@progress_domain, pivot, Enum.count(tail, &user_message?/1)}, [:deterministic])
+    )
+  end
+
+  def turn_progress(_payload), do: :crypto.hash(:sha256, :erlang.term_to_binary({@progress_domain, nil, 0}, [:deterministic]))
 
   defp compacted_turn_role(input, index) do
     tail = Enum.drop(input, index + 1)

@@ -127,7 +127,9 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
           required(:native_client_retry_witness) => ClientRetry.OriginalWitness.t() | nil,
           required(:input_count) => non_neg_integer() | nil,
           required(:semantic_turn_key) => <<_::256>>,
-          optional(:websocket_compaction_claims) => [String.t()]
+          optional(:websocket_compaction_claims) => [String.t()],
+          optional(:turn_progress) => <<_::256>>,
+          optional(:steered_claim) => String.t()
         }
 
   # Kinds that are about a turn rather than one of its model requests, and that
@@ -189,7 +191,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
          native_client_retry_witness(identity, payload, request_options, claim.arm)
        )
        |> Map.put(:input_count, input_count(payload, claim.arm))
-       |> Map.put(:semantic_turn_key, identity.semantic_turn_key)}
+       |> Map.put(:semantic_turn_key, identity.semantic_turn_key)
+       |> put_steered_claim(identity, payload)}
     else
       _fail_open -> :none
     end
@@ -228,9 +231,12 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   #   2. A compaction request is named by its whole payload, so a compaction
   #      resent with a changed body is not fenced.
   #   3. A request carrying a USER MESSAGE after the last compaction output item
-  #      is treated as a turn's opening request, because in the released client
-  #      that is a new turn with a new `turn_id`. A caller that reuses one
-  #      `turn_id` across a user message is refused rather than served.
+  #      is classified as a turn's opening request. In the released client it is
+  #      either that (a new turn, new `turn_id`) or user input steered into the
+  #      running turn under the SAME `turn_id`. The reservation tells them apart
+  #      only against a native HTTP opener that recorded its progress; against a
+  #      websocket opener (no progress recorded) such a request is still refused
+  #      (findings#206 row 206-403).
   #   4. Websocket and HTTP share the post-compaction resume claim, while the
   #      websocket compaction bridge retains its established claim ordering.
   defp turn_claim(identity, payload) do
@@ -251,6 +257,30 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
         )
     end
   end
+
+  # An `:opening` request also carries what it would be claimed under if it is a
+  # later request of its turn, steered in by the user (see
+  # `NativeTurnContinuation.turn_progress/1`), and the progress digest the
+  # opener's row records. The reservation decides between the two: the bare
+  # `codex-turn:` claim unless it is already held by a native HTTP request of the
+  # turn that recorded a DIFFERENT progress, which no retry of that request can
+  # produce (findings#206 row 206-403). The steered claim is named by the turn
+  # and that digest alone, so a rebuilt retry of the steered request (model
+  # output appended) derives it again and meets its own predecessor.
+  defp put_steered_claim(%{arm: :opening} = claim, identity, payload) do
+    progress = NativeTurnContinuation.turn_progress(payload)
+
+    claim
+    |> Map.put(:turn_progress, progress)
+    |> Map.put(:steered_claim, WebsocketTurnIdentity.resume_claim_key(identity.semantic_turn_key, steered_anchor(progress)))
+  end
+
+  defp put_steered_claim(claim, _identity, _payload), do: claim
+
+  # Domain-separated from the compaction anchor, so a steered claim can never
+  # equal a post-compaction resume claim of the same turn.
+  defp steered_anchor(progress),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary({"native_turn_steered_claim_v1", progress}, [:deterministic]))
 
   defp kind_claim(identity, request_options, payload) do
     case NativeTurnContinuation.request_kind(payload, request_options) do

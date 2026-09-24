@@ -208,6 +208,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       native_http_input_count: native_http_input_count(native_http_claim),
       native_http_semantic_turn_key: native_http_semantic_turn_key(native_http_claim),
       websocket_compaction_claims: websocket_compaction_claims(native_http_claim),
+      native_http_steered_claim: native_http_steered_claim(native_http_claim),
+      native_http_turn_progress: native_http_turn_progress(native_http_claim),
       api_key_policy: request_options.routing.api_key_policy,
       codex_session: Map.get(request_options.continuity, :codex_session),
       anchor_present?: not is_nil(Map.get(request_options.continuity, :previous_response_id)),
@@ -417,9 +419,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
 
   defp compaction_bridge_metadata(%PayloadContext{}), do: %{}
 
-  defp native_http_claim_metadata({:ok, %{arm: arm, input_count: input_count}}) do
+  defp native_http_claim_metadata({:ok, %{arm: arm, input_count: input_count} = claim}) do
     %{"native_http_claim_arm" => Atom.to_string(arm)}
     |> maybe_put_native_http_input_count(input_count)
+    |> maybe_put_native_http_turn_progress(Map.get(claim, :turn_progress))
   end
 
   defp native_http_claim_metadata(:none), do: %{}
@@ -452,6 +455,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
        do: Map.put(metadata, "native_http_input_count", input_count)
 
   defp maybe_put_native_http_input_count(metadata, _input_count), do: metadata
+
+  # What the reservation compares a later `:opening` request of the same turn
+  # against (findings#206 row 206-403); an opaque digest, never the body.
+  defp maybe_put_native_http_turn_progress(metadata, <<_::256>> = progress),
+    do: Map.put(metadata, "native_http_turn_progress", %{"version" => 1, "digest" => Base.url_encode64(progress, padding: false)})
+
+  defp maybe_put_native_http_turn_progress(metadata, _progress), do: metadata
+
+  defp native_http_steered_claim({:ok, %{steered_claim: claim}}) when is_binary(claim), do: claim
+  defp native_http_steered_claim(_native_http_claim), do: nil
+
+  defp native_http_turn_progress({:ok, %{turn_progress: <<_::256>> = progress}}), do: progress
+  defp native_http_turn_progress(_native_http_claim), do: nil
 
   defp request_class(
          _endpoint,

@@ -34,6 +34,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # open to a generated id. See `walk_native_turn_chain/4` for why (findings#212,
   # row 212-50).
   @native_turn_chain_depth 16
+  @native_http_transports ["http_json", "http_sse", "http_compact_json"]
 
   @usage_pending "usage_pending"
   @usage_not_applicable "not_applicable"
@@ -195,7 +196,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   end
 
   defp native_turn_resend_claim!(nil, %{correlation_id: correlation_id}),
-    do: {correlation_id, nil}
+    do: {correlation_id, nil, nil}
 
   # This reservation runs inside the caller's transaction, so a uniqueness
   # conflict cannot be rescued and re-resolved in a second transaction the way
@@ -207,8 +208,41 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # with the policy's anchored/entitlement refusals.
   defp native_turn_resend_claim!(%CodexSession{} = session, context) do
     case websocket_compaction_successor(session, context) do
-      {_claim, %{}} = successor -> successor
-      nil -> walk_native_turn_chain(session, context, context.correlation_id, 0)
+      {claim, %{} = client_resend} ->
+        {claim, client_resend, nil}
+
+      nil ->
+        case steered_continuation_claim(context) do
+          steered when is_binary(steered) ->
+            {claim, client_resend} = walk_native_turn_chain(session, %{context | correlation_id: steered}, steered, 0)
+            {claim, client_resend, "steered_continuation"}
+
+          nil ->
+            {claim, client_resend} = walk_native_turn_chain(session, context, context.correlation_id, 0)
+            {claim, client_resend, nil}
+        end
+    end
+  end
+
+  # The released client drains user input steered into a running turn into the
+  # same turn, under the same `turn_id`, so such a request derives the turn's
+  # bare `codex-turn:` claim although it is a later request of the turn (after a
+  # mid-turn compaction the drain comes right after it). A retry of the request
+  # holding that claim only appends model output and keeps its recorded progress
+  # digest; a request whose digest differs from the one a native HTTP holder
+  # recorded therefore cannot be that retry, and is claimed under its own
+  # steered claim instead, which its own rebuilt retries derive again
+  # (findings#206 row 206-403). A holder without a recorded digest -- a
+  # websocket request, or a row from before this release -- keeps the bare claim
+  # and today's verdict.
+  defp steered_continuation_claim(%{correlation_id: claim, opts: opts}) do
+    with steered when is_binary(steered) <- attr(opts, :native_http_steered_claim),
+         <<_::256>> = progress <- attr(opts, :native_http_turn_progress),
+         %Request{transport: transport, request_metadata: %{"native_http_turn_progress" => %{"digest" => recorded}}}
+         when transport in @native_http_transports and is_binary(recorded) <- native_turn_predecessor(claim) do
+      if recorded == Base.url_encode64(progress, padding: false), do: nil, else: steered
+    else
+      _not_steered -> nil
     end
   end
 
@@ -760,7 +794,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       auth = Map.put(auth, :api_key, api_key)
       maybe_test_runtime_authorization_barrier(:reserve, :after)
 
-      {correlation_id, client_resend} =
+      {correlation_id, client_resend, claim_arm} =
         native_turn_resend_claim!(resend_session, %{
           correlation_id: correlation_id,
           pool: pool,
@@ -800,6 +834,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         transport: transport,
         correlation_id: correlation_id,
         client_resend: client_resend,
+        native_http_claim_arm: claim_arm,
         auth: auth,
         pricing: pricing,
         estimate: estimate,
@@ -964,6 +999,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       context.auth
       |> reserve_metadata(context.pricing, context.estimate, context.opts)
       |> put_client_resend_metadata(Map.get(context, :client_resend))
+      |> put_native_http_claim_arm(Map.get(context, :native_http_claim_arm))
 
     settings_snapshot =
       PricingResolution.request_settings_snapshot(
@@ -1011,6 +1047,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     :ok = bind_direct_cleanup(context.opts, request)
     request
   end
+
+  defp put_native_http_claim_arm(metadata, nil), do: metadata
+  defp put_native_http_claim_arm(metadata, arm) when is_binary(arm), do: Map.put(metadata, "native_http_claim_arm", arm)
 
   defp put_client_resend_metadata(metadata, nil), do: metadata
 

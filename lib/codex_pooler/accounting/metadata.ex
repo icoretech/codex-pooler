@@ -396,6 +396,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "native_http_resume_progress" ->
         sanitize_native_http_resume_progress(value)
 
+      normalized == "native_http_turn_progress" ->
+        sanitize_native_http_turn_progress(value)
+
       normalized == "transport_failure" ->
         sanitize_transport_failure_map(value)
 
@@ -587,6 +590,18 @@ defmodule CodexPooler.Accounting.Metadata do
   end
 
   defp sanitize_native_http_resume_progress(_value), do: %{}
+
+  # The opaque progress digest a native HTTP opening request records
+  # (`NativeTurnContinuation.turn_progress/1`, findings#206 row 206-403).
+  defp sanitize_native_http_turn_progress(%{"version" => 1, "digest" => digest} = value)
+       when map_size(value) == 2 and is_binary(digest) and byte_size(digest) == 43 do
+    case Base.url_decode64(digest, padding: false) do
+      {:ok, decoded} when byte_size(decoded) == 32 -> value
+      _invalid -> %{}
+    end
+  end
+
+  defp sanitize_native_http_turn_progress(_value), do: %{}
 
   defp sanitize_compaction_projection_map(value) do
     value
