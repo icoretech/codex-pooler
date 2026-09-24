@@ -595,6 +595,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         %{method: :post, path: "/backend-api/codex/responses"},
         %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
         %{method: :post, path: "/v1/responses"},
+        %{method: :get, path: "/v1/responses", transport: "websocket"},
         %{method: :post, path: "/v1/chat/completions"}
       ],
       future_routes: [],
