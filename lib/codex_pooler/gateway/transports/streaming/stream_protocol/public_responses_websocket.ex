@@ -40,6 +40,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         cond do
           PublicResponses.provider_rejection_frame?(source_decoded) -> provider_rejection(source_decoded, state, stream_id)
           PublicResponses.provider_usage_limit_frame?(source_decoded) -> provider_usage_limit(source_decoded, state, stream_id)
+          match?({:withheld, _seconds}, ProviderUsageLimit.withheld(source_decoded)) -> withheld_usage_limit(source_decoded, state, stream_id)
           true -> normalize_decoded(data, source_decoded, state, stream_id)
         end
 
@@ -99,6 +100,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {:ok, error} = ProviderUsageLimit.frame_error(source_decoded)
 
     case PublicResponsesSequence.assign("error", Adapter.websocket_error(error), state, :websocket) do
+      {:emit, _type, event, state} -> {:push, CodexPooler.JSON.encode!(maybe_put_stream_id(event, stream_id)), state}
+      {:drop, state} -> {:drop, state}
+      {:overflow, _failed, state} -> {:error, sequence_exhausted(), state}
+    end
+  end
+
+  # A provider usage limit whose Pool advice was withheld (another candidate's
+  # return is not known) reaches the public client as the error event of the
+  # `/v1` HTTP answer to the same refusal: status `429`, the redacted
+  # `rate_limit_error`, and `headers.retry-after` when an open circuit of
+  # another candidate bounds the wait (findings#206 row 206-593). It used to be
+  # a masked `response.failed` with no retry advice.
+  defp withheld_usage_limit(source_decoded, state, stream_id) do
+    {:withheld, seconds} = ProviderUsageLimit.withheld(source_decoded)
+    error = PublicResponse.normalize_error(%{"code" => "upstream_rate_limited"}, status: 429)
+    event = %{"type" => "error", "status" => 429, "error" => error}
+    event = if seconds, do: Map.put(event, "headers", %{"retry-after" => Integer.to_string(seconds)}), else: event
+
+    case PublicResponsesSequence.assign("error", event, state, :websocket) do
       {:emit, _type, event, state} -> {:push, CodexPooler.JSON.encode!(maybe_put_stream_id(event, stream_id)), state}
       {:drop, state} -> {:drop, state}
       {:overflow, _failed, state} -> {:error, sequence_exhausted(), state}

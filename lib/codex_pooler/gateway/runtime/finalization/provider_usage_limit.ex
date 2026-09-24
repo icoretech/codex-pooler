@@ -33,6 +33,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit do
 
   # The code and message routing's own answer carries (`Quota`), so both
   # answers read the same to a client.
+  # Written by `pool_frame/3` into a frame whose Pool advice is withheld, so the
+  # socket relays it classified instead of as the terminal usage limit. A
+  # provider frame that carried it would only lose the terminal wording; its
+  # reset travels either way.
+  @withheld_key "pooler_advice"
+  @withheld "withheld"
+  @retry_after_key "pooler_retry_after"
   @code "quota_exhausted"
   @message "upstream quota is exhausted until its reset time"
   @usage_limit_tokens ["usage_limit_reached", "usage_limit_exceeded"]
@@ -65,6 +72,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit do
   @spec frame_error(map() | term(), DateTime.t()) :: {:ok, Contracts.gateway_error()} | :unknown
   def frame_error(frame, now \\ DateTime.utc_now())
 
+  def frame_error(%{"error" => %{@withheld_key => @withheld}}, _now), do: :unknown
+
   def frame_error(%{"error" => %{} = error} = frame, %DateTime{} = now) do
     if Map.get(frame, "status", Map.get(frame, "status_code")) == 429,
       do: refusal(error, Map.get(frame, "headers"), fn -> :none end, now),
@@ -87,19 +96,61 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit do
   `others`, or no reset at all when another candidate has no known return, so
   the socket keeps the retryable frame. Every other frame is returned as is.
   """
-  @spec pool_frame(binary(), (-> others_return()), DateTime.t()) :: binary()
-  def pool_frame(frame, others, now \\ DateTime.utc_now()) when is_binary(frame) and is_function(others, 0) do
+  @spec pool_frame(binary(), (-> others_return()), (-> pos_integer() | nil), DateTime.t()) :: binary()
+  def pool_frame(frame, others, circuit_seconds \\ fn -> nil end, now \\ DateTime.utc_now())
+      when is_binary(frame) and is_function(others, 0) and is_function(circuit_seconds, 0) do
     with {:ok, %{} = decoded} <- CodexPooler.JSON.decode(frame),
          {:ok, %{usage_limit: own}} <- frame_error(decoded, now) do
       case pool_return(own, others.()) do
         {:ok, ^own} -> frame
         {:ok, usage_limit} -> decoded |> put_frame_reset(%{"resets_at" => usage_limit.resets_at, "resets_in_seconds" => usage_limit.resets_in_seconds}) |> CodexPooler.JSON.encode!()
-        :unknown -> decoded |> put_frame_reset(nil) |> CodexPooler.JSON.encode!()
+        :unknown -> decoded |> put_frame_reset(withheld_fields(circuit_seconds.())) |> CodexPooler.JSON.encode!()
       end
     else
       _other -> frame
     end
   end
+
+  @doc """
+  The frame's refusal as the socket relays it: `{:terminal, error}` for the
+  Pooler's terminal usage limit, `{:relay, provider_error}` for a usage limit
+  whose Pool advice was withheld or whose reset is not known (the socket then
+  sends the classified wrapped `429` native HTTP sends, findings#206 row
+  206-592), `:canonical` for any other frame (a plain throttle keeps the
+  canonical frame the client classifies).
+  """
+  @spec frame_projection(map() | term(), DateTime.t()) :: {:terminal, Contracts.gateway_error()} | {:relay, map()} | :canonical
+  def frame_projection(frame, now \\ DateTime.utc_now())
+
+  def frame_projection(%{"error" => %{} = error} = frame, %DateTime{} = now) do
+    with 429 <- Map.get(frame, "status", Map.get(frame, "status_code")),
+         :unknown <- frame_error(frame, now) do
+      if usage_limit?(error, Map.get(frame, "headers")), do: {:relay, Map.drop(error, [@withheld_key, @retry_after_key])}, else: :canonical
+    else
+      {:ok, terminal} -> {:terminal, terminal}
+      _other_status -> :canonical
+    end
+  end
+
+  def frame_projection(_frame, _now), do: :canonical
+
+  defp withheld_fields(seconds) when is_integer(seconds) and seconds > 0, do: %{@withheld_key => @withheld, @retry_after_key => seconds}
+  defp withheld_fields(_seconds), do: %{@withheld_key => @withheld}
+
+  @doc """
+  For a frame whose Pool advice was withheld: `{:withheld, retry_after}` with
+  the seconds an open circuit of another candidate bounds the wait by, or
+  `nil`; `:no` for every other frame (findings#206 row 206-593).
+  """
+  @spec withheld(map() | term()) :: {:withheld, pos_integer() | nil} | :no
+  def withheld(%{"status" => 429, "error" => %{@withheld_key => @withheld} = error}) do
+    case error[@retry_after_key] do
+      seconds when is_integer(seconds) and seconds in 1..60 -> {:withheld, seconds}
+      _none -> {:withheld, nil}
+    end
+  end
+
+  def withheld(_frame), do: :no
 
   defp put_frame_reset(decoded, reset) do
     decoded
@@ -107,9 +158,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit do
     |> update_error(["response", "error"], reset)
   end
 
-  defp update_error(decoded, path, reset) do
+  defp update_error(decoded, path, fields) do
     case get_in(decoded, path) do
-      %{} = error -> put_in(decoded, path, if(reset, do: Map.merge(error, reset), else: Map.drop(error, ["resets_at", "resets_in_seconds"])))
+      %{} = error -> put_in(decoded, path, Map.merge(error, fields))
       _absent -> decoded
     end
   end

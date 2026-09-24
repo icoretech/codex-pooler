@@ -13,10 +13,8 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
   #   `response.failed` naming `usage_limit_reached` is a retryable stream
   #   error to it).
   #
-  # A streaming `/v1` HTTP turn bridged onto the upstream websocket is not
-  # covered: its owner consumes the pre-output usage-limit frame and completes
-  # without a terminal, so the client gets a stream interruption (findings#206,
-  # a separate row).
+  # A streaming `/v1` HTTP turn bridged onto the upstream websocket is covered
+  # by `responses_websocket_bridge_usage_limit_test.exs` (row 206-582).
   #
   # The provider's message and plan never travel. One BEAM node, one
   # assignment, FakeUpstream websocket; direct socket and local owner; Lite.
@@ -65,8 +63,9 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
   end
 
   # The advice is the Pool's (row 206-545): an exhausted sibling that resets
-  # sooner sets it, and a sibling with no known return (taken out by an open
-  # circuit) keeps the retryable frame, as routing keeps the retryable 503.
+  # sooner sets it. A sibling with no known return (taken out by an open
+  # circuit) withholds it, and the refusal goes out as the classified wrapped
+  # 429 native HTTP relays, with the provider's reset (row 206-592).
   test "native websocket: an exhausted sibling that resets sooner sets the advice", _context do
     put_owner_forwarding!(false)
     resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
@@ -89,15 +88,17 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     assert seconds in 895..900
   end
 
-  test "native websocket: a sibling taken out by an open circuit keeps the retryable frame", _context do
+  test "native websocket: a sibling taken out by an open circuit withholds the advice and relays the classified 429", _context do
     put_owner_forwarding!(false)
     resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
     setup = sibling_setup!(resets_at)
     open_sibling_circuit!(setup)
     {_server, port} = start_public_endpoint_with_server!()
 
-    assert %{"type" => "response.failed"} = event = native_turn!(port, setup)
-    refute Map.has_key?(event["error"] || %{}, "resets_at")
+    assert %{"type" => "error", "status" => 429, "error" => error} = event = native_turn!(port, setup)
+    assert %{"type" => "usage_limit_reached", "message" => "upstream usage limit reached", "resets_at" => ^resets_at} = error
+    refute Map.has_key?(event, "headers")
+    refute CodexPooler.JSON.encode!(event) =~ @provider_message
   end
 
   defp sibling_setup!(resets_at) do

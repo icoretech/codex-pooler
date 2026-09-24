@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.NativeImageResult
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
   alias CodexPooler.Gateway.Runtime.Dispatch.PartitionFallback
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
@@ -25,6 +26,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   }
 
   alias CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn
+  alias CodexPooler.Gateway.Routing.CircuitRetryAfter
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
@@ -592,7 +594,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
             {:error, usage_limit_error}
 
           :unknown ->
-            relayed_failure_result(response, context, body, error_code, validation_rejection, opts)
+            unanswered_failure_result(response, context, body, error_code, validation_rejection, opts)
         end
 
       {:error, gateway_error} ->
@@ -835,6 +837,36 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       raw_body: CodexPooler.JSON.encode!(%{"error" => ValidationRejection.error(validation_rejection)}),
       public_validation_rejection: validation_rejection
     }
+  end
+
+  defp unanswered_failure_result(response, context, body, error_code, validation_rejection, opts) do
+    if public_rate_limit_relay?(response, context.request_options),
+      do: {:error, public_rate_limit_error(context)},
+      else: relayed_failure_result(response, context, body, error_code, validation_rejection, opts)
+  end
+
+  # A `/v1` Responses or Chat `429` the terminal usage limit did not answer is
+  # the redacted `rate_limit_error` in Full and Lite alike (Full used to answer
+  # the canonical `server_error`), with `Retry-After` when a sibling taken out
+  # by an open circuit bounds the wait; the same over HTTP and over the
+  # upstream websocket bridge (findings#206 rows 206-531, 206-593).
+  defp public_rate_limit_relay?(%Req.Response{status: 429}, %RequestOptions{openai_compatibility: compatibility} = request_options),
+    do: OpenAICompatibility.translated_responses_surface?(compatibility) and not CompactionTrigger.streaming_result?(request_options)
+
+  defp public_rate_limit_relay?(_response, _request_options), do: false
+
+  defp public_rate_limit_error(%SelectedCandidateContext{} = context) do
+    others =
+      context.route_state
+      |> RouteState.route_filter_candidates()
+      |> Enum.reject(fn {assignment, _identity} -> assignment.id == context.assignment.id end)
+
+    error = %{status: 429, code: "upstream_rate_limited", message: "upstream request failed", param: nil}
+
+    case CircuitRetryAfter.current_seconds(context.auth, context.model, others, context.route_class) do
+      seconds when is_integer(seconds) -> Map.put(error, :circuit_retry_after_seconds, seconds)
+      nil -> error
+    end
   end
 
   # A native `429` the terminal usage limit did not answer keeps the tokens

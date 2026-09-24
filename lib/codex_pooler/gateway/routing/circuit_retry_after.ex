@@ -58,6 +58,18 @@ defmodule CodexPooler.Gateway.Routing.CircuitRetryAfter do
 
   def put_current(result, _auth, _model, _candidates, _route_class), do: result
 
+  @doc """
+  The seconds until the earliest circuit-blocked candidate among `candidates`
+  admits a probe, read now and clamped to 1..60, or `nil` when none is blocked
+  with a known time.
+  """
+  @spec current_seconds(map(), Model.t(), [{map(), map()}], String.t()) :: pos_integer() | nil
+  def current_seconds(auth, %Model{} = model, candidates, route_class) when is_list(candidates) and is_binary(route_class) do
+    snapshots = CircuitState.eligibility_snapshots(auth, model, candidates, route_class)
+    route_state = RouteState.put_circuit_snapshots(RouteState.new(%{visible_model: model, candidates: candidates}), snapshots)
+    seconds(candidates, route_state, DateTime.utc_now())
+  end
+
   defp seconds(candidates, route_state, now) do
     settings = OperationalSettings.current()
 

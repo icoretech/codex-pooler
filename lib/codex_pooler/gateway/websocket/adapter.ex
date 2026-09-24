@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Runtime.Finalization.{Metadata, ProviderUsageLimit, ValidationRejection}
+  alias CodexPooler.Gateway.Runtime.Finalization.{Metadata, NativeRateLimitRelay, ProviderUsageLimit, ValidationRejection}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -199,11 +199,29 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   # while it reads a `response.failed` naming that code as a retryable stream
   # error and resends the turn. The provider's message and plan never travel.
   # Any other 429 keeps the canonical frame.
+  #
+  # A usage limit whose Pool advice was withheld, or whose reset is not known,
+  # goes out as the wrapped `429` with the classified error native HTTP sends
+  # for the same refusal (`NativeRateLimitRelay`: type, code, the provider's
+  # reset, the Pooler's message; findings#206 rows 206-589, 206-592). The
+  # canonical `response.failed` it used to keep is a retryable stream error to
+  # the released client, which reconnected five times and then fell back to
+  # HTTP.
   defp native_usage_limit_frame(canonical, canonical_decoded) do
-    case ProviderUsageLimit.frame_error(canonical_decoded) do
-      {:ok, error} -> error |> websocket_error() |> CodexPooler.JSON.encode!()
-      :unknown -> canonical
+    case ProviderUsageLimit.frame_projection(canonical_decoded) do
+      {:terminal, error} -> error |> websocket_error() |> CodexPooler.JSON.encode!()
+      {:relay, provider_error} -> relay_usage_limit_frame(provider_error)
+      :canonical -> canonical
     end
+  end
+
+  # The canonical frame carries the error type again as its code when the
+  # provider sent none; that derived code is not the provider's and is dropped,
+  # so the relay reads the same tokens native HTTP does.
+  defp relay_usage_limit_frame(provider_error) do
+    provider_error = if provider_error["code"] == provider_error["type"], do: Map.delete(provider_error, "code"), else: provider_error
+    error = NativeRateLimitRelay.error(%Req.Response{status: 429, body: CodexPooler.JSON.encode!(%{"error" => provider_error})})
+    CodexPooler.JSON.encode!(%{"type" => "error", "status" => 429, "error" => error})
   end
 
   defp native_400_refusal_frame(canonical, status, error) do

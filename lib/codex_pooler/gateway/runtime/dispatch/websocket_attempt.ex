@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn
+  alias CodexPooler.Gateway.Routing.CircuitRetryAfter
   alias CodexPooler.Gateway.Runtime.Dispatch.AuthRefresh
   alias CodexPooler.Gateway.Runtime.Dispatch.PartitionFallback
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
@@ -426,7 +427,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
          response,
          failure
        ) do
-    deliver_retry_exhausted_websocket_failure(dispatch_request, response, &ProviderUsageLimit.pool_frame(&1, fn -> other_candidates_return(context) end))
+    deliver_retry_exhausted_websocket_failure(dispatch_request, response, &ProviderUsageLimit.pool_frame(&1, fn -> other_candidates_return(context) end, fn -> other_candidates_circuit_seconds(context) end))
 
     response_context = retryable_websocket_response_context(context, response)
 
@@ -733,6 +734,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   # The Pool a pre-output usage-limit refusal on the last candidate speaks for
   # (findings#206 rows 206-545, 206-546): the socket projects the frame without
   # route context, so the Pool's advice is written into it here.
+  # The wait an open circuit of another candidate bounds, for the public
+  # socket's `retry-after` when the Pool advice is withheld (row 206-593).
+  defp other_candidates_circuit_seconds(%{auth: auth, model: model, route_state: route_state, assignment: assignment, route_class: route_class}) do
+    others = route_state |> RouteState.route_filter_candidates() |> Enum.reject(fn {candidate, _identity} -> candidate.id == assignment.id end)
+    CircuitRetryAfter.current_seconds(auth, model, others, route_class)
+  end
+
   defp other_candidates_return(%{model: model, route_state: route_state, assignment: assignment}),
     do: PoolReturn.others(model, RouteState.route_filter_candidates(route_state), assignment.id, DateTime.utc_now())
 

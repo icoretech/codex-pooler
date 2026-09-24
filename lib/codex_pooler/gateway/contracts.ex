@@ -52,9 +52,10 @@ defmodule CodexPooler.Gateway.Contracts do
           # provider's `usage_limit_reached` fields and retry headers, and
           # exempt from the `/v1` redaction (findings#206 row 206-508).
           optional(:usage_limit) => usage_limit(),
-          # Set only by route filtering on a retryable `503` of a Pool with an
-          # open-circuit candidate: seconds until that circuit admits a probe,
-          # 1..60, rendered as `Retry-After` (findings#206 row 206-532).
+          # Set by route filtering on a retryable `503` of a Pool with an
+          # open-circuit candidate (findings#206 row 206-532), and on the `/v1`
+          # relayed `429` whose Pool advice is withheld (row 206-593): seconds
+          # until that circuit admits a probe, 1..60, rendered as `Retry-After`.
           optional(:circuit_retry_after_seconds) => pos_integer()
         }
   @type usage_limit :: %{required(:resets_at) => integer(), required(:resets_in_seconds) => pos_integer()}
@@ -226,7 +227,7 @@ defmodule CodexPooler.Gateway.Contracts do
   the OpenAI SDKs honour a `Retry-After` of up to a minute.
   """
   @spec circuit_retry_response_headers(gateway_error() | map()) :: response_headers()
-  def circuit_retry_response_headers(%{status: 503, circuit_retry_after_seconds: seconds}) when is_integer(seconds) and seconds > 0,
+  def circuit_retry_response_headers(%{status: status, circuit_retry_after_seconds: seconds}) when status in [429, 503] and is_integer(seconds) and seconds > 0,
     do: [{"retry-after", Integer.to_string(seconds)}]
 
   def circuit_retry_response_headers(_error), do: []

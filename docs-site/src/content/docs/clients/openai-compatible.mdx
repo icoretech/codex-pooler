@@ -552,8 +552,11 @@ the `GET /v1/responses` websocket the same refusal is the `error` event with
 `/v1/responses` request that Codex Pooler carries over the backend's
 websocket gets the same HTTP answer, or moves to another eligible account,
 when the refusal arrives before any output. A usage-limit
-refusal that names no reset still ahead keeps the redacted `rate_limit_error`
-described below.
+refusal that names no reset still ahead, or one answered while another
+account's return is not known, keeps the redacted `429` `rate_limit_error`
+described below in both serving modes, with `Retry-After` (and, over the
+websocket, an `error` event with `headers.retry-after`) when an account that
+an open circuit took out bounds the wait.
 
 ### Relayed terminal errors
 
