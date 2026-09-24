@@ -22,6 +22,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Routing.ModelMetadata
+  alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.InstanceSettings.AppSecretCrypto
   alias CodexPooler.Platform.InstancePresence
@@ -1316,10 +1317,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
       end
 
     if turn.status == "in_progress" and is_nil(turn.completed_at) do
-      {status, error_code} =
-        if request.status == "succeeded",
-          do: {"succeeded", nil},
-          else: {"failed", @orphaned_turn_closed_code}
+      {status, error_code} = settled_turn_outcome(request)
 
       turn
       |> Ecto.Changeset.change(%{
@@ -1342,6 +1340,29 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
     :closed
   end
+
+  # A request that was already terminal when its turn was met still open is,
+  # most often, a settlement in flight: the request, its attempt and its ledger
+  # commit before the turn row, in a second transaction. The turn is written
+  # the way that settlement writes it (`Finalization.Interruption`'s terminal
+  # turn vocabulary: interrupted for a lost client or owner, failed otherwise,
+  # the request's own error code), so a resend judged in between meets the
+  # same predecessor it meets after the settlement, and the settlement's own
+  # turn write then finds nothing to do. It used to close it `failed
+  # orphaned_turn_closed`, which no resend policy admits: the released client's
+  # resend of a provider-failed turn arriving in that window was refused `409
+  # duplicate_turn` (findings#206 row 206-609). A request this closer finalizes
+  # itself keeps `orphaned_turn_closed`.
+  defp settled_turn_outcome(%Request{status: "succeeded"}), do: {"succeeded", nil}
+
+  defp settled_turn_outcome(%Request{status: status, last_error_code: code})
+       when status in ["failed", "rejected", "cancelled"] and is_binary(code) and code != @orphaned_turn_closed_code do
+    if status == "failed" and InterruptionOutcome.interrupted_error_code?(code),
+      do: {"interrupted", code},
+      else: {"failed", code}
+  end
+
+  defp settled_turn_outcome(%Request{}), do: {"failed", @orphaned_turn_closed_code}
 
   # Closing a request with an outstanding reservation must settle the ledger
   # in the same transaction. Otherwise its terminal status removes it from

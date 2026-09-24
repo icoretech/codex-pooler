@@ -188,14 +188,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   end
 
   # The running request of this turn whatever claim it holds, this one included.
+  # An open turn behind a terminal request is a settlement in flight too: the
+  # request, its attempt and its ledger commit before the turn row, and the
+  # resend policy refuses the open turn as a live predecessor until it is
+  # written. Waiting only for an open request refused a resend arriving between
+  # those commits at once (`409 duplicate_turn`, findings#206 row 206-609).
   defp live_semantic_turn?(scope) do
     Repo.exists?(
       from turn in CodexTurn,
-        join: request in Request,
-        on: request.id == turn.request_id,
         where:
           turn.codex_session_id == ^scope.codex_session_id and turn.semantic_turn_digest == ^scope.semantic_turn_digest and
-            turn.status == "in_progress" and request.status in ["accepted", "in_progress"]
+            turn.status == "in_progress"
     )
   end
 

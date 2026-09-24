@@ -106,8 +106,11 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
   end
 
   test "preflight closes an orphaned generation-zero lifecycle behind an in-progress turn" do
-    # A terminal request whose turn was never completed: the turn is closed
-    # from the request outcome and the resend proceeds as a fresh turn.
+    # A terminal request whose turn was never completed, or not yet (its
+    # settlement writes the turn in a second transaction): the turn is written
+    # the way that settlement writes it, from the request's own outcome and
+    # error code, and the resend is judged against that predecessor
+    # (findings#206 row 206-609).
     terminal_request = replay_fixture()
     completed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -124,8 +127,8 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert :none = RequestReplay.preflight_snapshot(terminal_request.preflight)
 
     assert %CodexTurn{
-             status: "failed",
-             error_code: "orphaned_turn_closed",
+             status: "interrupted",
+             error_code: "client_disconnected",
              final_attempt_id: final_attempt_id,
              completed_at: %DateTime{}
            } = Repo.get!(CodexTurn, terminal_request.turn.id)
@@ -140,6 +143,16 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
              Repo.reload!(terminal_request.request)
 
     assert :none = RequestReplay.preflight_snapshot(terminal_request.preflight)
+
+    # A provider failure keeps its own code on a failed turn.
+    provider_failed = replay_fixture()
+
+    provider_failed.request
+    |> Ecto.Changeset.change(%{status: "failed", usage_status: "usage_unknown", completed_at: completed_at, response_status_code: 200, last_error_code: "server_error"})
+    |> Repo.update!()
+
+    assert :none = RequestReplay.preflight_snapshot(provider_failed.preflight)
+    assert %CodexTurn{status: "failed", error_code: "server_error"} = Repo.get!(CodexTurn, provider_failed.turn.id)
 
     # A succeeded request keeps a succeeded turn.
     succeeded_request = replay_fixture()
