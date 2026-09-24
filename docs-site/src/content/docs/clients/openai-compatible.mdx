@@ -529,6 +529,15 @@ at least one account is still eligible, the request is routed to it as usual,
 and a provider usage-limit refusal that arrives before any output moves the
 same request to another eligible account.
 
+When no other account is left for the request and the Codex backend's
+usage-limit refusal names the account's reset, that refusal gets the same
+answer: `429`, `usage_limit_reached`, `quota_exhausted` and Codex Pooler's
+message, `resets_at` and `resets_in_seconds` from the backend's reset,
+`Retry-After`, and `x-should-retry: false` when the wait is longer than 60
+seconds. The backend's own message and other fields are not relayed. A
+usage-limit refusal that names no reset still ahead keeps the redacted
+`rate_limit_error` described below.
+
 ### Relayed terminal errors
 
 When the Codex backend returns a genuine terminal error, Codex Pooler preserves its trimmed `error.code` only when

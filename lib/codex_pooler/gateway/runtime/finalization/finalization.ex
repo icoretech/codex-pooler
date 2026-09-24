@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Runtime.Finalization.{
     AttemptSettlement,
     Metadata,
+    ProviderUsageLimit,
     ResponseUsage,
     SettlementAttrs,
     SideEffects,
@@ -513,7 +514,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     %{
       reserved: reserved,
       attempt: attempt,
-      payload: payload,
       request_options: request_options
     } = context
 
@@ -561,34 +561,58 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:ok, finalized}
 
       {:ok, _finalized} ->
-        headers =
-          Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
+        case relayed_usage_limit(response, request_options) do
+          {:ok, usage_limit_error} ->
+            {:error, usage_limit_error}
 
-        # The client reads the rejection's `input[N]` in its own positions;
-        # the attempt above keeps the provider's (findings#254 row 254-61).
-        index_map = request_options.runtime.upstream_input_index_map
-
-        result =
-          failure_result(
-            status,
-            headers,
-            body,
-            request_options,
-            payload,
-            error_code,
-            Keyword.put(opts, :validation_rejection, ValidationRejection.for_client(validation_rejection, index_map)),
-            response |> Metadata.rejection_error() |> ValidationRejection.for_client(index_map)
-          )
-
-        case result do
-          {:error, error} -> {:error, error}
-          result -> {:ok, result}
+          :unknown ->
+            relayed_failure_result(response, context, body, error_code, validation_rejection, opts)
         end
 
       {:error, gateway_error} ->
         {:error, gateway_error}
     end
   end
+
+  defp relayed_failure_result(response, %SelectedCandidateContext{} = context, body, error_code, validation_rejection, opts) do
+    %{payload: payload, request_options: request_options} = context
+    headers = Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
+
+    # The client reads the rejection's `input[N]` in its own positions;
+    # the attempt above keeps the provider's (findings#254 row 254-61).
+    index_map = request_options.runtime.upstream_input_index_map
+
+    result =
+      failure_result(
+        response.status,
+        headers,
+        body,
+        request_options,
+        payload,
+        error_code,
+        Keyword.put(opts, :validation_rejection, ValidationRejection.for_client(validation_rejection, index_map)),
+        response |> Metadata.rejection_error() |> ValidationRejection.for_client(index_map)
+      )
+
+    case result do
+      {:error, error} -> {:error, error}
+      result -> {:ok, result}
+    end
+  end
+
+  # A provider usage-limit `429` on the last eligible candidate whose reset
+  # the provider named answers the Pooler's terminal usage-limit refusal on
+  # every HTTP surface, as routing does once every candidate is exhausted
+  # (findings#206 rows 206-508, 206-531). The attempt and the request row
+  # above keep the provider's `429` and `upstream_rate_limited`. The native
+  # compaction bridges keep their own result shapes.
+  defp relayed_usage_limit(%Req.Response{status: 429} = response, %RequestOptions{} = request_options) do
+    if native_compaction_websocket?(request_options) or CompactionTrigger.streaming_result?(request_options),
+      do: :unknown,
+      else: ProviderUsageLimit.error(response)
+  end
+
+  defp relayed_usage_limit(_response, _request_options), do: :unknown
 
   defp apply_failure_settlement_options(attrs, opts) do
     attrs =

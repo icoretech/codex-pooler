@@ -1678,6 +1678,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp normalize_upstream_transport_result(result, _identity, _opts), do: result
 
+  # A streaming request's 4xx body is read here, bounded by `RejectionDrain`
+  # (64 KiB, one 2 s deadline). A 429 is read too since findings#206 row
+  # 206-531: a provider usage limit names the account's reset only in its body,
+  # and the last candidate's refusal answers it (`ProviderUsageLimit`).
   defp maybe_drain_rejection_body(
          {:ok,
           %Req.Response{
@@ -1686,7 +1690,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           } = response},
          %RequestOptions{} = request_options
        )
-       when status in 400..499 and status != 429 do
+       when status in 400..499 do
     body = RejectionDrain.drain(response)
 
     response =
