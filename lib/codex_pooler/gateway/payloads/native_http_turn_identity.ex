@@ -129,6 +129,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
           required(:semantic_turn_key) => <<_::256>>,
           optional(:websocket_compaction_claims) => [String.t()],
           optional(:turn_progress) => <<_::256>>,
+          optional(:turn_position) => NativeTurnContinuation.progress_position(),
           optional(:steered_claim) => String.t()
         }
 
@@ -264,14 +265,17 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # opener's row records. The reservation decides between the two: the bare
   # `codex-turn:` claim unless it is already held by a native HTTP request of the
   # turn that recorded a DIFFERENT progress, which no retry of that request can
-  # produce (findings#206 row 206-403). The steered claim is named by the turn
-  # and that digest alone, so a rebuilt retry of the steered request (model
-  # output appended) derives it again and meets its own predecessor.
+  # produce (findings#206 row 206-403), and only when this request is further
+  # along the turn than that holder (its position, row 206-423). The steered
+  # claim is named by the turn and that digest alone, so a rebuilt retry of the
+  # steered request (model output appended) derives it again and meets its own
+  # predecessor.
   defp put_steered_claim(%{arm: :opening} = claim, identity, payload) do
     progress = NativeTurnContinuation.turn_progress(payload)
 
     claim
     |> Map.put(:turn_progress, progress)
+    |> Map.put(:turn_position, NativeTurnContinuation.turn_position(payload))
     |> Map.put(:steered_claim, WebsocketTurnIdentity.steered_claim_key(identity.semantic_turn_key, progress))
   end
 

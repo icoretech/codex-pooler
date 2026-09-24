@@ -210,6 +210,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       websocket_compaction_claims: websocket_compaction_claims(native_http_claim),
       native_http_steered_claim: native_http_steered_claim(native_http_claim),
       native_http_turn_progress: native_http_turn_progress(native_http_claim),
+      native_http_turn_position: native_http_turn_position(native_http_claim),
       api_key_policy: request_options.routing.api_key_policy,
       codex_session: Map.get(request_options.continuity, :codex_session),
       semantic_turn_digest: Map.get(request_options.continuity, :semantic_turn_key),
@@ -424,7 +425,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   defp native_http_claim_metadata({:ok, %{arm: arm, input_count: input_count} = claim}) do
     %{"native_http_claim_arm" => Atom.to_string(arm)}
     |> maybe_put_native_http_input_count(input_count)
-    |> maybe_put_native_http_turn_progress(Map.get(claim, :turn_progress))
+    |> maybe_put_native_http_turn_progress(Map.get(claim, :turn_progress), Map.get(claim, :turn_position))
   end
 
   defp native_http_claim_metadata(:none), do: %{}
@@ -460,25 +461,45 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
 
   # What the reservation compares a later `:opening` request of the same turn
   # against (findings#206 row 206-403); an opaque digest, never the body.
-  defp maybe_put_native_http_turn_progress(metadata, <<_::256>> = progress),
-    do: Map.put(metadata, "native_http_turn_progress", %{"version" => 1, "digest" => Base.url_encode64(progress, padding: false)})
+  defp maybe_put_native_http_turn_progress(metadata, <<_::256>> = progress, position),
+    do: Map.put(metadata, "native_http_turn_progress", recorded_turn_progress(progress, position))
 
-  defp maybe_put_native_http_turn_progress(metadata, _progress), do: metadata
+  defp maybe_put_native_http_turn_progress(metadata, _progress, _position), do: metadata
 
   # The full-history progress digest of a native websocket request, when its
   # socket knew it, so a later request of the same turn on another socket or
   # over HTTPS is compared against this row (findings#206 row 206-412); an
   # opaque digest, never the body.
-  defp native_websocket_turn_progress_metadata(%RequestOptions{transport: %{transport: "websocket"}, extra: %{native_turn_progress: <<_::256>> = progress}}),
-    do: %{"native_turn_progress" => %{"version" => 1, "digest" => Base.url_encode64(progress, padding: false)}}
+  defp native_websocket_turn_progress_metadata(%RequestOptions{transport: %{transport: "websocket"}, extra: %{native_turn_progress: <<_::256>> = progress} = extra}),
+    do: %{"native_turn_progress" => recorded_turn_progress(progress, Map.get(extra, :native_turn_position))}
 
   defp native_websocket_turn_progress_metadata(%RequestOptions{}), do: %{}
+
+  # The digest, and beside it the position that orders a later request of the
+  # turn against this row (findings#206 row 206-423): the compaction pivot's
+  # digest, absent when there is none, and the count of user messages after it.
+  # Readers of the previous release match only `version` and `digest`.
+  defp recorded_turn_progress(progress, position) do
+    %{"version" => 1, "digest" => Base.url_encode64(progress, padding: false)}
+    |> put_recorded_turn_position(position)
+  end
+
+  defp put_recorded_turn_position(recorded, {pivot, user_messages}) when is_integer(user_messages) and user_messages >= 0 do
+    recorded
+    |> Map.put("user_messages", user_messages)
+    |> then(&if is_binary(pivot), do: Map.put(&1, "pivot", Base.url_encode64(pivot, padding: false)), else: &1)
+  end
+
+  defp put_recorded_turn_position(recorded, _position), do: recorded
 
   defp native_http_steered_claim({:ok, %{steered_claim: claim}}) when is_binary(claim), do: claim
   defp native_http_steered_claim(_native_http_claim), do: nil
 
   defp native_http_turn_progress({:ok, %{turn_progress: <<_::256>> = progress}}), do: progress
   defp native_http_turn_progress(_native_http_claim), do: nil
+
+  defp native_http_turn_position({:ok, %{turn_position: {_pivot, _user_messages} = position}}), do: position
+  defp native_http_turn_position(_native_http_claim), do: nil
 
   defp request_class(
          _endpoint,

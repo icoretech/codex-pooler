@@ -91,14 +91,14 @@ defmodule CodexPooler.Accounting do
   defdelegate replay_semantic_turn_in_flight?(input), to: RequestReplay, as: :semantic_turn_in_flight?
 
   @doc """
-  The full-history progress digest recorded by the row holding a native turn
-  claim, or `nil` when it recorded none (findings#206 row 206-412).
+  The full-history position recorded by the row holding a native turn claim, or
+  `nil` when it recorded none (findings#206 rows 206-412/206-423).
   """
-  @spec native_turn_recorded_progress(String.t()) :: String.t() | nil
-  defdelegate native_turn_recorded_progress(claim), to: CodexPooler.Accounting.NativeTurnProgress, as: :recorded_for_claim
+  @spec native_turn_recorded_position(String.t()) :: CodexPooler.Accounting.NativeTurnProgress.position() | nil
+  defdelegate native_turn_recorded_position(claim), to: CodexPooler.Accounting.NativeTurnProgress, as: :recorded_position_for_claim
 
-  @spec native_turn_progress_differs?(String.t() | nil, <<_::256>>) :: boolean()
-  defdelegate native_turn_progress_differs?(recorded, progress), to: CodexPooler.Accounting.NativeTurnProgress, as: :differs?
+  @spec native_turn_progress_advances?(CodexPooler.Accounting.NativeTurnProgress.position() | nil, CodexPooler.Accounting.NativeTurnProgress.position() | nil) :: boolean()
+  defdelegate native_turn_progress_advances?(recorded, position), to: CodexPooler.Accounting.NativeTurnProgress, as: :advances?
 
   @spec replay_provisional_binding_status(RequestReplay.provisional_reference()) ::
           :armed

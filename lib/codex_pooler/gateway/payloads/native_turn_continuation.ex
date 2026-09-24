@@ -98,6 +98,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
 
   @anchor_domain "native_turn_compaction_anchor_v1"
   @progress_domain "native_turn_user_progress_v1"
+  @pivot_domain "native_turn_progress_pivot_v1"
 
   @type turn_role :: :opening | :tool_continuation | {:post_compaction_resume, <<_::256>>}
 
@@ -325,6 +326,38 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   @spec progress_digest(progress_state()) :: <<_::256>>
   def progress_digest({pivot, user_messages}) when is_integer(user_messages) and user_messages >= 0,
     do: :crypto.hash(:sha256, :erlang.term_to_binary({@progress_domain, pivot, user_messages}, [:deterministic]))
+
+  @typedoc """
+  Where a request stands in its turn, in a form that can be ordered and
+  recorded: an opaque digest of the latest compaction pivot (`nil` when there is
+  none) and the number of user messages after it.
+  """
+  @type progress_position :: {<<_::256>> | nil, non_neg_integer()}
+
+  @doc """
+  The `progress_position/0` of a `progress_state/0`.
+
+  The digest says only whether two requests stand at the same place; the
+  position says whether one is FURTHER along than the other, which is what a
+  later request of a turn must be (findings#206 row 206-423). A request is
+  further along than the turn's opener when it has the same compaction point
+  and strictly more user messages after it (the user steered input in), or a
+  compaction point the opener did not end on (a remote compaction replaced the
+  history: `compact_remote_v2.rs` `build_v2_compacted_history` keeps only
+  messages and appends the new compaction item last). Fewer user messages, or
+  a compaction point that disappeared, is a trimmed resend, not progress.
+  """
+  @spec progress_position(progress_state()) :: progress_position()
+  def progress_position({nil, user_messages}) when is_integer(user_messages) and user_messages >= 0, do: {nil, user_messages}
+
+  def progress_position({pivot, user_messages}) when is_integer(user_messages) and user_messages >= 0,
+    do: {:crypto.hash(:sha256, :erlang.term_to_binary({@pivot_domain, pivot}, [:deterministic])), user_messages}
+
+  @doc "The `progress_position/0` of a full-history request, the position `turn_progress/1` digests."
+  @spec turn_position(map()) :: progress_position()
+  def turn_position(%{"input" => input}) when is_list(input), do: input |> progress_state() |> progress_position()
+
+  def turn_position(_payload), do: {nil, 0}
 
   defp extend_anchored_progress(increment, anchor, %{response_digest: response_digest, progress: {pivot, user_messages}})
        when is_binary(response_digest) do

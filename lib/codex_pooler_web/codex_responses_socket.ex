@@ -1855,11 +1855,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # (`NativeTurnContinuation.websocket_frame_progress/2`). Only the 32-byte
   # digest leaves the socket: the reservation records it on the row, and the
   # claim of a later request of the same turn is compared against it on any
-  # socket or transport (findings#206 row 206-412).
+  # socket or transport (findings#206 row 206-412). Its position beside it (the
+  # pivot's digest and a count) orders it against that request, so only a frame
+  # further along the turn is re-keyed (row 206-423).
   defp put_native_turn_progress(%RequestOptions{} = options, decoded, state) do
     with {:ok, payload} <- decoded,
          {:ok, progress} <- native_turn_frame_progress(payload, options, state) do
-      %{options | extra: Map.put(options.extra, :native_turn_progress, NativeTurnContinuation.progress_digest(progress))}
+      extra =
+        options.extra
+        |> Map.put(:native_turn_progress, NativeTurnContinuation.progress_digest(progress))
+        |> Map.put(:native_turn_position, NativeTurnContinuation.progress_position(progress))
+
+      %{options | extra: extra}
     else
       _unknown -> options
     end

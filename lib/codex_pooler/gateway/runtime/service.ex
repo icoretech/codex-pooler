@@ -765,16 +765,19 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   # same turn once a request of it completed. When the connection that
   # delivered that response is gone (or the session fell back to HTTPS) the
   # steer goes out as full history and derives the turn's bare claim, which the
-  # turn's opener holds (findings#206 row 206-412). A frame whose full-history
-  # progress differs from the progress the holder recorded cannot be a retry of
-  # it -- a retry only appends model output -- so it takes the steered claim of
-  # its own progress, the claim every other form of that steer derives too. A
-  # holder that recorded no progress, and a frame whose progress its socket
-  # could not know, keep the bare claim and today's verdict.
+  # turn's opener holds (findings#206 row 206-412). A frame further along the
+  # turn than the holder -- more user messages after the same compaction point,
+  # or a compaction point the holder did not end on -- cannot be a retry of it,
+  # which only appends model output, nor a resend of it with trimmed history,
+  # which stands behind it (row 206-423); it takes the steered claim of its own
+  # progress, the claim every other form of that steer derives too. A holder
+  # that recorded no position, and a frame whose progress its socket could not
+  # know, keep the bare claim and today's verdict.
   defp maybe_rebind_steered_turn_claim(%PreparedWebsocketFrame{} = prepared) do
-    with {:ok, progress, steered_claim} <- WebsocketCodec.steered_turn_claim(prepared),
-         recorded = Accounting.native_turn_recorded_progress(prepared.turn_claim_key),
-         true <- Accounting.native_turn_progress_differs?(recorded, progress),
+    with {:ok, _progress, steered_claim} <- WebsocketCodec.steered_turn_claim(prepared),
+         {_pivot, _user_messages} = position <- Map.get(prepared.request_options.extra, :native_turn_position),
+         recorded = Accounting.native_turn_recorded_position(prepared.turn_claim_key),
+         true <- Accounting.native_turn_progress_advances?(recorded, position),
          {:ok, rebound} <- WebsocketCodec.rebind_steered_turn_claim(prepared, steered_claim) do
       log_steered_turn_claim_rebound(rebound)
       {:ok, rebound}

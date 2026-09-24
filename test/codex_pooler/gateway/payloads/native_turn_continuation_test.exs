@@ -442,6 +442,35 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
     end
   end
 
+  # findings#206 row 206-423: the position orders a request against the turn's
+  # opener, and an anchored frame's position is the one its full history has.
+  describe "progress positions" do
+    test "an anchored increment stands where its full history stands" do
+      pivot = %{"type" => "compaction", "encrypted_content" => "synthetic-pivot"}
+      opener = %{"input" => [user_message("x"), pivot, user_message("one")]}
+      {:ok, opener_progress} = NativeTurnContinuation.websocket_frame_progress(opener, nil)
+      base = %{semantic_turn_key: @turn_key, response_digest: NativeCodexTurnMetadata.response_id_digest("resp_one"), progress: opener_progress}
+
+      increment = %{"previous_response_id" => "resp_one", "input" => [user_message("two")]}
+      full_history = %{"input" => [user_message("x"), pivot, user_message("one"), assistant_message("a"), user_message("two")]}
+
+      assert {:ok, progress} = NativeTurnContinuation.websocket_frame_progress(increment, base)
+      assert NativeTurnContinuation.progress_position(progress) == NativeTurnContinuation.turn_position(full_history)
+      assert {<<_::256>>, 2} = NativeTurnContinuation.turn_position(full_history)
+    end
+
+    test "the pivot is a digest of the latest compaction item alone, and absent without one" do
+      pivot = %{"type" => "compaction", "encrypted_content" => "synthetic-pivot"}
+      {pivot_digest, 1} = NativeTurnContinuation.turn_position(%{"input" => [user_message("x"), pivot, user_message("one")]})
+
+      # Pruning history before the pivot keeps the position.
+      assert NativeTurnContinuation.turn_position(%{"input" => [pivot, user_message("one")]}) == {pivot_digest, 1}
+      refute NativeTurnContinuation.turn_position(%{"input" => [%{pivot | "encrypted_content" => "synthetic-other"}, user_message("one")]}) == {pivot_digest, 1}
+      assert NativeTurnContinuation.turn_position(%{"input" => [user_message("x"), user_message("one")]}) == {nil, 2}
+      assert NativeTurnContinuation.turn_position(%{"input" => "not a list"}) == {nil, 0}
+    end
+  end
+
   defp steer_payload(anchor),
     do: %{
       "previous_response_id" => anchor,
