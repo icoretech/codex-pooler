@@ -252,6 +252,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
   def start_bridge_peer!(release, identity, opts \\ [])
       when release in [:current, :previous] and is_struct(identity, UpstreamIdentity) do
+    peer_node = boot_bridge_peer!(release, opts)
+
+    case release do
+      :current ->
+        assert {:module, CodexPooler.Upstreams} =
+                 WebsocketOwnerPreviousReleaseFixture.load_synthetic_identity_lookup(
+                   peer_node,
+                   identity.id
+                 )
+
+        trace_remote_v1_calls!(peer_node)
+
+      :previous ->
+        assert {:module, WebsocketOwnerForwarder} =
+                 WebsocketOwnerPreviousReleaseFixture.load_pre_v1_bridge_forwarder(peer_node)
+
+        refute :erpc.call(peer_node, :erlang, :function_exported, [
+                 WebsocketOwnerForwarder,
+                 :remote_submit_request_v1,
+                 3
+               ])
+    end
+
+    peer_node
+  end
+
+  # One current-release peer with the real Repo for a whole test module,
+  # booted from `setup_all` together with this node's test distribution, so its
+  # tests pay neither the VM boot nor the fresh VM's first-turn warm-up each
+  # (findings#206 row 206-539). The warm-up is done here too: the application's
+  # modules are loaded (an interactive VM loads each on its first call, about a
+  # hundred of them during its first turn) and the peer's Repo has run a query.
+  # Its owner runtime, Repo and connection outlive every test and stop with the
+  # module; each test then starts its session's owner on it with
+  # `start_shared_peer_window_owner!/3`.
+  def start_shared_bridge_peer! do
+    ensure_test_distribution_started!()
+    peer_node = boot_bridge_peer!(:current, repo: :real)
+    {:ok, modules} = :application.get_key(:codex_pooler, :modules)
+    assert :ok = :erpc.call(peer_node, :code, :ensure_modules_loaded, [modules])
+    assert %{rows: [[1]]} = :erpc.call(peer_node, Repo, :query!, ["SELECT 1"])
+    peer_node
+  end
+
+  # The peer VM with the owner runtime (and, with `repo: :real`, the real Repo),
+  # stopped by `on_exit` of the calling test or `setup_all`.
+  defp boot_bridge_peer!(release, opts) do
     peer_name = String.to_atom("public_owner_#{release}_#{System.unique_integer([:positive])}")
 
     assert {:ok, peer_pid, peer_node} =
@@ -315,27 +362,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
       end
     end)
 
-    case release do
-      :current ->
-        assert {:module, CodexPooler.Upstreams} =
-                 WebsocketOwnerPreviousReleaseFixture.load_synthetic_identity_lookup(
-                   peer_node,
-                   identity.id
-                 )
-
-        trace_remote_v1_calls!(peer_node)
-
-      :previous ->
-        assert {:module, WebsocketOwnerForwarder} =
-                 WebsocketOwnerPreviousReleaseFixture.load_pre_v1_bridge_forwarder(peer_node)
-
-        refute :erpc.call(peer_node, :erlang, :function_exported, [
-                 WebsocketOwnerForwarder,
-                 :remote_submit_request_v1,
-                 3
-               ])
-    end
-
     peer_node
   end
 
@@ -365,6 +391,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     BackendCodexTestSupport.register_unboxed_pool_cleanup!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(authorization)
     peer_node = start_bridge_peer!(:current, identity, repo: :real)
+    start_peer_owner_on!(auth, session_attrs, peer_node)
+  end
+
+  # `start_peer_window_owner!/2` on the module's shared peer
+  # (`start_shared_bridge_peer!/0`): the peer's identity lookup names this
+  # test's upstream identity, and the lifecycle relay this test attaches there
+  # is detached when it ends.
+  def start_shared_peer_window_owner!(%{authorization: authorization, identity: identity} = setup, window_id, peer_node) do
+    BackendCodexTestSupport.register_unboxed_pool_cleanup!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(authorization)
+
+    assert {:module, CodexPooler.Upstreams} =
+             WebsocketOwnerPreviousReleaseFixture.load_synthetic_identity_lookup(peer_node, identity.id)
+
+    start_peer_owner_on!(auth, %{session_header: window_id, session_header_source: "x-codex-window-id"}, peer_node)
+  end
+
+  defp start_peer_owner_on!(auth, session_attrs, peer_node) do
     {session, owner_pid} = start_remote_session_owner!(auth, session_attrs, peer_node, :real)
     assert node(owner_pid) == peer_node
     assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
@@ -378,6 +422,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
                &__MODULE__.relay_native_compaction_lifecycle/4,
                self()
              ])
+
+    on_exit(fn ->
+      if remote_node_connected?(peer_node), do: :erpc.call(peer_node, :telemetry, :detach, [handler_id])
+    end)
 
     %{node: peer_node, session: session, owner_pid: owner_pid}
   end
