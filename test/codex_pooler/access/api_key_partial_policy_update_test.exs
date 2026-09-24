@@ -143,6 +143,44 @@ defmodule CodexPooler.Access.APIKeyPartialPolicyUpdateTest do
     end
   end
 
+  # `Access.update_api_key/3` edits the key row and never its bindings. A
+  # policy field it receives goes through the same merge and validation as
+  # the policy path, so the allow list is lowercased and cannot drop the
+  # stored enforced model (findings#206 row 206-505).
+  describe "the key-row update path" do
+    test "normalizes a submitted allow list and keeps the policy fields it omits" do
+      {scope, pool} = owner_scope_and_pool()
+      api_key = restricted_key!(scope, pool, "key row allow list")
+      before = policy_snapshot(api_key.id)
+
+      assert {:ok, updated} =
+               Access.update_api_key(scope, api_key, %{allowed_model_identifiers: [" GPT-Alpha ", "GPT-Gamma", "gpt-alpha"]})
+
+      assert updated.allowed_model_identifiers == ["gpt-alpha", "gpt-gamma"]
+      assert policy_snapshot(api_key.id) == %{before | allowed_model_identifiers: ["gpt-alpha", "gpt-gamma"]}
+      assert latest_update_audit(api_key.id).details["changed_fields"] == ["allowed_model_identifiers"]
+
+      assert {:ok, widened} = Access.update_api_key(scope, api_key, %{model_mode: "all_models", enforced_model_identifier: " GPT-Beta "})
+      assert widened.allowed_model_identifiers == nil
+      assert widened.enforced_model_identifier == "gpt-beta"
+      assert policy_snapshot(api_key.id).model_bindings == before.model_bindings
+    end
+
+    test "refuses an allow list that drops the stored enforced model" do
+      {scope, pool} = owner_scope_and_pool()
+      api_key = restricted_key!(scope, pool, "key row narrow")
+      before = policy_snapshot(api_key.id)
+
+      assert {:error, %{code: :invalid_policy, message: message}} =
+               Access.update_api_key(scope, api_key, %{status: "paused", allowed_model_identifiers: ["gpt-beta"]})
+
+      assert message =~ "enforced model"
+      assert policy_snapshot(api_key.id) == before
+      assert Repo.get!(APIKey, api_key.id).status == "active"
+      refute latest_update_audit(api_key.id)
+    end
+  end
+
   describe "the Pool wizard" do
     test "moves a key without rewriting its policy and audits only the Pool change" do
       {scope, pool} = owner_scope_and_pool()

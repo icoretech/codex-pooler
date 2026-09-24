@@ -33,6 +33,13 @@ defmodule CodexPooler.Access.APIKeys do
   @status_active "active"
   @status_paused "paused"
   @status_revoked "revoked"
+  @key_row_policy_fields [
+    :allowed_model_identifiers,
+    :enforced_model_identifier,
+    :enforced_reasoning_effort,
+    :maximum_reasoning_effort,
+    :enforced_service_tier
+  ]
   @policy_denial_precedence [
     :api_key_missing,
     :api_key_disabled,
@@ -272,7 +279,8 @@ defmodule CodexPooler.Access.APIKeys do
            {:ok, target_pool_id} <- authorize_api_key_update(scope, previous_api_key, attrs),
            transition =
              RuntimeAuthorization.advance_epoch_for_pool_move(transition, target_pool_id),
-           update_attrs = api_key_update_attrs(attrs, target_pool_id),
+           {:ok, policy_attrs} <- key_row_policy_attrs(scope, target_pool_id, previous_api_key, attrs),
+           update_attrs = attrs |> api_key_update_attrs(target_pool_id) |> Map.merge(policy_attrs),
            {:ok, updated_api_key} <-
              update_api_key_record(previous_api_key, update_attrs, transition) do
         {:ok,
@@ -284,6 +292,21 @@ defmodule CodexPooler.Access.APIKeys do
          }}
       end
     end)
+  end
+
+  # A policy field on the key row goes through the policy path's merge and
+  # validation: an omitted group keeps the stored value read under the writer
+  # lock, the allow list is lowercased, and a list that drops the stored
+  # enforced model is refused (findings#206 row 206-505). This path never
+  # writes bindings, so the stored bindings are not read.
+  defp key_row_policy_attrs(scope, target_pool_id, api_key, attrs) do
+    if Policy.key_policy_submitted?(attrs) do
+      with {:ok, normalized} <- Policy.normalize_attrs(scope, target_pool_id, Policy.merge_stored(attrs, api_key, [])) do
+        {:ok, Map.take(normalized, @key_row_policy_fields)}
+      end
+    else
+      {:ok, %{}}
+    end
   end
 
   defp update_api_key_record(api_key, update_attrs, transition) do
@@ -840,7 +863,6 @@ defmodule CodexPooler.Access.APIKeys do
       :dashboard_access,
       :max_active_requests,
       :expires_at,
-      :allowed_model_identifiers,
       :metadata
     ]
     |> Enum.reduce(%{}, &put_update_attr(&2, attrs, &1))

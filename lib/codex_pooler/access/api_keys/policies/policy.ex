@@ -88,6 +88,14 @@ defmodule CodexPooler.Access.APIKeys.Policy do
     |> put_unless_submitted(@model_policies_keys, %{model_policies: stored_model_policies(bindings)}, :top_level)
   end
 
+  @doc """
+  Whether an update submits a policy field stored on the key row: the allow
+  list, the enforced model, the reasoning pair or the service tier.
+  """
+  @spec key_policy_submitted?(map()) :: boolean()
+  def key_policy_submitted?(attrs) when is_map(attrs),
+    do: submitted?(attrs, @allow_list_keys ++ @enforced_model_keys ++ @reasoning_keys ++ @service_tier_keys, :with_nested_policy)
+
   defp put_unless_submitted(attrs, keys, stored, depth \\ :with_nested_policy) do
     if submitted?(attrs, keys, depth), do: attrs, else: Map.merge(attrs, stored)
   end

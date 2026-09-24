@@ -321,7 +321,7 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       assert updated.display_name == "Edited key"
       assert updated.status == "paused"
-      assert updated.allowed_model_identifiers == ["GPT-Admin"]
+      assert updated.allowed_model_identifiers == ["gpt-admin"]
       assert updated.metadata["operator_notes"] == "admin form update"
       assert {:error, :api_key_disabled} = Access.normalize_api_key_policy(updated)
 
