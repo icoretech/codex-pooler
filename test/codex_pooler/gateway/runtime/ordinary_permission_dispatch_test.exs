@@ -283,9 +283,13 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
     owner = Repo.get!(User, setup.api_key.created_by_user_id)
     scope = Scope.for_user(owner, ["instance_owner"])
 
+    # Another in-flight request of the key exhausts the daily window the
+    # request would fit on its own (findings#206 row 206-448).
+    holder = CodexPooler.AccountingTestSupport.hold_key_reservation!(setup.authorization, setup.model, 10_000)
+
     assert {:ok, _updated} =
              Access.update_api_key_with_policy(scope, setup.api_key, %{
-               default_policy: %{max_tokens_per_day: 1}
+               default_policy: %{max_tokens_per_day: 10_000}
              })
 
     assert {:ok, _auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -297,6 +301,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
 
     assert generation_count(upstream) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+    CodexPooler.AccountingTestSupport.release_key_reservation!(holder)
   end
 
   test "affirmative usage does not bypass upstream reauthentication", %{conn: conn} do

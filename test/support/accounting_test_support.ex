@@ -196,6 +196,35 @@ defmodule CodexPooler.AccountingTestSupport do
     end
   end
 
+  # An earlier request of the key, still in flight: its reservation of
+  # `output_tokens` output tokens counts in the key's token windows until it
+  # settles, so a daily or weekly max of `output_tokens` is exhausted for a
+  # later request whose own estimate fits under that max. A max below the
+  # request's own estimate is a per-request refusal instead (findings#206 row
+  # 206-448).
+  def hold_key_reservation!(authorization, model, output_tokens, correlation_prefix \\ "key-reservation-holder") do
+    {:ok, auth} = CodexPooler.Access.authenticate_authorization_header(authorization)
+
+    {:ok, %{request: holder}} =
+      CodexPooler.Accounting.reserve(auth, model, %{"model" => model.exposed_model_id, "max_output_tokens" => output_tokens}, %{
+        correlation_id: "#{correlation_prefix}-#{System.unique_integer([:positive])}"
+      })
+
+    holder
+  end
+
+  def release_key_reservation!(holder) do
+    {:ok, _settled} =
+      CodexPooler.Accounting.finalize_reserved_request_failure(holder, %{
+        request_status: "failed",
+        response_status_code: 499,
+        last_error_code: "client_disconnected",
+        usage_status: "not_applicable"
+      })
+
+    :ok
+  end
+
   def update_default_policy!(api_key, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

@@ -140,6 +140,47 @@ defmodule CodexPooler.Accounting.ReservationPolicyTest do
     assert :ok = ReservationPolicy.enforce_reservation_limits(nil, nil, estimate, now)
   end
 
+  # A token window the request fits once it moves is a window refusal (429,
+  # with the daily window's reset as its hint); a token window whose max is
+  # below the request's own estimate never admits that request, whatever the
+  # window holds, so it is a per-request refusal like the estimate caps, with
+  # no hint (findings#206 row 206-448).
+  test "a token window below the request's own estimate is a per-request refusal, an exhausted one a window refusal" do
+    fixture = CodexPooler.AccountingTestSupport.accounting_setup()
+    as_of = ~U[2026-01-15 12:00:00.000000Z]
+    earlier = DateTime.add(as_of, -1, :second)
+    request = request_fixture(fixture.auth, %{model_id: fixture.model.id})
+    ledger_entry_fixture(request, %{entry_kind: "settlement", usage_status: "usage_known", total_tokens: 10, occurred_at: earlier})
+
+    fits_alone = %{input_tokens: 0, output_tokens: 11, total_tokens: 11}
+    above_max = %{input_tokens: 0, output_tokens: 21, total_tokens: 21}
+
+    measured =
+      for field <- [:max_tokens_per_day, :max_tokens_per_week], {label, estimate} <- [fits_alone: fits_alone, above_max: above_max], into: %{} do
+        policy = struct(APIKeyPolicyBinding, [{field, 20}])
+        {:error, error} = ReservationPolicy.enforce_reservation_limits(fixture.api_key, policy, estimate, as_of)
+        {{field, label}, {error.code, Map.get(error, :limit_scope), Map.get(error, :retry_after_seconds)}}
+      end
+
+    assert measured == %{
+             {:max_tokens_per_day, :fits_alone} => {:api_key_policy_limit_exceeded, :window, 12 * 3_600},
+             {:max_tokens_per_day, :above_max} => {:api_key_policy_limit_exceeded, :request, nil},
+             {:max_tokens_per_week, :fits_alone} => {:api_key_policy_limit_exceeded, :window, nil},
+             {:max_tokens_per_week, :above_max} => {:api_key_policy_limit_exceeded, :request, nil}
+           }
+
+    {:error, error} = ReservationPolicy.enforce_reservation_limits(fixture.api_key, %APIKeyPolicyBinding{max_tokens_per_day: 20}, above_max, as_of)
+    assert error.message =~ "max_tokens_per_day"
+    assert error.message =~ "request estimate 21 exceeds max 20"
+
+    # An exhausted daily window does not promise a reset the weekly max
+    # below the estimate would refuse again.
+    both = %APIKeyPolicyBinding{max_tokens_per_day: 20, max_tokens_per_week: 15}
+    {:error, error} = ReservationPolicy.enforce_reservation_limits(fixture.api_key, both, %{input_tokens: 0, output_tokens: 16, total_tokens: 16}, as_of)
+    assert {error.limit_scope, Map.get(error, :retry_after_seconds)} == {:request, nil}
+    assert error.message =~ "max_tokens_per_week"
+  end
+
   test "absent and nil active caps skip database reads for trusted minimal key contexts" do
     test_pid = self()
     handler_id = {__MODULE__, make_ref()}

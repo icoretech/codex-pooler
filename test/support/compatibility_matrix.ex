@@ -566,7 +566,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       future_routes: [],
       fixture: :api_key_reservation_policy_refusals,
-      contract: "an API key policy refusal at the reservation keeps the wire code api_key_policy_limit_exceeded and the Pooler's own message on every transport, is marked as a Pooler policy denial so public /v1 never redacts it, and takes its status from what refused it: a window (max_requests_per_minute, max_tokens_per_day, max_tokens_per_week) answers 429 rate_limit_error, with a retry hint taken from the window's own boundary (60 s for the minute window, the seconds until the next 00:00 UTC for the daily window, none for the trailing week) sent as the HTTP Retry-After header and as the websocket error event's headers retry-after, plus HTTP x-should-retry false when the window frees no sooner than a minute; a per-request estimate cap (max_input_tokens_per_request, max_output_tokens_per_request) answers 400 invalid_request_error with no hint; the refused request row records the status the client received; with owner forwarding on or off the same request gets the same answer, including a chained client-retry successor refused by the key's own policy, which records its refused row under a correlation that holds no request claim; a refusal made before a request's durable claim never takes that claim, so the same request resent once the cause is gone is served instead of meeting 409 duplicate_turn"
+      contract: "an API key policy refusal at the reservation keeps the wire code api_key_policy_limit_exceeded and the Pooler's own message on every transport, is marked as a Pooler policy denial so public /v1 never redacts it, and takes its status from what refused it: a window (max_requests_per_minute, max_tokens_per_day, max_tokens_per_week) that the request fits once the window moves answers 429 rate_limit_error, with a retry hint taken from the window's own boundary (60 s for the minute window, the seconds until the next 00:00 UTC for the daily window, none for the trailing week) sent as the HTTP Retry-After header and as the websocket error event's headers retry-after, plus HTTP x-should-retry false when the window frees no sooner than a minute; a per-request estimate cap (max_input_tokens_per_request, max_output_tokens_per_request), and a daily or weekly token window whose max is below the request's own estimate, which no later window admits either, answer 400 invalid_request_error with no hint; the refused request row records the status the client received; with owner forwarding on or off the same request gets the same answer, including a chained client-retry successor refused by the key's own policy, which records its refused row under a correlation that holds no request claim; a refusal made before a request's durable claim never takes that claim, so the same request resent once the cause is gone is served instead of meeting 409 duplicate_turn"
     },
     %{
       slug: :api_key_terminal_policy_denials,
@@ -584,7 +584,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       future_routes: [],
       fixture: :api_key_terminal_policy_denials,
-      contract: "an API key policy denial that no resend of the same request can pass answers 400 invalid_request_error on every route and transport, because the released Codex client ends the turn on a 400 while it resends a 403 five times and then falls back from websocket to HTTPS for the session: model_not_allowed (the key's allowed or enforced model excludes the requested one, as the Codex backend answers 400 for a model the account cannot serve) with param model and the Pooler's own message, and the per-request estimate caps of feature api_key_reservation_policy_refusals; the refused request row records 400; image_generation_disabled stays 403 because it is answered only on the HTTP image routes, which the released client's HTTP layer and image tool never resend on a 4xx; api_key_policy_malformed stays 403 because the request is not at fault; OpenAI SDKs retry neither 400 nor 403"
+      contract: "an API key policy denial that no resend of the same request can pass answers 400 invalid_request_error on every route and transport, because the released Codex client ends the turn on a 400 while it resends a 403 five times and then falls back from websocket to HTTPS for the session: model_not_allowed (the key's allowed or enforced model excludes the requested one, as the Codex backend answers 400 for a model the account cannot serve) with param model and the Pooler's own message, and the per-request estimate caps and token windows below the request's own estimate of feature api_key_reservation_policy_refusals; the refused request row records 400; image_generation_disabled stays 403 because it is answered only on the HTTP image routes, which the released client's HTTP layer and image tool never resend on a 4xx; api_key_policy_malformed stays 403 because the request is not at fault; OpenAI SDKs retry neither 400 nor 403"
     },
     %{
       slug: :reasoning_context,
@@ -2434,6 +2434,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       code: "api_key_policy_limit_exceeded",
       window: %{
         limits: ["max_requests_per_minute", "max_tokens_per_day", "max_tokens_per_week"],
+        admits_request_once_moved: true,
         status: 429,
         type: "rate_limit_error",
         retry_after_seconds: %{minute: 60, daily: :until_next_utc_midnight, weekly: nil},
@@ -2442,6 +2443,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       },
       request_cap: %{
         limits: ["max_input_tokens_per_request", "max_output_tokens_per_request"],
+        window_below_request_estimate: ["max_tokens_per_day", "max_tokens_per_week"],
         status: 400,
         type: "invalid_request_error",
         retry_hint: nil

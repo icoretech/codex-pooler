@@ -13,7 +13,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
   # - a per-request estimate cap (input or output tokens) that no resend of the
   #   same request can pass: `400 invalid_request_error`, which the released
   #   client ends the turn on; the `403` answered before made it resend the
-  #   refused turn five times and fall back to HTTPS (findings#206 row 206-438).
+  #   refused turn five times and fall back to HTTPS (findings#206 row 206-438);
+  # - a token window (daily or weekly) whose max is below the request's own
+  #   estimate: no later window admits that request either, so it is the same
+  #   per-request `400` with no hint, not a `429` promising the next 00:00 UTC
+  #   (findings#206 row 206-448). A window refusal is one the request fits once
+  #   the window moves: the token windows here are exhausted by an earlier
+  #   request still holding its reservation.
   #
   # The websocket answered every one of them `500` (the refusal carried no
   # status and the socket renders a missing status as a server fault, which
@@ -34,6 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
 
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  import CodexPooler.AccountingTestSupport, only: [hold_key_reservation!: 4, release_key_reservation!: 1]
 
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting
@@ -55,11 +62,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
     tokens_per_day: {429, :daily},
     tokens_per_week: {429, nil},
     input_tokens_per_request: {400, nil},
-    output_tokens_per_request: {400, nil}
+    output_tokens_per_request: {400, nil},
+    request_above_tokens_per_day: {400, nil},
+    request_above_tokens_per_week: {400, nil}
   }
 
-  for limit <- [:requests_per_minute, :tokens_per_day, :tokens_per_week, :input_tokens_per_request, :output_tokens_per_request],
-      forwarding <- [:forwarded, :direct] do
+  @limit_names [
+    :requests_per_minute,
+    :tokens_per_day,
+    :tokens_per_week,
+    :input_tokens_per_request,
+    :output_tokens_per_request,
+    :request_above_tokens_per_day,
+    :request_above_tokens_per_week
+  ]
+
+  # An earlier request of the key holds this many output tokens reserved; the
+  # refused request's own estimate (a short prompt and the default output
+  # reservation) fits under it alone.
+  @holder_output_tokens 10_000
+
+  for limit <- @limit_names, forwarding <- [:forwarded, :direct] do
     @tag limit: limit, forwarding: forwarding
     test "websocket #{forwarding}: a #{limit} refusal is answered and recorded with its own status", %{limit: limit, forwarding: forwarding} do
       {status, hint} = @limits[limit]
@@ -75,7 +98,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
     end
   end
 
-  for limit <- [:requests_per_minute, :tokens_per_day, :tokens_per_week, :input_tokens_per_request, :output_tokens_per_request] do
+  for limit <- @limit_names do
     @tag limit: limit
     test "http sse: a #{limit} refusal is answered and recorded with its own status and retry hint", %{conn: conn, limit: limit} do
       {status, hint} = @limits[limit]
@@ -97,7 +120,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
 
     assert fixture.code == @code
     assert fixture.window.status == 429 and fixture.window.type == error_type(429)
+    assert fixture.window.admits_request_once_moved == true
     assert fixture.request_cap.status == 400 and fixture.request_cap.type == error_type(400)
+    assert fixture.request_cap.window_below_request_estimate == ["max_tokens_per_day", "max_tokens_per_week"]
     assert fixture.window.retry_after_seconds == %{minute: 60, daily: :until_next_utc_midnight, weekly: nil}
     assert fixture.window.http_x_should_retry == %{minute: nil, daily: "false", weekly: "false"}
     assert fixture.recorded_status == :answered_status
@@ -237,8 +262,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
     put_policy!(setup, max_requests_per_minute: 1)
   end
 
-  defp impose_limit!(:tokens_per_day, setup), do: put_policy!(setup, max_tokens_per_day: 1)
-  defp impose_limit!(:tokens_per_week, setup), do: put_policy!(setup, max_tokens_per_week: 1)
+  defp impose_limit!(:tokens_per_day, setup) do
+    hold_key_reservation!(setup.authorization, setup.model, @holder_output_tokens, "policy-refusal-holder")
+    put_policy!(setup, max_tokens_per_day: @holder_output_tokens)
+  end
+
+  defp impose_limit!(:tokens_per_week, setup) do
+    hold_key_reservation!(setup.authorization, setup.model, @holder_output_tokens, "policy-refusal-holder")
+    put_policy!(setup, max_tokens_per_week: @holder_output_tokens)
+  end
+
+  defp impose_limit!(:request_above_tokens_per_day, setup), do: put_policy!(setup, max_tokens_per_day: 1)
+  defp impose_limit!(:request_above_tokens_per_week, setup), do: put_policy!(setup, max_tokens_per_week: 1)
   defp impose_limit!(:input_tokens_per_request, setup), do: put_policy!(setup, max_input_tokens_per_request: 1)
   defp impose_limit!(:output_tokens_per_request, setup), do: put_policy!(setup, max_output_tokens_per_request: 1)
 
@@ -276,8 +311,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
   end
 
   defp impose_refusal!(:tokens_per_day, setup) do
-    put_policy!(setup, max_tokens_per_day: 1)
-    fn -> put_policy!(setup, max_tokens_per_day: nil) end
+    holder = hold_key_reservation!(setup.authorization, setup.model, @holder_output_tokens, "policy-refusal-holder")
+    put_policy!(setup, max_tokens_per_day: @holder_output_tokens)
+
+    fn ->
+      release_key_reservation!(holder)
+      put_policy!(setup, max_tokens_per_day: nil)
+    end
   end
 
   defp put_policy!(setup, set) do

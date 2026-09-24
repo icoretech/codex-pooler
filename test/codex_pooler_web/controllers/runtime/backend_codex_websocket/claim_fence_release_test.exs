@@ -255,10 +255,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimFenceReleaseTest do
     end
   end
 
-  # A daily token window smaller than the request's estimate, then lifted.
+  # A daily token window exhausted by another request of the same key (a
+  # reservation left outstanding), then lifted. A window below the request's
+  # own estimate would be a per-request 400 instead (findings#206 row 206-448).
   defp impose_refusal!(:token_window, setup) do
-    {1, _} = Repo.update_all(from(binding in APIKeyPolicyBinding, where: binding.api_key_id == ^setup.api_key.id), set: [status: "active", max_tokens_per_day: 1])
-    fn -> Repo.update_all(from(binding in APIKeyPolicyBinding, where: binding.api_key_id == ^setup.api_key.id), set: [max_tokens_per_day: nil]) end
+    holder = CodexPooler.AccountingTestSupport.hold_key_reservation!(setup.authorization, setup.model, 10_000, "claim-fence-holder")
+    {1, _} = Repo.update_all(from(binding in APIKeyPolicyBinding, where: binding.api_key_id == ^setup.api_key.id), set: [status: "active", max_tokens_per_day: 10_000])
+
+    fn ->
+      CodexPooler.AccountingTestSupport.release_key_reservation!(holder)
+      Repo.update_all(from(binding in APIKeyPolicyBinding, where: binding.api_key_id == ^setup.api_key.id), set: [max_tokens_per_day: nil])
+    end
   end
 
   # The only assignment's circuit is open when routing runs after the claim,
