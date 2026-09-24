@@ -13,9 +13,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # Every check fails closed: a live request, turn, or attempt, a succeeded or
   # otherwise non-failed predecessor, a failure outside the provider-terminal
   # and task-exception vocabulary (an owner drain or a client disconnect is not
-  # a provider verdict; the one client disconnect admitted is a websocket turn
+  # a provider verdict; the client disconnects admitted are a websocket turn
   # interrupted before any output reached the client and never armed for
-  # replay), a stream error whose final attempt does not carry the
+  # replay, and a native compaction its client never completed), a stream error whose final attempt does not carry the
   # verified lifecycle-only or partial-reasoning cut evidence the client retry
   # policy requires, an anchored resend (a `previous_response_id` is bound to
   # the connection that produced it; the released client drops the anchor
@@ -80,6 +80,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           | :undelivered_completion
           | :undelivered_partial_output
           | :completed_item_resend
+          | :unreceived_compaction
 
   @type resolution :: %{
           claim: String.t(),
@@ -212,7 +213,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
              ClientRetry.verified_quota_rejection?(turn, request, attempt) or
              ClientRetry.verified_previous_response_miss?(turn, request, attempt) or
              ClientRetry.verified_provider_terminal_failure?(turn, request, attempt) or
-             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion, :undelivered_partial_output, :completed_item_resend] do
+             shape in [:previsible_disconnect, :lifecycle_cut, :partial_reasoning_cut, :undelivered_completion, :undelivered_partial_output, :completed_item_resend, :unreceived_compaction] do
       :ok
     else
       _invalid -> {:error, :terminal_predecessor}
@@ -264,14 +265,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # (findings#232 row 232-201) and `verified_undelivered_partial_output?/3`
   # (row 232-203). Or completed items and no terminal, after which the client
   # resends it with those items appended (`verified_completed_item_resend?/4`,
-  # row 232-232). The turn-claim branch still requires the witness.
+  # row 232-232). The turn-claim branch still requires the witness. A native
+  # compaction billed but never completed by its client is resent under its
+  # compaction claim, which binds the window the client advances after every
+  # compaction it completes (`ClientRetry.verified_unreceived_compaction?/3`,
+  # findings#206 row 206-330).
   defp undelivered_completion(request, scope, now) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
     shape = undelivered_completion_shape(turn, request, attempt, scope)
 
     cond do
-      Map.get(scope, :semantic_claim?) != true -> {:error, :terminal_predecessor}
+      Map.get(scope, :semantic_claim?) != true and shape != :unreceived_compaction -> {:error, :terminal_predecessor}
       is_nil(shape) -> {:error, :terminal_predecessor}
       live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
       entitlement?(request.id) -> {:error, :entitlement_present}
@@ -281,6 +286,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp undelivered_completion_shape(turn, request, attempt, scope) do
     cond do
+      ClientRetry.verified_unreceived_compaction?(turn, request, attempt) -> :unreceived_compaction
       ClientRetry.verified_undelivered_completion?(turn, request, attempt) -> :undelivered_completion
       ClientRetry.verified_undelivered_partial_output?(turn, request, attempt) -> :undelivered_partial_output
       completed_item_resend?(turn, request, attempt, scope) -> :completed_item_resend
@@ -376,6 +382,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     cond do
       advanced_http_resume?(request, scope) -> {:ok, :advanced_http_resume}
       previsible_websocket_disconnect?(request) -> {:ok, :previsible_disconnect}
+      unreceived_compaction?(request) -> {:ok, :unreceived_compaction}
       undelivered_partial_output?(request) -> {:ok, :undelivered_partial_output}
       completed_item_resend?(request, scope) -> {:ok, :completed_item_resend}
       true -> {:error, :terminal_predecessor}
@@ -397,6 +404,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
     ClientRetry.verified_undelivered_partial_output?(turn, request, attempt)
+  end
+
+  # A native compaction the client left while the Pooler was still collecting
+  # it: nothing of it was written to the client (findings#206 row 206-332).
+  defp unreceived_compaction?(%Request{} = request) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+    ClientRetry.verified_unreceived_compaction?(turn, request, attempt)
   end
 
   defp lock_turn(request_id) do

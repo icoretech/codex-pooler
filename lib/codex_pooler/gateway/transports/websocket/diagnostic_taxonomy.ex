@@ -39,6 +39,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
                                undelivered_completion
                                undelivered_partial_output
                                completed_item_resend
+                               unreceived_compaction
                              )
   @handoff_outcomes ~w(
                         ready

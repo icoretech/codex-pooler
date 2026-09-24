@@ -366,16 +366,24 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
       })
 
       counts = row_counts()
-
-      assert {:error, _reason} =
-               Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
-
-      assert row_counts() == counts
+      claimed = Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
 
       refute Repo.exists?(
                from link in RequestClientRetryLink,
                  where: link.predecessor_request_id == ^predecessor.id
              )
+
+      # A newer compaction of the same digest that succeeded is the one the
+      # resend repeats: the client resends a compaction only when it did not
+      # read its reply, so that one is chained, never the older failed one
+      # (findings#206 row 206-330). A newer ordinary turn keeps the fence.
+      if unquote(endpoint) == "/backend-api/codex/responses/compact" do
+        assert {:ok, %{predecessor_request_id: predecessor_request_id}} = claimed
+        assert predecessor_request_id == newer.id
+      else
+        assert {:error, _reason} = claimed
+        assert row_counts() == counts
+      end
     end
   end
 

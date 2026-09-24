@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3]
 
-  alias CodexPooler.Accounting.{LedgerEntry, Request}
+  alias CodexPooler.Accounting.{LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.{NativeCompactionAdmission, WebsocketOwnerSession}
@@ -29,14 +29,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   # it was served and billed again, and while the cut predecessor was still
   # live it hit the active-turn index and left an accepted row behind
   # (`500 websocket_response_task_failed`, then `409 duplicate_turn`). Both
-  # forms now derive one compaction claim, so the resend meets the resend
-  # policy: a pre-visible cut is retried once and chained, a cut after
-  # upstream output or after a billed completion is fenced, and a resend that
-  # races a live predecessor is refused cleanly. Frames keep the released
-  # client's key sets; identifiers, prompt text and reply frames are synthetic.
-  # One node, owner forwarding on and off; the resend is sent once the
-  # predecessor has settled (the released client retries after about 200 ms),
-  # except in the `unobserved_cut` arm, where the Pooler has not seen the cut.
+  # forms now derive one compaction claim (findings#206 row 206-310). Every arm
+  # drives the released client's whole retry (P69 wire probe): two websocket
+  # resends on new connections, then `POST /responses` over SSE with the same
+  # body and two HTTP retries, after which the turn fails. A cut after
+  # upstream output or after a billed completion used to be refused `409`
+  # twice and then bought again, unchained, by that HTTPS fallback; the client
+  # resends a compaction only when it did not complete it, so the resend is
+  # now the predecessor's successor, one charge per request (rows 206-330 and
+  # 206-332). The HTTPS fallback of a compaction whose websocket resends met a
+  # live predecessor derives the websocket claim and is chained the same way.
+  # Frames keep the released client's key sets; identifiers, prompt text and
+  # reply frames are synthetic. One node, owner forwarding on and off; the
+  # resend is sent once the predecessor has settled (the released client
+  # retries after about 200 ms), except in the `unobserved_cut` arm, where the
+  # Pooler has not seen the cut when the websocket resends arrive.
   @thread_id "019a0000-0000-7000-8000-00000000f001"
   @window_id "#{@thread_id}:0"
   @resumed_window_id "#{@thread_id}:1"
@@ -59,41 +66,119 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
 
   for {mode, shape} <- @arms, topology <- [:forwarded, :direct], cut <- [:no_cut, :before_output, :after_output, :after_completion, :unobserved_cut] do
     @tag mode: mode, shape: shape, topology: topology, cut: cut
-    test "#{mode} #{shape} #{topology} admitted compaction #{cut}: the full-history resend is served at most once and nothing is billed twice",
+    test "#{mode} #{shape} #{topology} admitted compaction #{cut}: the released client's retries buy the compaction once per request and the turn completes",
          %{mode: mode, shape: shape, topology: topology, cut: cut} do
-      measured = run_scenario(mode, shape, topology, cut)
-      CodexPooler.TestDiagnostics.puts(fn -> "206-310 #{mode} #{shape} #{topology} #{cut}: #{inspect(measured)}" end)
-      assert measured == expected(cut)
+      assert run_scenario(mode, shape, topology, cut) == expected(cut, topology)
     end
   end
 
-  defp expected(:no_cut),
-    do: %{resend: nil, rows: [{@turn_endpoint, "succeeded", nil}, {@compact_endpoint, "succeeded", nil}, {@turn_endpoint, "succeeded", nil}], compaction_charges: 1, upstream_compactions: 1, live_rows: 0}
+  # Rows are `{endpoint, transport, status, last_error_code, chained?}` in
+  # admission order; `compaction_charges` lists each compaction request's
+  # charges in the same order, so a request billed twice shows as a 2.
+  defp expected(:unobserved_cut, topology), do: expected_unobserved(topology)
+  defp expected(cut, _topology), do: expected(cut)
 
+  defp expected(:no_cut),
+    do: %{
+      retries: nil,
+      rows: [{@turn_endpoint, "websocket", "succeeded", nil, false}, {@compact_endpoint, "websocket", "succeeded", nil, false}, {@turn_endpoint, "websocket", "succeeded", nil, false}],
+      compaction_charges: [1],
+      upstream_compactions: 1,
+      live_rows: 0
+    }
+
+  # A cut before the provider produced anything: the first websocket resend is
+  # served as the predecessor's successor.
   defp expected(:before_output),
     do: %{
-      resend: :served,
-      rows: [{@turn_endpoint, "succeeded", nil}, {@compact_endpoint, "failed", "client_disconnected"}, {@compact_endpoint, "succeeded", nil}, {@turn_endpoint, "succeeded", nil}],
-      compaction_charges: 1,
+      retries: [:served],
+      rows: [
+        {@turn_endpoint, "websocket", "succeeded", nil, false},
+        {@compact_endpoint, "websocket", "failed", "client_disconnected", false},
+        {@compact_endpoint, "websocket", "succeeded", nil, true},
+        {@turn_endpoint, "websocket", "succeeded", nil, false}
+      ],
+      compaction_charges: [0, 1],
       upstream_compactions: 2,
       live_rows: 0
     }
 
+  # The provider pushed the compaction item and the Pooler collected it, but
+  # nothing reached the client; the first websocket resend is served as the
+  # successor (findings#206 rows 206-330, 206-332). It used to be refused twice
+  # and bought again, unchained, by the client's HTTPS fallback.
   defp expected(:after_output),
-    do: %{resend: {409, "duplicate_turn"}, rows: [{@turn_endpoint, "succeeded", nil}, {@compact_endpoint, "failed", "client_disconnected"}], compaction_charges: 0, upstream_compactions: 1, live_rows: 0}
+    do: %{
+      retries: [:served],
+      rows: [
+        {@turn_endpoint, "websocket", "succeeded", nil, false},
+        {@compact_endpoint, "websocket", "failed", "client_disconnected", false},
+        {@compact_endpoint, "websocket", "succeeded", nil, true},
+        {@turn_endpoint, "websocket", "succeeded", nil, false}
+      ],
+      compaction_charges: [0, 1],
+      upstream_compactions: 2,
+      live_rows: 0
+    }
 
+  # The reply was billed and written and the client never read it: the client
+  # resends a compaction only when it did not complete it (its window has not
+  # advanced), so the resend is served as the successor, one charge per
+  # request, instead of two refusals and an unchained HTTPS purchase.
   defp expected(:after_completion),
-    do: %{resend: {409, "duplicate_turn"}, rows: [{@turn_endpoint, "succeeded", nil}, {@compact_endpoint, "succeeded", nil}], compaction_charges: 1, upstream_compactions: 1, live_rows: 0}
+    do: %{
+      retries: [:served],
+      rows: [
+        {@turn_endpoint, "websocket", "succeeded", nil, false},
+        {@compact_endpoint, "websocket", "succeeded", nil, false},
+        {@compact_endpoint, "websocket", "succeeded", nil, true},
+        {@turn_endpoint, "websocket", "succeeded", nil, false}
+      ],
+      compaction_charges: [1, 1],
+      upstream_compactions: 2,
+      live_rows: 0
+    }
 
-  defp expected(:unobserved_cut),
-    do: %{resend: {409, "duplicate_turn"}, rows: [{@turn_endpoint, "succeeded", nil}, {@compact_endpoint, "failed", "client_disconnected"}], compaction_charges: 0, upstream_compactions: 1, live_rows: 0}
+  # Without owner forwarding both websocket resends race the live predecessor
+  # and are refused; the HTTPS fallback, which arrives after the Pooler settled
+  # it, derives the predecessor's claim and is served as its successor, and
+  # the turn finishes over HTTPS as the released client does.
+  defp expected_unobserved(:direct),
+    do: %{
+      retries: [{409, "duplicate_turn"}, {409, "duplicate_turn"}, :http_served],
+      rows: [
+        {@turn_endpoint, "websocket", "succeeded", nil, false},
+        {@compact_endpoint, "websocket", "failed", "client_disconnected", false},
+        {@compact_endpoint, "http_compact_json", "succeeded", nil, true},
+        {@turn_endpoint, "http_sse", "succeeded", nil, false}
+      ],
+      compaction_charges: [0, 1],
+      upstream_compactions: 2,
+      live_rows: 0
+    }
+
+  # With owner forwarding the first resend's socket takes the owner over and
+  # the owner cuts the predecessor, so the second resend is its successor.
+  defp expected_unobserved(:forwarded),
+    do: %{
+      retries: [{409, "duplicate_turn"}, :served],
+      rows: [
+        {@turn_endpoint, "websocket", "succeeded", nil, false},
+        {@compact_endpoint, "websocket", "failed", "client_disconnected", false},
+        {@compact_endpoint, "websocket", "succeeded", nil, true},
+        {@turn_endpoint, "websocket", "succeeded", nil, false}
+      ],
+      compaction_charges: [0, 1],
+      upstream_compactions: 2,
+      live_rows: 0
+    }
 
   defp run_scenario(mode, shape, topology, cut) do
     put_owner_forwarding!(topology == :forwarded)
     release_ref = make_ref()
     ctx = %{mode: mode, shape: shape}
 
-    upstream = start_upstream(FakeUpstream.strict_sequence(upstream_sequence(ctx, cut, release_ref)))
+    upstream = start_upstream(FakeUpstream.strict_sequence(upstream_sequence(ctx, cut, topology, release_ref)))
     setup = gateway_setup(upstream, compact?: true)
     if mode == "lite", do: set_model_serving_mode!(model_serving_scope(), setup, "lite")
     ctx = Map.put(ctx, :setup, setup)
@@ -105,18 +190,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     # The strict upstream expects this compaction anchored on the admitted
     # response: it is dispatched on its first send.
     first = send_frame!(first, anchored_compaction_frame(ctx))
-    resend = cut_and_resend(cut, ctx, first, port, upstream, release_ref)
+    retries = cut_and_resend(cut, ctx, first, port, upstream, release_ref)
 
     rows = await_settled!(setup.pool.id)
-    assert :ok = FakeUpstream.verify!(upstream)
+    compactions = Enum.filter(rows, &compaction_row?/1)
 
-    %{
-      resend: resend,
-      rows: Enum.map(rows, &{&1.endpoint, &1.status, &1.last_error_code}),
-      compaction_charges: compaction_charges(setup.pool.id),
+    measured = %{
+      retries: retries,
+      rows: Enum.map(rows, &{&1.endpoint, &1.transport, &1.status, &1.last_error_code, chained?(&1)}),
+      compaction_charges: Enum.map(compactions, &charges/1),
       upstream_compactions: upstream |> FakeUpstream.requests() |> Enum.count(&compaction_request?/1),
       live_rows: Enum.count(rows, &(&1.status in ["accepted", "in_progress"]))
     }
+
+    CodexPooler.TestDiagnostics.puts(fn -> "206-330 #{mode} #{shape} #{topology} #{cut}: #{inspect(measured)}" end)
+    assert :ok = FakeUpstream.verify!(upstream)
+    measured
   end
 
   defp cut_and_resend(:no_cut, ctx, client, _port, _upstream, _release_ref) do
@@ -135,12 +224,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   defp cut_and_resend(:unobserved_cut, ctx, client, port, upstream, release_ref) do
     await_barrier!(0, release_ref)
     # The client gave up on the connection but the Pooler has not seen it close
-    # yet: the predecessor is still live when the full-history resend arrives.
-    resend = full_history_resend!(ctx, port)
-    Mint.HTTP.close(client.conn)
-    await_compaction_settled!(ctx.setup.pool.id, ["succeeded", "failed"])
-    release_held_compaction!(upstream, release_ref, 1)
-    resend
+    # yet: the predecessor is still live when both websocket resends arrive,
+    # and the Pooler settles it before the HTTPS fallback.
+    settle = fn ->
+      Mint.HTTP.close(client.conn)
+      await_compaction_settled!(ctx.setup.pool.id, ["succeeded", "failed"])
+      release_held_compaction!(upstream, release_ref, 1)
+    end
+
+    retries = released_client_retries!(ctx, port, settle)
+    if List.last(retries) == :served, do: settle.()
+    retries
   end
 
   defp cut_and_resend(cut, ctx, client, port, upstream, release_ref) do
@@ -172,13 +266,39 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
 
     Mint.HTTP.close(client.conn)
     await_compaction_settled!(ctx.setup.pool.id, ["succeeded", "failed"])
-    resend = full_history_resend!(ctx, port)
+    retries = released_client_retries!(ctx, port, fn -> :ok end)
     if next_barrier, do: release_held_compaction!(upstream, release_ref, next_barrier)
-    resend
+    retries
   end
 
-  # The released client's retry: a new connection and the same compaction as
-  # full history; when it is served the turn continues on that connection.
+  # The released client's retry of a remote compaction it did not complete
+  # (`compact_remote_v2.rs`, measured on the wire in P69 with Codex 0.156.1):
+  # two websocket retries, each on a new connection with the full history,
+  # then `POST /responses` over SSE with the same body (no `type`, no
+  # websocket start timestamp, the Lite marker moved to a header) and two
+  # more HTTP retries; after those the turn fails and the compaction is lost.
+  defp released_client_retries!(ctx, port, before_https) do
+    case websocket_retries!(ctx, port, 2, []) do
+      {:served, outcomes} ->
+        outcomes
+
+      {:refused, outcomes} ->
+        before_https.()
+        outcomes ++ https_retries!(ctx, 3, [])
+    end
+  end
+
+  defp websocket_retries!(_ctx, _port, 0, outcomes), do: {:refused, Enum.reverse(outcomes)}
+
+  defp websocket_retries!(ctx, port, remaining, outcomes) do
+    case full_history_resend!(ctx, port) do
+      :served -> {:served, Enum.reverse([:served | outcomes])}
+      refused -> websocket_retries!(ctx, port, remaining - 1, [refused | outcomes])
+    end
+  end
+
+  # One websocket retry: a new connection and the same compaction as full
+  # history; when it is served the turn continues on that connection.
   defp full_history_resend!(ctx, port) do
     client = connect!(port, ctx.setup)
 
@@ -197,6 +317,49 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     after
       Mint.HTTP.close(client.conn)
     end
+  end
+
+  defp https_retries!(_ctx, 0, outcomes), do: Enum.reverse(outcomes)
+
+  defp https_retries!(ctx, remaining, outcomes) do
+    compaction = post_native!(ctx, https_body(full_history_compaction_payload(ctx)), compaction_metadata(ctx.shape), @window_id)
+
+    if compaction.status == 200 do
+      assert compaction.resp_body =~ "response.completed"
+      {payload, metadata} = resume_payload(ctx, "https")
+      resume = post_native!(ctx, https_body(payload), metadata, @resumed_window_id)
+      assert resume.status == 200 and resume.resp_body =~ "response.completed", inspect({resume.status, resume.resp_body})
+      Enum.reverse([:http_served | outcomes])
+    else
+      code = get_in(CodexPooler.JSON.decode!(compaction.resp_body), ["error", "code"])
+      https_retries!(ctx, remaining - 1, [{:http, compaction.status, code} | outcomes])
+    end
+  end
+
+  # The HTTP request the released client builds from the websocket one: the
+  # same body without the websocket-only keys, the turn metadata echoed as a
+  # header, and in Lite the marker as `x-openai-internal-codex-responses-lite`.
+  defp post_native!(ctx, body, metadata, window_id) do
+    conn =
+      build_conn()
+      |> put_req_header("authorization", ctx.setup.authorization)
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("accept", "text/event-stream")
+      |> put_req_header("session-id", @thread_id)
+      |> put_req_header("thread-id", @thread_id)
+      |> put_req_header("x-client-request-id", @thread_id)
+      |> put_req_header("x-codex-window-id", window_id)
+      |> put_req_header("x-codex-turn-metadata", metadata)
+      |> put_req_header("originator", "codex_cli_rs")
+
+    conn = if ctx.mode == "lite", do: put_req_header(conn, "x-openai-internal-codex-responses-lite", "true"), else: conn
+    post(conn, @turn_endpoint, CodexPooler.JSON.encode!(body))
+  end
+
+  defp https_body(payload) do
+    payload
+    |> Map.delete("type")
+    |> Map.update!("client_metadata", &Map.drop(&1, ["x-codex-ws-stream-request-start-ms", @lite_marker]))
   end
 
   # The provider finishes the cut generation, as a live provider would; the
@@ -237,7 +400,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     end
   end
 
-  defp upstream_sequence(ctx, cut, release_ref) do
+  defp upstream_sequence(ctx, cut, topology, release_ref) do
     turn = FakeUpstream.expect_request(method: "WEBSOCKET", json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]], respond: completed_frames(@anchor, t1_output(ctx.shape)))
 
     anchored =
@@ -254,22 +417,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
 
     resume = FakeUpstream.expect_request(method: "WEBSOCKET", json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]], respond: completed_frames(@final_response, []))
 
-    case cut do
-      :no_cut ->
+    full_history =
+      FakeUpstream.expect_request(
+        method: "WEBSOCKET",
+        json: [valid: true, equals: lite_marker_expectation(%{"type" => "response.create"}, ctx.mode), forbidden: ["previous_response_id"]],
+        respond: compaction_frames(compaction_item("resend"), @resend_response)
+      )
+
+    case {cut, topology} do
+      {:no_cut, _topology} ->
         [turn, anchored, resume]
 
-      :before_output ->
-        full_history =
+      {:unobserved_cut, :direct} ->
+        https_compaction =
           FakeUpstream.expect_request(
-            method: "WEBSOCKET",
-            json: [valid: true, equals: lite_marker_expectation(%{"type" => "response.create"}, ctx.mode), forbidden: ["previous_response_id"]],
-            respond: compaction_frames(compaction_item("resend"), @resend_response)
+            method: "POST",
+            path: @turn_endpoint,
+            json: [valid: true, forbidden: ["previous_response_id", "type"]],
+            respond: FakeUpstream.sse_stream(compaction_events(compaction_item("https"), @resend_response))
           )
 
-        [turn, anchored, full_history, resume]
+        https_resume =
+          FakeUpstream.expect_request(method: "POST", path: @turn_endpoint, json: [valid: true, forbidden: ["previous_response_id"]], respond: FakeUpstream.sse_stream(completed_events(@final_response)))
 
-      _fenced ->
-        [turn, anchored]
+        [turn, anchored, https_compaction, https_resume]
+
+      _websocket_resend ->
+        [turn, anchored, full_history, resume]
     end
   end
 
@@ -280,16 +454,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   defp compaction_request?(_request), do: false
 
   # A charge is a settlement that billed known usage.
-  defp compaction_charges(pool_id) do
+  defp charges(%Request{id: request_id}) do
     Repo.aggregate(
-      from(entry in LedgerEntry,
-        join: request in Request,
-        on: request.id == entry.request_id,
-        where: request.pool_id == ^pool_id and request.endpoint == @compact_endpoint and entry.entry_kind == "settlement" and entry.usage_status == "usage_known" and entry.settled_cost_micros > 0
-      ),
+      from(entry in LedgerEntry, where: entry.request_id == ^request_id and entry.entry_kind == "settlement" and entry.usage_status == "usage_known" and entry.settled_cost_micros > 0),
       :count
     )
   end
+
+  # Both a websocket compaction and its HTTPS fallback (which the Pooler
+  # bridges to a compact request) are recorded on the compact endpoint.
+  defp compaction_row?(%Request{endpoint: endpoint}), do: endpoint == @compact_endpoint
+
+  # Chained to its predecessor: the owner's client-retry link, or the resend
+  # policy's `client_resend` marker when owner forwarding is off.
+  defp chained?(%Request{request_metadata: %{"client_resend" => %{"predecessor_request_id" => predecessor}}}) when is_binary(predecessor), do: true
+  defp chained?(%Request{id: request_id}), do: Repo.exists?(from(link in RequestClientRetryLink, where: link.successor_request_id == ^request_id))
 
   defp pool_requests(pool_id), do: Repo.all(from(request in Request, where: request.pool_id == ^pool_id, order_by: [asc: request.admitted_at, asc: request.id]))
 
@@ -425,6 +604,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
   defp resume_turn(:standalone_turn), do: @next_turn_id
   defp resume_turn(shape), do: compaction_turn(shape)
 
+  # After a pre-turn or manual compaction the next user turn opens on the
+  # compacted history; after a mid-turn one the same turn continues on it with
+  # no new user message (one carrying a user message after the compaction item
+  # would open a new turn, which a reused turn id is refused over HTTPS).
+  defp resume_delta(:mid_turn), do: []
+  defp resume_delta(_shape), do: [prompt("next")]
+
   # The released Lite client opens a provider context with its tool manifest.
   defp context_prefix("lite"), do: [%{"type" => "additional_tools", "role" => "developer", "tools" => []}]
   defp context_prefix("full"), do: []
@@ -444,21 +630,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     |> CodexPooler.JSON.encode!()
   end
 
-  defp full_history_compaction_frame(ctx) do
+  defp full_history_compaction_frame(ctx), do: ctx |> full_history_compaction_payload() |> CodexPooler.JSON.encode!()
+
+  defp full_history_compaction_payload(ctx) do
     ctx
     |> frame(context_prefix(ctx.mode) ++ [prompt("first") | t1_output(ctx.shape)] ++ compaction_delta(ctx.shape), compaction_turn(ctx.shape), @window_id)
     |> put_in(["client_metadata", "x-codex-turn-metadata"], compaction_metadata(ctx.shape))
-    |> CodexPooler.JSON.encode!()
   end
 
   defp resume_frame(ctx, label) do
-    turn_id = resume_turn(ctx.shape)
-    metadata = %{"request_kind" => "turn", "turn_id" => turn_id, "root_turn_id" => turn_id, "window_id" => @resumed_window_id, "window_number" => 1, "context_window_id" => @resumed_context_window_id}
+    {payload, _metadata} = resume_payload(ctx, label)
+    CodexPooler.JSON.encode!(payload)
+  end
 
-    ctx
-    |> frame(context_prefix(ctx.mode) ++ [compaction_item(label), prompt("next")], turn_id, @resumed_window_id)
-    |> put_in(["client_metadata", "x-codex-turn-metadata"], turn_metadata(metadata))
-    |> CodexPooler.JSON.encode!()
+  defp resume_payload(ctx, label) do
+    turn_id = resume_turn(ctx.shape)
+    metadata = turn_metadata(%{"request_kind" => "turn", "turn_id" => turn_id, "root_turn_id" => turn_id, "window_id" => @resumed_window_id, "window_number" => 1, "context_window_id" => @resumed_context_window_id})
+
+    payload =
+      ctx
+      |> frame(context_prefix(ctx.mode) ++ [compaction_item(label) | resume_delta(ctx.shape)], turn_id, @resumed_window_id)
+      |> put_in(["client_metadata", "x-codex-turn-metadata"], metadata)
+
+    {payload, metadata}
   end
 
   defp compaction_metadata(shape) do
@@ -550,5 +744,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
       CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => item}),
       CodexPooler.JSON.encode!(%{"type" => "response.completed", "response" => %{"id" => response_id, "status" => "completed", "output" => [item], "usage" => usage()}})
     ])
+  end
+
+  defp compaction_events(item, response_id) do
+    [
+      %{"type" => "response.created", "response" => %{"id" => response_id, "status" => "in_progress"}},
+      %{"type" => "response.output_item.done", "item" => item},
+      %{"type" => "response.completed", "response" => %{"id" => response_id, "status" => "completed", "output" => [item], "usage" => usage()}}
+    ]
+  end
+
+  defp completed_events(response_id) do
+    [
+      %{"type" => "response.created", "response" => %{"id" => response_id, "status" => "in_progress"}},
+      %{"type" => "response.completed", "response" => %{"id" => response_id, "status" => "completed", "output" => [], "usage" => usage()}}
+    ]
   end
 end

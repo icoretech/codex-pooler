@@ -126,7 +126,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
           required(:arm) => claim_arm(),
           required(:native_client_retry_witness) => ClientRetry.OriginalWitness.t() | nil,
           required(:input_count) => non_neg_integer() | nil,
-          required(:semantic_turn_key) => <<_::256>>
+          required(:semantic_turn_key) => <<_::256>>,
+          optional(:websocket_compaction_claims) => [String.t()]
         }
 
   # Kinds that are about a turn rather than one of its model requests, and that
@@ -199,10 +200,12 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   defp claim_for(identity, request_options, payload) do
     cond do
       NativeTurnContinuation.compaction_request?(payload, request_options) ->
-        claim(
-          WebsocketTurnIdentity.compaction_claim_key(identity.semantic_turn_key, payload),
-          :compaction
-        )
+        with {:ok, claim} <-
+               claim(
+                 WebsocketTurnIdentity.compaction_claim_key(identity.semantic_turn_key, payload),
+                 :compaction
+               ),
+             do: {:ok, Map.put(claim, :websocket_compaction_claims, websocket_compaction_claims(identity, payload))}
 
       turn_request?(payload, request_options) ->
         turn_claim(identity, payload)
@@ -263,6 +266,26 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   end
 
   defp claim(key, arm), do: {:ok, %{key: key, arm: arm}}
+
+  # The claim a websocket compaction of this body holds. The released client's
+  # HTTPS fallback for a remote compaction it did not complete over the
+  # websocket is `POST /responses` with the websocket frame's body minus `type`
+  # and the websocket start timestamp, the Lite marker moved to a header (P69
+  # wire probe of Codex 0.156.1). Both transports derive their claim from the
+  # payload coerced for the compact route, which drops `type` and the client
+  # metadata; the websocket one keeps the `stream: true` every native frame
+  # carries and the HTTP one does not, so the websocket payload is rebuilt by
+  # restoring it. The marked variant covers a coercion that keeps the Lite
+  # marker. Deriving the websocket claim lets the reservation find the
+  # websocket compaction this request repeats (findings#206 row 206-330); the
+  # HTTP compaction still reserves under its own payload-scoped claim when no
+  # such compaction exists.
+  defp websocket_compaction_claims(identity, payload) do
+    payload
+    |> Map.put("stream", true)
+    |> lite_marker_variants()
+    |> Enum.map(&WebsocketTurnIdentity.native_compaction_claim_key(identity.semantic_turn_key, &1))
+  end
 
   defp native_client_retry_witness(
          identity,

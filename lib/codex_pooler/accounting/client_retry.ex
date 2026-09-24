@@ -1262,7 +1262,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   end
 
   defp validate_retry_lifecycle_for_policy(turn, request, attempt, %{retry_policy: :native_compaction}, _witness_match) do
-    if verified_compaction_execution_failure?(turn, request, attempt),
+    if verified_compaction_execution_failure?(turn, request, attempt) or verified_unreceived_compaction?(turn, request, attempt),
       do: :ok,
       else: validate_compaction_lifecycle(turn, request, attempt)
   end
@@ -1661,6 +1661,43 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: true
 
   defp verified_previsible_disconnect?(_turn, _request, _attempt), do: false
+
+  @doc """
+  A native websocket compaction that ended before its client completed it: the
+  provider finished it and the Pooler billed it, or the client left while the
+  Pooler was still collecting it (`client_disconnected`, whatever the turn's
+  `first_visible_output_at` says: the Pooler stamps it when it starts
+  collecting, but writes the client nothing of a native compaction before its
+  terminal). The released client resends a remote compaction only when it did
+  not read its `response.completed`, and advances `x-codex-window-id` after
+  every compaction it completes, so a resend under the compaction claim
+  (which binds the window) is proof the reply was lost. It used to be refused
+  `409` twice and then bought again, unchained, by the client's HTTPS
+  fallback; it is admitted as one successor with its own single settlement,
+  like an undelivered completion (findings#206 rows 206-330 and 206-332,
+  precedent row 232-201). Only the compact route, generation zero.
+  """
+  @spec verified_unreceived_compaction?(term(), term(), term()) :: boolean()
+  def verified_unreceived_compaction?(
+        %CodexTurn{final_attempt_id: attempt_id, transport_kind: "websocket", completed_at: %DateTime{}} = turn,
+        %Request{transport: "websocket", endpoint: "/backend-api/codex/responses/compact", completed_at: %DateTime{}} = request,
+        %Attempt{id: attempt_id, transport: "websocket", replay_generation: 0, completed_at: %DateTime{}} = attempt
+      )
+      when is_binary(attempt_id),
+      do: unreceived_compaction_settlement?(turn, request, attempt)
+
+  def verified_unreceived_compaction?(_turn, _request, _attempt), do: false
+
+  defp unreceived_compaction_settlement?(%CodexTurn{status: "succeeded"}, %Request{status: "succeeded"}, %Attempt{status: "succeeded"}), do: true
+
+  defp unreceived_compaction_settlement?(
+         %CodexTurn{status: "interrupted", error_code: "client_disconnected"},
+         %Request{status: "failed", last_error_code: "client_disconnected"},
+         %Attempt{status: "failed", network_error_code: "client_disconnected"}
+       ),
+       do: true
+
+  defp unreceived_compaction_settlement?(_turn, _request, _attempt), do: false
 
   @doc """
   A native websocket turn the provider completed while its client was already

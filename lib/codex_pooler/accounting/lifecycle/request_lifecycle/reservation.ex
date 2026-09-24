@@ -205,8 +205,41 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # reaches the resend policy. A turn nobody has recorded keeps its claim and
   # inserts exactly as before, so an unfenceable first request is never taxed
   # with the policy's anchored/entitlement refusals.
-  defp native_turn_resend_claim!(%CodexSession{} = session, context),
-    do: walk_native_turn_chain(session, context, context.correlation_id, 0)
+  defp native_turn_resend_claim!(%CodexSession{} = session, context) do
+    case websocket_compaction_successor(session, context) do
+      {_claim, %{}} = successor -> successor
+      nil -> walk_native_turn_chain(session, context, context.correlation_id, 0)
+    end
+  end
+
+  # The released client's HTTPS fallback of a websocket compaction it did not
+  # complete (after two refused websocket resends) carries the claim of that
+  # compaction, so an ended one is chained exactly as its websocket resend
+  # would be: one successor with its own single settlement (findings#206 row
+  # 206-330). When it cannot be chained -- the predecessor is still live
+  # (row 206-333: the fallback arrives about 1 s after the cut), or any other
+  # verdict of the resend policy -- the fallback keeps its own payload-scoped
+  # claim and is served as before. Refusing it would fail the user's turn and
+  # lose the compaction (measured: three HTTP refusals end the turn `failed`),
+  # which costs more than the purchase it would save.
+  defp websocket_compaction_successor(session, context) do
+    context.opts
+    |> attr(:websocket_compaction_claims)
+    |> List.wrap()
+    |> Enum.find_value(fn claim ->
+      case native_turn_predecessor(claim) do
+        %Request{transport: "websocket"} -> resolve_websocket_compaction_successor(session, context, claim)
+        _none -> nil
+      end
+    end)
+  end
+
+  defp resolve_websocket_compaction_successor(session, context, claim) do
+    case FailedPredecessorResend.resolve(claim, native_turn_resend_scope(session, context)) do
+      {:ok, resolution} -> {resolution.claim, client_resend(resolution)}
+      {:error, _disposition} -> nil
+    end
+  end
 
   # Falling open must not abandon the turn's identity. A zero-output predecessor
   # is stepped over by deriving the next claim from it -- the same deterministic
@@ -261,10 +294,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   end
 
   defp resolve_native_turn_resend!(session, context, claim) do
+    case FailedPredecessorResend.resolve(claim, native_turn_resend_scope(session, context)) do
+      {:ok, resolution} -> {resolution.claim, client_resend(resolution)}
+      {:error, disposition} -> Repo.rollback(duplicate_request_error(disposition))
+    end
+  end
+
+  defp native_turn_resend_scope(session, context) do
     %{pool: pool, api_key: api_key, model: model, opts: opts} = context
     _locked = SessionContinuity.lock_codex_session_for_turn(session)
 
-    scope = %{
+    %{
       pool_id: pool.id,
       api_key_id: api_key.id,
       model_id: model.id,
@@ -276,27 +316,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       payload: context.payload,
       anchor_present?: attr(opts, :anchor_present?) == true
     }
-
-    case FailedPredecessorResend.resolve(claim, scope) do
-      {:ok,
-       %{
-         claim: resolved_claim,
-         predecessor: resolved,
-         predecessor_shape: shape,
-         recovery_markers: recovery_markers
-       }} ->
-        {resolved_claim,
-         %{
-           predecessor_request_id: resolved.id,
-           reason: :failed_predecessor,
-           predecessor_shape: shape,
-           recovery_markers: recovery_markers
-         }}
-
-      {:error, disposition} ->
-        Repo.rollback(duplicate_request_error(disposition))
-    end
   end
+
+  defp client_resend(%{predecessor: predecessor, predecessor_shape: shape, recovery_markers: recovery_markers}),
+    do: %{predecessor_request_id: predecessor.id, reason: :failed_predecessor, predecessor_shape: shape, recovery_markers: recovery_markers}
 
   defp native_turn_predecessor(correlation_id) do
     Repo.one(from request in Request, where: request.correlation_id == ^correlation_id)

@@ -207,6 +207,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       native_client_retry_witness: native_http_retry_witness(native_http_claim, request_options),
       native_http_input_count: native_http_input_count(native_http_claim),
       native_http_semantic_turn_key: native_http_semantic_turn_key(native_http_claim),
+      websocket_compaction_claims: websocket_compaction_claims(native_http_claim),
       api_key_policy: request_options.routing.api_key_policy,
       codex_session: Map.get(request_options.continuity, :codex_session),
       anchor_present?: not is_nil(Map.get(request_options.continuity, :previous_response_id)),
@@ -442,6 +443,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     do: semantic_turn_key
 
   defp native_http_semantic_turn_key(:none), do: nil
+
+  defp websocket_compaction_claims({:ok, %{websocket_compaction_claims: claims}}) when is_list(claims), do: claims
+  defp websocket_compaction_claims(_native_http_claim), do: []
 
   defp maybe_put_native_http_input_count(metadata, input_count)
        when is_integer(input_count) and input_count >= 0,
