@@ -97,6 +97,77 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeUsageLimitTest do
     assert [%Attempt{status: "retryable_failed", upstream_status_code: 429}, %Attempt{status: "succeeded"}] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id, order_by: [asc: a.attempt_number]))
   end
 
+  # After the failover the session's owner rides the sibling's upstream
+  # connection under the same lease (findings#206 row 206-585). The session's
+  # next turn, anchored on the sibling's response, stays on that account and
+  # that connection: the anchor resolves where it was produced, the request
+  # carries the owner binding, and the refusing account sees no second request.
+  test "the turn after a bridged failover keeps continuity on the sibling's connection", %{conn: conn} do
+    resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
+
+    refusing_upstream = start_upstream(FakeUpstream.strict_sequence([bridge_turn(1, FakeUpstream.websocket_text_frames([usage_limit_frame(resets_at)]))]))
+
+    sibling_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          bridge_turn(1, FakeUpstream.websocket_text_frames([completed_frame("resp_sibling_first")])),
+          bridge_turn(1, FakeUpstream.websocket_text_frames([completed_frame("resp_sibling_second")]), %{"previous_response_id" => "resp_sibling_first"})
+        ])
+      )
+
+    setup = gateway_setup(refusing_upstream)
+    sibling = gateway_upstream(setup.pool, sibling_upstream, "upstream-token-sibling", compact?: false)
+    prime_routing_quota!(sibling.identity)
+    use_deterministic_rotation!(setup.pool, 2)
+    setup.pool |> CodexPooler.Pools.ensure_routing_settings() |> Ecto.Changeset.change(sticky_websocket_sessions: false) |> Repo.update!()
+    setup = %{setup | model: put_model_source_assignments!(setup.model, [setup.assignment, sibling.assignment])}
+    session = "bridge-failover-continuity-#{System.unique_integer([:positive])}"
+
+    first = post_session(conn, setup, session, %{"input" => "synthetic first turn"}, deterministic_rotation_seed(2, 0))
+    assert first.status == 200
+    assert first.resp_body =~ "resp_sibling_first"
+
+    second = post_session(build_conn(), setup, session, %{"input" => [%{"type" => "function_call_output", "call_id" => "call_synthetic_continuity", "output" => "synthetic tool output"}], "previous_response_id" => "resp_sibling_first"}, deterministic_rotation_seed(2, 0) <> "-second")
+
+    CodexPooler.TestDiagnostics.puts(fn -> "206-585 second turn: #{second.status} #{String.slice(second.resp_body, 0, 300)}" end)
+
+    assert second.status == 200
+    assert second.resp_body =~ "resp_sibling_second"
+
+    assert [first_row, second_row] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
+    assert first_row.status == "succeeded" and second_row.status == "succeeded"
+    assert [%Attempt{status: "succeeded", transport: "websocket"} = second_attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^second_row.id))
+    assert second_attempt.pool_upstream_assignment_id == sibling.assignment.id
+    assert %{"reused" => true, "reconnected" => false} = second_attempt.response_metadata["upstream_websocket_connection"]
+    assert %{"enabled" => true} = second_row.request_metadata["websocket_owner_forwarding"]
+
+    assert %CodexPooler.Gateway.Persistence.CodexSession{pool_upstream_assignment_id: pinned} = Repo.get_by(CodexPooler.Gateway.Persistence.CodexSession, session_key: session)
+    assert pinned == sibling.assignment.id
+
+    assert {FakeUpstream.websocket_connection_count(refusing_upstream), FakeUpstream.http_request_count(refusing_upstream)} == {1, 0}
+    assert {FakeUpstream.websocket_connection_count(sibling_upstream), FakeUpstream.http_request_count(sibling_upstream)} == {1, 0}
+    assert :ok = FakeUpstream.verify!(refusing_upstream)
+    assert :ok = FakeUpstream.verify!(sibling_upstream)
+  end
+
+  defp bridge_turn(connection_ordinal, respond, equals \\ %{}) do
+    FakeUpstream.expect_request(
+      method: "WEBSOCKET",
+      path: "/backend-api/codex/responses",
+      websocket_connection_ordinal: connection_ordinal,
+      json: [valid: true, equals: Map.merge(%{"type" => "response.create"}, equals)],
+      respond: respond
+    )
+  end
+
+  defp post_session(conn, setup, session, body, request_id) do
+    conn
+    |> auth(setup)
+    |> put_req_header("x-session-id", session)
+    |> put_req_header("x-request-id", request_id)
+    |> post("/v1/responses", Map.merge(%{"model" => setup.model.exposed_model_id, "stream" => true}, body))
+  end
+
   defp usage_limit_frame(resets_at) do
     CodexPooler.JSON.encode!(%{
       "type" => "error",
@@ -106,10 +177,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeUsageLimitTest do
     })
   end
 
-  defp completed_frame do
+  defp completed_frame(id \\ "resp_bridge_usage_limit_failover") do
     CodexPooler.JSON.encode!(%{
       "type" => "response.completed",
-      "response" => %{"id" => "resp_bridge_usage_limit_failover", "status" => "completed", "output" => [], "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}}
+      "response" => %{"id" => id, "status" => "completed", "output" => [], "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}}
     })
   end
 
