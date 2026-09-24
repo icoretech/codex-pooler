@@ -324,6 +324,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     |> put_policy_retry_header(error)
     |> put_gateway_headers(Contracts.recovery_response_headers(error))
     |> put_gateway_headers(Contracts.usage_limit_response_headers(error))
+    |> put_gateway_headers(Contracts.circuit_retry_response_headers(error))
     |> put_status(status)
     |> json(body)
   end

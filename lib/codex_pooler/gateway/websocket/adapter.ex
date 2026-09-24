@@ -446,6 +446,11 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   defp put_policy_retry_headers(event, %{status: 429, usage_limit: %{resets_in_seconds: seconds}}),
     do: Map.put(event, "headers", %{"retry-after" => Integer.to_string(seconds)})
 
+  # A retryable `503` with an open-circuit candidate carries the seconds until
+  # that circuit admits a probe the same way (findings#206 row 206-532).
+  defp put_policy_retry_headers(event, %{status: 503, circuit_retry_after_seconds: seconds}) when is_integer(seconds) and seconds > 0,
+    do: Map.put(event, "headers", %{"retry-after" => Integer.to_string(seconds)})
+
   defp put_policy_retry_headers(event, _reason), do: event
 
   @spec request_id(term()) :: String.t() | nil

@@ -111,7 +111,10 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
 
   defp do_send(conn, {:error, %{status: status} = reason}, _success_normalizer, _opts) do
     if PublicResponse.redacted_gateway_error?(reason) do
+      # The redacted body keeps the retry advice a retryable `503` carries
+      # (findings#206 row 206-532): a number, never upstream detail.
       conn
+      |> put_retry_headers(Contracts.circuit_retry_response_headers(reason))
       |> put_status(status)
       |> json(%{"error" => PublicResponse.normalize_error(reason, status: status)})
     else
@@ -121,6 +124,8 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
 
   defp do_send(conn, {:error, reason}, _success_normalizer, _opts),
     do: GatewayHelpers.send_error(conn, reason)
+
+  defp put_retry_headers(conn, headers), do: Enum.reduce(headers, conn, fn {name, value}, conn -> Plug.Conn.put_resp_header(conn, name, value) end)
 
   defp public_error_status(_status, %{public_input_file_upstream_404?: true}), do: 404
   defp public_error_status(404, _result), do: 502

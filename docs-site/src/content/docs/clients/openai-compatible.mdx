@@ -525,6 +525,11 @@ saved reset can bring an account back sooner. When the reset of any of those
 accounts is unknown (missing or stale quota evidence), or an account was taken
 out by an open circuit rather than by quota, the answer stays a retryable `503`
 (`quota_evidence_unavailable` or `quota_exhausted`) with no reset fields. When
+an open circuit took an account out, that `503` (and the `no_eligible_backend`
+`503` when open circuits took out every account) carries a `Retry-After` of the
+seconds until the earliest of those circuits lets a request through again,
+between 1 and 60, in the websocket error frame's `headers` too, and never
+`x-should-retry: false`, because the request can succeed then. When
 at least one account is still eligible, the request is routed to it as usual,
 and a provider usage-limit refusal that arrives before any output moves the
 same request to another eligible account.

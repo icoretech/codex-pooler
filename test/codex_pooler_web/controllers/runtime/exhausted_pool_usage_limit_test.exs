@@ -143,7 +143,8 @@ defmodule CodexPoolerWeb.Runtime.ExhaustedPoolUsageLimitTest do
     prime_exhausted_routing_quota!(pool.second.identity, %{reset_at: reset_in(@early_reset_seconds)})
 
     first = post_native(conn, pool)
-    assert_retryable_503!(first, pool, "quota_exhausted")
+    # The open circuit bounds the wait: it probes again within a minute (row 206-532).
+    assert_retryable_503!(first, pool, "quota_exhausted", :circuit_probe)
 
     # The usage poll marks the first account exhausted with its own later reset, and the
     # circuit's probe time passes: every candidate is quota-excluded.
@@ -191,7 +192,7 @@ defmodule CodexPoolerWeb.Runtime.ExhaustedPoolUsageLimitTest do
 
     conn = post_native(conn, pool)
 
-    assert_retryable_503!(conn, pool, "quota_exhausted")
+    assert_retryable_503!(conn, pool, "quota_exhausted", :circuit_probe)
   end
 
   test "a 5-hour block known from usage: the exhausted primary, not the marked weekly row, sets the hint", %{conn: conn} do
@@ -408,16 +409,21 @@ defmodule CodexPoolerWeb.Runtime.ExhaustedPoolUsageLimitTest do
     assert Enum.all?(pool.upstreams, &(FakeUpstream.count(&1) == 0))
   end
 
-  defp assert_retryable_503!(conn, pool, code) do
+  defp assert_retryable_503!(conn, pool, code, retry_after \\ :none) do
     assert conn.status == 503
     assert %{"error" => error} = CodexPooler.JSON.decode!(conn.resp_body)
     assert error["code"] == code
     assert error["type"] == "server_error"
     refute Map.has_key?(error, "resets_at")
-    assert get_resp_header(conn, "retry-after") == []
+    assert_circuit_retry_after!(get_resp_header(conn, "retry-after"), retry_after)
     assert get_resp_header(conn, "x-should-retry") == []
     assert Enum.all?(pool.upstreams, &(FakeUpstream.count(&1) == 0))
   end
+
+  # A candidate taken out by an open circuit bounds the wait by that circuit's
+  # next probe, at most a minute (findings#206 row 206-532).
+  defp assert_circuit_retry_after!(header, :none), do: assert(header == [])
+  defp assert_circuit_retry_after!([seconds], :circuit_probe), do: assert(String.to_integer(seconds) in 1..60)
 
   defp assert_recorded_refusal!(pool, status) do
     assert [row] = settled_rows!(pool, 1)

@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit
+  alias CodexPooler.Gateway.Routing.CircuitRetryAfter
   alias CodexPooler.Gateway.Routing.QuotaRefresh.{Executor, Plan}
   alias CodexPooler.Gateway.Routing.SavedResetAutoRedeem
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -38,6 +39,14 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
     request_options = filter_input.request_options
     quota_mode = Keyword.get(opts, :quota_mode, :required)
 
+    filter_input
+    |> filter_candidates(route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts)
+    |> CircuitRetryAfter.put(filter_input.candidates, route_state)
+  end
+
+  # A retryable `503` of a Pool with an open-circuit candidate carries the
+  # seconds until that circuit admits a probe (findings#206 row 206-532).
+  defp filter_candidates(filter_input, route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts) do
     with {:ok, candidates} <-
            CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state),
          circuit_excluded? = length(candidates) < length(filter_input.candidates),
