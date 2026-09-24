@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Telemetry do
   alias CodexPooler.Gateway.Runtime.DuplicateTurnTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionLifecycleObservation
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
+  alias CodexPooler.Jobs.DeletionFailureNotifier
   alias CodexPooler.Jobs.FailureLog
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
@@ -133,6 +134,9 @@ defmodule CodexPoolerWeb.Telemetry do
     # Every role attaches it: the job roles run no Prometheus reporter, and a
     # failed job's row is pruned after a day (findings#206 row 206-90).
     FailureLog.attach()
+    # Deletion pages learn that a Pool or API key deletion job gave up only after Oban wrote its
+    # final state (findings#206 row 206-602).
+    DeletionFailureNotifier.attach()
 
     children =
       [

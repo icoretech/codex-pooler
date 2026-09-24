@@ -27,20 +27,17 @@ defmodule CodexPooler.Jobs.APIKeyDeletionWorker do
   def timeout(%Oban.Job{}), do: :timer.minutes(2)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"api_key_id" => api_key_id} = args} = job) when is_binary(api_key_id) do
+  def perform(%Oban.Job{args: %{"api_key_id" => api_key_id} = args}) when is_binary(api_key_id) do
     case Access.continue_api_key_deletion(api_key_id, Map.get(args, "requested_by_user_id"), System.monotonic_time(:millisecond) + @run_budget_ms) do
       :more -> {:snooze, 1}
       :deleted -> :ok
       :gone -> :ok
       {:cancel, reason} -> {:cancel, reason}
-      {:error, reason} -> error_on_attempt(job, api_key_id, reason)
+      # A job that gives up is announced by `CodexPooler.Jobs.DeletionFailureNotifier`, once Oban
+      # has written its final state.
+      {:error, reason} -> {:error, reason}
     end
   end
 
   def perform(%Oban.Job{}), do: {:cancel, :api_key_deletion_target_invalid}
-
-  defp error_on_attempt(%Oban.Job{attempt: attempt, max_attempts: max_attempts}, api_key_id, reason) do
-    if attempt >= max_attempts, do: Access.broadcast_api_key_deletion_failed(api_key_id)
-    {:error, reason}
-  end
 end

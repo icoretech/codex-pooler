@@ -28,20 +28,17 @@ defmodule CodexPooler.Jobs.PoolDeletionWorker do
   def timeout(%Oban.Job{}), do: :timer.minutes(2)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"pool_id" => pool_id} = args} = job) when is_binary(pool_id) do
+  def perform(%Oban.Job{args: %{"pool_id" => pool_id} = args}) when is_binary(pool_id) do
     case Pools.continue_pool_deletion(pool_id, Map.get(args, "requested_by_user_id"), System.monotonic_time(:millisecond) + @run_budget_ms) do
       :more -> {:snooze, 1}
       :deleted -> :ok
       :gone -> :ok
       {:cancel, reason} -> {:cancel, reason}
-      {:error, reason} -> error_on_attempt(job, reason)
+      # A job that gives up is announced by `CodexPooler.Jobs.DeletionFailureNotifier`, once Oban
+      # has written its final state.
+      {:error, reason} -> {:error, reason}
     end
   end
 
   def perform(%Oban.Job{}), do: {:cancel, :pool_deletion_target_invalid}
-
-  defp error_on_attempt(%Oban.Job{attempt: attempt, max_attempts: max_attempts, args: %{"pool_id" => pool_id}}, reason) do
-    if attempt >= max_attempts, do: Pools.broadcast_pool_deletion_failed(pool_id)
-    {:error, reason}
-  end
 end

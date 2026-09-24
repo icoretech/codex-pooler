@@ -4803,6 +4803,62 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-row-#{pool.id}")
   end
 
+  test "a deletion job that exhausts its attempts shows deletion failed, and deleting again resumes it", %{conn: conn} do
+    CodexPooler.TestAppEnv.restore_on_exit(:pool_deletion_immediate_request_limit)
+    Application.put_env(:codex_pooler, :pool_deletion_immediate_request_limit, 1)
+
+    pool = pool_fixture(%{slug: "failing-deletion-pool", name: "Failing Deletion Pool"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    _request = request_fixture(%{pool: pool, api_key: api_key})
+    pool = pool |> Ecto.Changeset.change(status: "archived") |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    delete_from_card(view, pool)
+    assert has_element?(view, "#pool-row-#{pool.id}-deletion", "deleting")
+
+    # The job's last attempt fails in its request batch.
+    Repo.query!("""
+    CREATE FUNCTION pg_temp.fail_request_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE EXCEPTION 'request batch failed';
+    END $$
+    """)
+
+    Repo.query!("CREATE TRIGGER fail_request_delete BEFORE DELETE ON requests FOR EACH ROW EXECUTE FUNCTION pg_temp.fail_request_delete()")
+
+    Repo.update_all(from(job in Oban.Job, where: fragment("?->>'pool_id'", job.args) == ^pool.id), set: [max_attempts: 1])
+    assert %{discard: 1} = Oban.drain_queue(queue: :jobs)
+
+    _ = await_pool_traffic(view)
+    assert has_element?(view, "#pool-row-#{pool.id}-deletion", "deletion failed")
+    refute has_element?(view, "#delete-pool-#{pool.id}[disabled]")
+    assert Repo.get!(Pool, pool.id).status == "archived"
+    refute Repo.get_by(AuditEvent, action: "pool.delete", target_id: pool.id)
+
+    Repo.query!("DROP TRIGGER fail_request_delete ON requests")
+
+    delete_from_card(view, pool)
+    assert has_element?(view, "#pool-row-#{pool.id}-deletion", "deleting")
+    assert %{success: 1} = Oban.drain_queue(queue: :jobs)
+
+    refute Repo.get(Pool, pool.id)
+    assert [_one] = Repo.all(from(event in AuditEvent, where: event.action == "pool.delete" and event.target_id == ^pool.id))
+    _ = await_pool_traffic(view)
+    refute has_element?(view, "#pool-row-#{pool.id}")
+  end
+
+  defp delete_from_card(view, pool) do
+    view |> element("#delete-pool-#{pool.id}") |> render_click()
+
+    view
+    |> element("#pool-delete-form")
+    |> render_submit(%{"pool_delete" => %{"id" => pool.id, "confirmation_slug" => pool.slug}})
+
+    assert has_element?(view, "#flash-info", "Pool deletion started")
+  end
+
   test "rejects missing-scope pool mutations", %{scope: scope} do
     pool = pool_fixture(%{slug: "scope-check", name: "Scope Check"})
 
