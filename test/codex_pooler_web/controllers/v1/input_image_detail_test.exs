@@ -121,6 +121,48 @@ defmodule CodexPoolerWeb.V1.InputImageDetailTest do
       assert FakeUpstream.count(upstream) == 0
       assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
     end
+
+    # Hermes in its default `chat_completions` mode sends a screenshot tool
+    # result as a Chat tool message with `image_url` parts; the rebuild carries
+    # them into the `function_call_output`, which the Codex backend accepts.
+    @tag serving_mode: mode
+    test "/v1/chat/completions carries a tool message image into the function_call_output on a #{mode} model", %{conn: conn, serving_mode: mode} do
+      upstream = start_upstream(FakeUpstream.json_response(@completed))
+      setup = gateway_setup(upstream, model_metadata: @vision_metadata)
+      _revision = set_model_serving_mode!(model_serving_scope(), setup, mode)
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/chat/completions", %{
+          "model" => setup.model.exposed_model_id,
+          "messages" => [
+            %{"role" => "user", "content" => "synthetic screenshot request"},
+            %{"role" => "assistant", "content" => nil, "tool_calls" => [%{"id" => "call_fixture_screenshot", "type" => "function", "function" => %{"name" => "computer_use", "arguments" => "{}"}}]},
+            %{
+              "role" => "tool",
+              "name" => "computer_use",
+              "tool_call_id" => "call_fixture_screenshot",
+              "content" => [
+                %{"type" => "text", "text" => "synthetic capture summary"},
+                %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/screen.png", "detail" => "high"}}
+              ]
+            }
+          ]
+        })
+
+      assert %{"object" => "chat.completion"} = json_response(conn, 200)
+      assert [%{"type" => "input_text"}, image] = captured_tool_output(upstream, "call_fixture_screenshot")
+      assert image["type"] == "input_image"
+      assert image["image_url"] == "https://example.com/screen.png"
+      assert image["detail"] == if(mode == "lite", do: nil, else: "high")
+    end
+  end
+
+  defp captured_tool_output(upstream, call_id) do
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert [%{"output" => output}] = for(%{"type" => "function_call_output", "call_id" => ^call_id} = item <- captured.json["input"], do: item)
+    output
   end
 
   defp captured_images(upstream) do

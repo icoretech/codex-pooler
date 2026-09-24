@@ -342,6 +342,11 @@ including streams whose terminal event omits the output list.
 The optional `user` field accepts a string or null and is discarded before
 dispatch. It does not establish ownership, permissions, or routing identity.
 
+A `tool` message may carry `image_url` parts next to its text, as Hermes sends a
+screenshot tool result when it talks Chat Completions. Codex Pooler forwards them
+as images of the tool output, with `image_url.detail` handled like a user image.
+A `file` part in a `tool` message returns `invalid_request`.
+
 ### Image generation and edits
 
 Use `gpt-image-2.5-flare` for current image examples, or select `gpt-image-2.5-sunburst` explicitly. Both [Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare) and [Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst) are accepted; `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini` remain available for compatibility. Media identifiers do not have to appear in the Pool's model catalog for these translated routes to work.

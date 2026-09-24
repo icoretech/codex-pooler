@@ -1156,6 +1156,11 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert %{method: :post, path: "/v1/chat/completions"} in feature.routes
       assert feature.contract =~ "carries image_url.detail into the rebuilt input_image detail"
       assert fixture.v1_chat_invalid_image_detail.param == "messages[0].content[1].image_url.detail"
+
+      # A Chat tool message carries its image_url parts into the rebuilt
+      # function_call_output, as Hermes sends a screenshot in Chat mode.
+      assert feature.contract =~ "carries image_url parts of a role tool message into the rebuilt function_call_output"
+      assert fixture.v1_chat_tool_message_image_parts == ["image_url"]
     end
 
     test "documents non-strict function tool schema lowering scope" do

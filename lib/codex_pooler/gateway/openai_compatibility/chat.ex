@@ -606,6 +606,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
        when type in ["text", "input_text"] and is_binary(text),
        do: true
 
+  # Hermes in its default `chat_completions` mode sends a screenshot tool
+  # result as `image_url` parts of the tool message. The rebuild carries them
+  # into the `function_call_output`, where the Codex backend accepts an image
+  # (findings#206 row 206-476, probed on `gpt-6-luna`); a file part has no
+  # tool-output form there and stays refused.
+  defp valid_tool_content_part?(%{"type" => "image_url", "image_url" => image_url})
+       when is_binary(image_url),
+       do: true
+
+  defp valid_tool_content_part?(%{"type" => "image_url", "image_url" => %{"url" => image_url}})
+       when is_binary(image_url),
+       do: true
+
   defp valid_tool_content_part?(_part), do: false
 
   defp validate_translatable_prompt_cache_breakpoints(%{"messages" => messages})

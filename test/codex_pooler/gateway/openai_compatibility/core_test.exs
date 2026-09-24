@@ -3363,6 +3363,55 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end
     end
 
+    # Hermes in its default `chat_completions` mode (a `custom` provider without
+    # `api_mode: codex_responses`) sends a screenshot tool result as a Chat tool
+    # message whose content holds `image_url` parts. The Codex backend accepts
+    # an image in a `function_call_output` (findings#206 row 206-476, probed on
+    # `gpt-6-luna`), so the Chat rebuild carries it there with its detail.
+    test "Chat carries image_url parts of a tool message into the function_call_output" do
+      breakpoint = %{"mode" => "explicit"}
+
+      assert {:ok, result} =
+               Chat.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "messages" => [
+                   %{"role" => "user", "content" => "synthetic screenshot request"},
+                   %{"role" => "assistant", "content" => nil, "tool_calls" => [%{"id" => "call_fixture_screenshot", "type" => "function", "function" => %{"name" => "computer_use", "arguments" => "{}"}}]},
+                   %{
+                     "role" => "tool",
+                     "name" => "computer_use",
+                     "tool_call_id" => "call_fixture_screenshot",
+                     "content" => [
+                       %{"type" => "text", "text" => "synthetic capture summary"},
+                       %{"type" => "image_url", "image_url" => %{"url" => "data:image/png;base64,iVBORw0KGgo="}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/high.png", "detail" => "high"}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/null.png", "detail" => nil}},
+                       %{"type" => "image_url", "image_url" => "https://example.com/bare.png", "prompt_cache_breakpoint" => breakpoint}
+                     ]
+                   }
+                 ]
+               })
+
+      assert [_user, %{"type" => "function_call", "call_id" => "call_fixture_screenshot"}, function_output] = result.payload["input"]
+
+      assert function_output == %{
+               "type" => "function_call_output",
+               "call_id" => "call_fixture_screenshot",
+               "output" => [
+                 %{"type" => "input_text", "text" => "synthetic capture summary"},
+                 %{"type" => "input_image", "image_url" => "data:image/png;base64,iVBORw0KGgo="},
+                 %{"type" => "input_image", "image_url" => "https://example.com/high.png", "detail" => "high"},
+                 %{"type" => "input_image", "image_url" => "https://example.com/null.png"},
+                 %{"type" => "input_image", "image_url" => "https://example.com/bare.png", "prompt_cache_breakpoint" => breakpoint}
+               ]
+             }
+
+      bogus = %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/bogus.png", "detail" => "bogus"}}
+
+      assert {:error, %{status: 400, code: "invalid_value", param: "messages[0].content[1].image_url.detail"}} =
+               Chat.coerce(%{"model" => "gpt-fixture-text", "messages" => [%{"role" => "tool", "tool_call_id" => "call_bogus", "content" => [%{"type" => "text", "text" => "loaded"}, bogus]}]})
+    end
+
     # findings#258 row 258-11: the Responses SDK types a tool-output image as
     # `input_image` with `file_id` or `image_url`; the file reference is kept.
     test "function_call_output keeps an input_image file_id from Responses SDK tool output" do
@@ -7801,15 +7850,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :prompt_cache_controls
-  test "Chat rejects image and file parts in tool messages" do
+  # A tool message carries text and images (the image parts become
+  # `function_call_output` images); a file part is still refused.
+  test "Chat rejects file parts in tool messages" do
     breakpoint = prompt_cache_breakpoint()
 
     for part <- [
-          %{
-            "type" => "image_url",
-            "image_url" => "https://example.com/image.png",
-            "prompt_cache_breakpoint" => breakpoint
-          },
           %{
             "type" => "file",
             "file" => %{"file_id" => "file_fixture"},
