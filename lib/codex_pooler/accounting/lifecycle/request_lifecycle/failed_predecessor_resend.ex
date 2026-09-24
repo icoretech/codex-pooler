@@ -259,8 +259,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   defp validate_predecessor(%Request{} = request, scope, now) do
     family = failure_family(request.last_error_code)
 
+    # A request of the same turn under the same authorization but on a
+    # transport this claim does not resend (a native HTTP fallback met by a
+    # websocket or HTTPS resend) is still the turn's own predecessor: a live
+    # one is `active_predecessor` and a served one `terminal_predecessor`, not
+    # a changed authorization (findings#206 row 206-534). The transport still
+    # decides admission: `undelivered_completion/3` refuses a served request
+    # outside it, and a failed one keeps `authorization_changed`, because a
+    # websocket resend's `terminal_predecessor` also looks up a recorded final
+    # refusal to relay.
     cond do
-      not scoped?(request, scope) ->
+      not authorization_scoped?(request, scope) ->
         {:error, :authorization_changed}
 
       request.status in @live_request_statuses or is_nil(request.completed_at) ->
@@ -268,6 +277,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
       request.status == "succeeded" ->
         undelivered_completion(request, scope, now)
+
+      not transport_scoped?(request, scope) ->
+        {:error, :authorization_changed}
 
       request.status != "failed" or is_nil(family) ->
         {:error, :terminal_predecessor}
@@ -300,6 +312,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     shape = undelivered_completion_shape(turn, request, attempt, scope)
 
     cond do
+      not transport_scoped?(request, scope) -> {:error, :terminal_predecessor}
       Map.get(scope, :semantic_claim?) != true and shape != :unreceived_compaction -> {:error, :terminal_predecessor}
       is_nil(shape) -> {:error, :terminal_predecessor}
       live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
@@ -464,10 +477,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp lock_final_attempt(_turn, _request_id), do: nil
 
-  defp scoped?(%Request{} = request, scope) do
+  defp scoped?(%Request{} = request, scope),
+    do: authorization_scoped?(request, scope) and transport_scoped?(request, scope)
+
+  defp authorization_scoped?(%Request{} = request, scope) do
     request.pool_id == scope.pool_id and request.api_key_id == scope.api_key_id and
-      request.model_id == scope.model_id and request.endpoint == scope.endpoint and
-      transport_scoped?(request, scope)
+      request.model_id == scope.model_id and request.endpoint == scope.endpoint
   end
 
   defp transport_scoped?(%Request{transport: "websocket"}, _scope), do: true
