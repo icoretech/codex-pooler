@@ -317,6 +317,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
 
       if interrupt == :before_output do
         dispatched_state = assert_superseded_replay_dispatch!(result, log, owner_pid, setup, prewarm)
+        # Both sockets of this test are the test process, and the drain inside
+        # `terminate/2` takes any task's result, so the first socket's drain
+        # can take the dispatched turn's result as its own. That task then
+        # parks for a delivery acknowledgement nobody sends, and the second
+        # `terminate/2` sat out its whole 15 s owner drain whenever the session
+        # cleanup was deferred (findings#206 row 206-426). The dispatched turn
+        # completes at once, so its result is processed here, as the second
+        # socket's WebSock loop would.
+        dispatched_state = settle_dispatched_turn!(dispatched_state)
         release_interrupted_turn!(predecessor)
         CodexResponsesSocket.terminate(:closed, first_state)
         CodexResponsesSocket.terminate(:closed, dispatched_state)
@@ -505,6 +514,41 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
     state = settle_task!(state, task)
     assert MapSet.size(state.tasks) == 0
     state
+  end
+
+  # Runs the second socket's WebSock loop for the dispatched turn until that
+  # turn's task exits, its exit being the signal that no drain can wait on it:
+  # the owner's frames for the second downstream (its correlation and epoch)
+  # and the task's own messages. The first socket's messages, which share this
+  # mailbox, stay where they are.
+  @dispatched_task_messages [:websocket_response_activity, :codex_response_done, :websocket_response_delivery_complete, :direct_request_cleanup]
+
+  defp settle_dispatched_turn!(state) do
+    assert [task] = MapSet.to_list(state.tasks)
+    %{correlation_id: correlation_id, epoch: epoch} = state.websocket_owner_downstream
+    pump_dispatched_turn!(state, task, Process.monitor(task), {correlation_id, epoch})
+  end
+
+  defp pump_dispatched_turn!(state, task, monitor, {correlation_id, epoch} = downstream) do
+    receive do
+      {:DOWN, ^monitor, :process, ^task, _reason} ->
+        state
+
+      message when is_tuple(message) and tuple_size(message) >= 3 and elem(message, 1) == correlation_id and elem(message, 2) == epoch ->
+        state |> socket_info!(message) |> pump_dispatched_turn!(task, monitor, downstream)
+
+      message when is_tuple(message) and tuple_size(message) >= 2 and elem(message, 0) in @dispatched_task_messages and elem(message, 1) == task ->
+        state |> socket_info!(message) |> pump_dispatched_turn!(task, monitor, downstream)
+    after
+      @detection_timeout_ms -> flunk("the dispatched turn's task never finished")
+    end
+  end
+
+  defp socket_info!(state, message) do
+    case CodexResponsesSocket.handle_info(message, state) do
+      {:ok, state} -> state
+      {:push, _frames, state} -> state
+    end
   end
 
   defp settle_task!(state, task) do
