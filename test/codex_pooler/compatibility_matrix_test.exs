@@ -614,12 +614,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                aliases_share_exact_body_and_token: true,
                cache_coherence: "eventual_after_successful_responses_token",
                instructions_representation: %{
-                 selector: "client_version_query",
+                 selector: "codex_build_user_agent",
                  template_only_since: "0.148.0",
                  template_only: "base_instructions_dropped_when_instructions_template_is_a_string",
-                 verbatim: "older_0_147_0_absent_or_unparsable_client_version",
+                 verbatim: "older_0_147_0_or_non_codex_user_agent",
                  etag_input: "served_representation",
-                 vary_header: false,
+                 vary_header: "user-agent",
+                 client_version_query: :ignored,
                  decode_checked: %{
                    window: {"0.154.0", "0.156.1"},
                    window_version: "whole_version_prereleases_included",
@@ -640,8 +641,8 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       {since, through} = CodexModelDecodeContract.verified_range()
       version = fn {major, minor, patch} -> "#{major}.#{minor}.#{patch}" end
       assert fixture.instructions_representation.decode_checked.window == {version.(since), version.(through)}
-      assert CatalogRepresentation.for_client_version(version.(since)) == :decode_checked
-      assert CatalogRepresentation.for_client_version(version.(through)) == :decode_checked
+      assert CatalogRepresentation.for_user_agent("codex_cli_rs/#{version.(since)} (Linux 6.8.0; x86_64) unknown") == :decode_checked
+      assert CatalogRepresentation.for_user_agent("codex_cli_rs/#{version.(through)} (Linux 6.8.0; x86_64) unknown") == :decode_checked
       assert feature.contract =~ "receives the decode_checked representation"
       assert feature.contract =~ "a left-out model is not advertised to that client but stays routable"
 
@@ -738,6 +739,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.upstream_etag_relay == false
       assert fixture.representation_selector == "user_agent_package_version"
       assert feature.contract =~ "package version after the originator in the request User-Agent"
+      assert feature.contract =~ "selected by the same function from the same header as that catalog fetch"
 
       assert fixture.provider_metadata_event == %{
                order: :after_pooler_event,

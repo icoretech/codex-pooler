@@ -33,21 +33,28 @@ defmodule CodexPooler.Gateway.Metadata do
           required(:source_identity) => CodexPooler.Upstreams.Schemas.UpstreamIdentity.t() | nil
         }
 
-  # `client_version` is the value of the request's `client_version` query
-  # parameter (Codex appends its whole package version); it selects the
-  # instructions representation of the served body and therefore its ETag.
-  @spec serve_codex_models(auth(), opts(), term()) ::
+  # The request's `User-Agent` selects the instructions representation of the
+  # served body and therefore its ETag, with the same function a Responses
+  # turn uses for its `x-models-etag` (`codex_turn_catalog_snapshot/3`), so the
+  # two always agree for one client; the body varies with that header.
+  @spec serve_codex_models(auth(), opts()) ::
           {:ok, gateway_result()} | {:error, gateway_error()}
-  def serve_codex_models(auth, %RequestOptions{} = request_options, client_version \\ nil) do
+  def serve_codex_models(auth, %RequestOptions{} = request_options) do
     endpoint = request_endpoint(request_options, "/backend-api/codex/models")
     request_options = request_options(request_options, endpoint, %{})
-    representation = CatalogRepresentation.for_client_version(client_version)
+    representation = CatalogRepresentation.for_request(request_options)
 
     with {:ok, snapshot} <- codex_catalog_snapshot(auth, endpoint, request_options, representation),
          :ok <-
            record_metadata_request(auth, endpoint, request_options, snapshot) do
       log_undecodable_models(auth, snapshot.undecodable_models)
-      {:ok, %{status: 200, headers: [{"etag", snapshot.etag} | json_headers()], body: snapshot.body}}
+
+      {:ok,
+       %{
+         status: 200,
+         headers: [{"etag", snapshot.etag}, {"vary", "user-agent"} | json_headers()],
+         body: snapshot.body
+       }}
     end
   end
 
@@ -128,7 +135,7 @@ defmodule CodexPooler.Gateway.Metadata do
 
   # The catalog a Responses turn (or the websocket upgrade) names in
   # `x-models-etag`: the representation the same client's own catalog fetch
-  # selected, derived from the version in its `User-Agent`.
+  # received, selected by the same function from the same `User-Agent`.
   @spec codex_turn_catalog_snapshot(auth(), String.t(), opts()) ::
           {:ok, codex_catalog_snapshot()} | {:error, gateway_error()}
   def codex_turn_catalog_snapshot(auth, endpoint, %RequestOptions{} = request_options)

@@ -4,10 +4,15 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentationTest do
   alias CodexPooler.Gateway.Metadata.CatalogRepresentation
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
-  describe "for_client_version/1" do
+  # findings#258 row 258-102: the catalog fetch and the turn select the
+  # representation from the same `User-Agent`, so the version table is read
+  # from the package version a Codex build writes there.
+  defp codex(version), do: "codex_cli_rs/#{version} (Linux 6.8.0; x86_64) unknown"
+
+  describe "version table" do
     test "clients whose every build prefers the instructions template get the template-only entry" do
       for version <- ["0.148.0", "0.153.4", "0.156.2", "0.157.0", "0.200.0", "1.0.0", "0.148.0-alpha.1"] do
-        assert CatalogRepresentation.for_client_version(version) == :instructions_template, version
+        assert CatalogRepresentation.for_user_agent(codex(version)) == :instructions_template, version
       end
     end
 
@@ -17,32 +22,13 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentationTest do
     # template-only one.
     test "clients inside the verified decode window get the decode-checked template-only entry" do
       for version <- ["0.154.0", "0.154.0-alpha.6.2", "0.155.0", "0.155.1", "0.156.0", "0.156.0-alpha.18", "0.156.1"] do
-        assert CatalogRepresentation.for_client_version(version) == :decode_checked, version
+        assert CatalogRepresentation.for_user_agent(codex(version)) == :decode_checked, version
       end
     end
 
-    test "older, 0.147.0 (alphas 1-5 still require the legacy field), absent and unparsable versions stay verbatim" do
-      for version <- [
-            "0.147.0",
-            "0.147.0-alpha.3",
-            "0.146.1",
-            "0.146.0",
-            "0.99.0",
-            "0.1.0",
-            nil,
-            "",
-            "0.156",
-            "v0.156.0",
-            "0.156.0 ",
-            "latest",
-            "0.156.0\n",
-            "0.156.x",
-            "9999999999.0.0",
-            ["0.156.0"],
-            %{"version" => "0.156.0"},
-            156
-          ] do
-        assert CatalogRepresentation.for_client_version(version) == :verbatim, inspect(version)
+    test "older, 0.147.0 (alphas 1-5 still require the legacy field) and unparsable versions stay verbatim" do
+      for version <- ["0.147.0", "0.147.0-alpha.3", "0.146.1", "0.146.0", "0.99.0", "0.1.0", "", "0.156", "v0.156.0", "latest", "0.156.x", "9999999999.0.0"] do
+        assert CatalogRepresentation.for_user_agent(codex(version)) == :verbatim, version
       end
     end
 
@@ -155,6 +141,32 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentationTest do
 
       for user_agent <- ["codex-tui/0.156.1", "codex_sdk_ts/0.156.1", "CODEX_EXEC/0.156.0"] do
         assert CatalogRepresentation.for_user_agent(user_agent) == :decode_checked, user_agent
+      end
+    end
+
+    # An app-server host's originator is any header-valid `clientInfo.name`
+    # (rust-v0.156.1 `initialize_processor.rs`), so it can hold a slash or run
+    # past 64 bytes; its catalog fetch and its turns carry the same
+    # `User-Agent`, and the version is the one the platform block follows.
+    test "a Codex build whose originator holds a slash or is long is read from the version before its platform block" do
+      long = String.duplicate("synthetic-app-server-host-", 4)
+
+      assert CatalogRepresentation.for_user_agent("acme/agent/0.156.1 (Mac OS 26.0.0; arm64) unknown (acme/agent; 1.0.0)") == :decode_checked
+      assert CatalogRepresentation.for_user_agent("#{long}/0.156.1 (Linux 6.8.0; x86_64) unknown") == :decode_checked
+      assert CatalogRepresentation.for_user_agent("tool/1.2.3-thing/0.153.4 (Linux 6.8.0; x86_64) unknown") == :instructions_template
+      assert CatalogRepresentation.for_user_agent("acme/agent/0.147.0 (Mac OS 15.5.0; arm64) iTerm.app/3.7.2 (acme/agent; 0.147.0)") == :verbatim
+      assert CatalogRepresentation.for_user_agent("acme/agent/0.156.1-alpha.2 (Windows 10.0.26100; x86_64) unknown") == :decode_checked
+
+      for user_agent <- [
+            "acme/agent/0.156.1",
+            "acme/agent/0.156.1 (compatible)",
+            "acme/agent/0.156 (Linux 6.8.0; x86_64)",
+            "acme/agent/0.156.1(Linux 6.8.0; x86_64)",
+            "ai-sdk/openai-compatible/3.0.37 ai-sdk/provider-utils/5.0.30 runtime/bun/1.3.13",
+            "#{String.duplicate("a", 513)}/0.156.1 (Linux 6.8.0; x86_64)",
+            "acme\nagent/0.156.1 (Linux 6.8.0; x86_64)"
+          ] do
+        assert CatalogRepresentation.for_user_agent(user_agent) == :verbatim, user_agent
       end
     end
 

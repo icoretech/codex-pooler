@@ -29,7 +29,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogDecodeContractTest do
     for path <- ["/backend-api/codex/models", "/backend-api/codex/v1/models"] do
       log =
         capture_log(fn ->
-          response = conn |> recycle() |> auth(setup) |> get(path, %{"client_version" => "0.156.1"})
+          response = conn |> recycle() |> auth(setup) |> put_req_header("user-agent", @user_agent) |> get(path, %{"client_version" => "0.156.1"})
           body = json_response(response, 200)
 
           assert Enum.map(body["models"], & &1["slug"]) == [good_slug], path
@@ -43,7 +43,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogDecodeContractTest do
     end
 
     for version <- ["0.157.0", "0.153.4", "0.146.1", ""] do
-      response = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models", %{"client_version" => version})
+      response = conn |> recycle() |> auth(setup) |> put_req_header("user-agent", user_agent(version)) |> get("/backend-api/codex/models", %{"client_version" => version})
       assert response |> json_response(200) |> Map.fetch!("models") |> Enum.map(& &1["slug"]) |> Enum.sort() == Enum.sort([good_slug, @broken_slug]), version
     end
 
@@ -80,7 +80,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogDecodeContractTest do
       assert [catalog_etag] = get_resp_header(models, "etag")
 
       unchecked =
-        conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models", %{"client_version" => "0.157.0"}) |> get_resp_header("etag")
+        conn |> recycle() |> auth(setup) |> put_req_header("user-agent", user_agent("0.157.0")) |> get("/backend-api/codex/models", %{"client_version" => "0.157.0"}) |> get_resp_header("etag")
 
       refute unchecked == [catalog_etag]
 
@@ -110,7 +110,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogDecodeContractTest do
     log =
       capture_log(fn ->
         for version <- ["0.156.1", "0.154.0", "0.157.0", "0.146.1"] do
-          body = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models", %{"client_version" => version}) |> json_response(200)
+          body = conn |> recycle() |> auth(setup) |> put_req_header("user-agent", user_agent(version)) |> get("/backend-api/codex/models", %{"client_version" => version}) |> json_response(200)
 
           assert [entry] = body["models"], version
           assert entry["slug"] == setup.model.exposed_model_id, version
@@ -120,6 +120,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogDecodeContractTest do
 
     refute log =~ "codex catalog entry left out"
   end
+
+  # The catalog fetch selects its representation from the Codex build's
+  # `User-Agent`, exactly as its turns do (findings#258 row 258-102).
+  defp user_agent(""), do: "codex_cli_rs"
+  defp user_agent(version), do: "codex_cli_rs/#{version} (Mac OS 26.0.0; arm64) xterm-256color"
 
   defp catalog_setup(upstream) do
     setup = gateway_setup(upstream)
