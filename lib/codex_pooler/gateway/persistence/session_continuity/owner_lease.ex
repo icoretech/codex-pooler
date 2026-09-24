@@ -28,7 +28,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   @type owner :: %{node_name: String.t(), boot_id: String.t() | nil}
 
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
-  @type renewal_option :: {:lock_timeout_ms, pos_integer()} | {:timeout_ms, pos_integer()}
+  @type renewal_option ::
+          {:lock_timeout_ms, pos_integer()} | {:timeout_ms, pos_integer()} | {:take_over_expired, boolean()}
   @type session_ref :: CodexSession.t() | Ecto.UUID.t() | String.t()
 
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
@@ -232,7 +233,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
         with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
                active_snapshot_for_update(session_ref, lock_deadline),
              now <- db_now(),
-             :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now),
+             :ok <- validate_or_take_over(session, lease, owner_lease_token, opts, renewal_opts, now),
              :ok <- validate_renewal_presence(lease, now) do
           expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
@@ -252,6 +253,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
           })
           |> Repo.update!()
         else
+          {:taken_over, %CodexSession{} = session} -> session
           {:error, reason} -> Repo.rollback(reason)
         end
       end,
@@ -263,6 +265,49 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       if lock_timeout_error?(error, renewal_opts),
         do: {:error, {:lock_timeout, LockWaitDiagnostics.unresolved(:unknown)}},
         else: reraise(error, __STACKTRACE__)
+  end
+
+  # `take_over_expired: true` is the HTTP request's synchronous renewal only
+  # (findings#206 row 206-564). A native HTTP turn whose previous turn ran on
+  # another VM is handed that VM's live lease at acquisition, and the lease can
+  # run out before this renewal. Instead of refusing, the renewal takes it over
+  # by compare-and-set, under the locks and the database clock: the row must
+  # still be the session's active lease, carry the caller's token on both the
+  # lease and the session, and be past its deadline, so nobody renewed or
+  # replaced it. The old lease is released and a fresh one with a new token is
+  # minted for this VM. The old token then authorizes nothing (its renewals and
+  # validations answer `stale_owner`), so a stalled turn on the old VM cannot
+  # keep acting as the owner. Extending the old lease at acquisition instead
+  # would revive exactly that stalled token. A lease the old VM still renews is
+  # not past its deadline and is shared as before. Websocket owners and
+  # scheduled renewals never take over: an expired lease still ends them.
+  defp validate_or_take_over(session, lease, owner_lease_token, opts, renewal_opts, now) do
+    case validate_owner_token_snapshot(session, lease, owner_lease_token, now) do
+      {:error, :owner_unavailable} = unavailable ->
+        if Keyword.get(renewal_opts, :take_over_expired, false) and
+             expired_unrenewed?(session, lease, owner_lease_token, now),
+           do: {:taken_over, take_over_expired!(session, lease, opts, now)},
+           else: unavailable
+
+      result ->
+        result
+    end
+  end
+
+  defp expired_unrenewed?(%CodexSession{} = session, %BridgeOwnerLease{} = lease, owner_lease_token, now) do
+    session.status in @session_reconnectable_statuses and
+      lease.status == @lease_active and
+      session.owner_lease_token == owner_lease_token and
+      lease.lease_token == owner_lease_token and
+      (expired_at?(lease.expires_at, now) or expired_at?(session.owner_lease_expires_at, now))
+  end
+
+  defp take_over_expired!(%CodexSession{} = session, %BridgeOwnerLease{} = lease, opts, now) do
+    release!(lease, "expired_unrenewed_takeover", nil, now)
+
+    session
+    |> insert_takeover!(owner_instance(opts), opts, now, "expired_unrenewed_takeover")
+    |> then(&persist_session!(session, &1, now))
   end
 
   @spec release(session_ref(), Ecto.UUID.t() | String.t(), String.t()) ::
@@ -392,7 +437,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
 
   defp maybe_put_owner_exit_cause(metadata, nil), do: metadata
 
-  defp insert_takeover!(%CodexSession{} = session, owner, opts, now) do
+  defp insert_takeover!(%CodexSession{} = session, owner, opts, now, source \\ "owner_unavailable_takeover") do
     expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
     %BridgeOwnerLease{}
@@ -408,7 +453,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       acquired_at: now,
       renewed_at: now,
       expires_at: expires_at,
-      metadata: %{"source" => "owner_unavailable_takeover"},
+      metadata: %{"source" => source},
       created_at: now,
       updated_at: now
     })

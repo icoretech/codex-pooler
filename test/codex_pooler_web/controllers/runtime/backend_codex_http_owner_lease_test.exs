@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   import ExUnit.CaptureLog
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
 
   alias CodexPooler.Gateway.Persistence.{
@@ -882,7 +882,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert current_session.last_heartbeat_at == original_session.last_heartbeat_at
     assert current_lease.expires_at == original_lease.expires_at
     assert current_lease.renewed_at == original_lease.renewed_at
-    assert_zero_work!(setup)
+    assert_refused_without_work!(setup, "owner_unavailable", "synchronous_renewal")
     assert FakeUpstream.count(upstream) == 0
   end
 
@@ -936,7 +936,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       release_owner_lock!(blocker)
     end
 
-    assert_zero_work!(setup)
+    assert_refused_without_work!(setup, "owner_unavailable", "synchronous_renewal")
     assert FakeUpstream.count(upstream) == 0
   end
 
@@ -1081,7 +1081,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       assert %{"error" => %{"code" => "stale_owner", "type" => "server_error"}} =
                json_response(response, 409)
 
-      assert_zero_work!(setup)
+      # Both barriers sit after the synchronous renewal.
+      assert_refused_without_work!(setup, "stale_owner", "reservation")
       assert FakeUpstream.count(upstream) == 0
 
       current = Repo.get!(CodexSession, session.id)
@@ -1124,7 +1125,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       assert %{"error" => %{"code" => "owner_unavailable", "type" => "server_error"}} =
                json_response(response, 503)
 
-      assert_zero_work!(setup)
+      assert_refused_without_work!(setup, "owner_unavailable", "reservation")
       assert FakeUpstream.count(upstream) == 0
     end
   end
@@ -1484,6 +1485,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert request_ids == []
     assert Repo.aggregate(from(a in Attempt, where: a.request_id in ^request_ids), :count) == 0
     assert Repo.aggregate(from(t in CodexTurn, where: t.request_id in ^request_ids), :count) == 0
+  end
+
+  # A session owner refusal before any attempt writes one rejected request row
+  # naming the code and the phase that refused it, and no attempt, turn or
+  # ledger entry (findings#206 row 206-564; before it the refusal left no row).
+  defp assert_refused_without_work!(setup, code, phase) do
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == code
+    assert request.request_metadata["gateway_denial"]["code"] == code
+    assert request.request_metadata["continuity_denial"]["denial_family"] == "session_owner_lease"
+    assert request.request_metadata["continuity_denial"]["failure_phase"] == phase
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+    assert Repo.aggregate(from(t in CodexTurn, where: t.request_id == ^request.id), :count) == 0
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) == 0
   end
 
   defp db_now do

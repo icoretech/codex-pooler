@@ -157,7 +157,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
 
       assert %{renew_call_timeout_ms: timeout} = :sys.get_state(short_lease)
       assert timeout == div(ttl * 1_000, 3) + 1_000
-      assert :ok = GenServer.call(short_lease, :renew_now)
+      assert {:ok, ^session} = GenServer.call(short_lease, :renew_now)
       assert_receive {:short_lease_budget, opts}, @detection_timeout
       assert opts[:timeout_ms] == div(ttl * 1_000, 3)
       assert opts[:lock_timeout_ms] == div(opts[:timeout_ms], 2)
@@ -198,7 +198,9 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
                  end)
       end)
 
-    assert_received {:synchronous_renewal_options, [lock_timeout_ms: 7_500, timeout_ms: 15_000]}
+    # Only the synchronous renewal may take an expired, unrenewed lease over
+    # (findings#206 row 206-564).
+    assert_received {:synchronous_renewal_options, [lock_timeout_ms: 7_500, timeout_ms: 15_000, take_over_expired: true]}
 
     assert [line] = renewal_failure_lines(logs)
     assert line =~ "phase=synchronous reason=lock_timeout"

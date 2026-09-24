@@ -530,12 +530,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     request_options = context.request_options
     maybe_test_runtime_authorization_barrier(:heartbeat, :before)
 
-    SessionLeaseHeartbeat.run(request_options, fn heartbeat ->
+    SessionLeaseHeartbeat.run(request_options, fn heartbeat, request_options ->
       context
+      |> Map.put(:request_options, request_options)
       |> do_execute_session_routable_model(reserve_and_start_turn)
       |> wrap_deferred_session_lease_stream(heartbeat)
     end)
-    |> normalize_session_lease_heartbeat_failure(request_options)
+    |> normalize_session_lease_heartbeat_failure(context)
   end
 
   defp do_execute_session_routable_model(
@@ -675,18 +676,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       {:error, reason} ->
         clear_native_compaction_admission(request_options)
-        reason = AccountingReservation.pre_attempt_failure(reason, request_options)
 
-        reject_claimed_turn(
-          auth,
-          model,
-          reason,
-          endpoint,
-          payload,
-          request_options,
-          turn_claim
+        reject_pre_attempt_failure(
+          %{auth: auth, model: model, endpoint: endpoint, payload: payload, request_options: request_options, turn_claim: turn_claim},
+          reason
         )
     end
+  end
+
+  defp reject_pre_attempt_failure(context, reason) when reason in [:owner_unavailable, :stale_owner],
+    do: reject_owner_lease_refusal(context, reason, "reservation")
+
+  defp reject_pre_attempt_failure(context, reason) do
+    %{auth: auth, model: model, endpoint: endpoint, payload: payload, request_options: request_options, turn_claim: turn_claim} = context
+    reason = AccountingReservation.pre_attempt_failure(reason, request_options)
+    reject_claimed_turn(auth, model, reason, endpoint, payload, request_options, turn_claim)
   end
 
   defp clear_native_compaction_admission(%RequestOptions{} = request_options) do
@@ -2584,14 +2588,40 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp lock_codex_session_before_reservation(%RequestOptions{} = request_options),
     do: request_options
 
-  defp normalize_session_lease_heartbeat_failure(
-         {:error, reason},
-         %RequestOptions{} = request_options
-       )
+  defp normalize_session_lease_heartbeat_failure({:error, reason}, context)
        when reason in [:stale_owner, :owner_unavailable],
-       do: {:error, AccountingReservation.pre_attempt_failure(reason, request_options)}
+       do: reject_owner_lease_refusal(context, reason, "synchronous_renewal")
 
-  defp normalize_session_lease_heartbeat_failure(result, %RequestOptions{}), do: result
+  defp normalize_session_lease_heartbeat_failure(result, _context), do: result
+
+  # A session owner refusal before any attempt is a client-visible answer, so
+  # it gets a rejected request row like every other refusal (findings#206 row
+  # 206-564): no attempt, turn or ledger entry, the refusal code, and the phase
+  # that refused it (`synchronous_renewal` or `reservation`). Recording is best
+  # effort, because the database can be what failed the renewal; the client
+  # gets the same refusal either way, and a claimed turn is released.
+  defp reject_owner_lease_refusal(context, reason, phase) do
+    %{auth: auth, model: model, endpoint: endpoint, payload: payload, request_options: request_options, turn_claim: turn_claim} = context
+
+    error =
+      reason
+      |> AccountingReservation.pre_attempt_failure(request_options)
+      |> Map.put(:continuity_denial, %{
+        "denial_family" => "session_owner_lease",
+        "internal_reason" => Atom.to_string(reason),
+        "failure_phase" => phase,
+        "operator_action" => "none needed; the session changed owner before this request could run, and a resend attaches to the current owner"
+      })
+
+    try do
+      Denials.log_gateway(denial_context(auth, model, error, endpoint, payload, request_options), turn_claim)
+    rescue
+      exception ->
+        Logger.warning("session owner refusal not recorded reason_code=#{DiagnosticTaxonomy.reason_code(exception.__struct__)}")
+        release_turn_claim(turn_claim)
+        {:error, error}
+    end
+  end
 
   defp wrap_deferred_session_lease_stream({:ok, %{stream: stream} = result}, heartbeat)
        when is_function(stream, 1) do
