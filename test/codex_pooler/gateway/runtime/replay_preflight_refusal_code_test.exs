@@ -136,6 +136,49 @@ defmodule CodexPooler.Gateway.Runtime.ReplayPreflightRefusalCodeTest do
     assert_received {:duplicate_turn_refused, "runtime_replay_preflight", "websocket"}
   end
 
+  # A model the key may not use refuses a brand-new turn here too; it is
+  # recorded once the preflight has rolled back, and logged on the refusal
+  # line (S18, 2026-09-24: no row and no line with owner forwarding on). The
+  # queued-frame dequeue submits the frame to the ordinary checks after any
+  # refusal, which record it, so it asks for no record here.
+  test "a model the key may not use is recorded and logged, and not counted as a duplicate", %{setup: setup, session: session} do
+    forbid_model!(setup)
+    prepared = prepare(new_turn_payload(setup), session, setup)
+
+    {result, log} = with_info_log(fn -> Service.prepare_replay_intent(setup.auth, prepared) end)
+
+    assert {:error, %{status: 400, code: "model_not_allowed", param: "model"}} = result
+    assert [{"rejected", "model_not_allowed", 400, "websocket", model_id}] = refused_rows(setup)
+    assert model_id == setup.model.id
+    assert log =~ "stage=runtime_replay_preflight reason_code=model_not_allowed"
+    assert log =~ "public_code=model_not_allowed"
+    refute_received {:duplicate_turn_refused, _stage, _transport}
+  end
+
+  test "asked for no record, the same refusal leaves the record to the ordinary checks", %{setup: setup, session: session} do
+    forbid_model!(setup)
+    prepared = prepare(new_turn_payload(setup), session, setup)
+
+    {result, _log} = with_info_log(fn -> Service.prepare_replay_intent(setup.auth, prepared, record_model_denial: false) end)
+
+    assert {:error, %{status: 400, code: "model_not_allowed", param: "model"}} = result
+    assert refused_rows(setup) == []
+  end
+
+  defp forbid_model!(setup) do
+    setup.api_key |> Ecto.Changeset.change(allowed_model_identifiers: ["another-model-fixture"]) |> Repo.update!()
+    :ok
+  end
+
+  defp refused_rows(setup) do
+    Repo.all(
+      from(request in CodexPooler.Accounting.Request,
+        where: request.pool_id == ^setup.pool.id and request.status == "rejected",
+        select: {request.status, request.last_error_code, request.response_status_code, request.transport, request.model_id}
+      )
+    )
+  end
+
   defp assert_outcome(result, reason, setup) do
     refute @outcomes.counted_as_duplicate_turn
 

@@ -2644,7 +2644,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          false <- Map.get(state, :websocket_owner_active_turn_reconnect?, false),
          false <- is_map(Map.get(state, :websocket_owner_pending_handoff)),
          true <- WebsocketCodec.replay_eligible?(prepared),
-         {:ok, %{intent: :fresh, lifecycle: nil} = replay_intent} <- Service.prepare_replay_intent(state.auth, prepared),
+         {:ok, %{intent: :fresh, lifecycle: nil} = replay_intent} <- Service.prepare_replay_intent(state.auth, prepared, record_model_denial: false),
          {:ok, control} <- replay_preflight_control(prepared, state, replay_intent, make_ref()),
          {:ok, :fresh_dispatch, binding} <- Adapter.reconnect_control_v2(state, control),
          true <- fresh_owner_binding?(binding, state),

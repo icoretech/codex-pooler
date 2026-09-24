@@ -797,16 +797,26 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     Logger.info("native websocket steered turn claim rebound codex_session_id=#{session_id} claim_class=steered_continuation")
   end
 
-  @spec prepare_replay_intent(auth(), PreparedWebsocketFrame.t()) ::
+  @doc """
+  The owner's replay preflight for a replay-eligible native frame. A frame
+  whose model the key or the Pool refuses is recorded as a refused request
+  unless `record_model_denial: false`: a caller that submits the frame to the
+  ordinary checks after any refusal here (the queued-frame dequeue) leaves the
+  record to those checks, so one refusal is never recorded twice.
+  """
+  @spec prepare_replay_intent(auth(), PreparedWebsocketFrame.t(), keyword()) ::
           {:ok, replay_intent_result()} | {:error, gateway_error() | term()}
-  def prepare_replay_intent(auth, %PreparedWebsocketFrame{} = prepared) do
+  def prepare_replay_intent(auth, prepared, opts \\ [])
+
+  def prepare_replay_intent(auth, %PreparedWebsocketFrame{} = prepared, opts) when is_list(opts) do
     with :ok <- validate_replay_prepared_frame(prepared),
          {:ok, replay_context} <- replay_preflight_context(auth, prepared) do
+      replay_context = Map.put(replay_context, :record_model_denial?, Keyword.get(opts, :record_model_denial, true))
       before_dispatch("replay_intent", fn -> prepare_replay_intent_transaction(replay_context) end)
     end
   end
 
-  def prepare_replay_intent(_auth, _prepared),
+  def prepare_replay_intent(_auth, _prepared, _opts),
     do: {:error, log_prepared_frame_provenance_breach("replay_intent_shape", :unknown, nil, nil, nil)}
 
   defp validate_replay_prepared_frame(%PreparedWebsocketFrame{} = prepared) do
@@ -881,6 +891,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          session: request_options.continuity.codex_session,
          api_key_runtime_epoch: api_key_runtime_epoch,
          endpoint: prepared.endpoint,
+         payload: payload,
          request_options: request_options,
          requested_model: requested_model,
          semantic_turn_claim_key: prepared.turn_claim_key,
@@ -933,8 +944,42 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end)
     |> case do
       {:ok, result} -> {:ok, result}
+      {:error, {:replay_model_denial, denial}} -> refuse_replay_model(context, denial)
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # The key's policy or the Pool's catalog refuses the frame's model before it
+  # is matched to any recorded turn, so it refuses a brand-new turn: recorded
+  # and logged as the fresh path records the same refusal, once the preflight
+  # transaction has rolled back, so the record outlives it. Forwarding on, the
+  # released client's turn (its turn metadata makes the frame replay-eligible)
+  # met this refusal here and left no row and no log line (production rev 50,
+  # Codex 0.156.1).
+  defp refuse_replay_model(%{record_model_denial?: false}, {:policy, _model, reason}),
+    do: {:error, Denials.policy_denial_error(reason)}
+
+  defp refuse_replay_model(%{record_model_denial?: false}, {:gateway, _model, reason}),
+    do: {:error, reason}
+
+  defp refuse_replay_model(context, {kind, model, reason}) do
+    denial_context = %Denials.Context{
+      auth: context.auth,
+      model: model,
+      reason: reason,
+      endpoint: context.endpoint,
+      payload: context.payload,
+      opts: context.request_options
+    }
+
+    {:error, public_error} =
+      case kind do
+        :policy -> Denials.log_policy(denial_context)
+        :gateway -> Denials.log_gateway(denial_context)
+      end
+
+    log_pre_classification_refusal(context.request_options, context.session, public_error.code, public_error)
+    {:error, public_error}
   end
 
   defp classify_replay_intent(locked_session, authorization, model, context) do
@@ -1280,8 +1325,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     Repo.rollback(public_error)
   end
 
+  # Each refusal answers what the fresh path answers for the same condition:
+  # a policy that fails normalization its own reason, recorded as a policy
+  # denial; a model the Pool does not serve `invalid_model`; a model the key
+  # may not use `model_not_allowed`, recorded against that model. A policy
+  # that failed normalization answered `model_not_allowed` here.
   defp authorize_replay_model(api_key, pool, context) do
-    with {:ok, policy} <- Access.normalize_api_key_policy(api_key),
+    with {:ok, policy} <- normalize_replay_policy(api_key),
          {:ok, effective_model} <-
            effective_model_name(
              policy,
@@ -1291,23 +1341,38 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            ),
          %Model{} = model <- Catalog.get_model_by_exposed_id(pool, effective_model),
          true <- model.status == "active",
-         {:ok, _policy} <-
-           Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
+         :ok <- authorize_replay_model_policy(policy, model) do
       {:ok, model}
     else
       nil ->
-        {:error, error(400, "invalid_model", "model is not available for this pool", "model")}
+        replay_model_denial(:gateway, nil, error(400, "invalid_model", "model is not available for this pool", "model"))
 
       false ->
-        {:error, error(400, "invalid_model", "model is not available for this pool", "model")}
+        replay_model_denial(:gateway, nil, error(400, "invalid_model", "model is not available for this pool", "model"))
+
+      {:error, {:replay_model_denial, _denial}} = denial ->
+        denial
 
       {:error, %{code: _code} = reason} ->
-        {:error, reason}
-
-      {:error, _reason} ->
-        {:error, Denials.policy_denial_error(:model_not_allowed)}
+        replay_model_denial(:gateway, nil, reason)
     end
   end
+
+  defp normalize_replay_policy(api_key) do
+    case Access.normalize_api_key_policy(api_key) do
+      {:ok, policy} -> {:ok, policy}
+      {:error, reason} -> replay_model_denial(:policy, nil, reason)
+    end
+  end
+
+  defp authorize_replay_model_policy(policy, %Model{} = model) do
+    case Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
+      {:ok, _policy} -> :ok
+      {:error, reason} -> replay_model_denial(:gateway, model, Denials.policy_denial_error(reason))
+    end
+  end
+
+  defp replay_model_denial(kind, model, reason), do: {:error, {:replay_model_denial, {kind, model, reason}}}
 
   defp replay_authorization_binding(session, authorization, model) do
     %{

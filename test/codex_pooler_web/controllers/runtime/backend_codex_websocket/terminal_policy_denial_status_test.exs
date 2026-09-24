@@ -38,9 +38,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalPolicyDenialStatu
 
   @model_not_allowed %{status: 400, code: "model_not_allowed", type: "invalid_request_error", param: "model", message: "api key is not allowed to use this model"}
 
-  for forwarding <- [:forwarded, :direct] do
-    @tag forwarding: forwarding
-    test "websocket #{forwarding}: a model the key may not use is refused 400 and recorded 400", %{forwarding: forwarding} do
+  # `released_turn` is the frame the released client sends for every turn:
+  # its `x-codex-turn-metadata` makes it replay-eligible, so with owner
+  # forwarding on the owner's replay preflight refuses it, a path the bare
+  # frame never reaches (the replay preflight recorded no row, findings#206,
+  # S18 2026-09-24; pinned per refusal in
+  # `replay_preflight_policy_denial_record_test.exs`).
+  for forwarding <- [:forwarded, :direct], shape <- [:bare, :released_turn] do
+    @tag forwarding: forwarding, shape: shape
+    test "websocket #{forwarding} #{shape}: a model the key may not use is refused 400 and recorded 400", %{forwarding: forwarding, shape: shape} do
       put_owner_forwarding!(forwarding)
       thread_id = Ecto.UUID.generate()
       upstream = start_upstream(FakeUpstream.json_response(%{"output" => []}))
@@ -48,7 +54,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalPolicyDenialStatu
       {_server, port} = start_public_endpoint_with_server!()
       forbid_model!(setup)
 
-      terminal = send_once!(port, setup, thread_id)
+      terminal = send_once!(port, setup, thread_id, shape)
       rows = await_settled!(setup.pool.id, 1)
 
       measured = %{
@@ -57,7 +63,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalPolicyDenialStatu
         upstream_requests: FakeUpstream.count(upstream)
       }
 
-      CodexPooler.TestDiagnostics.puts(fn -> "206-438 websocket model_not_allowed #{forwarding}: #{inspect(measured)}" end)
+      CodexPooler.TestDiagnostics.puts(fn -> "206-438 websocket model_not_allowed #{forwarding} #{shape}: #{inspect(measured)}" end)
 
       assert measured == %{
                refused: {@model_not_allowed.status, Map.drop(@model_not_allowed, [:status])},
@@ -120,7 +126,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalPolicyDenialStatu
   end
 
   # One request on its own connection, as the released client sends a turn.
-  defp send_once!(port, setup, thread_id) do
+  defp send_once!(port, setup, thread_id, shape) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
 
     headers = [
@@ -136,7 +142,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalPolicyDenialStatu
     {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
 
     try do
-      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame(setup, thread_id))
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame(setup, thread_id, shape))
       receive_terminal!(conn, websocket, ref)
     after
       Mint.HTTP.close(conn)
@@ -152,10 +158,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalPolicyDenialStatu
     end
   end
 
-  defp frame(setup, thread_id) do
+  defp frame(setup, thread_id, shape) do
     turn_id = "#{thread_id}-turn"
 
-    CodexPooler.JSON.encode!(%{
+    %{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
       "instructions" => "synthetic instructions",
@@ -176,7 +182,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalPolicyDenialStatu
         "x-codex-installation-id" => @installation_id,
         "x-codex-window-id" => "#{thread_id}:0"
       }
-    })
+    }
+    |> put_turn_metadata(shape, thread_id, turn_id)
+    |> CodexPooler.JSON.encode!()
+  end
+
+  defp put_turn_metadata(frame, :bare, _thread_id, _turn_id), do: frame
+
+  defp put_turn_metadata(frame, :released_turn, thread_id, turn_id) do
+    metadata = %{
+      "agent_name" => "/root",
+      "installation_id" => @installation_id,
+      "request_kind" => "turn",
+      "root_turn_id" => turn_id,
+      "session_id" => thread_id,
+      "thread_id" => thread_id,
+      "turn_id" => turn_id,
+      "window_id" => "#{thread_id}:0",
+      "window_number" => 0,
+      "model" => frame["model"],
+      "reasoning_effort" => "low"
+    }
+
+    put_in(frame, ["client_metadata", "x-codex-turn-metadata"], CodexPooler.JSON.encode!(metadata))
   end
 
   defp http_body(setup) do
