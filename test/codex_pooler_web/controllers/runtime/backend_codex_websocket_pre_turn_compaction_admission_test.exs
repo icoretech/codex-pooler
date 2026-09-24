@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
   import Ecto.Query
   import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_peer_window_owner!: 2]
 
   alias CodexPooler.Accounting.{LedgerEntry, Request}
   alias CodexPooler.Events
@@ -34,7 +35,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
   # generation and downstream, inside the admission deadline; the reservation
   # adopts T2's turn key, so the final request's admission matches. Frames keep
   # the released client's key sets; identifiers, prompt text and reply frames
-  # are synthetic. Serving mode Full (the fake catalog model), one node.
+  # are synthetic. Serving mode Full (the fake catalog model). Topologies:
+  # one node with owner forwarding off (`direct`) or on (`forwarded`, the owner
+  # on the socket's node), and `peer`: forwarding on with the socket on this
+  # node and the owner and its provider connection on a second VM sharing the
+  # committed database, as when a production turn lands on the other web pod
+  # (findings#206 row 206-334).
   @thread_id "019a0000-0000-7000-8000-00000000e001"
   @window_id "#{@thread_id}:0"
   @resumed_window_id "#{@thread_id}:1"
@@ -48,11 +54,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
   @final_response "resp_preturn_admission_final0001"
   @lifecycle_event [:codex_pooler, :gateway, :native_compaction, :lifecycle]
 
-  for topology <- [:forwarded, :direct] do
+  for topology <- [:forwarded, :direct, :peer] do
     @tag topology: topology
     test "#{topology} released pre-turn compaction anchored on the admitted response is served on its first send, billed once, and its turn continues on the same connection",
          %{topology: topology} do
-      put_owner_forwarding!(topology == :forwarded)
+      put_owner_forwarding!(topology != :direct)
       attach_lifecycle_events!(topology)
       item = compaction_item("served")
 
@@ -75,7 +81,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
           ])
         )
 
-      setup = gateway_setup(upstream, compact?: true)
+      setup = topology_setup!(topology, upstream)
       port = start_public_endpoint!()
       client = connect!(port, setup, @window_id)
 
@@ -134,7 +140,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
     @tag topology: topology
     test "#{topology} a resend of a served pre-turn compaction finds the admission spent and is refused before dispatch",
          %{topology: topology} do
-      put_owner_forwarding!(topology == :forwarded)
+      put_owner_forwarding!(topology != :direct)
       attach_lifecycle_events!(topology)
       item = compaction_item("spent")
 
@@ -147,7 +153,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
           ])
         )
 
-      setup = gateway_setup(upstream, compact?: true)
+      setup = topology_setup!(topology, upstream)
       port = start_public_endpoint!()
       client = connect!(port, setup, @window_id)
 
@@ -171,7 +177,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
             client
           end)
 
-        assert log =~ "native compaction refused before dispatch reason=admission_unavailable cause=invalid_transition code=owner_unavailable status=503 compaction_phase=pre_turn topology=#{topology}"
+        assert log =~ "native compaction refused before dispatch reason=admission_unavailable cause=invalid_transition code=owner_unavailable status=503 compaction_phase=pre_turn topology=#{socket_topology(topology)}"
         assert [%Request{status: "succeeded"}, %Request{endpoint: "/backend-api/codex/responses/compact", status: "succeeded"}] = settled_pool_requests!(setup.pool.id, 2)
         assert length(FakeUpstream.requests(upstream)) == 2
         assert :ok = FakeUpstream.verify!(upstream)
@@ -180,6 +186,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
       end
     end
   end
+
+  # The peer shares the committed database, so its fixture is committed:
+  # the sandbox switches to auto mode before anything is written.
+  defp topology_setup!(:peer, upstream) do
+    enter_peer_owner_topology!()
+    setup = gateway_setup(upstream, compact?: true)
+    Map.put(setup, :peer_owner, start_peer_window_owner!(setup, @window_id))
+  end
+
+  defp topology_setup!(_topology, upstream), do: gateway_setup(upstream, compact?: true)
+
+  # The refusal line names the socket's side: a peer owner is a forwarded one.
+  defp socket_topology(:peer), do: :forwarded
+  defp socket_topology(topology), do: topology
 
   defp connect!(port, setup, window_id) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
@@ -220,6 +240,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
   # Every admission transition of the owner (forwarded) or of the socket's own
   # upstream session (direct) is reported on this event; the test waits on the
   # transitions instead of on time.
+  # The peer owner's events are relayed by `start_peer_window_owner!/2`.
+  defp attach_lifecycle_events!(:peer), do: :ok
+
   defp attach_lifecycle_events!(topology) do
     handler_id = {__MODULE__, self(), make_ref()}
     test_pid = self()
@@ -249,9 +272,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionAdmission
     end
   end
 
+  defp await_armed!(:peer, setup), do: await_owner_armed!(setup.peer_owner.owner_pid)
+
   defp await_armed!(:forwarded, setup) do
     [session_id] = Repo.all(from(session in CodexSession, where: session.pool_id == ^setup.pool.id, select: session.id))
     assert {:ok, owner} = WebsocketOwnerSession.lookup(session_id)
+    await_owner_armed!(owner)
+  end
+
+  defp await_owner_armed!(owner) do
     deadline = System.monotonic_time(:millisecond) + 15_000
 
     Stream.repeatedly(fn -> :sys.get_state(owner) end)

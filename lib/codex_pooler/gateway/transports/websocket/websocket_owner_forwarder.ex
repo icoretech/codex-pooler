@@ -34,6 +34,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   @restore_downstream_keys [:correlation_id, :epoch, :pid]
   @stable_downstream_keys [:active_turn_reconnect? | @restore_downstream_keys]
   @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
+  # `NativeCompactionAdmission`'s refusal vocabulary (its `error` type plus the
+  # confirmation and provenance answers), passed through unchanged by a remote
+  # admission control call.
+  @native_compaction_admission_errors [
+    :invalid_binding,
+    :invalid_transition,
+    :binding_mismatch,
+    :compaction_item_mismatch,
+    :capability_mismatch,
+    :expired,
+    :committed,
+    :invalid_provenance,
+    :provenance_mismatch
+  ]
 
   @type owner_node :: node()
   @type owner_resolution :: {:local, binary()} | {:remote, owner_node(), binary()}
@@ -2142,6 +2156,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp normalize_remote_call_result({:error, result}, :remote_cancel_downstream)
        when result in [:reattachable, :suspended],
+       do: result
+
+  # An owner's native compaction admission answer keeps its own vocabulary
+  # across nodes, as it does from a local owner (`remote_admission_control_v1/2`
+  # returns it unchanged there). Folded into `owner_crashed`, a remote owner's
+  # refusal logged a crash that never happened and a compaction item mismatch
+  # answered `503 owner_unavailable` instead of the local `409` (findings#206
+  # row 206-334, two-node run).
+  defp normalize_remote_call_result({:error, reason} = result, :remote_admission_control_v1)
+       when reason in @native_compaction_admission_errors,
        do: result
 
   defp normalize_remote_call_result(result, _function), do: normalize_forward_result(result)
