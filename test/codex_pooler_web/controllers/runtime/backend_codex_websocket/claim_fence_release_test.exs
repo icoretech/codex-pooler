@@ -129,11 +129,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimFenceReleaseTest do
     frame = frame(shape, setup, thread_id)
 
     lifted = impose_refusal!(refusal, setup)
+
     {{refused, rows_after_refusal}, log} =
       ExUnit.CaptureLog.with_log(fn ->
         refused = port |> send_once!(setup, thread_id, frame) |> refusal_of() |> unpin(refusal)
         {refused, await_settled!(setup.pool.id, 1, &websocket?/1)}
       end)
+
     lifted.()
 
     retry = port |> send_once!(setup, thread_id, frame) |> outcome()
@@ -216,6 +218,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimFenceReleaseTest do
         refused = port |> send_once!(setup, thread_id, frame) |> refusal_of()
         {refused, await_settled!(setup.pool.id, 1, &websocket?/1)}
       end)
+
     remove_faults!()
 
     retry = port |> send_once!(setup, thread_id, frame) |> outcome()
