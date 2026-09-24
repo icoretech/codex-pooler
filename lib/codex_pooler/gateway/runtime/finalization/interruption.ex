@@ -433,7 +433,26 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       attempt.replay_generation == Map.get(receipt, :replay_generation)
   end
 
-  defp fail_task_exception_locked(turn, request, attempt, reason) do
+  # A task that raised between its turn claim and a committed reservation (a
+  # reservation that raised and rolled back, findings#206 row 206-310) holds
+  # nothing but the claim row, which has no reservation to release: the
+  # reservation-failure write below raised `Ecto.NoResultsError`, and the claim
+  # stayed `accepted` and fenced every resend for six hours. It is released
+  # instead, as if it had been written by the rolled-back reservation
+  # (findings#206 row 206-331); anything more than the claim is kept and
+  # settled below.
+  defp fail_task_exception_locked(nil, %Request{status: "accepted"} = request, nil, reason) do
+    case Accounting.release_websocket_turn_claim(request) do
+      {:ok, :released} -> []
+      {:ok, :kept} -> fail_reserved_task_exception_locked(nil, request, nil, reason)
+      {:error, error} -> Repo.rollback({:task_exception_accounting_failed, error})
+    end
+  end
+
+  defp fail_task_exception_locked(turn, request, attempt, reason),
+    do: fail_reserved_task_exception_locked(turn, request, attempt, reason)
+
+  defp fail_reserved_task_exception_locked(turn, request, attempt, reason) do
     now = now()
 
     cond do

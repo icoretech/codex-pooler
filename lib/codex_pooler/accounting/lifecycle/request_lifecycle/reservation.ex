@@ -9,11 +9,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   alias CodexPooler.Access
 
   alias CodexPooler.Accounting.{
+    Attempt,
     ClientRetry,
+    LedgerEntry,
     Metadata,
     PricingResolution,
     Request,
+    RequestClientRetryLink,
     RequestLogFacts,
+    RequestReplayEntitlement,
     ReservationPolicy
   }
 
@@ -223,6 +227,46 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         reraise(error, __STACKTRACE__)
       end
   end
+
+  # The claim above commits on its own, before the reservation transaction, so
+  # a reservation that rolls back -- a database that stopped answering, or a
+  # reservation that raised -- used to leave the claim `accepted`: every resend
+  # of the request met `409 duplicate_turn` until the six-hour stale-claim
+  # recovery, which leaves it failed and still fenced (findings#206 row
+  # 206-331). Releasing it restores what a claim written inside the rolled-back
+  # reservation would have left: no row. Only the row this claim inserted can be
+  # named here, and only while it is nothing but that claim -- still
+  # `accepted`, with no ledger entry, attempt, turn, replay entitlement or
+  # successor -- so a reservation that committed, or a predecessor the claim
+  # chained onto, is never released. Its request-log fact and its own
+  # client-retry link go with it (`ON DELETE CASCADE`).
+  @spec release_websocket_turn_claim(Request.t()) :: {:ok, :released | :kept} | {:error, term()}
+  def release_websocket_turn_claim(%Request{id: request_id}) do
+    Repo.transaction(fn ->
+      case Repo.one(from request in Request, where: request.id == ^request_id, lock: "FOR UPDATE") do
+        %Request{} = request ->
+          if unreserved_turn_claim?(request) do
+            _deleted = Repo.delete!(request)
+            :released
+          else
+            :kept
+          end
+
+        nil ->
+          :kept
+      end
+    end)
+  end
+
+  defp unreserved_turn_claim?(%Request{id: id, status: "accepted", transport: "websocket", completed_at: nil}) do
+    not (Repo.exists?(from entry in LedgerEntry, where: entry.request_id == ^id) or
+           Repo.exists?(from attempt in Attempt, where: attempt.request_id == ^id) or
+           Repo.exists?(from turn in CodexTurn, where: turn.request_id == ^id) or
+           Repo.exists?(from entitlement in RequestReplayEntitlement, where: entitlement.request_id == ^id) or
+           Repo.exists?(from link in RequestClientRetryLink, where: link.predecessor_request_id == ^id))
+  end
+
+  defp unreserved_turn_claim?(%Request{}), do: false
 
   defp link_semantic_execution_retry!(opts, %{predecessor_request_id: id}, request, timestamp) do
     case attr(opts, :correlation_id) do

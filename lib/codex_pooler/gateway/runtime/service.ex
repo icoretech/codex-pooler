@@ -640,9 +640,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         )
 
       # A database failure is not recorded as a denied request: the record
-      # needs the database that just failed (findings#206 row 206-358).
+      # needs the database that just failed (findings#206 row 206-358). The
+      # turn claim committed before the reservation is released with it, or it
+      # fences every resend of this request (findings#206 row 206-331).
       {:error, %{code: code} = reason} when code in ["duplicate_turn", "service_unavailable"] ->
         clear_native_compaction_admission(request_options)
+        release_turn_claim(turn_claim)
         {:error, reason}
 
       {:error, {:reset_probe_scope_mismatch, reason}} ->
@@ -1743,6 +1746,27 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       denial_context(auth, model, reason, endpoint, payload, request_options),
       turn_claim
     )
+  end
+
+  # The claim row this request inserted in `claim_prepared_turn/6`, never a
+  # predecessor it chained onto. Best effort: a database still failing keeps the
+  # row for the stale-claim recovery, and the refusal the client gets is the one
+  # it would have got anyway.
+  defp release_turn_claim(nil), do: :ok
+
+  defp release_turn_claim(%Accounting.Request{} = turn_claim) do
+    case Accounting.release_websocket_turn_claim(turn_claim) do
+      {:ok, _released_or_kept} -> :ok
+      {:error, reason} -> log_turn_claim_release_failure(reason)
+    end
+  rescue
+    exception -> log_turn_claim_release_failure(exception.__struct__)
+  catch
+    kind, _reason -> log_turn_claim_release_failure(kind)
+  end
+
+  defp log_turn_claim_release_failure(reason) do
+    Logger.warning("websocket turn claim release failed reason_code=#{DiagnosticTaxonomy.reason_code(reason) || "unknown"}")
   end
 
   defp claim_explicit_websocket_turn(

@@ -97,6 +97,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   def claim_websocket_turn(_auth, _model_or_id, _opts),
     do: {:error, Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
+  @spec release_websocket_turn_claim(Request.t()) :: {:ok, :released | :kept} | {:error, term()}
+  defdelegate release_websocket_turn_claim(request), to: Reservation
+
   @spec claim_client_retry_successor(auth(), model_ref(), map(), map()) ::
           {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
   def claim_client_retry_successor(

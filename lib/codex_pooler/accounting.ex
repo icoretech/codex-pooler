@@ -46,6 +46,14 @@ defmodule CodexPooler.Accounting do
   @spec claim_websocket_turn(auth(), model_ref(), map()) :: request_result()
   defdelegate claim_websocket_turn(auth, model_or_id, opts), to: RequestLifecycle
 
+  @doc """
+  Releases a websocket turn claim whose reservation rolled back, while the row
+  is still nothing but that claim; any other row is kept (findings#206 row
+  206-331).
+  """
+  @spec release_websocket_turn_claim(Request.t()) :: {:ok, :released | :kept} | {:error, term()}
+  defdelegate release_websocket_turn_claim(request), to: RequestLifecycle
+
   @spec claim_client_retry_successor(auth(), model_ref(), map(), map()) ::
           {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
   defdelegate claim_client_retry_successor(auth, model_or_id, payload, opts),
