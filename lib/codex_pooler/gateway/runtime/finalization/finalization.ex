@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   Finalizes gateway runtime dispatch attempts after upstream transport returns.
   """
 
+  alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.NativeImageResult
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
@@ -534,16 +535,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     # (codex-pooler-findings#177).
     validation_rejection = ValidationRejection.fetch(response, request_options)
 
+    # Decided before settlement so the attempt records the reset the client
+    # is told (findings#206 row 206-553).
+    relayed_usage_limit = relayed_usage_limit(response, context)
+
     attrs =
       SettlementAttrs.failure(
         context,
         status,
         error_code,
         accounting_message,
-        Map.merge(
-          Metadata.response_metadata(response, error_code, request_options),
-          ValidationRejection.attempt_metadata(validation_rejection)
-        ),
+        response
+        |> Metadata.response_metadata(error_code, request_options)
+        |> Map.merge(ValidationRejection.attempt_metadata(validation_rejection))
+        |> Map.merge(relayed_usage_limit_metadata(relayed_usage_limit)),
         latency_ms: elapsed_ms(context.started),
         usage: %{status: "usage_unknown", source: "upstream_status"}
       )
@@ -563,7 +568,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:ok, finalized}
 
       {:ok, _finalized} ->
-        case relayed_usage_limit(response, context) do
+        case relayed_usage_limit do
           {:ok, usage_limit_error} ->
             {:error, usage_limit_error}
 
@@ -615,6 +620,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   end
 
   defp relayed_usage_limit(_response, _context), do: :unknown
+
+  defp relayed_usage_limit_metadata({:ok, usage_limit_error}) do
+    case Contracts.usage_limit_record(usage_limit_error) do
+      record when map_size(record) == 2 -> %{"usage_limit" => record}
+      _none -> %{}
+    end
+  end
+
+  defp relayed_usage_limit_metadata(:unknown), do: %{}
 
   # The Pool's other candidates, as route filtering classified them (findings#206 row 206-545).
   defp other_candidates_return(%SelectedCandidateContext{model: model, route_state: route_state, assignment: assignment}),

@@ -70,9 +70,22 @@ defmodule CodexPooler.Accounting.RequestLogs.ErrorSummaries do
       source: "metadata",
       kind: key,
       code: Map.get(summary, "code") || Map.get(summary, "error_code") || Map.get(summary, "reason"),
-      message: Map.get(summary, "message")
+      message: Map.get(summary, "message"),
+      reset_at: advised_reset_at(Map.get(summary, "resets_at"))
     })
   end
+
+  # The reset a terminal usage-limit refusal advised (findings#206 row
+  # 206-553), shown by the drawer's quota line ahead of any exclusion's own
+  # window reset.
+  defp advised_reset_at(resets_at) when is_integer(resets_at) and resets_at > 0 do
+    case DateTime.from_unix(resets_at) do
+      {:ok, reset_at} -> DateTime.to_iso8601(reset_at)
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp advised_reset_at(_resets_at), do: nil
 
   defp candidate_exclusion_error_summaries(%{"candidate_exclusions" => exclusions})
        when is_list(exclusions) do

@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPooler.Platform.TransientDatabaseError
   alias CodexPooler.Pools.Routing, as: PoolRouting
+  alias CodexPoolerWeb.RequestLogger
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
@@ -324,6 +325,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     |> put_policy_retry_header(error)
     |> put_gateway_headers(Contracts.recovery_response_headers(error))
     |> put_gateway_headers(Contracts.usage_limit_response_headers(error))
+    |> RequestLogger.put_usage_limit(Contracts.usage_limit_record(error))
     |> put_gateway_headers(Contracts.circuit_retry_response_headers(error))
     |> put_status(status)
     |> json(body)

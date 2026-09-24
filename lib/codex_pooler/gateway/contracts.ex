@@ -190,6 +190,19 @@ defmodule CodexPooler.Gateway.Contracts do
   def usage_limit_error_fields(_error), do: %{}
 
   @doc """
+  The reset an all-exhausted Pool's terminal answer advised, as it was sent,
+  for the refused row and the log line (findings#206 row 206-553): the two
+  integers only, so the advice a client was told never has to be re-derived
+  from the exclusions under a later rule. Empty for every other error.
+  """
+  @spec usage_limit_record(gateway_error() | map()) :: %{optional(String.t()) => integer()}
+  def usage_limit_record(%{status: 429, usage_limit: %{resets_at: resets_at, resets_in_seconds: seconds}})
+      when is_integer(resets_at) and is_integer(seconds),
+      do: %{"resets_at" => resets_at, "resets_in_seconds" => seconds}
+
+  def usage_limit_record(_error), do: %{}
+
+  @doc """
   The retry advice of the same answer: `Retry-After` in seconds, and
   `x-should-retry: false` once the wait exceeds a minute, so the OpenAI SDKs
   (openai-node honours `retry-after` up to 60 s, openai-python up to 120 s)

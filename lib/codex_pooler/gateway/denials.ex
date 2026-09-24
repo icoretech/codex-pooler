@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Denials do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.SessionContinuity
 
@@ -248,6 +249,7 @@ defmodule CodexPooler.Gateway.Denials do
       "param" => Map.get(reason, :param),
       "reasoning_policy" => safe_reasoning_policy(Map.get(reason, :reasoning_policy))
     }
+    |> Map.merge(Contracts.usage_limit_record(reason))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
   end

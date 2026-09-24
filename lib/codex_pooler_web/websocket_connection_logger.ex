@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   require Logger
 
+  alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
 
   @init_failed_message "websocket init failed before request reservation"
@@ -29,7 +30,9 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     :proxy_instance_id,
     :rejection_stage,
     :public_code,
-    :downstream_epoch
+    :downstream_epoch,
+    :resets_at,
+    :resets_in_seconds
   ]
   @reconnect_event_keys [:reconnect_disposition, :handoff_outcome]
   @reconnect_metadata_keys @metadata_keys ++ @reconnect_event_keys
@@ -69,18 +72,31 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   @spec log_failed_native_websocket_turn(event_metadata(), term()) :: :ok
   def log_failed_native_websocket_turn(metadata, reason) do
+    usage_limit = Contracts.usage_limit_record(unwrap_reason(reason))
+
     metadata =
       metadata
       |> normalize_metadata()
       |> put_native_reason_code(reason)
+      |> Map.put(:resets_at, usage_limit["resets_at"])
+      |> Map.put(:resets_in_seconds, usage_limit["resets_in_seconds"])
 
     log_event(
-      failed_native_websocket_turn_level(metadata_value(metadata, :error_code)),
+      failed_native_websocket_turn_level(metadata_value(metadata, :error_code), usage_limit),
       @failed_native_websocket_turn_message,
       failure_log_metadata(metadata),
       reason
     )
   end
+
+  # The terminal usage-limit refusal of an all-exhausted Pool is the designed
+  # answer, logged at `info` with the reset it advised like the HTTP
+  # `request_completed` line of the same refusal (findings#206 row 206-553).
+  defp failed_native_websocket_turn_level(_error_code, %{"resets_at" => _resets_at}), do: :info
+  defp failed_native_websocket_turn_level(error_code, _usage_limit), do: failed_native_websocket_turn_level(error_code)
+
+  defp unwrap_reason({:error, reason}), do: unwrap_reason(reason)
+  defp unwrap_reason(reason), do: reason
 
   @spec log_reconnect_disposition(event_metadata(), term()) :: :ok
   def log_reconnect_disposition(metadata, disposition) do
