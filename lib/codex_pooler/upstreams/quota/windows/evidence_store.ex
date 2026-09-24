@@ -2704,8 +2704,30 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       metadata: Map.merge(existing.metadata || %{}, Map.get(attrs, :metadata, %{})),
       updated_at: timestamp
     })
-    |> preserve_existing_relative_reset_metadata(existing)
+    |> newer_pinned_reset_countdown_metadata(existing, evidence)
   end
+
+  # This merge keeps the existing reset for a relative claim but, unlike the
+  # same-cycle merge, does not require the claim to be newer than the row: an
+  # older claim's countdown would move the stored one back in time, so only a
+  # claim observed after the row measures it again against the kept reset.
+  # An inferred claim (a countdown the provider reports as the whole window,
+  # not a measurement) never replaces the stored countdown, which keeps the
+  # explicit reset's provenance. Copying the stored countdown on every claim
+  # froze it (findings#206 row 206-563, the same defect as row 206-555).
+  defp newer_pinned_reset_countdown_metadata(
+         merged_attrs,
+         %Quota.AccountQuotaWindow{observed_at: %DateTime{} = existing_observed_at} = existing,
+         %Evidence{observed_at: %DateTime{} = incoming_observed_at, source_precision: precision} = evidence
+       )
+       when precision in ["observed", "authoritative"] do
+    if DateTime.compare(incoming_observed_at, existing_observed_at) == :gt,
+      do: pinned_reset_countdown_metadata(merged_attrs, existing, evidence),
+      else: preserve_existing_relative_reset_metadata(merged_attrs, existing)
+  end
+
+  defp newer_pinned_reset_countdown_metadata(merged_attrs, existing, _evidence),
+    do: preserve_existing_relative_reset_metadata(merged_attrs, existing)
 
   defp merge_weak_usage_with_existing_reset_attrs(
          %Quota.AccountQuotaWindow{} = existing,
