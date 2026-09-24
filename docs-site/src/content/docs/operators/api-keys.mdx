@@ -311,7 +311,7 @@ The current actions are:
     </tr>
     <tr>
       <td>Delete</td>
-      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key. Request history is retained under its Pool without a link to the deleted key. Connections still open with the key close as well. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
+      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key. Request history is retained under its Pool without a link to the deleted key. Connections still open with the key close as well. A key with a large request history is revoked at once and removed by a background job: its row shows <code>deleting</code> and Delete stays disabled until the job has detached the history and removed the key. If the job gives up, the row shows <code>deletion failed</code>, and deleting again resumes. The <code>API key deleted</code> audit event is recorded only when the key is actually gone. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
   </tbody>
 </table>
