@@ -20,8 +20,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.UsageLimitRefusal do
   the circuit rule too.
 
   A `429` is a usage limit when its drained body names `usage_limit_reached`
-  or `usage_limit_exceeded` (as `type` or `code`), or it carries a known
-  `x-codex-rate-limit-reached-type`; only those bounded tokens are read.
+  or `usage_limit_exceeded` (as `type` or `code`), or it carries a
+  `workspace_*` `x-codex-rate-limit-reached-type`; only those bounded tokens
+  are read. A `rate_limit_reached` header on a body that names no usage limit
+  is an ordinary per-window throttle (row 206-509), not a usage limit.
   """
 
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
@@ -43,7 +45,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.UsageLimitRefusal do
     cond do
       error["type"] in @usage_limit_codes -> error["type"]
       error["code"] in @usage_limit_codes -> error["code"]
-      is_binary(RateLimitReachedType.parse_header(response.headers)) -> "usage_limit_reached"
+      RateLimitReachedType.parse_header(response.headers) in AccountDenial.account_denial_types() -> "usage_limit_reached"
       true -> nil
     end
   end

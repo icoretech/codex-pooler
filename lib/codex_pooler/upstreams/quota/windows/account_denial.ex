@@ -7,8 +7,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.AccountDenial do
   The four `workspace_*` values refuse the whole account, whatever model the
   request named and however far the reported windows are from 100%: the
   workspace ran out of credits or hit its own usage limit. `rate_limit_reached`
-  is left out on purpose, because it also names an ordinary per-window limit
-  whose percentage already says whether it is spent.
+  alone is left out on purpose, because it also names an ordinary per-window
+  limit whose percentage already says whether it is spent; but a window
+  recorded from a provider usage-limit refusal (`rate_limit_error_code`
+  `usage_limit_reached`/`usage_limit_exceeded`, set by the header parser when
+  the refusing `429` or wrapped error named it) denies the account too, whatever
+  its reached type: the provider refused the account until its reset, and an
+  exhausted-window reading alone could lose to a fresh `allowed` Usage API
+  reading while the provider kept refusing (findings#206 row 206-594).
 
   A denial is in force from the observation that carried it until the earliest
   reset that observation reported, and it ends earlier when a later
@@ -28,6 +34,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.AccountDenial do
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
 
+  @usage_limit_refusal_codes ~w(usage_limit_reached usage_limit_exceeded)
   @account_denial_types ~w(
     workspace_owner_credits_depleted
     workspace_member_credits_depleted
@@ -59,6 +66,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.AccountDenial do
   end
 
   def active(_snapshot), do: nil
+
+  defp account_denial_window?(%AccountQuotaWindow{metadata: %{"rate_limit_error_code" => code}, observed_at: %DateTime{}})
+       when code in @usage_limit_refusal_codes,
+       do: true
 
   defp account_denial_window?(%AccountQuotaWindow{metadata: %{"rate_limit_reached_type" => type}, observed_at: %DateTime{}}),
     do: type in @account_denial_types

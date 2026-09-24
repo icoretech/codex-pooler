@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Runtime.UsageLimitRouteHealthTest do
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
 
   @moduletag capture_log: true
 
@@ -106,6 +107,105 @@ defmodule CodexPoolerWeb.Runtime.UsageLimitRouteHealthTest do
       assert route_health(pool).circuit_failures == 1
     end
   end
+
+  # Findings#206 row 206-594, reopened: an account whose fresh Usage API
+  # reading still says `allowed` (5%) refuses with a usage limit whose
+  # headers put a window at 100% until a reset ahead. Whatever the reached
+  # type, the refusal excludes the account until that reset; the workspace
+  # types did through the account-denial filter, `rate_limit_reached` did not.
+  for rtype <- ["rate_limit_reached", "workspace_member_usage_limit_reached"], mode <- ["full", "lite"], stream? <- [true, false] do
+    @rtype rtype
+    @mode mode
+    @stream stream?
+
+    test "#{rtype} #{mode} stream=#{stream?}: a usage limit on an allowed account excludes it until the reset", %{conn: conn} do
+      resets_at = DateTime.to_unix(DateTime.utc_now()) + 90
+      refusal = usage_limit_429(resets_at, exhausted_window_headers(resets_at) ++ [{"x-codex-rate-limit-reached-type", @rtype}])
+      {upstream, pool} = usage_allowed_pool!(refusal, @mode)
+
+      assert post_native(conn, pool, @stream).status == 429
+
+      for _turn <- 1..3 do
+        second = post_native(build_conn(), pool, @stream)
+        assert second.status == 429
+        assert %{"error" => %{"type" => "usage_limit_reached", "code" => "quota_exhausted"}} = CodexPooler.JSON.decode!(second.resp_body)
+      end
+
+      assert model_posts(upstream) == 1
+      assert route_health(pool) == %{circuit_failures: 0, demotions: 0}
+    end
+  end
+
+  # The same refusal whose headers keep the window below 100% (the provider
+  # refused the account before the percentage reached it): the refusal's
+  # reached type decided whether it excluded anything, workspace types only.
+  for rtype <- ["rate_limit_reached", "workspace_member_usage_limit_reached"], stream? <- [true, false] do
+    @rtype rtype
+    @stream stream?
+
+    test "#{rtype} stream=#{stream?}: a usage limit below 100% excludes the account until the reset", %{conn: conn} do
+      resets_at = DateTime.to_unix(DateTime.utc_now()) + 90
+      refusal = usage_limit_429(resets_at, window_headers(resets_at, "97") ++ [{"x-codex-rate-limit-reached-type", @rtype}])
+      {upstream, pool} = usage_allowed_pool!(refusal, "lite")
+
+      assert post_native(conn, pool, @stream).status == 429
+
+      for _turn <- 1..3 do
+        next = post_native(build_conn(), pool, @stream)
+        assert next.status == 429
+        assert %{"error" => %{"type" => "usage_limit_reached", "code" => "quota_exhausted", "resets_in_seconds" => seconds}} = CodexPooler.JSON.decode!(next.resp_body)
+        assert seconds in 80..90
+      end
+
+      assert model_posts(upstream) == 1
+    end
+  end
+
+  test "a plain throttle below 100% with a reached-type header name keeps routing", %{conn: conn} do
+    resets_at = DateTime.to_unix(DateTime.utc_now()) + 90
+    headers = window_headers(resets_at, "40") ++ [{"x-codex-rate-limit-reached-type", "rate_limit_reached"}]
+    throttle = {:json_headers, 429, %{"error" => %{"code" => "rate_limit_exceeded", "message" => "synthetic"}}, headers}
+    {upstream, pool} = usage_allowed_pool!(throttle, "full")
+
+    assert post_native(conn, pool, false).status == 429
+    assert post_native(build_conn(), pool, false).status == 429
+    assert model_posts(upstream) == 2
+  end
+
+  test "a plain throttle on an allowed account is not excluded", %{conn: conn} do
+    resets_at = DateTime.to_unix(DateTime.utc_now()) + 90
+    throttle = {:json_headers, 429, %{"error" => %{"code" => "rate_limit_exceeded", "message" => "synthetic"}}, window_headers(resets_at, "40")}
+    {upstream, pool} = usage_allowed_pool!(throttle, "lite")
+
+    assert post_native(conn, pool, true).status == 429
+    assert post_native(build_conn(), pool, true).status == 429
+    assert model_posts(upstream) == 2
+  end
+
+  # The account's usage reading, recorded through the real reconciliation
+  # path: `allowed`, both windows at 5% with a later reset.
+  defp usage_allowed_pool!(refusal, mode) do
+    usage = %{
+      "plan_type" => "pro",
+      "rate_limit" => %{
+        "allowed" => true,
+        "limit_reached" => false,
+        "primary_window" => %{"used_percent" => 5, "limit_window_seconds" => 18_000, "reset_after_seconds" => 9_000, "reset_at" => DateTime.to_unix(DateTime.utc_now()) + 9_000},
+        "secondary_window" => %{"used_percent" => 5, "limit_window_seconds" => 604_800, "reset_after_seconds" => 300_000, "reset_at" => DateTime.to_unix(DateTime.utc_now()) + 300_000}
+      },
+      "credits" => %{"has_credits" => false, "unlimited" => false, "balance" => "0"}
+    }
+
+    routes = %{"/api/codex/usage" => {200, usage}, "/backend-api/codex/usage" => {200, usage}, "/wham/usage" => {200, usage}, "/backend-api/wham/usage" => {200, usage}, @turn_endpoint => refusal}
+    upstream = start_upstream({:path_json, routes})
+    setup = gateway_setup(upstream, quota?: false, compact?: true)
+    identity = setup.identity |> Ecto.Changeset.change(metadata: Map.put(setup.identity.metadata, "usage_base_url", FakeUpstream.url(upstream))) |> Repo.update!()
+    assert {:ok, identity} = PoolReconciliation.refresh_quota_from_usage(identity, setup.assignment)
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, mode)
+    {upstream, Map.merge(%{setup | identity: identity}, %{mode: mode, started_at: DateTime.utc_now()})}
+  end
+
+  defp model_posts(upstream), do: Enum.count(FakeUpstream.requests(upstream), &(&1.path == @turn_endpoint))
 
   defp usage_limit_429(resets_at, headers) do
     error = %{"type" => "usage_limit_reached", "message" => "synthetic provider usage limit text", "resets_at" => resets_at, "resets_in_seconds" => resets_at - DateTime.to_unix(DateTime.utc_now())}

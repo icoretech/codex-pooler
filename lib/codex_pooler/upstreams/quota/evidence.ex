@@ -50,11 +50,18 @@ defmodule CodexPooler.Upstreams.Quota.Evidence do
           merge_precedence: Evidence.merge_precedence(source, reset_at, evidence.source_precision)
       }
     else
-      evidence
+      mark_usage_limit_refusal(evidence, code)
     end
   end
 
   defp preserve_header_denial(evidence, _code, _at), do: evidence
+
+  # A window the refusal reported below 100% (or without a reset ahead) keeps
+  # its percentage and source, but records that it came from a provider
+  # usage-limit refusal: the account-denial routing filter reads that, whatever
+  # the reached type (findings#206 row 206-594).
+  defp mark_usage_limit_refusal(%Evidence{} = evidence, code),
+    do: %{evidence | metadata: Map.put(evidence.metadata || %{}, "rate_limit_error_code", code)}
 
   @spec codex_rate_limit_event_windows(term(), DateTime.t()) :: [window_attrs()]
   def codex_rate_limit_event_windows(event, synced_at) do
