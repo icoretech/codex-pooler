@@ -42,6 +42,49 @@ defmodule CodexPooler.MixTasks.QaPhaseTest do
     end
   end
 
+  test "the cap marker stops the owned command group without any signal to the supervisor" do
+    root = Path.join(System.tmp_dir!(), "qa-phase-cap-#{System.pid()}-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(root) end)
+    File.mkdir_p!(root)
+    pids = Path.join(root, "pids")
+    cap = Path.join(root, "cap-reached")
+    executable = Path.join(root, "phase")
+
+    File.write!(executable, """
+    #!/bin/bash
+    [ -z "${QA_PHASE_CANCEL_FILE:-}" ] || exit 64
+    (while :; do sleep 0.05; done) &
+    printf '%s %s\n' "$$" "$!" > "$1"
+    echo ready
+    wait
+    """)
+
+    File.chmod!(executable, 0o700)
+    port = Port.open({:spawn_executable, @helper}, [:binary, :exit_status, :stderr_to_stdout, args: [executable, pids], env: [{~c"QA_PHASE_CANCEL_FILE", String.to_charlist(cap)}]])
+    {:os_pid, supervisor_pid} = Port.info(port, :os_pid)
+    supervisor_identity = CodexPooler.InstancePresencePeer.capture_os_process_identity!(Integer.to_string(supervisor_pid))
+    on_exit(fn -> stop_owned_supervisor(supervisor_identity) end)
+
+    assert_receive {^port, {:data, "ready\n"}}, 15_000
+    [command_pid, descendant_pid] = pids |> File.read!() |> String.split()
+    identities = Enum.map([command_pid, descendant_pid], &CodexPooler.InstancePresencePeer.capture_os_process_identity!/1)
+    File.touch!(cap)
+    assert_receive {^port, {:exit_status, 137}}, 15_000
+    for identity <- [supervisor_identity | identities], do: CodexPooler.InstancePresencePeer.assert_os_process_stopped!(identity)
+  end
+
+  test "a cap marker present before launch ends the phase before the command starts" do
+    root = Path.join(System.tmp_dir!(), "qa-phase-cap-#{System.pid()}-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(root) end)
+    File.mkdir_p!(root)
+    cap = Path.join(root, "cap-reached")
+    started = Path.join(root, "started")
+    File.touch!(cap)
+
+    assert {"", 124} = System.cmd(@helper, ["/bin/bash", "-c", ": > \"$1\"", "phase", started], env: [{"QA_PHASE_CANCEL_FILE", cap}], stderr_to_stdout: true)
+    refute File.exists?(started)
+  end
+
   defp stop_owned_supervisor(identity) do
     snapshot = owned_snapshot(identity)
 

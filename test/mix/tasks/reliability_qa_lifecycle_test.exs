@@ -9,6 +9,8 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
   @manifest Path.expand("../../../dev_support/bin/qa-manifest", __DIR__)
   @phase Path.expand("../../../dev_support/bin/qa-phase", __DIR__)
   @cancellation_budget_ms 15_000
+  # Starts the wrapper with TERM blocked, so its TERM trap can never run.
+  @term_blocked_launcher ~S|sigprocmask(SIG_BLOCK, POSIX::SigSet->new(SIGTERM)) or die "qa launcher: block failed\n"; exec { $ARGV[0] } @ARGV or die "qa launcher: exec failed\n"|
 
   test "help describes the explicit lifecycle protocol without mutation" do
     {output, code} = System.cmd(@wrapper, ["--help"], stderr_to_stdout: true)
@@ -95,6 +97,17 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
     exec "$0-real" "$@"
     """)
 
+    assert_cap_cancels_blocked_preparation!(fixture)
+  end
+
+  @tag slow: "the wrapper's cap is whole seconds, so the cancellation under test cannot fire before one second"
+  test "the cap still cancels preparation when the wrapper never acts on its own TERM" do
+    # Drone 1519 and 1560 (CI Bash 5.2): the watchdog fired, yet the wrapper
+    # ran its TERM trap only after the awaited phase returned, so no
+    # cancellation reached the supervisor. Blocking TERM in the wrapper
+    # removes that trap deterministically; the supervisor must end the phase
+    # from the watchdog marker alone and the wrapper must still report the cap.
+    fixture = Map.put(wrapper_fixture!(0, 0), :term_blocked, true)
     assert_cap_cancels_blocked_preparation!(fixture)
   end
 
@@ -423,9 +436,17 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
   end
 
   defp run_wrapper(fixture, input, extra_env \\ []) do
+    wrapper = Path.join(fixture.root, "dev_support/bin/reliability-qa-lifecycle")
+    args = ["--root", fixture.root, "--run-id", "a203b8f15e6d4901fixture", "--port", "44188"]
+
+    {executable, args} =
+      if Map.get(fixture, :term_blocked, false),
+        do: {System.find_executable("perl"), ["-MPOSIX", "-e", @term_blocked_launcher, wrapper | args]},
+        else: {wrapper, args}
+
     System.cmd(
-      Path.join(fixture.root, "dev_support/bin/reliability-qa-lifecycle"),
-      ["--root", fixture.root, "--run-id", "a203b8f15e6d4901fixture", "--port", "44188"],
+      executable,
+      args,
       cd: fixture.root,
       env:
         [

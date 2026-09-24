@@ -4,12 +4,17 @@ use warnings;
 use POSIX qw(setsid WNOHANG);
 
 @ARGV or die "qa-phase: command required\n";
+# A caller's cap marker: once this file exists the phase is cancelled exactly
+# as by TERM, without relying on any signal reaching this supervisor.
+my $cancel_file = delete $ENV{QA_PHASE_CANCEL_FILE};
 my $cancel;
 $SIG{TERM} = sub { $cancel = 143; };
 $SIG{INT} = sub { $cancel = 130; };
+sub cap_reached { defined($cancel_file) && length($cancel_file) && -e $cancel_file }
 # Erlang Ports already place their executable in an owned process group.
 # A group leader cannot call setsid again, but already has the required fence.
 setsid() >= 0 || getpgrp() == $$ or die "qa-phase: session creation failed\n";
+$cancel = 124 if !defined($cancel) && cap_reached();
 exit($cancel) if defined($cancel);
 
 my $child = fork();
@@ -21,6 +26,7 @@ if ($child == 0) {
 }
 
 while (1) {
+  $cancel = 124 if !defined($cancel) && cap_reached();
   if (defined($cancel)) {
     # This supervisor remains the session/group leader until all owned
     # descendants have received KILL. Its group id cannot be reused meanwhile.

@@ -102,20 +102,25 @@ fi
 first_failure=0
 cleanup_started=0
 watchdog_pid=""
+watchdog_marker="$runtime_root/watchdog-timeout"
 phase_pid=""
 phase_launching=0
 pending_signal=""
 run_phase() {
   # A foreground command delays Bash traps until it returns. Waiting on an
   # owned background session lets the watchdog interrupt preparation now.
+  # The supervisor also ends the phase on its own once the watchdog marker
+  # exists, so the cap never depends on this shell acting on its TERM: CI's
+  # Bash 5.2 has twice left that TERM pending until the awaited phase returned.
   phase_launching=1
-  "$root/dev_support/bin/qa-phase" "$@" &
+  QA_PHASE_CANCEL_FILE="$watchdog_marker" "$root/dev_support/bin/qa-phase" "$@" &
   phase_pid=$!
   phase_launching=0
   if [ -n "$pending_signal" ]; then on_signal "$pending_signal"; fi
   local phase_rc=0
   wait "$phase_pid" || phase_rc=$?
   phase_pid=""
+  if [ -e "$watchdog_marker" ]; then on_signal 143; fi
   return "$phase_rc"
 }
 stop_phase() {
@@ -174,7 +179,7 @@ cleanup() {
 on_signal() {
   local code="$1"
   if [ "$phase_launching" -eq 1 ]; then pending_signal="$code"; return; fi
-  if [ -e "$runtime_root/watchdog-timeout" ]; then code=124; fi
+  if [ -e "$watchdog_marker" ]; then code=124; fi
   record_failure "$code"
   cleanup "$code" || true
   exit "$first_failure"
@@ -187,7 +192,7 @@ umask 077
 mkdir -p "$runtime_root"
 chmod 700 "$runtime_root"
 perl -e '$seconds = shift; $parent = shift; $marker = shift; sleep $seconds; open my $fh, ">", $marker or exit 1; close $fh; kill "TERM", $parent' \
-  "$timeout_seconds" "$$" "$runtime_root/watchdog-timeout" &
+  "$timeout_seconds" "$$" "$watchdog_marker" &
 watchdog_pid="$!"
 printf '%s\n' \
   "services:" \
