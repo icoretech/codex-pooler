@@ -345,6 +345,20 @@ Full never silently downgrades. An ordinary Responses HTTP failure under the exp
 
 Serving modes are database-backed Pool configuration. There is no global environment variable or Helm value for them.
 
+### Codex Catalog Entries Left Out
+
+Codex reads the whole Pool catalog as one document: a single entry it cannot decode (a required field missing or null, an unknown enumeration value, a fractional number where it expects an integer) makes it discard every entry and fall back to the catalog bundled with the Codex release. For Codex releases whose catalog decoder Codex Pooler has been verified against, 0.154.0 through 0.156.1, the catalog is checked entry by entry and an entry that release cannot decode is left out, so the client keeps every other Pool model. The version is the one Codex sends in its `client_version` query parameter; prereleases count by their whole version, so `0.155.0-alpha.16` is judged as 0.155.0. Newer and older releases, `/v1/models`, and requests without `client_version` receive the catalog unchecked, because the decoder rules are not known to hold for them.
+
+A left-out model is not advertised to that client, so it is missing from the Codex model picker. It stays routable: a request that names the model is routed and served as usual, because routing does not read the served catalog.
+
+Each omission is logged as a warning on every catalog fetch that leaves an entry out:
+
+```text
+codex catalog entry left out: the requesting client cannot decode it pool_id=<pool id> model=<model id> fields=<field paths>
+```
+
+The line names the Pool, the model, and up to ten field paths that fail, never a value. A model id outside letters, digits, `.`, `_` and `-` is shown as a `sha256:` fingerprint. A left-out entry usually means the provider catalog changed shape or a synced entry is incomplete. The next [catalog sync](/operators/jobs/) replaces the entry; if the warning persists after it, compare the named fields with a current Codex release before changing anything else. Codex Desktop and the IDE extension report the version of the Codex core they bundle, so the same rule applies to them.
+
 ## Operational Checklist
 
 When a Pool is not behaving as expected, check it in this order:

@@ -3,6 +3,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
 
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.Gateway.Metadata.CatalogRepresentation
+  alias CodexPooler.Gateway.Metadata.CodexModelDecodeContract
   alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Pools.RoutingSettings
 
@@ -618,12 +619,31 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                  template_only: "base_instructions_dropped_when_instructions_template_is_a_string",
                  verbatim: "older_0_147_0_absent_or_unparsable_client_version",
                  etag_input: "served_representation",
-                 vary_header: false
+                 vary_header: false,
+                 decode_checked: %{
+                   window: {"0.154.0", "0.156.1"},
+                   window_version: "whole_version_prereleases_included",
+                   body: "template_only_minus_entries_the_client_cannot_decode",
+                   left_out_model: %{advertised: false, routable: true},
+                   operator_log: "codex catalog entry left out",
+                   log_fields: ["pool_id", "model", "fields"]
+                 },
+                 turn_selector: "codex_build_user_agent"
                }
              }
 
       assert fixture.instructions_representation.template_only_since ==
                CatalogRepresentation.template_only_since()
+
+      # findings#206 row 206-442: the window the matrix names is the one the
+      # decode contract enforces.
+      {since, through} = CodexModelDecodeContract.verified_range()
+      version = fn {major, minor, patch} -> "#{major}.#{minor}.#{patch}" end
+      assert fixture.instructions_representation.decode_checked.window == {version.(since), version.(through)}
+      assert CatalogRepresentation.for_client_version(version.(since)) == :decode_checked
+      assert CatalogRepresentation.for_client_version(version.(through)) == :decode_checked
+      assert feature.contract =~ "receives the decode_checked representation"
+      assert feature.contract =~ "a left-out model is not advertised to that client but stays routable"
 
       assert feature.contract =~ "the ETag is the digest of the representation actually served"
 
