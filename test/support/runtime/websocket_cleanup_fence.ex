@@ -282,4 +282,56 @@ defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFence do
 
   defp expected_teardown_entry?(entry),
     do: Regex.match?(@deferred_line, entry) or String.contains?(entry, "[info]") or String.contains?(entry, "[debug]")
+
+  @doc """
+  Calls `CodexResponsesSocket.terminate/2` from the calling process and returns
+  its result only once that call's session cleanup has finished, so rows,
+  owner state and log lines the cleanup writes can be read next (findings#206
+  rows 206-341/206-345). A cleanup slower than the 100 ms yield is deferred and
+  keeps running after `terminate/2` returns; this waits for its
+  `cleanup_finished` event (`caller` is the calling process) within the
+  detection budget. Call it inside a log capture to capture the cleanup's lines.
+  """
+  @spec terminate_and_await!(term(), map()) :: :ok
+  def terminate_and_await!(reason, state) do
+    caller = self()
+    tag = make_ref()
+    handler_id = {__MODULE__, :terminate_and_await, tag}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.caller == caller, do: send(caller, {tag, :cleanup_finished})
+        end,
+        nil
+      )
+
+    try do
+      result = CodexPoolerWeb.CodexResponsesSocket.terminate(reason, state)
+
+      receive do
+        {^tag, :cleanup_finished} -> result
+      after
+        @budget_ms -> flunk("websocket session cleanup did not finish within #{@budget_ms} ms of terminate/2")
+      end
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  @doc """
+  Removes the `cleanup_deferred` warning from captured logs. That line records
+  only that the session cleanup outlasted the 100 ms yield, which scheduling
+  alone decides; a test asserting that a path stays quiet asserts on the rest,
+  after awaiting the cleanup with `terminate_and_await!/2`.
+  """
+  @spec without_deferred_cleanup(String.t()) :: String.t()
+  def without_deferred_cleanup(logs) when is_binary(logs) do
+    logs
+    |> String.split("\n")
+    |> Enum.reject(&Regex.match?(@deferred_line, &1))
+    |> Enum.join("\n")
+  end
 end

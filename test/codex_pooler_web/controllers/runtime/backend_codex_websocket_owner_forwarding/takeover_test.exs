@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.ReplayRemoteNodeClient
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.StaleOwnerNodeClient
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.TurnBudgetNodeClient
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
   setup do
@@ -249,8 +250,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
                    }
                  })
 
-        CodexResponsesSocket.terminate(:closed, returned_state)
+        WebsocketCleanupFence.terminate_and_await!(:closed, returned_state)
       end)
+      |> WebsocketCleanupFence.without_deferred_cleanup()
 
     assert warning_logs == ""
     assert FakeUpstream.count(upstream) == 0

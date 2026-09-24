@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTaskFailureCleanupTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   @moduletag capture_log: true
 
   test "delivery cleanup preserves a failed task after database finalization recovers" do
@@ -123,7 +124,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTaskFailureCleanupTest do
       monitor = Process.monitor(task)
       # The fixture obeys the real delivery acknowledgement instead of waiting
       # for the socket's cancellation budget to kill an unresponsive fake task.
-      assert :ok = CodexResponsesSocket.terminate(:normal, state)
+      # The exception cause is written by the session cleanup, which can
+      # outlast terminate/2.
+      assert :ok = WebsocketCleanupFence.terminate_and_await!(:normal, state)
       assert_receive {:cleanup_delivery_acknowledged, ^task}, 15_000
       assert_receive {:DOWN, ^monitor, :process, ^task, :normal}, 15_000
       assert Repo.reload!(fixture.request).last_error_code == "owner_task_exception"

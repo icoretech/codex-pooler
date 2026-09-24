@@ -33,6 +33,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.ReplayRemoteNodeClient
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.TurnBudgetNodeClient
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
   # Failure-detection budget for an expected message: a green run returns as
@@ -569,8 +570,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
                        )
             after
               # The forced malformed reply also reaches the remote detach call, so
-              # terminate doubles as the detach-containment regression.
-              assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
+              # terminate doubles as the detach-containment regression; that
+              # detach runs in the session cleanup, awaited inside the capture.
+              assert :ok = WebsocketCleanupFence.terminate_and_await!(:closed, remote_state)
             end
           end)
 

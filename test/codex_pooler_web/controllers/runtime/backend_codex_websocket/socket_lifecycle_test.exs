@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -1159,9 +1160,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     assert FakeUpstream.await_websocket_connection_count(upstream, 1, 1_000) == 1
     upstream_socket_monitor = Process.monitor(upstream_socket_pid)
 
+    # The turn, request and attempt rows read below are settled by the session
+    # cleanup, which can outlast terminate/2.
     terminator =
       Task.async(fn ->
-        CodexResponsesSocket.terminate(:closed, %{
+        WebsocketCleanupFence.terminate_and_await!(:closed, %{
           tasks: MapSet.new([task]),
           codex_session: session,
           upstream_websocket_session: upstream_websocket_session,

@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RetargetTe
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.ReplayRemoteNodeClient
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.TurnBudgetNodeClient
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
 
@@ -367,7 +368,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RetargetTe
         assert {:ok, target_state} = receive_socket_done(target_state)
         target_state
       after
-        CodexResponsesSocket.terminate(:closed, target_state)
+        # The owner detach runs in the session cleanup read right below.
+        WebsocketCleanupFence.terminate_and_await!(:closed, target_state)
       end
 
     target_session = target_state.codex_session
@@ -427,18 +429,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RetargetTe
       after
         {_, origin_cleanup_logs} =
           with_log([level: :warning], fn ->
-            assert :ok = CodexResponsesSocket.terminate(:closed, origin_state)
+            assert :ok = WebsocketCleanupFence.terminate_and_await!(:closed, origin_state)
           end)
 
+        origin_cleanup_logs = WebsocketCleanupFence.without_deferred_cleanup(origin_cleanup_logs)
         assert origin_cleanup_logs == ""
         assert_no_leak!("stale origin cleanup logs", origin_cleanup_logs)
       end
 
     {_, target_cleanup_logs} =
       with_log([level: :warning], fn ->
-        assert :ok = CodexResponsesSocket.terminate(:closed, retargeted_state)
+        assert :ok = WebsocketCleanupFence.terminate_and_await!(:closed, retargeted_state)
       end)
 
+    target_cleanup_logs = WebsocketCleanupFence.without_deferred_cleanup(target_cleanup_logs)
     assert target_cleanup_logs == ""
     assert_no_leak!("retarget cleanup logs", target_cleanup_logs)
     assert %{downstream: nil} = :sys.get_state(target_owner_pid)

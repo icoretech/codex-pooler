@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   import ExUnit.CaptureLog
   import CodexPooler.PoolerFixtures
 
@@ -255,6 +256,16 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     state = %{auth: %{api_key: key, pool: pool}, test_parent: self(), opts: RequestOptions.for_websocket(%{})}
     server = start_supervised!({Bandit, plug: {Endpoint, state}, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
     {:ok, {_, port}} = ThousandIsland.listener_info(server)
+    parent = self()
+    handler = make_ref()
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :telemetry.attach(
+      handler,
+      [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+      fn _event, _measurements, %{caller: caller}, _config -> send(parent, {:cleanup_finished, handler, caller}) end,
+      nil
+    )
 
     logs =
       capture_log(fn ->
@@ -279,6 +290,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
         {:ok, _websocket, data} = Mint.WebSocket.encode(websocket, {:close, 1000, ""})
         {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
         await_down!(socket, socket_monitor, @shutdown_budget)
+        assert_receive {:cleanup_finished, ^handler, ^socket}, @shutdown_budget
         Mint.HTTP.close(conn)
         send(self(), {:stopped_socket, socket, runtime.codex_session.id})
       end)
@@ -286,6 +298,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     assert_received {:stopped_socket, socket, session_id}
     assert [{stopped_state, {:ok, stopped_state}}] = for({:socket_handled_in, ^socket, state_in, result} <- drain_messages(), do: {state_in, result})
     assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session_id)
+    logs = WebsocketCleanupFence.without_deferred_cleanup(logs)
     refute logs =~ "websocket control path failed"
     refute logs =~ "websocket response task failed"
     assert Repo.aggregate(CodexPooler.Accounting.Request, :count) == 0
@@ -329,10 +342,16 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     handler = make_ref()
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    :telemetry.attach(
+    :telemetry.attach_many(
       handler,
-      [:codex_pooler, :gateway, :websocket_control, :failure],
-      fn _event, _measurements, metadata, _config -> send(parent, {:control_failure, handler, self(), metadata}) end,
+      [
+        [:codex_pooler, :gateway, :websocket_control, :failure],
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished]
+      ],
+      fn
+        [_, _, _, :failure], _measurements, metadata, _config -> send(parent, {:control_failure, handler, self(), metadata})
+        [_, _, _, :cleanup_finished], _measurements, %{caller: caller}, _config -> send(parent, {:cleanup_finished, handler, caller})
+      end,
       nil
     )
 
@@ -359,14 +378,29 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
         server_data = for {:data, ^ref, data} <- responses, do: data
         close = await_server_close!(conn, ref, websocket, server_data)
         await_down!(socket, socket_monitor, @shutdown_budget)
+        # The socket's session cleanup can outlast terminate/2; its lines belong
+        # to this capture.
+        assert_receive {:cleanup_finished, ^handler, ^socket}, @shutdown_budget
         send(parent, {:server_close, handler, close, socket})
       end)
 
     assert_received {:server_close, ^handler, close, socket}
     messages = drain_messages()
-    failures = for {:control_failure, ^handler, ^socket, metadata} <- messages, do: metadata
+    # A cleanup that outlasted the 100 ms yield is a scheduling outcome, not part
+    # of these claims; it is reported apart.
+    {deferred, failures} =
+      for({:control_failure, ^handler, ^socket, metadata} <- messages, do: metadata)
+      |> Enum.split_with(&match?(%{phase: :terminate, reason: :cleanup_deferred}, &1))
+
     handled = for {:socket_handled_in, ^socket, state_in, result} <- messages, do: {state_in, result}
-    %{close: close, control_failures: failures, handled_in: handled, logs: logs}
+
+    %{
+      close: close,
+      control_failures: failures,
+      deferred_cleanups: length(deferred),
+      handled_in: handled,
+      logs: WebsocketCleanupFence.without_deferred_cleanup(logs)
+    }
   end
 
   defp await_server_close!(conn, ref, websocket, data, mode \\ :close) do

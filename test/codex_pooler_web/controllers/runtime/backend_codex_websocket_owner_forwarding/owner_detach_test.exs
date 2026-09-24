@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.ReplayRemoteNodeClient
   alias CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport.TurnBudgetNodeClient
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
@@ -247,10 +248,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
     }
 
     try do
+      # The remote detach runs in the session cleanup: await it inside the
+      # capture, and leave out the scheduling-only deferral line.
       logs =
         capture_log([level: :warning], fn ->
-          assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
+          assert :ok = WebsocketCleanupFence.terminate_and_await!(:closed, remote_state)
         end)
+        |> WebsocketCleanupFence.without_deferred_cleanup()
 
       assert logs == ""
       assert_no_leak!("cleanup-only remote detach logs", logs)

@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
   @detection_timeout_ms 15_000
@@ -288,7 +289,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     Process.exit(response_task_pid, :kill)
 
     assert_receive {:DOWN, ^response_task_monitor, :process, ^response_task_pid, :killed}, @detection_timeout_ms
-    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    # The request settlement read below is written by the session cleanup.
+    assert :ok = WebsocketCleanupFence.terminate_and_await!(:closed, state)
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
 
     assert_reset_probe_outcome!(
@@ -337,7 +339,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     monitor = Process.monitor(task)
     Process.exit(task, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^task, :killed}, 15_000
-    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    assert :ok = WebsocketCleanupFence.terminate_and_await!(:closed, state)
     assert %{status: "failed", last_error_code: "client_disconnected"} = Repo.reload!(request)
 
     assert Repo.aggregate(
