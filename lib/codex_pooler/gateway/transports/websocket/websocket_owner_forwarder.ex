@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.AbandonedSubmissions
   alias CodexPooler.Gateway.Transports.Websocket.CompactionRetrySubmitHold
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
@@ -34,20 +35,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   @restore_downstream_keys [:correlation_id, :epoch, :pid]
   @stable_downstream_keys [:active_turn_reconnect? | @restore_downstream_keys]
   @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
-  # `NativeCompactionAdmission`'s refusal vocabulary (its `error` type plus the
-  # confirmation and provenance answers), passed through unchanged by a remote
-  # admission control call.
-  @native_compaction_admission_errors [
-    :invalid_binding,
-    :invalid_transition,
-    :binding_mismatch,
-    :compaction_item_mismatch,
-    :capability_mismatch,
-    :expired,
-    :committed,
-    :invalid_provenance,
-    :provenance_mismatch
-  ]
 
   @type owner_node :: node()
   @type owner_resolution :: {:local, binary()} | {:remote, owner_node(), binary()}
@@ -2163,10 +2150,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   # returns it unchanged there). Folded into `owner_crashed`, a remote owner's
   # refusal logged a crash that never happened and a compaction item mismatch
   # answered `503 owner_unavailable` instead of the local `409` (findings#206
-  # row 206-334, two-node run).
+  # row 206-334, two-node run). The vocabulary is `NativeCompactionAdmission`'s
+  # own, read at run time: a copy kept here let a new refusal read
+  # `owner_crashed` on a remote owner again (row 206-400).
   defp normalize_remote_call_result({:error, reason} = result, :remote_admission_control_v1)
-       when reason in @native_compaction_admission_errors,
-       do: result
+       when is_atom(reason) do
+    if NativeCompactionAdmission.refusal_reason?(reason),
+      do: result,
+      else: normalize_forward_result(result)
+  end
 
   defp normalize_remote_call_result(result, _function), do: normalize_forward_result(result)
 

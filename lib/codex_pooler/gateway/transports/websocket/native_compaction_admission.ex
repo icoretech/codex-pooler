@@ -419,13 +419,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
           expires_at_ms: non_neg_integer() | nil,
           compaction_item_digest: <<_::256>> | nil
         }
-  @type error ::
-          :invalid_binding
-          | :invalid_transition
-          | :binding_mismatch
-          | :compaction_item_mismatch
-          | :capability_mismatch
-          | :expired
+  # The `error` type and `refusal_reasons/0` come from these lists, so a new
+  # refusal is added once. A remote owner's admission control answer crosses
+  # nodes through `WebsocketOwnerForwarder`, which passes exactly
+  # `refusal_reasons/0` through and folds anything else into `owner_crashed`
+  # (findings#206 rows 206-397/206-400).
+  @errors [
+    :invalid_binding,
+    :invalid_transition,
+    :binding_mismatch,
+    :compaction_item_mismatch,
+    :capability_mismatch,
+    :expired
+  ]
+  # The answers outside `error`: `cancel/4` after accounting started
+  # (`committed`) and `record_first_compact_collected/2` (`invalid_provenance`,
+  # `provenance_mismatch`).
+  @refusal_reasons @errors ++ [:committed, :invalid_provenance, :provenance_mismatch]
+
+  @type error :: unquote(Enum.reduce(Enum.reverse(@errors), &{:|, [], [&1, &2]}))
+  @type refusal :: error() | :committed | :invalid_provenance | :provenance_mismatch
+
+  @spec refusal_reasons() :: [refusal()]
+  def refusal_reasons, do: @refusal_reasons
+
+  @spec refusal_reason?(term()) :: boolean()
+  def refusal_reason?(reason), do: reason in @refusal_reasons
 
   @spec ordinary_success(Binding.t()) :: {:ok, t()} | {:error, :invalid_binding}
   def ordinary_success(%Binding{} = binding) do
