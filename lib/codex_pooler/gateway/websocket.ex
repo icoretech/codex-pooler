@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Websocket do
 
   require Logger
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
@@ -882,6 +883,56 @@ defmodule CodexPooler.Gateway.Websocket do
     do: Enum.reject(candidates, fn {assignment, _identity} -> assignment.id == pinned end)
 
   defp other_candidates(candidates, _unpinned), do: Enum.drop(candidates, 1)
+
+  # The inherited turn settles once its submitter records the cancel, tens of
+  # milliseconds after the owner stops it (P76 measured 27-45 ms after the
+  # client's close did the same); the bound only caps a submitter that is gone.
+  @inherited_turn_settlement_budget_ms 2_000
+  @inherited_turn_settlement_poll_ms 20
+
+  @doc """
+  Takes over the running turn this socket inherited at its attach, before the
+  socket's next request is judged (findings#206 rows 206-359 and 206-362).
+
+  The owner cancels that turn as the socket's close would, and this waits,
+  bounded, until the database shows it settled, so the request meets committed
+  state exactly as the client's retry on a new socket used to. `:taken_over`
+  when it settled in time, `:unsettled` when the owner cancelled it but the
+  settlement did not appear within the bound, `:not_taken_over` when the owner
+  refused, was unreachable or predates the take-over; in that last case nothing
+  changed and the request meets today's refusal.
+  """
+  @spec take_over_inherited_websocket_owner_turn(CodexSession.t() | nil, String.t() | nil, map() | nil, opts()) ::
+          :taken_over | :unsettled | :not_taken_over
+  def take_over_inherited_websocket_owner_turn(%CodexSession{} = session, owner_lease_token, downstream, opts)
+      when is_binary(owner_lease_token) and is_map(downstream) do
+    opts = websocket_request_options(opts)
+
+    case WebsocketOwnerForwarder.take_over_inherited_turn(session, owner_lease_token, downstream, owner_forwarder_opts(opts)) do
+      {:ok, %{semantic_turn_digest: digest}} ->
+        input = %{pool_id: session.pool_id, api_key_id: session.api_key_id, semantic_turn_digest: digest}
+        await_inherited_turn_settled(input, System.monotonic_time(:millisecond) + @inherited_turn_settlement_budget_ms)
+
+      {:error, _reason} ->
+        :not_taken_over
+    end
+  end
+
+  def take_over_inherited_websocket_owner_turn(_session, _token, _downstream, _opts), do: :not_taken_over
+
+  defp await_inherited_turn_settled(input, deadline_ms) do
+    cond do
+      not Accounting.replay_semantic_turn_in_flight?(input) ->
+        :taken_over
+
+      System.monotonic_time(:millisecond) >= deadline_ms ->
+        :unsettled
+
+      true ->
+        Process.sleep(@inherited_turn_settlement_poll_ms)
+        await_inherited_turn_settled(input, deadline_ms)
+    end
+  end
 
   @spec cancel_websocket_owner_turn(
           CodexSession.t() | nil,

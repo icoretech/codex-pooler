@@ -370,6 +370,31 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
   def preflight_snapshot(_input), do: {:error, :invalid_input}
 
+  @doc """
+  True while a turn of the key and Pool with this semantic digest is still
+  `in_progress` behind an open request: the state `preflight_snapshot/1` refuses
+  a same-turn post-visible resend for as `lifecycle_conflict`. A socket that
+  took over the turn it inherited waits on this before its request is judged
+  (findings#206 row 206-362).
+  """
+  @spec semantic_turn_in_flight?(%{
+          required(:pool_id) => Ecto.UUID.t(),
+          required(:api_key_id) => Ecto.UUID.t(),
+          required(:semantic_turn_digest) => <<_::256>>
+        }) :: boolean()
+  def semantic_turn_in_flight?(%{pool_id: pool_id, api_key_id: api_key_id, semantic_turn_digest: digest})
+      when is_binary(pool_id) and is_binary(api_key_id) and is_binary(digest) and byte_size(digest) == 32 do
+    Repo.exists?(
+      from turn in CodexTurn,
+        join: request in Request,
+        on: request.id == turn.request_id,
+        where:
+          request.pool_id == ^pool_id and request.api_key_id == ^api_key_id and
+            turn.semantic_turn_digest == ^digest and turn.status == "in_progress" and
+            request.status in ["accepted", "in_progress"]
+    )
+  end
+
   @spec provisional_binding_status(provisional_reference()) ::
           :armed
           | {:consumed, map(), :committed_not_started | :started, DateTime.t()}

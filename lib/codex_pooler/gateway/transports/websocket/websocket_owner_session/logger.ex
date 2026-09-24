@@ -109,6 +109,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Logger 
     )
   end
 
+  # The socket that inherited a running visible turn at its attach sent another
+  # request, and the owner cancelled that turn as the socket's close would
+  # (findings#206 row 206-362).
+  @spec inherited_turn_taken_over(map(), pos_integer()) :: :ok
+  def inherited_turn_taken_over(state, downstream_epoch) do
+    owner_event(:info, "websocket owner inherited turn taken over",
+      codex_session_id: state.codex_session_id,
+      owner_instance_id: state.owner_instance_id,
+      owner_pid: self(),
+      downstream_epoch: downstream_epoch
+    )
+  end
+
   @spec owner_exit_persistence_failure(atom(), map(), atom(), term()) :: :ok
   # A later turn of the session (an HTTP fallback the owner never held) was
   # already running when the owner exited, so the owner-scoped interrupt stood

@@ -79,6 +79,9 @@ defmodule CodexPooler.Accounting do
           | {:error, atom()}
   defdelegate replay_preflight_snapshot(input), to: RequestReplay, as: :preflight_snapshot
 
+  @spec replay_semantic_turn_in_flight?(map()) :: boolean()
+  defdelegate replay_semantic_turn_in_flight?(input), to: RequestReplay, as: :semantic_turn_in_flight?
+
   @spec replay_provisional_binding_status(RequestReplay.provisional_reference()) ::
           :armed
           | {:consumed, map(), atom(), DateTime.t()}

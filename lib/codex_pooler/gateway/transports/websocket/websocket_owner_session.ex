@@ -412,6 +412,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     GenServer.call(owner, {:abandon_turn, pid, epoch, correlation_id, owner_turn_id}, owner_call_timeout())
   end
 
+  @doc """
+  Cancels the running turn that `downstream` inherited when it attached, as its
+  close would, and keeps the downstream attached.
+
+  The released client drops a socket in the middle of a streaming response and
+  opens a new one at once; the new socket attaches while the dropped turn is
+  still running, and the attach hands that turn to it. Its next request was
+  refused (`409 duplicate_turn` for the same turn, `409 owner_busy` for
+  another) until the client closed the socket in reaction, which is what
+  cancelled the inherited turn (findings#206 rows 206-359 and 206-362). Only a
+  turn that is already visible, that this exact downstream received through an
+  active-turn attach, and that has no terminal, pending handoff, compaction
+  phase or collected delivery is cancelled; its task is stopped and it settles
+  `client_disconnected` through its submitter exactly as after the close. The
+  answer carries the turn's semantic digest so the caller can wait for that
+  settlement. Anything else answers an error and changes nothing.
+  """
+  @spec take_over_inherited_turn(GenServer.server(), downstream()) ::
+          {:ok, %{semantic_turn_digest: <<_::256>>}} | {:error, WebsocketOwnerContract.owner_error()}
+  def take_over_inherited_turn(owner, %{pid: pid, epoch: epoch, correlation_id: correlation_id})
+      when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
+    GenServer.call(owner, {:take_over_inherited_turn, pid, epoch, correlation_id}, owner_call_timeout())
+  end
+
   @type reconnect_preflight_result ::
           {:ok, :dispatch | :same_turn_replay}
           | {:ok, :replacement_handoff | :duplicate_replacement, reference()}
@@ -1763,6 +1787,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
       {:error, reason} ->
         {:reply, {:error, reason}, remember_abandoned_submission(state, downstream)}
+    end
+  end
+
+  # The inherited turn is cancelled as the socket's close cancels it (its task
+  # stopped, `client_disconnected`, settled through its submitter); unlike the
+  # close, the downstream and its monitor stay, so the socket's next request
+  # meets an owner with nothing running.
+  def handle_call({:take_over_inherited_turn, pid, epoch, correlation_id}, _from, state) do
+    downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
+
+    case inherited_visible_turn(state, downstream) do
+      {:ok, semantic_turn_digest} ->
+        state =
+          state
+          |> DownstreamState.cancel_active_turn_downstream(downstream, :client_disconnected)
+          |> clear_native_compaction_admission(:downstream_cancelled)
+          |> maybe_settle_cancelled_without_pending_handoff(:client_disconnected)
+
+        :ok = Logger.inherited_turn_taken_over(state, epoch)
+
+        reply_or_retire(state, {:ok, %{semantic_turn_digest: semantic_turn_digest}})
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -4540,6 +4588,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     DownstreamState.downstream_status(state.downstream, requested_downstream) == :active and
       is_nil(state.active_turn) and is_nil(state.suspended_replay) and is_nil(state.pending_handoff) and
       is_nil(state.compaction_retry_submit_hold) and not state.draining?
+  end
+
+  # The turn a socket received through its attach (the attach's
+  # `active_turn_reconnect?`), already visible, still streaming to that socket,
+  # an ordinary relayed native turn with no terminal and nothing half-handed
+  # over. A pre-visible turn is left to its replay reattach, and a compaction or
+  # collected delivery to its own lifecycle.
+  defp inherited_visible_turn(%{draining?: true}, _requested_downstream), do: {:error, :owner_drained}
+
+  defp inherited_visible_turn(state, requested_downstream) do
+    with :active <- DownstreamState.cancellation_status(state, requested_downstream),
+         %{active_turn_reconnect?: true} <- state.downstream,
+         %{
+           visible_output?: true,
+           collect?: false,
+           admission_phase: nil,
+           terminal_forwarded?: false,
+           pending_result: nil,
+           descriptor: %{kind: :native, semantic_turn_key: semantic_turn_key}
+         } = active_turn
+         when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 <- state.active_turn,
+         true <- not Map.has_key?(active_turn, :canceled_result),
+         nil <- state.pending_handoff,
+         nil <- state.compaction_retry_submit_hold do
+      {:ok, semantic_turn_key}
+    else
+      {:error, reason} -> {:error, reason}
+      _not_inherited -> {:error, :owner_busy}
+    end
   end
 
   defp detach_active_downstream(state, requested_downstream) do

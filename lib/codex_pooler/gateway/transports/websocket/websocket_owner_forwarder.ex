@@ -1046,6 +1046,66 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     :exit, _reason -> {:error, :owner_crashed}
   end
 
+  @doc """
+  Asks the session's owner to take over the running turn `downstream` inherited
+  at its attach (`WebsocketOwnerSession.take_over_inherited_turn/2`), wherever
+  the owner runs (findings#206 row 206-362).
+
+  An owner node of an earlier release has no `remote_take_over_inherited_turn_v1`
+  and answers `{:error, :remote_take_over_v1_unsupported}`; the caller then keeps
+  the refusal that release gives, and the client's own close still cancels the
+  turn. Every other failure changes nothing either.
+  """
+  @spec take_over_inherited_turn(CodexSession.t(), binary(), WebsocketOwnerSession.downstream(), submit_opts()) ::
+          {:ok, %{semantic_turn_digest: <<_::256>>}}
+          | {:error, WebsocketOwnerContract.owner_error() | :remote_take_over_v1_unsupported}
+  def take_over_inherited_turn(%CodexSession{} = session, token, downstream, opts \\ [])
+      when is_binary(token) and is_map(downstream) and is_list(opts) do
+    downstream = Map.take(downstream, [:pid, :epoch, :correlation_id])
+
+    with :ok <- SessionContinuity.validate_owner_token(session, token),
+         {:ok, owner} <- resolve_owner(session, opts) do
+      case owner do
+        {:local, _instance} -> remote_take_over_inherited_turn_v1(session.id, downstream)
+        {:remote, node, _instance} -> call_remote_take_over(node, [session.id, downstream], opts)
+      end
+    end
+  end
+
+  @doc false
+  @spec remote_take_over_inherited_turn_v1(binary(), WebsocketOwnerSession.downstream()) ::
+          {:ok, %{semantic_turn_digest: <<_::256>>}} | {:error, WebsocketOwnerContract.owner_error()}
+  def remote_take_over_inherited_turn_v1(codex_session_id, downstream)
+      when is_binary(codex_session_id) and is_map(downstream) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.take_over_inherited_turn(owner_pid, downstream)
+    end
+  catch
+    :exit, _reason -> {:error, :owner_crashed}
+  end
+
+  defp call_remote_take_over(node, args, opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(node, __MODULE__, :remote_take_over_inherited_turn_v1, args, timeout)
+    |> case do
+      {:ok, %{semantic_turn_digest: digest}} when is_binary(digest) and byte_size(digest) == 32 ->
+        {:ok, %{semantic_turn_digest: digest}}
+
+      {:error, :remote_take_over_v1_unsupported} = unsupported ->
+        log_take_over_protocol_incompatibility()
+        unsupported
+
+      {:error, reason} when is_atom(reason) ->
+        if WebsocketOwnerContract.owner_error?(reason), do: {:error, reason}, else: {:error, :owner_crashed}
+
+      _unsafe_result ->
+        {:error, :owner_crashed}
+    end
+  end
+
   @doc false
   @spec remote_detach_previsible_downstream_v1(binary(), WebsocketOwnerSession.downstream()) ::
           :suspended | :detached | :not_previsible | {:error, WebsocketOwnerContract.owner_error()}
@@ -2448,6 +2508,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           | :owner_crashed
           | :remote_cancel_v1_unsupported
           | :remote_abandon_v1_unsupported
+          | :remote_take_over_v1_unsupported
   def normalize_remote_failure(kind, reason, module, function, args) do
     case normalize_protocol_failure(kind, reason, module, function, args) do
       nil -> normalize_remote_transport_failure(reason)
@@ -2621,6 +2682,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     cond do
       missing_remote_cancel_v1?(reason, module, function, args) -> :remote_cancel_v1_unsupported
       missing_remote_abandon_v1?(reason, module, function, args) -> :remote_abandon_v1_unsupported
+      missing_remote_take_over_v1?(reason, module, function, args) -> :remote_take_over_v1_unsupported
       true -> nil
     end
   end
@@ -2645,6 +2707,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp missing_remote_abandon_v1?(_reason, _module, _function, _args), do: false
 
+  defp missing_remote_take_over_v1?(
+         {:exception, :undef, [{module, :remote_take_over_inherited_turn_v1, remote_args, _location} | _stack]},
+         module,
+         :remote_take_over_inherited_turn_v1,
+         args
+       ),
+       do: remote_args == args and length(remote_args) == 2
+
+  defp missing_remote_take_over_v1?(_reason, _module, _function, _args), do: false
+
   defp missing_remote_reconnect_control_v1?(
          {:exception, :undef, [{module, :remote_reconnect_control_v1, remote_args, _location} | _stack]},
          module,
@@ -2654,6 +2726,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
        do: remote_args == args and length(remote_args) == 1
 
   defp missing_remote_reconnect_control_v1?(_reason, _module, _function, _args), do: false
+
+  defp log_take_over_protocol_incompatibility do
+    require Logger
+
+    Logger.warning(
+      "websocket owner protocol incompatible event=owner_protocol_incompatible " <>
+        "boundary=inherited_turn_take_over protocol=v1 canonical_error=owner_busy"
+    )
+  end
 
   defp log_control_protocol_incompatibility do
     require Logger

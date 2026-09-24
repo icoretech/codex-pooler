@@ -4203,6 +4203,66 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     end
   end
 
+  # findings#206 row 206-362: the socket that received a running turn through
+  # its attach sends a request of its own, and the owner cancels that turn as
+  # the socket's close would, keeping the socket attached. Only an inherited,
+  # visible, relayed turn without a terminal is taken over; every other shape
+  # answers an error and leaves the turn running.
+  describe "taking over the turn a socket inherited at its attach" do
+    @describetag :inherited_turn_take_over
+
+    test "cancels a visible inherited turn once and keeps the socket attached", context do
+      inherited = inherited_turn_owner!(context, "take-over-visible", %{}, true)
+      task_monitor = Process.monitor(inherited.task)
+
+      log =
+        capture_info_log(fn ->
+          assert {:ok, %{semantic_turn_digest: <<9::256>>}} = WebsocketOwnerSession.take_over_inherited_turn(inherited.owner, inherited.downstream)
+        end)
+
+      task = inherited.task
+      assert_receive {:DOWN, ^task_monitor, :process, ^task, :shutdown}, @detection_timeout_ms
+      downstream = inherited.downstream
+      assert %{downstream: %{pid: pid, epoch: 1}, active_turn: %{downstream: nil, canceled_result: {:error, :client_disconnected}}} = :sys.get_state(inherited.owner)
+      assert pid == downstream.pid
+      assert log =~ "websocket owner inherited turn taken over"
+      assert log =~ "downstream_epoch=1"
+
+      # A second request finds nothing of this socket's left to take over.
+      assert {:error, :stale_downstream} = WebsocketOwnerSession.take_over_inherited_turn(inherited.owner, inherited.downstream)
+      :sys.replace_state(inherited.owner, fn state -> %{state | active_turn: nil} end)
+    end
+
+    for {label, turn, inherited?, requested, expected} <- [
+          {"a turn before visible output", %{visible_output?: false}, true, :same, :owner_busy},
+          {"a turn this socket submitted itself", %{}, false, :same, :owner_busy},
+          {"a collected delivery", %{collect?: true}, true, :same, :owner_busy},
+          {"a compaction phase", %{admission_phase: :compact}, true, :same, :owner_busy},
+          {"a turn whose terminal was relayed", %{terminal_forwarded?: true}, true, :same, :owner_busy},
+          {"another socket's request", %{}, true, :next_epoch, :stale_downstream},
+          {"a draining owner", %{}, true, :draining, :owner_drained}
+        ] do
+      @tag turn: turn, inherited?: inherited?, requested: requested, expected: expected
+      test "leaves #{label} running", %{turn: turn, inherited?: inherited?, requested: requested, expected: expected} = context do
+        inherited = inherited_turn_owner!(context, "take-over-refused", turn, inherited?)
+
+        requested_downstream =
+          case requested do
+            :same -> inherited.downstream
+            :next_epoch -> %{inherited.downstream | epoch: 2}
+            :draining -> tap(inherited.downstream, fn _downstream -> :sys.replace_state(inherited.owner, &%{&1 | draining?: true}) end)
+          end
+
+        assert {:error, ^expected} = WebsocketOwnerSession.take_over_inherited_turn(inherited.owner, requested_downstream)
+        task = inherited.task
+        assert %{active_turn: %{task_pid: ^task, downstream: %{pid: _pid}} = active_turn} = :sys.get_state(inherited.owner)
+        refute Map.has_key?(active_turn, :canceled_result)
+        assert Process.alive?(task)
+        :sys.replace_state(inherited.owner, fn state -> %{state | active_turn: nil, draining?: false} end)
+      end
+    end
+  end
+
   @tag :replay_provisional_state
   @tag :replay_race
   test "suspended V2 provisional reserve query cancel is idempotent and bounded", context do
@@ -6943,6 +7003,41 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       semantic_turn_digest: <<1::256>>,
       replay_claim_digest: <<2::256>>
     }
+  end
+
+  # An owner whose attached downstream (this test process, epoch 1) receives a
+  # running native turn: `inherited?` marks the downstream as attached while
+  # that turn ran, as `attach_downstream_now/2` does.
+  defp inherited_turn_owner!(context, label, turn_overrides, inherited?) do
+    context = replay_owner_context(context, label)
+    {:ok, owner} = start_owner(context, upstream: WebsocketOwnerNodeHarness.fake_upstream_boundary(self()), persistence: replay_persistence())
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert {:ok, %{epoch: 1} = downstream} = WebsocketOwnerSession.attach_downstream(owner, downstream_target(label))
+    task = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> send(task, :stop) end)
+
+    active_turn =
+      Map.merge(
+        %{
+          task_pid: task,
+          task_ref: make_ref(),
+          downstream: downstream |> Map.take([:pid, :epoch, :correlation_id]) |> Map.put(:owner_turn_id, task),
+          visible_output?: true,
+          collect?: false,
+          admission_phase: nil,
+          terminal_forwarded?: false,
+          pending_result: nil,
+          output_commit_probe: nil,
+          descriptor: %{kind: :native, semantic_turn_key: <<9::256>>, downstream_status: :attached, visible_output?: true}
+        },
+        turn_overrides
+      )
+
+    :sys.replace_state(owner, fn state ->
+      %{state | active_turn: active_turn, downstream: Map.put(state.downstream, :active_turn_reconnect?, inherited?)}
+    end)
+
+    %{owner: owner, task: task, downstream: Map.take(downstream, [:pid, :epoch, :correlation_id])}
   end
 
   defp superseding_control(armed, downstream, semantic_turn_digest, replay_claim_digest) do

@@ -2735,7 +2735,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  live_owner_refusal_code: "owner_busy",
                  running_request_lost_race: "duplicate_turn_counted_as_owner_replay_preflight",
                  resend_of_recorded_turn: "duplicate_turn_counted_as_owner_replay_preflight",
-                 newer_socket_turn_at_armed_previsible_replay: "retires_replay_settles_predecessor_once_then_dispatches"
+                 newer_socket_turn_at_armed_previsible_replay: "retires_replay_settles_predecessor_once_then_dispatches",
+                 request_from_socket_that_inherited_visible_turn: "owner_cancels_inherited_turn_awaits_settlement_then_judges_request",
+                 inherited_visible_turn_at_owner_without_take_over: "refusal_kept"
                },
                runtime_replay_pre_classification: %{
                  session_not_reconnectable: "owner_unavailable",

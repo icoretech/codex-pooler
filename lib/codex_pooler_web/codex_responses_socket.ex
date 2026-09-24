@@ -2501,6 +2501,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        )
        when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 do
     if WebsocketCodec.replay_eligible?(prepared) do
+      state = take_over_inherited_owner_turn(state)
+
       with {:ok, intent} <- Service.prepare_replay_intent(state.auth, prepared),
            {:ok, prepared} <- rebind_replay_claim(prepared, intent) do
         dispatch_replay_intent(prepared, state, intent)
@@ -2521,6 +2523,39 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:ok, start_or_queue_prepared_response(prepared, state)}
     end
   end
+
+  # This socket attached while the owner still ran a turn it inherited, and
+  # sends a request of its own: the released client dropped the previous socket
+  # in the middle of that turn and has moved on (a full-history resend of the
+  # same turn, or its next turn). Every such request met a refusal until the
+  # client closed this socket too, which cancelled the inherited turn, and its
+  # retry on a third socket was then served (findings#206 rows 206-359 and
+  # 206-362). The owner now cancels a visible inherited turn here as that close
+  # would, the predecessor settles, and the request is judged against settled
+  # state. An owner that refuses or predates the take-over leaves everything as
+  # it was, and the request meets the refusal it always met. A pre-visible
+  # inherited turn is not taken over: its same-turn resend reattaches to it.
+  defp take_over_inherited_owner_turn(state) do
+    if Map.get(state, :websocket_owner_active_turn_reconnect?, false) and
+         not is_map(Map.get(state, :websocket_owner_pending_handoff)) do
+      case Adapter.take_over_inherited_owner_turn(state) do
+        :not_taken_over ->
+          state
+
+        outcome ->
+          log_reconnect_disposition(state, inherited_take_over_disposition(outcome))
+
+          state
+          |> Map.put(:websocket_owner_active_turn_reconnect?, false)
+          |> Map.put(:websocket_owner_reconnect_turn_pid, nil)
+      end
+    else
+      state
+    end
+  end
+
+  defp inherited_take_over_disposition(:taken_over), do: :inherited_turn_taken_over
+  defp inherited_take_over_disposition(:unsettled), do: :inherited_turn_unsettled
 
   defp dispatch_replay_intent(prepared, state, replay_intent) do
     control_ref = make_ref()
