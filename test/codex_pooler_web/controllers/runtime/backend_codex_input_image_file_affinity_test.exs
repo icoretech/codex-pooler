@@ -122,10 +122,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInputImageFileAffinityTest do
     end
   end
 
-  for mode <- ["full", "lite"] do
-    @tag serving_mode: mode
-    test "native HTTP keeps a message and a tool-output input_image file_id on a #{mode} model", %{
+  for path <- ["/backend-api/codex/responses", "/v1/responses"], mode <- ["full", "lite"] do
+    @tag file_path: path, serving_mode: mode
+    test "#{path} keeps a message and a tool-output input_image file_id on a #{mode} model", %{
       conn: conn,
+      file_path: path,
       serving_mode: mode
     } do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_image_#{mode}", "object" => "response"}))
@@ -137,7 +138,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInputImageFileAffinityTest do
       conn =
         conn
         |> auth(setup)
-        |> post("/backend-api/codex/responses", %{
+        |> post(path, %{
           "model" => setup.model.exposed_model_id,
           "input" => [
             %{
@@ -164,8 +165,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInputImageFileAffinityTest do
             do: part
 
       # Lite removes the `detail` compatibility hint, as the released client does
-      # for a Responses Lite model; the file reference itself is never rewritten.
+      # for a Responses Lite model, and `/v1` translates a tool-output image
+      # without it; the file reference itself is never rewritten.
       expected_detail = if mode == "lite", do: nil, else: "high"
+      expected_tool_detail = if path == "/v1/responses", do: nil, else: expected_detail
 
       assert [
                %{"file_id" => ^message_file_id} = message_image,
@@ -173,7 +176,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInputImageFileAffinityTest do
              ] = images
 
       assert message_image["detail"] == expected_detail
-      assert tool_image["detail"] == expected_detail
+      assert tool_image["detail"] == expected_tool_detail
       refute Map.has_key?(message_image, "image_url")
       refute Map.has_key?(tool_image, "image_url")
     end
