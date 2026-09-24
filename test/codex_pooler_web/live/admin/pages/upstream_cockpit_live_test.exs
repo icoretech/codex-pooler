@@ -5360,6 +5360,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       %{status: if(ordinal == depth + 50, do: "failed", else: "succeeded"), admitted_at: DateTime.add(now, -10 * ordinal, :second)}
     end)
 
+    # The walk over these 10,100 attempts is planned on the tables'
+    # statistics. A shared test database can hold empty-table statistics
+    # (autovacuum after rolled-back sandbox rows leaves `reltuples` at 0 over
+    # hundreds of pages), under which the walk timed out its connection on
+    # Drone 1559; a running install analyzes a table within seconds of its
+    # rows arriving (findings#206 row 206-500).
+    Repo.query!("ANALYZE requests")
+    Repo.query!("ANALYZE attempts")
+    assert %{rows: [[true]]} = Repo.query!("SELECT bool_and(reltuples > 0) FROM pg_class WHERE oid IN ('public.requests'::regclass, 'public.attempts'::regclass)")
+
     assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
     assert cockpit.recent_events.items == []
     assert cockpit.recent_events.searched_attempt_limit == depth

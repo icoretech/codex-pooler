@@ -147,8 +147,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
       Repo.insert_all(Attempt, attempts)
     end
 
-    Repo.query!("ANALYZE requests")
-    Repo.query!("ANALYZE attempts")
+    analyze_fixture_tables!()
     {rows, query, params} = capture_event_query(context)
     assert Enum.map(rows, & &1.id) == Enum.map(target_requests, & &1.id)
 
@@ -179,8 +178,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
         %{status: if(rem(ordinal, 100) == 0, do: "failed", else: "succeeded"), admitted_at: DateTime.add(now, -10 * ordinal, :second)}
       end)
 
-    Repo.query!("ANALYZE requests")
-    Repo.query!("ANALYZE attempts")
+    analyze_fixture_tables!()
 
     expected = [seed_request | history |> Enum.filter(&(&1.status == "failed")) |> Enum.take(4)]
     {rows, queries} = capture_event_queries(fn -> event_rows(context.scope, context.identity, 5) end)
@@ -219,8 +217,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
         %{status: if(ordinal in failed_ordinals, do: "failed", else: "succeeded"), admitted_at: DateTime.add(now, -10 * ordinal, :second)}
       end)
 
-    Repo.query!("ANALYZE requests")
-    Repo.query!("ANALYZE attempts")
+    analyze_fixture_tables!()
 
     last_in_window = Enum.at(history, depth - 2)
     assert last_in_window.status == "failed"
@@ -268,8 +265,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
         %{status: "succeeded", admitted_at: DateTime.add(now, -ordinal, :second)}
       end)
 
-    Repo.query!("ANALYZE requests")
-    Repo.query!("ANALYZE attempts")
+    analyze_fixture_tables!()
 
     expected =
       [seed | Enum.filter(own, &(&1.status == "failed"))]
@@ -407,6 +403,20 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
     after
       :telemetry.detach(handler)
     end
+  end
+
+  # The walks are planned on the tables' statistics. A shared test database
+  # can hold empty-table statistics (autovacuum after rolled-back sandbox rows
+  # leaves `reltuples` at 0 over hundreds of pages), under which the walk's
+  # per-attempt probes can take a skip-scanned index and time out; a running
+  # install analyzes a table within seconds of its rows arriving (findings#206
+  # row 206-500). The fixture is analyzed, and the statistics are asserted,
+  # before a measured call.
+  defp analyze_fixture_tables! do
+    Repo.query!("ANALYZE requests")
+    Repo.query!("ANALYZE attempts")
+
+    assert %{rows: [[true]]} = Repo.query!("SELECT bool_and(reltuples > 0) FROM pg_class WHERE oid IN ('public.requests'::regclass, 'public.attempts'::regclass)")
   end
 
   defp plan_nodes(node), do: [node | Enum.flat_map(Map.get(node, "Plans", []), &plan_nodes/1)]
