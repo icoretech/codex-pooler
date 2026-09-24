@@ -567,19 +567,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
        when is_binary(image_url),
        do: %{"type" => "input_image", "image_url" => image_url}
 
+  # A tool-result image keeps its detail like a message image (findings#206
+  # row 206-494); `validate_image_details/1` admits only an enum value.
   defp normalize_cline_tool_result_output_part(%{
          "type" => "image_url",
-         "image_url" => %{"url" => image_url}
+         "image_url" => %{"url" => image_url} = image
        })
        when is_binary(image_url),
-       do: %{"type" => "input_image", "image_url" => image_url}
+       do: %{"type" => "input_image", "image_url" => image_url} |> maybe_put_image_detail(image)
 
-  defp normalize_cline_tool_result_output_part(%{
-         "type" => "input_image",
-         "image_url" => image_url
-       })
+  defp normalize_cline_tool_result_output_part(%{"type" => "input_image", "image_url" => image_url} = part)
        when is_binary(image_url),
-       do: %{"type" => "input_image", "image_url" => image_url}
+       do: %{"type" => "input_image", "image_url" => image_url} |> maybe_put_image_detail(part)
 
   defp normalize_cline_tool_result_output_part(%{
          "type" => "image",
@@ -710,6 +709,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
   defp invalid_image_detail(%{"type" => "input_image", "detail" => detail}, path),
     do: unless(Normalization.valid_image_detail?(detail), do: {:error, Normalization.invalid_image_detail(path <> ".detail")})
+
+  # A Cline `tool-result` carries its images in `output`; their detail is
+  # checked under `.output[k]` of the Chat field (findings#206 row 206-494).
+  defp invalid_image_detail(%{"type" => "tool-result", "output" => output}, path) when is_list(output) do
+    output
+    |> Enum.with_index()
+    |> Enum.find_value(fn {part, output_index} -> invalid_image_detail(part, "#{path}.output[#{output_index}]") end)
+  end
 
   defp invalid_image_detail(_part, _path), do: nil
 

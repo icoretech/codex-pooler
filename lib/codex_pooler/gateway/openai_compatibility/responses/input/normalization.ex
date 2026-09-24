@@ -253,17 +253,27 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
        when type in ["function_call_output", "custom_tool_call_output"] and is_list(output),
        do: invalid_image_detail_in(output, "input[#{index}].output")
 
+  # A Chat-style `image_url` part is translated only in a `role: "tool"`
+  # item, where it becomes a tool-output `input_image` carrying
+  # `image_url.detail`, so only there is that detail checked, under the field
+  # the client sent (findings#206 row 206-494).
+  defp invalid_input_image_detail(%{"role" => "tool", "content" => content}, index) when is_list(content),
+    do: invalid_image_detail_in(content, "input[#{index}].content", true)
+
   defp invalid_input_image_detail(%{"content" => content}, index) when is_list(content),
     do: invalid_image_detail_in(content, "input[#{index}].content")
 
   defp invalid_input_image_detail(_item, _index), do: nil
 
-  defp invalid_image_detail_in(parts, path) do
+  defp invalid_image_detail_in(parts, path, chat_image_url? \\ false) do
     parts
     |> Enum.with_index()
     |> Enum.find_value(fn
       {%{"type" => "input_image", "detail" => detail}, part_index} when not is_nil(detail) and detail not in @image_details ->
         {:error, invalid_image_detail("#{path}[#{part_index}].detail")}
+
+      {%{"type" => "image_url", "image_url" => %{"detail" => detail}}, part_index} when chat_image_url? and not is_nil(detail) and detail not in @image_details ->
+        {:error, invalid_image_detail("#{path}[#{part_index}].image_url.detail")}
 
       _part ->
         nil
@@ -672,8 +682,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp normalize_tool_output_part(%{"type" => "image_url"} = part) do
     case Map.get(part, "image_url") do
-      %{"url" => image_url} when is_binary(image_url) ->
-        {:ok, %{"type" => "input_image", "image_url" => image_url}}
+      %{"url" => image_url} = image when is_binary(image_url) ->
+        {:ok, %{"type" => "input_image", "image_url" => image_url} |> maybe_put_image_detail(image)}
 
       image_url when is_binary(image_url) ->
         {:ok, %{"type" => "input_image", "image_url" => image_url}}

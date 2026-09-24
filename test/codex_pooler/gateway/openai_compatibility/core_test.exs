@@ -3412,6 +3412,123 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                Chat.coerce(%{"model" => "gpt-fixture-text", "messages" => [%{"role" => "tool", "tool_call_id" => "call_bogus", "content" => [%{"type" => "text", "text" => "loaded"}, bogus]}]})
     end
 
+    # findings#206 row 206-494: a `/v1/responses` `role: "tool"` item may hold
+    # a Chat-style `image_url` part (a Pooler extension shape for clients that
+    # replay Chat tool messages as Responses input). Its `image_url.detail`
+    # reaches the rebuilt `input_image` like every other tool-output image, a
+    # null one stays absent, and a value outside the enum is refused under the
+    # field the client sent.
+    test "role tool image_url part keeps its detail in the function_call_output" do
+      assert {:ok, %{payload: payload}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{"type" => "function_call", "call_id" => "call_fixture_chat_image", "name" => "computer_use", "arguments" => "{}"},
+                   %{
+                     "role" => "tool",
+                     "tool_call_id" => "call_fixture_chat_image",
+                     "content" => [
+                       %{"type" => "text", "text" => "synthetic capture summary"},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/high.png", "detail" => "high"}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/original.png", "detail" => "original"}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/null.png", "detail" => nil}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/object.png"}},
+                       %{"type" => "image_url", "image_url" => "https://example.com/bare.png"}
+                     ]
+                   }
+                 ]
+               })
+
+      assert [_call, %{"type" => "function_call_output", "call_id" => "call_fixture_chat_image", "output" => output}] = payload["input"]
+
+      assert output == [
+               %{"type" => "input_text", "text" => "synthetic capture summary"},
+               %{"type" => "input_image", "image_url" => "https://example.com/high.png", "detail" => "high"},
+               %{"type" => "input_image", "image_url" => "https://example.com/original.png", "detail" => "original"},
+               %{"type" => "input_image", "image_url" => "https://example.com/null.png"},
+               %{"type" => "input_image", "image_url" => "https://example.com/object.png"},
+               %{"type" => "input_image", "image_url" => "https://example.com/bare.png"}
+             ]
+
+      bogus = %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/bogus.png", "detail" => "bogus"}}
+      text = %{"type" => "text", "text" => "loaded"}
+
+      call = %{"type" => "function_call", "call_id" => "call_bogus", "name" => "view_image", "arguments" => "{}"}
+      tool = fn detail -> %{"role" => "tool", "tool_call_id" => "call_bogus", "content" => [text, put_in(bogus, ["image_url", "detail"], detail)]} end
+
+      cases = [
+        {[tool.("bogus")], "input[0].content[1].image_url.detail"},
+        {[call, tool.("HIGH")], "input[1].content[1].image_url.detail"},
+        {[call, tool.(3)], "input[1].content[1].image_url.detail"}
+      ]
+
+      for {input, param} <- cases do
+        assert {:error, %{status: 400, code: "invalid_value", param: ^param, message: message}} = Responses.coerce(%{"model" => "gpt-fixture-text", "input" => input})
+        assert message == "invalid value for parameter #{param} (invalid_value); supported values: low, high, auto, original"
+      end
+    end
+
+    # findings#206 row 206-494: a Cline `tool-result` part in a Chat message
+    # (the shape the Pooler has translated since the June Cline continuations)
+    # carries its image detail into the rebuilt `function_call_output` image,
+    # and a value outside the enum is refused under the Chat field path.
+    test "Chat Cline tool-result images keep their detail" do
+      assert {:ok, result} =
+               Chat.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "messages" => [
+                   %{"role" => "assistant", "content" => [%{"type" => "tool-call", "toolCallId" => "call_fixture_cline_image", "toolName" => "browser_action", "input" => %{"action" => "screenshot"}}]},
+                   %{
+                     "role" => "user",
+                     "content" => [
+                       %{
+                         "type" => "tool-result",
+                         "toolCallId" => "call_fixture_cline_image",
+                         "toolName" => "browser_action",
+                         "output" => [
+                           %{"type" => "text", "text" => "synthetic screenshot taken"},
+                           %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/high.png", "detail" => "high"}},
+                           %{"type" => "input_image", "image_url" => "https://example.com/low.png", "detail" => "low"},
+                           %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/null.png", "detail" => nil}},
+                           %{"type" => "input_image", "image_url" => "https://example.com/input-null.png", "detail" => nil},
+                           %{"type" => "image_url", "image_url" => "https://example.com/bare.png"},
+                           %{"type" => "image", "data" => "YWJj", "mediaType" => "image/png"}
+                         ]
+                       }
+                     ]
+                   }
+                 ]
+               })
+
+      assert [%{"type" => "function_call"}, %{"type" => "function_call_output", "call_id" => "call_fixture_cline_image", "output" => output}] = result.payload["input"]
+
+      assert output == [
+               %{"type" => "input_text", "text" => "synthetic screenshot taken"},
+               %{"type" => "input_image", "image_url" => "https://example.com/high.png", "detail" => "high"},
+               %{"type" => "input_image", "image_url" => "https://example.com/low.png", "detail" => "low"},
+               %{"type" => "input_image", "image_url" => "https://example.com/null.png"},
+               %{"type" => "input_image", "image_url" => "https://example.com/input-null.png"},
+               %{"type" => "input_image", "image_url" => "https://example.com/bare.png"},
+               %{"type" => "input_image", "image_url" => "data:image/png;base64,YWJj"}
+             ]
+
+      tool_result = fn output -> %{"type" => "tool-result", "toolCallId" => "call_bogus", "toolName" => "browser_action", "output" => output} end
+      text = %{"type" => "text", "text" => "loaded"}
+      bogus = %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/bogus.png", "detail" => "bogus"}}
+
+      cases = [
+        {[%{"role" => "user", "content" => "look"}, %{"role" => "user", "content" => [tool_result.([text, bogus])]}], "messages[1].content[0].output[1].image_url.detail"},
+        {[%{"role" => "user", "content" => [text, tool_result.([put_in(bogus, ["image_url", "detail"], "HIGH")])]}], "messages[0].content[1].output[0].image_url.detail"},
+        {[%{"role" => "user", "content" => [tool_result.([%{"type" => "input_image", "image_url" => "https://example.com/bogus.png", "detail" => 3}])]}], "messages[0].content[0].output[0].detail"},
+        {[%{"role" => "user", "content" => tool_result.([text, bogus])}], "messages[0].content.output[1].image_url.detail"}
+      ]
+
+      for {messages, param} <- cases do
+        assert {:error, %{status: 400, code: "invalid_value", param: ^param, message: message}} = Chat.coerce(%{"model" => "gpt-fixture-text", "messages" => messages})
+        assert message == "invalid value for parameter #{param} (invalid_value); supported values: low, high, auto, original"
+      end
+    end
+
     # findings#258 row 258-11: the Responses SDK types a tool-output image as
     # `input_image` with `file_id` or `image_url`; the file reference is kept.
     test "function_call_output keeps an input_image file_id from Responses SDK tool output" do

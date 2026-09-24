@@ -1161,6 +1161,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       # function_call_output, as Hermes sends a screenshot in Chat mode.
       assert feature.contract =~ "carries image_url parts of a role tool message into the rebuilt function_call_output"
       assert fixture.v1_chat_tool_message_image_parts == ["image_url"]
+
+      # findings#206 row 206-494: the tool-result extension shapes carry and
+      # validate image_url.detail under the field the client sent.
+      assert feature.contract =~ "refused at input[i].content[j].image_url.detail"
+      assert feature.contract =~ "refused at messages[i].content[j].output[k].image_url.detail"
+      assert fixture.v1_role_tool_invalid_image_detail.param == "input[1].content[1].image_url.detail"
+      assert fixture.v1_chat_tool_result_invalid_image_detail.param == "messages[1].content[0].output[1].image_url.detail"
     end
 
     test "documents non-strict function tool schema lowering scope" do
