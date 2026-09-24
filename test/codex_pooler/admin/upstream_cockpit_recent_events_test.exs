@@ -154,74 +154,50 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
     %{rows: [[[explain]]]} =
       Repo.query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> query, params)
 
-    attempt_reads =
-      explain["Plan"]
-      |> plan_nodes()
-      |> Enum.filter(&(&1["Relation Name"] == "attempts"))
-      |> Enum.sum_by(fn node ->
-        (node["Actual Rows"] + Map.get(node, "Rows Removed by Filter", 0)) * node["Actual Loops"]
-      end)
+    attempt_reads = attempt_reads(explain)
 
     assert attempt_reads < 1000,
            "five sparse events read #{attempt_reads} attempt tuples across 2,005 attempts: #{inspect(explain)}"
   end
 
+  # Each attempt starts when its request is admitted, ten seconds apart, as in
+  # production (no assignment has two attempts with one start). With one shared
+  # start the walk met the tied attempts in heap order, so the tuples it read
+  # before the fifth event followed where the test database placed the rows:
+  # 797 alone, 1,105 in a full run, 3,965 with the failures stored last
+  # (findings#206 row 206-440). Every query of the call is measured, the second
+  # walk included.
   test "dense identity history keeps recent-event probes bounded", context do
     now = DateTime.utc_now()
     seed_request = insert_request(context, "failed", now)
+    seed_attempt = Repo.one!(from attempt in Attempt, where: attempt.request_id == ^seed_request.id)
 
-    seed_attempt =
-      Repo.one!(from attempt in Attempt, where: attempt.request_id == ^seed_request.id)
-
-    request_fields = Request.__schema__(:fields)
-    attempt_fields = Attempt.__schema__(:fields)
-
-    # Keep twenty failures and enough history to reject a full scan at the unchanged budget.
-    for batch <- 0..1 do
-      requests =
-        for offset <- 1..1000 do
-          ordinal = batch * 1000 + offset
-
-          seed_request
-          |> Map.take(request_fields)
-          |> Map.merge(%{
-            id: Ecto.UUID.generate(),
-            correlation_id: "dense-scale-#{System.unique_integer([:positive])}",
-            status: if(rem(ordinal, 100) == 0, do: "failed", else: "succeeded"),
-            admitted_at: DateTime.add(now, -ordinal, :second)
-          })
-        end
-
-      Repo.insert_all(Request, requests)
-
-      Repo.insert_all(
-        Attempt,
-        Enum.map(requests, fn request ->
-          seed_attempt
-          |> Map.take(attempt_fields)
-          |> Map.merge(%{id: Ecto.UUID.generate(), request_id: request.id})
-        end)
-      )
-    end
+    # Twenty failures among 2,000 requests: a probe that reads the whole history fails the budget.
+    history =
+      insert_scaled!(seed_request, seed_attempt, context.assignment, 2_000, fn ordinal ->
+        %{status: if(rem(ordinal, 100) == 0, do: "failed", else: "succeeded"), admitted_at: DateTime.add(now, -10 * ordinal, :second)}
+      end)
 
     Repo.query!("ANALYZE requests")
     Repo.query!("ANALYZE attempts")
-    {rows, query, params} = capture_event_query(context)
-    assert length(rows) == 5
 
-    %{rows: [[[explain]]]} =
-      Repo.query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> query, params)
+    expected = [seed_request | history |> Enum.filter(&(&1.status == "failed")) |> Enum.take(4)]
+    {rows, queries} = capture_event_queries(fn -> RequestHealth.recent_request_event_rows(context.scope, context.identity, 5) end)
+    assert Enum.map(rows, & &1.id) == Enum.map(expected, & &1.id)
 
-    attempt_reads =
-      explain["Plan"]
-      |> plan_nodes()
-      |> Enum.filter(&(&1["Relation Name"] == "attempts"))
-      |> Enum.sum_by(fn node ->
-        (node["Actual Rows"] + Map.get(node, "Rows Removed by Filter", 0)) * node["Actual Loops"]
-      end)
+    probes =
+      for {query, params} <- queries, String.contains?(query, "\"attempts\"") do
+        %{rows: [[[explain]]]} = Repo.query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> query, params)
+        {attempt_reads(explain), explain}
+      end
 
-    assert attempt_reads < 1000,
-           "five dense events read #{attempt_reads} attempt tuples across 2,001 attempts: #{inspect(explain)}"
+    for {attempt_reads, explain} <- probes do
+      assert attempt_reads < 1000,
+             "a probe for five dense events read #{attempt_reads} attempt tuples across 2,001 attempts: #{inspect(explain)}"
+    end
+
+    # The first walk, the second walk from the fifth admission, and the attempt counts.
+    assert length(probes) == 3
   end
 
   # A busy account that went quiet: its own history is dense, so walking
@@ -382,6 +358,14 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
   end
 
   defp plan_nodes(node), do: [node | Enum.flat_map(Map.get(node, "Plans", []), &plan_nodes/1)]
+
+  # Attempt tuples every node of the plan read, subplan loops included.
+  defp attempt_reads(explain) do
+    explain["Plan"]
+    |> plan_nodes()
+    |> Enum.filter(&(&1["Relation Name"] == "attempts"))
+    |> Enum.sum_by(&((&1["Actual Rows"] + Map.get(&1, "Rows Removed by Filter", 0)) * &1["Actual Loops"]))
+  end
 
   defp insert_request(context, status, admitted_at) do
     request =
