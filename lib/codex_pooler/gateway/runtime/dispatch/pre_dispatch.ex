@@ -442,7 +442,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   # already route over every valid source and keep none.
   defp partition_fallback(input_candidates, kept_candidates, visible_model_context, endpoint, request_options, model) do
     kept_ids = MapSet.new(kept_candidates, fn {assignment, _identity} -> assignment.id end)
-    valid_ids = MapSet.new(visible_model_context.valid_canonical_assignment_ids || [])
+    valid_ids = MapSet.new(visible_model_context.valid_canonical_assignment_ids)
 
     held_back =
       Enum.filter(input_candidates, fn {assignment, _identity} ->
