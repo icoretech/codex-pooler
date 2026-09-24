@@ -33,7 +33,8 @@ defmodule CodexPoolerWeb.Runtime.PinnedSessionUsageLimitFailoverTest do
       second_upstream = start_upstream(success)
       setup = gateway_setup(first_upstream)
       second = gateway_upstream(setup.pool, second_upstream, "upstream-token-sibling", compact?: false)
-      prime_routing_quota!(second.identity)
+      # The first turn binds the session to the first account: the sibling has
+      # no quota evidence, so no route, until the second turn.
       use_deterministic_rotation!(setup.pool, 2)
       model = put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
       setup = %{setup | model: model}
@@ -43,7 +44,8 @@ defmodule CodexPoolerWeb.Runtime.PinnedSessionUsageLimitFailoverTest do
       first = post_turn(conn, setup, session_header, @stream, deterministic_rotation_seed(2, 0))
       assert first.status == 200
       assert %CodexSession{pool_upstream_assignment_id: pinned} = Repo.get_by(CodexSession, session_key: session_header)
-      CodexPooler.TestDiagnostics.puts(fn -> "206-P128d session pin after turn 1: #{pinned == setup.assignment.id}" end)
+      assert pinned == setup.assignment.id
+      prime_routing_quota!(second.identity)
 
       second_conn = post_turn(build_conn(), setup, session_header, @stream, deterministic_rotation_seed(2, 0) <> "-second")
 
