@@ -154,18 +154,33 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   test "the database deadline bounds COMMIT and leaves the old owner state intact" do
     fixture = unboxed_owner_session_fixture("renewal-commit-deadline", 1)
+    parent = self()
+    ref = make_ref()
     function = "renewal_commit_deadline_#{System.unique_integer([:positive])}"
+    witness = "#{function}_reached"
+    gate_key = :erlang.phash2({__MODULE__, function}, 2_147_483_647)
 
     CodexPooler.UnboxedFixture.register_unboxed_cleanup!(fn ->
       Repo.query!("DROP TRIGGER IF EXISTS #{function} ON codex_sessions")
       Repo.query!("DROP FUNCTION IF EXISTS #{function}()")
+      Repo.query!("DROP SEQUENCE IF EXISTS #{witness}")
     end)
 
+    # The deferred trigger runs inside the renewal's COMMIT. It records the
+    # renewal backend in a sequence, which survives the aborted COMMIT, and then
+    # waits on an advisory lock the test holds, with lock_timeout disabled. The
+    # COMMIT can therefore end only by the renewal's deadline (cancel or close),
+    # never by finishing late: a timed trigger let a COMMIT whose disconnect ran
+    # late succeed and return {:ok, session} (findings#206 row 206-433).
     Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!("CREATE SEQUENCE #{witness}")
+
       Repo.query!("""
       CREATE FUNCTION #{function}() RETURNS trigger AS $$
       BEGIN
-        PERFORM pg_sleep(2);
+        PERFORM setval('#{witness}', pg_backend_pid());
+        PERFORM set_config('lock_timeout', '0', true);
+        PERFORM pg_advisory_xact_lock(#{gate_key});
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql
@@ -179,33 +194,84 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       """)
     end)
 
-    before_session = unboxed_get_session!(fixture.session.id)
-    before_lease = unboxed_active_lease!(fixture.session.id)
-    started_at = System.monotonic_time(:millisecond)
-
-    logs =
-      ExUnit.CaptureLog.capture_log(fn ->
+    gate =
+      Task.async(fn ->
         Sandbox.unboxed_run(Repo, fn ->
-          failure =
-            try do
-              SessionContinuity.renew_owner_token(
-                fixture.session.id,
-                fixture.token,
-                request_options(bridge_owner_lease_ttl_seconds: 120),
-                lock_timeout_ms: 100,
-                timeout_ms: 300
-              )
-            rescue
-              error in [DBConnection.ConnectionError, Postgrex.Error] -> error
-            end
+          Repo.transaction(fn ->
+            Repo.query!("SELECT pg_advisory_xact_lock($1)", [gate_key])
+            send(parent, {:commit_gate_held, ref})
 
-          assert match?(%DBConnection.ConnectionError{}, failure) or
-                   match?(%Postgrex.Error{postgres: %{code: :query_canceled}}, failure)
+            receive do
+              {:release_commit_gate, ^ref} -> :ok
+            after
+              15_000 -> raise "COMMIT gate was not released"
+            end
+          end)
         end)
       end)
 
-    assert logs =~ "disconnected"
-    assert System.monotonic_time(:millisecond) - started_at < 2_000
+    on_exit(fn -> stop_latency_task!(gate) end)
+    assert_receive {:commit_gate_held, ^ref}, 5_000
+
+    before_session = unboxed_get_session!(fixture.session.id)
+    before_lease = unboxed_active_lease!(fixture.session.id)
+
+    try do
+      logs =
+        ExUnit.CaptureLog.capture_log(fn ->
+          renewal =
+            Task.async(fn ->
+              Sandbox.unboxed_run(Repo, fn ->
+                # Hold the connection first, so checkout cannot spend the deadline.
+                send(parent, {:commit_deadline_waiter, ref, backend_pid!()})
+
+                try do
+                  {:returned,
+                   SessionContinuity.renew_owner_token(
+                     fixture.session.id,
+                     fixture.token,
+                     request_options(bridge_owner_lease_ttl_seconds: 120),
+                     lock_timeout_ms: 400,
+                     timeout_ms: 700
+                   )}
+                rescue
+                  error in [DBConnection.ConnectionError, Postgrex.Error] -> {:raised, error}
+                end
+              end)
+            end)
+
+          assert_receive {:commit_deadline_waiter, ^ref, waiter_backend}, 5_000
+
+          outcome =
+            case Task.yield(renewal, 5_000) || Task.shutdown(renewal, :brutal_kill) do
+              {:ok, outcome} ->
+                outcome
+
+              nil ->
+                flunk("the renewal was still running 5 s after its 700 ms deadline, so the deadline did not cut it")
+            end
+
+          case commit_witness!(witness) do
+            ^waiter_backend ->
+              assert match?({:raised, %DBConnection.ConnectionError{}}, outcome) or
+                       match?({:raised, %Postgrex.Error{postgres: %{code: :query_canceled}}}, outcome),
+                     "the renewal reached COMMIT, which only its deadline can end, but came back with #{inspect(outcome, limit: 5)}"
+
+            reached_by ->
+              flunk("the renewal never reached COMMIT (trigger witness #{inspect(reached_by)}), so this run could not arm the COMMIT deadline; it came back with #{inspect(outcome, limit: 5)}")
+          end
+
+          # The cut transaction must be gone before the gate opens, or its
+          # COMMIT could still finish once the advisory lock is released.
+          await_latency_backend_released!(waiter_backend, System.monotonic_time(:millisecond) + 5_000)
+        end)
+
+      assert logs =~ "disconnected"
+    after
+      send(gate.pid, {:release_commit_gate, ref})
+    end
+
+    assert {:ok, :ok} = Task.await(gate, 5_000)
     assert unboxed_get_session!(fixture.session.id) == before_session
     assert unboxed_active_lease!(fixture.session.id) == before_lease
 
@@ -2158,6 +2224,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline)
         end
     end
+  end
+
+  # The backend pid the COMMIT trigger recorded, or nil when it never ran.
+  defp commit_witness!(witness) do
+    Sandbox.unboxed_run(Repo, fn ->
+      case Repo.query!("SELECT last_value, is_called FROM #{witness}").rows do
+        [[backend_pid, true]] -> backend_pid
+        [[_start, false]] -> nil
+      end
+    end)
   end
 
   defp backend_pid! do
