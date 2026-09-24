@@ -1817,7 +1817,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         reply_or_retire(state, {:ok, %{semantic_turn_digest: semantic_turn_digest}})
 
       {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        case closed_socket_collection(state, downstream) do
+          {:ok, bound, semantic_turn_digest} -> take_over_closed_socket_collection(state, bound, downstream, semantic_turn_digest)
+          :error -> {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -1884,6 +1887,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          upstream_payload,
          submission_notification?
        ) do
+    submitted_payload = upstream_payload
+
     with {:ok, active_turn_downstream} <- active_turn_downstream(state.downstream, downstream),
          {:ok, upstream_payload, state, admission_phase} <-
            prepare_owner_admission_submission(state, active_turn_downstream, upstream_payload) do
@@ -1891,8 +1896,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       task = start_upstream_task(state, ref, upstream_payload)
       {submitter_pid, _tag} = from
 
+      # The submission as it arrived: the admission it carries, validated just
+      # above, still names its turn (`admission_turn_descriptor/1`).
       {descriptor, state} =
-        take_next_turn_descriptor(state, active_turn_downstream, upstream_payload)
+        take_next_turn_descriptor(state, active_turn_downstream, submitted_payload)
 
       cleanup_witness =
         OwnerCleanup.capture(
@@ -3646,17 +3653,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp settle_predecessor_before_retire(state), do: state
 
-  defp upstream_turn_descriptor(state, %UpstreamWebsocketSession.Request{
-         payload: payload,
-         message_mapper: mapper
-       }) do
+  defp upstream_turn_descriptor(
+         state,
+         %UpstreamWebsocketSession.Request{payload: payload, message_mapper: mapper} = request
+       ) do
     if native_message_mapper?(mapper) do
       with {:ok, decoded} when is_map(decoded) <- CodexPooler.JSON.decode(payload),
            {:ok, %{semantic_turn_key: semantic_turn_key}} <-
              WebsocketTurnIdentity.resolve(decoded, turn_claim_scope(state, decoded)) do
         %{kind: :native, semantic_turn_key: semantic_turn_key}
       else
-        _missing_or_invalid -> :unknown
+        _missing_or_invalid -> admission_turn_descriptor(request)
       end
     else
       %{kind: :public}
@@ -3664,6 +3671,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp upstream_turn_descriptor(_state, _payload), do: :unknown
+
+  # A native compaction's upstream body carries no turn metadata, so the owner
+  # cannot key it from the body. The released client sends a compaction the
+  # moment the previous turn's `response.completed` arrives. When the socket
+  # still tracks that turn's response task, it queues the compaction and
+  # submits it at dequeue with no owner preflight to record its turn (the
+  # anchored compaction is not replay-eligible). The owner then ran it as an
+  # `:unknown` turn that no same-turn check (`same_turn_replay`, the take-over
+  # digest, a handoff) could match. This was seen on the peer owner, where the
+  # previous turn settles later (findings#206 row 206-455). The admission the
+  # socket reserved for it names the turn under the socket's own claim scope
+  # (the binding the owner checks against the frame's continuity key), and
+  # the submission is refused before it runs unless that admission is valid,
+  # so the turn is keyed from it: the key the owner preflight records for an
+  # unqueued compaction.
+  defp admission_turn_descriptor(%UpstreamWebsocketSession.Request{
+         native_compaction_capability: %NativeCompactionAdmission.Capability{binding: %NativeCompactionAdmission.Binding{semantic_turn_key: key}}
+       })
+       when is_binary(key) and byte_size(key) == 32,
+       do: %{kind: :native, semantic_turn_key: key}
+
+  defp admission_turn_descriptor(%UpstreamWebsocketSession.Request{
+         first_compact_collection: %NativeCompactionAdmission.FirstCompactCollection{binding: %NativeCompactionAdmission.Binding{semantic_turn_key: key}}
+       })
+       when is_binary(key) and byte_size(key) == 32,
+       do: %{kind: :native, semantic_turn_key: key}
+
+  defp admission_turn_descriptor(_request), do: :unknown
 
   # The socket derives a native frame's semantic turn key under
   # `WebsocketCodec.native_turn_claim_scope/2`: an HMAC of Pool, key and thread
@@ -4669,6 +4704,69 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp inherited_turn_key(_state, _active_turn, _requested_downstream), do: :error
+
+  # A native collection (a full-history compaction, collected with its request
+  # identity) is never handed on at an attach: the next socket gets only a
+  # candidate at `downstream_epoch + 1`, and the collecting socket stays the
+  # downstream until its own detach. The released client sends a compaction
+  # as full history on any connection that cannot resolve the anchor, and it
+  # retries a failed compaction stream on a new connection about 200 ms after
+  # the failure (`compact_remote_v2.rs`). The cut socket's detach comes from
+  # its session cleanup, after a 250 ms drain and a cleanup it waits on for
+  # only 100 ms. So both websocket retries met the owner busy (`409
+  # duplicate_turn`), and the compaction was bought again over HTTPS
+  # (findings#206 row 206-454). The requester is that candidate, and the
+  # collecting socket has already closed: it announced its close
+  # (`closing_downstream`), or the owner handled its exit (no downstream, the
+  # collection still bound to it). The owner does what that pending detach
+  # would do and attaches the requester. It never takes over a collection
+  # whose socket it has not seen close, a visible or terminal one, a result
+  # already back, a handoff, a suspended replay, a compaction submit hold or
+  # a drain.
+  defp closed_socket_collection(%{draining?: true}, _requester), do: :error
+
+  defp closed_socket_collection(state, requester) do
+    with %{collect?: true, first_compact_request_identity: identity, visible_output?: false, terminal_forwarded?: false, pending_result: nil, downstream: %{pid: bound_pid} = bound} = active_turn
+         when is_tuple(identity) <- state.active_turn,
+         false <- Map.has_key?(active_turn, :canceled_result),
+         true <- closed_socket?(state, bound),
+         true <- requester.epoch == DownstreamState.next_downstream_epoch(state.downstream_epoch) and requester.pid != bound_pid,
+         nil <- state.pending_handoff,
+         nil <- state.suspended_replay,
+         nil <- state.compaction_retry_submit_hold do
+      {:ok, bound, collection_turn_key(active_turn.descriptor)}
+    else
+      _live_or_other -> :error
+    end
+  end
+
+  defp closed_socket?(%{downstream: nil}, _bound), do: true
+
+  defp closed_socket?(state, bound),
+    do: DownstreamState.downstream_status(state.downstream, bound) == :active and DownstreamState.downstream_status(state.closing_downstream, bound) == :active
+
+  defp collection_turn_key(%{kind: :native, semantic_turn_key: key}) when is_binary(key) and byte_size(key) == 32, do: key
+  defp collection_turn_key(_unkeyed), do: @unknown_turn_key
+
+  # What the closed socket's own detach does (`detach_active_downstream/2`),
+  # done at its retry's request. The retry is then attached as the downstream,
+  # exactly as a candidate that retires a superseded replay is attached. The
+  # closed socket's late detach then meets another downstream and stays
+  # stale, and the cancelled collection settles through its submitter.
+  defp take_over_closed_socket_collection(state, bound, requester, semantic_turn_digest) do
+    state =
+      state
+      |> DownstreamState.demonitor_downstream()
+      |> DownstreamState.cancel_active_turn_downstream(bound, :client_disconnected)
+      |> Map.merge(%{downstream: nil, closing_downstream: nil})
+      |> clear_native_compaction_admission(:downstream_detached)
+      |> maybe_settle_cancelled_without_pending_handoff(:client_disconnected)
+      |> attach_superseding_downstream(requester)
+
+    :ok = Logger.closed_socket_collection_taken_over(state, bound.epoch, requester.epoch)
+
+    reply_or_retire(state, {:ok, %{semantic_turn_digest: semantic_turn_digest}})
+  end
 
   defp detach_active_downstream(state, requested_downstream) do
     state =
