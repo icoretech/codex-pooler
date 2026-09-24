@@ -2638,13 +2638,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # (findings#232 rows 232-181, 232-202). The dequeue therefore asks the owner
   # the same fresh-dispatch question now that the previous turn is gone; any
   # other answer keeps the frame as it was, and its submission meets the owner's
-  # ordinary checks exactly as before.
+  # ordinary checks exactly as before. Those checks raise again, from durable
+  # state, every refusal the replay preflight can raise, which is why a queued
+  # turn leaves no `runtime_replay_preflight` line (findings#206 row 206-496).
+  #
+  # A fresh intent that names a predecessor gets the binding too, lifecycle and
+  # all, as on the unqueued route: the client's resend of a turn the provider
+  # failed. The released client sends that resend the moment its reconnect's
+  # prewarm completes, which can be while the prewarm's task is still tracked
+  # (row 206-339). Binding
+  # only an intent without a predecessor ran the resend unbound: a cut before any
+  # output settled it `client_disconnected` with no replay entitlement, and the
+  # next resend met `409 duplicate_turn` where the unqueued resend is replayed
+  # (row 206-496). A fresh intent never carries a rebound claim (only an armed
+  # replay's does), so no rebind precedes the binding.
   defp attach_queued_owner_replay_intent(%PreparedWebsocketFrame{} = prepared, state) do
     with true <- owner_forwarded_socket?(state),
          false <- Map.get(state, :websocket_owner_active_turn_reconnect?, false),
          false <- is_map(Map.get(state, :websocket_owner_pending_handoff)),
          true <- WebsocketCodec.replay_eligible?(prepared),
-         {:ok, %{intent: :fresh, lifecycle: nil} = replay_intent} <- Service.prepare_replay_intent(state.auth, prepared, record_model_denial: false),
+         {:ok, %{intent: :fresh} = replay_intent} <- Service.prepare_replay_intent(state.auth, prepared, record_model_denial: false),
          {:ok, control} <- replay_preflight_control(prepared, state, replay_intent, make_ref()),
          {:ok, :fresh_dispatch, binding} <- Adapter.reconnect_control_v2(state, control),
          true <- fresh_owner_binding?(binding, state),
