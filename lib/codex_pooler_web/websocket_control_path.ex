@@ -24,12 +24,19 @@ defmodule CodexPoolerWeb.WebsocketControlPath do
       {:error, :process_exit}
   end
 
+  # A cleanup that outlives the wait logs its own duration when it finishes,
+  # under the socket's request id: the released client retries a failed stream
+  # on a new connection about 200 ms after the failure and again about 400 ms
+  # later, and what that retry meets depends on this detach (findings#206 row
+  # 206-436). `cleanup_deferred` only says the wait ran out.
   @spec cleanup((-> term())) :: :ok
   def cleanup(operation) do
     caller = self()
+    metadata = Logger.metadata()
 
     task =
       Task.Supervisor.async_nolink(@supervisor, fn ->
+        started = System.monotonic_time()
         result = run(:terminate, operation)
 
         :telemetry.execute(
@@ -38,6 +45,7 @@ defmodule CodexPoolerWeb.WebsocketControlPath do
           %{caller: caller}
         )
 
+        log_late_cleanup(metadata, System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond))
         result
       end)
 
@@ -61,6 +69,13 @@ defmodule CodexPoolerWeb.WebsocketControlPath do
       failure(:terminate, :process_exit)
       :ok
   end
+
+  defp log_late_cleanup(metadata, elapsed_ms) when elapsed_ms >= @cleanup_wait_ms do
+    Logger.metadata(metadata)
+    Logger.info("websocket control path deferred cleanup finished elapsed_ms=#{elapsed_ms}")
+  end
+
+  defp log_late_cleanup(_metadata, _elapsed_ms), do: :ok
 
   defp failure(phase, reason) do
     Logger.warning("websocket control path failed phase=#{phase} reason=#{reason}")
