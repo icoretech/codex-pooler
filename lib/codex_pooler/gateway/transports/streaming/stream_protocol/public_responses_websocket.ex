@@ -3,8 +3,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
+  alias CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
+  alias CodexPooler.Gateway.Websocket.Adapter
 
   @type state :: %{
           required(:max_seen) => integer() | nil,
@@ -35,9 +37,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
     case CodexPooler.JSON.decode(data) do
       {:ok, %{} = source_decoded} ->
-        if PublicResponses.provider_rejection_frame?(source_decoded),
-          do: provider_rejection(source_decoded, state, stream_id),
-          else: normalize_decoded(data, source_decoded, state, stream_id)
+        cond do
+          PublicResponses.provider_rejection_frame?(source_decoded) -> provider_rejection(source_decoded, state, stream_id)
+          PublicResponses.provider_usage_limit_frame?(source_decoded) -> provider_usage_limit(source_decoded, state, stream_id)
+          true -> normalize_decoded(data, source_decoded, state, stream_id)
+        end
 
       _invalid ->
         {:drop, state}
@@ -79,6 +83,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     event = PublicResponse.provider_rejection_websocket_event(status, error)
 
     case PublicResponsesSequence.assign("error", event, state, :websocket) do
+      {:emit, _type, event, state} -> {:push, CodexPooler.JSON.encode!(maybe_put_stream_id(event, stream_id)), state}
+      {:drop, state} -> {:drop, state}
+      {:overflow, _failed, state} -> {:error, sequence_exhausted(), state}
+    end
+  end
+
+  # A provider usage limit sent as the wrapped `429` frame, with a reset still
+  # ahead, reaches the public client as the terminal usage-limit event every
+  # other surface sends (findings#206 row 206-546): `usage_limit_reached`, the
+  # Pooler's code and message, the reset fields and `headers.retry-after`,
+  # never the provider's message or plan. It used to be the masked
+  # `response.failed` `rate_limit_error`, which an SDK retries.
+  defp provider_usage_limit(source_decoded, state, stream_id) do
+    {:ok, error} = ProviderUsageLimit.frame_error(source_decoded)
+
+    case PublicResponsesSequence.assign("error", Adapter.websocket_error(error), state, :websocket) do
       {:emit, _type, event, state} -> {:push, CodexPooler.JSON.encode!(maybe_put_stream_id(event, stream_id)), state}
       {:drop, state} -> {:drop, state}
       {:overflow, _failed, state} -> {:error, sequence_exhausted(), state}

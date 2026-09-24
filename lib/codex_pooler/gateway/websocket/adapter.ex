@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Runtime.Finalization.{Metadata, ValidationRejection}
+  alias CodexPooler.Gateway.Runtime.Finalization.{Metadata, ProviderUsageLimit, ValidationRejection}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -184,12 +184,27 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   defp native_refusal_frame(canonical, %{"type" => "response.failed", "error" => %{} = error} = canonical_decoded, sole_account?) do
     case wrapped_status(canonical_decoded) do
       400 = status -> native_400_refusal_frame(canonical, status, error)
+      429 -> native_usage_limit_frame(canonical, canonical_decoded)
       status when is_integer(status) -> native_final_refusal_frame(canonical, canonical_decoded, status, error, sole_account?)
       _other -> canonical
     end
   end
 
   defp native_refusal_frame(canonical, _canonical_decoded, _sole_account?), do: canonical
+
+  # A provider usage limit with a reset still ahead goes out as the wrapped
+  # terminal `429` event of an all-exhausted Pool (findings#206 rows 206-508,
+  # 206-546): the released client maps a wrapped `429` naming
+  # `usage_limit_reached` to its terminal usage limit and shows the reset,
+  # while it reads a `response.failed` naming that code as a retryable stream
+  # error and resends the turn. The provider's message and plan never travel.
+  # Any other 429 keeps the canonical frame.
+  defp native_usage_limit_frame(canonical, canonical_decoded) do
+    case ProviderUsageLimit.frame_error(canonical_decoded) do
+      {:ok, error} -> error |> websocket_error() |> CodexPooler.JSON.encode!()
+      :unknown -> canonical
+    end
+  end
 
   defp native_400_refusal_frame(canonical, status, error) do
     response = %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"error" => error})}

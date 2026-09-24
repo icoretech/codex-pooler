@@ -543,9 +543,11 @@ message, and `resets_at` and `resets_in_seconds` for the soonest of the
 backend's reset and the resets of the other accounts, which must all be
 exhausted with a known reset (otherwise the refusal stays retryable),
 `Retry-After`, and `x-should-retry: false` when the wait is longer than 60
-seconds. The backend's own message and other fields are not relayed. A
-usage-limit refusal that names no reset still ahead keeps the redacted
-`rate_limit_error` described below.
+seconds. The backend's own message and other fields are not relayed. Over
+the `GET /v1/responses` websocket the same refusal is the `error` event with
+`"status": 429`, those fields and `headers.retry-after`. A usage-limit
+refusal that names no reset still ahead keeps the redacted `rate_limit_error`
+described below.
 
 ### Relayed terminal errors
 

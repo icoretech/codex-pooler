@@ -5,11 +5,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn
   alias CodexPooler.Gateway.Runtime.Dispatch.AuthRefresh
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Finalization
-  alias CodexPooler.Gateway.Runtime.Finalization.{AttemptSettlement, Metadata}
+  alias CodexPooler.Gateway.Runtime.Finalization.{AttemptSettlement, Metadata, ProviderUsageLimit}
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -411,7 +413,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
          response,
          failure
        ) do
-    deliver_retry_exhausted_websocket_failure(dispatch_request, response)
+    deliver_retry_exhausted_websocket_failure(dispatch_request, response, &ProviderUsageLimit.pool_frame(&1, fn -> other_candidates_return(context) end))
 
     response_context = retryable_websocket_response_context(context, response)
 
@@ -700,17 +702,26 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     }
   end
 
+  defp deliver_retry_exhausted_websocket_failure(dispatch_request, upstream_response, project \\ &Function.identity/1)
+
   defp deliver_retry_exhausted_websocket_failure(
          %DispatchRequest{accounting_request: %{id: request_id}, writer: writer},
-         upstream_response
+         upstream_response,
+         project
        )
        when is_function(writer, 1) do
     request_id
     |> WebsocketCodec.stream_messages(Map.get(upstream_response, :body, ""))
-    |> Enum.each(&writer.(sanitize_retry_terminal(&1)))
+    |> Enum.each(&writer.(&1 |> sanitize_retry_terminal() |> project.()))
   end
 
-  defp deliver_retry_exhausted_websocket_failure(_dispatch_request, _upstream_response), do: :ok
+  defp deliver_retry_exhausted_websocket_failure(_dispatch_request, _upstream_response, _project), do: :ok
+
+  # The Pool a pre-output usage-limit refusal on the last candidate speaks for
+  # (findings#206 rows 206-545, 206-546): the socket projects the frame without
+  # route context, so the Pool's advice is written into it here.
+  defp other_candidates_return(%{model: model, route_state: route_state, assignment: assignment}),
+    do: PoolReturn.others(model, RouteState.route_filter_candidates(route_state), assignment.id, DateTime.utc_now())
 
   defp sanitize_retry_terminal(frame) do
     with {:ok, event} <- CodexPooler.JSON.decode(frame),

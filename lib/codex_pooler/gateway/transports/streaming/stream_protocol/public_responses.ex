@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @moduledoc false
 
   alias CodexPooler.Gateway.OpenAICompatibility.{PublicResponse, Responses}
+  alias CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -129,10 +130,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec normalize_owner_json_message(binary(), map()) :: {binary(), map()}
   def normalize_owner_json_message(data, %{} = decoded) when is_binary(data) do
-    if provider_rejection_frame?(decoded),
+    if provider_rejection_frame?(decoded) or provider_usage_limit_frame?(decoded),
       do: {data, decoded},
       else: normalize_json_message(data, decoded)
   end
+
+  @doc """
+  True for a provider usage limit with a known reset sent as the websocket
+  transport's wrapped `429` frame, or as the canonical `response.failed` the
+  session makes of it, which keeps the wrapped `status` and the provider's
+  error object (`ProviderUsageLimit.frame_error/2`). The owner passes it
+  through unmasked like a refusal frame, and the public websocket, which
+  normalizes every owner frame again, answers it with the wrapped terminal
+  event (findings#206 row 206-546).
+  """
+  @spec provider_usage_limit_frame?(term()) :: boolean()
+  def provider_usage_limit_frame?(%{"type" => type} = decoded) when type in ["error", "response.failed"],
+    do: match?({:ok, _error}, ProviderUsageLimit.frame_error(decoded))
+
+  def provider_usage_limit_frame?(_decoded), do: false
 
   @doc """
   True for the websocket transport's wrapped error frame
