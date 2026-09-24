@@ -480,6 +480,105 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
     end
   end
 
+  # An open socket judges a turn against the key it read at the upgrade: the
+  # allowed and enforced model, the reasoning-effort policy and the enforced
+  # service tier. An edit of any of them advances the runtime epoch, so every
+  # open socket of the key closes and reconnects under the new policy
+  # (findings#206 row 206-484). Limits, bindings and the active-request cap
+  # are read again by every reservation and leave the epoch alone.
+  describe "policy edit epochs" do
+    test "an edit of a field the upgrade reads advances the epoch once and prompts a reread on both update paths" do
+      Sandbox.unboxed_run(Repo, fn ->
+        {scope, pool} = owner_scope_and_pool()
+        assert :ok = Events.subscribe_pool(pool.id, "pools")
+
+        scenarios = [
+          {"generic allowed models", fn api_key -> Access.update_api_key(scope, api_key, %{status: "active", allowed_model_identifiers: ["gpt-alpha"]}) end},
+          {"policy allowed models", fn api_key -> Access.update_api_key_with_policy(scope, api_key, %{status: "active", model_mode: "selected_models", allowed_model_identifiers: ["gpt-alpha"]}) end},
+          {"policy enforced model", fn api_key -> Access.update_api_key_with_policy(scope, api_key, %{status: "active", enforced_model_identifier: "gpt-alpha"}) end},
+          {"policy maximum effort", fn api_key -> Access.update_api_key_with_policy(scope, api_key, %{status: "active", maximum_reasoning_effort: "medium"}) end},
+          {"policy enforced effort", fn api_key -> Access.update_api_key_with_policy(scope, api_key, %{status: "active", enforced_reasoning_effort: "low"}) end},
+          {"policy service tier", fn api_key -> Access.update_api_key_with_policy(scope, api_key, %{status: "active", enforced_service_tier: "flex"}) end}
+        ]
+
+        for {label, mutation} <- scenarios do
+          api_key = create_api_key!(scope, pool, label)
+          assert {:ok, result} = publish_from_task(fn -> mutation.(api_key) end)
+
+          assert api_key_from_result(result).runtime_revocation_epoch == 1, label
+          assert %APIKey{status: "active", runtime_revocation_epoch: 1} = Repo.get!(APIKey, api_key.id)
+          assert_lifecycle_event(api_key.id, "api_key_updated", "active", 1)
+          assert latest_update_audit(api_key.id).details["runtime_revocation_epoch_advanced"] == true, label
+        end
+      end)
+    end
+
+    test "limits, the active-request cap, a rename and an unchanged resubmit keep the epoch" do
+      Sandbox.unboxed_run(Repo, fn ->
+        {scope, pool} = owner_scope_and_pool()
+
+        scenarios = [
+          {"policy limits", %{status: "active", default_policy: %{max_input_tokens_per_request: 1, max_tokens_per_day: 10}, model_policies: [%{model_identifier: "gpt-alpha", max_requests_per_minute: 1}]}},
+          {"policy active cap", %{status: "active", max_active_requests: 1}},
+          {"policy rename", %{status: "active", display_name: "Renamed lifecycle key", model_mode: "all_models"}},
+          {"policy unchanged", %{status: "active"}},
+          {"generic active cap", {:generic, %{status: "active", max_active_requests: 1}}},
+          {"generic dashboard access", {:generic, %{dashboard_access: true}}}
+        ]
+
+        for {label, attrs} <- scenarios do
+          api_key = create_api_key!(scope, pool, label)
+
+          assert {:ok, _result} =
+                   (case attrs do
+                      {:generic, attrs} -> Access.update_api_key(scope, api_key, attrs)
+                      attrs -> Access.update_api_key_with_policy(scope, api_key, attrs)
+                    end)
+
+          assert Repo.get!(APIKey, api_key.id).runtime_revocation_epoch == 0, label
+          assert latest_update_audit(api_key.id).details["runtime_revocation_epoch_advanced"] == false, label
+        end
+
+        # The allow list is a set: the same models resubmitted in another order
+        # grant nothing new.
+        assert {:ok, %{api_key: selected}} =
+                 Access.create_api_key(scope, pool, %{display_name: "Lifecycle reordered key", model_mode: "selected_models", allowed_model_identifiers: ["gpt-alpha", "gpt-beta"]})
+
+        assert {:ok, _reordered} =
+                 Access.update_api_key_with_policy(scope, selected, %{status: "active", model_mode: "selected_models", allowed_model_identifiers: ["gpt-beta", "gpt-alpha"]})
+
+        assert Repo.get!(APIKey, selected.id).runtime_revocation_epoch == 0
+      end)
+    end
+
+    test "a policy edit that also pauses or moves the key advances the epoch once" do
+      Sandbox.unboxed_run(Repo, fn ->
+        {scope, pool} = owner_scope_and_pool()
+        target_pool = create_pool!(scope, "policy-move")
+
+        scenarios = [
+          {"pause", %{status: "paused", model_mode: "selected_models", allowed_model_identifiers: ["gpt-alpha"]}},
+          {"move", %{status: "active", pool_id: target_pool.id, maximum_reasoning_effort: "low"}}
+        ]
+
+        for {label, attrs} <- scenarios do
+          api_key = create_api_key!(scope, pool, label)
+          assert {:ok, result} = Access.update_api_key_with_policy(scope, api_key, attrs)
+          assert api_key_from_result(result).runtime_revocation_epoch == 1, label
+        end
+      end)
+    end
+  end
+
+  defp latest_update_audit(api_key_id) do
+    Repo.one!(
+      from event in CodexPooler.Audit.AuditEvent,
+        where: event.target_id == ^api_key_id and event.action == "api_key.update",
+        order_by: [desc: event.occurred_at],
+        limit: 1
+    )
+  end
+
   defp create_api_key!(scope, pool, label) do
     assert {:ok, %{api_key: api_key}} =
              Access.create_api_key(scope, pool, %{display_name: "Lifecycle #{label} key"})

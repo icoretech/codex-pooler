@@ -39,20 +39,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
   @detection_timeout_ms 15_000
   @transport_barrier_payload "api-key-lifecycle-barrier"
   @primary_path "/backend-api/codex/responses"
+  @released_installation_id "00000000-0000-4000-8000-00000000c114"
+  @released_context_window_id "00000000-0000-4000-8000-00000000c115"
   @backend_websocket_routes [
     {:backend_responses, "/backend-api/codex/responses"},
     {:backend_v1_responses, "/backend-api/codex/v1/responses"}
   ]
   # `:rotate_key` keeps the key active and only advances its runtime epoch, so
   # the socket learns nothing from the event's status and must reread the
-  # durable authorization to close (findings#204).
+  # durable authorization to close (findings#204). `:narrow_models` does the
+  # same through a policy edit that the operator form submits with the key's
+  # unchanged `active` status (findings#206 row 206-484).
   @lifecycle_changes [
     :delete_key,
     :expire_key,
     :rotate_key,
     :disable_pool,
     :delete_pool,
-    :move_key
+    :move_key,
+    :narrow_models
   ]
   @fence_changes @lifecycle_changes
 
@@ -274,6 +279,145 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
     end
   end
 
+  # A socket keeps the key it read at the upgrade, and the fresh path (owner
+  # forwarding off, a frame without turn metadata, the queued dequeue) judges a
+  # turn against that copy. A policy edit therefore advances the key's runtime
+  # epoch, so a socket that already served a turn closes with the same `1008` a
+  # pause gives and the client reconnects under the new policy (findings#206
+  # row 206-484). Relayed, the edit's event closes the idle socket; with the
+  # relay suspended, the durable epoch fence refuses the next released-client
+  # turn before anything reaches the provider.
+  for owner_forwarding <- [false, true], delivery <- [:relayed, :relay_suspended] do
+    @tag :distributed
+    test "#{@primary_path} closes a serving websocket after its allowed models are narrowed on a peer node (owner forwarding #{owner_forwarding}, #{delivery})",
+         %{peer: peer} do
+      owner_forwarding = unquote(owner_forwarding)
+      delivery = unquote(delivery)
+      put_owner_forwarding!(owner_forwarding)
+      upstream = start_upstream(FakeUpstream.strict_sequence([policy_turn_upstream("resp_policy_edit_narrowed")]))
+      setup = gateway_setup(upstream, compact?: true)
+      register_committed_setup_cleanup!(setup)
+      {server, port} = start_public_endpoint_with_server!()
+      thread_id = Ecto.UUID.generate()
+      {conn, websocket, ref} = released_client_connect!(port, setup, thread_id)
+
+      try do
+        assert_socket_ready!(server, setup.api_key.id)
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, released_turn_frame(setup, thread_id, 1))
+        {conn, websocket, completed} = receive_turn_terminal!(conn, websocket, ref)
+        assert completed["type"] == "response.completed"
+
+        :ok = suspend_relay_for(delivery)
+        assert {:ok, _narrowed} = apply_change_on_peer!(peer, :narrow_models, setup)
+        {conn, websocket} = next_turn_for(delivery, conn, websocket, ref, setup, thread_id)
+        {_conn, _websocket, frames} = receive_websocket_frames_until_close!(conn, websocket, ref)
+
+        # The narrowed model is neither served nor answered on the old socket:
+        # the only frame is the policy close, and the provider saw one turn.
+        assert frames == [@api_key_close_frame]
+        assert FakeUpstream.count(upstream) == 1
+        assert request_statuses(setup) == ["succeeded"]
+
+        :sys.resume(PostgresBridge)
+      after
+        resume_if_suspended(PostgresBridge)
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
+  # An edit that changes nothing a turn is judged by -- a rename submitted with
+  # the key's unchanged status and policy, as the operator form sends it --
+  # keeps the socket open and serving.
+  for owner_forwarding <- [false, true] do
+    @tag :distributed
+    test "#{@primary_path} keeps serving after an edit on a peer node that leaves the policy unchanged (owner forwarding #{owner_forwarding})",
+         %{peer: peer} do
+      put_owner_forwarding!(unquote(owner_forwarding))
+
+      upstream =
+        start_upstream(FakeUpstream.strict_sequence([policy_turn_upstream("resp_policy_edit_kept_1"), policy_turn_upstream("resp_policy_edit_kept_2")]))
+
+      setup = gateway_setup(upstream, compact?: true)
+      register_committed_setup_cleanup!(setup)
+      {server, port} = start_public_endpoint_with_server!()
+      thread_id = Ecto.UUID.generate()
+      {conn, websocket, ref} = released_client_connect!(port, setup, thread_id)
+
+      try do
+        assert_socket_ready!(server, setup.api_key.id)
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, released_turn_frame(setup, thread_id, 1))
+        {conn, websocket, first} = receive_turn_terminal!(conn, websocket, ref)
+        assert first["type"] == "response.completed"
+
+        assert {:ok, _renamed} = apply_change_on_peer!(peer, :rename_key, setup)
+        assert Repo.get!(CodexPooler.Access.APIKey, setup.api_key.id).runtime_revocation_epoch == setup.api_key.runtime_revocation_epoch
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, released_turn_frame(setup, thread_id, 2))
+        {_conn, _websocket, second} = receive_turn_terminal!(conn, websocket, ref)
+
+        assert second["type"] == "response.completed"
+        assert FakeUpstream.count(upstream) == 2
+        assert request_statuses(setup) == ["succeeded", "succeeded"]
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
+  # Limits and bindings are not part of what the socket read at the upgrade:
+  # every reservation reads the key's `max_active_requests` and its effective
+  # binding again under the reservation lock. An edit of them therefore keeps
+  # the socket open, and the next turn is still judged by the new limit.
+  for owner_forwarding <- [false, true] do
+    @tag :distributed
+    test "#{@primary_path} keeps the socket open after a limits edit on a peer node and enforces it on the next turn (owner forwarding #{owner_forwarding})",
+         %{peer: peer} do
+      put_owner_forwarding!(unquote(owner_forwarding))
+      upstream = start_upstream(FakeUpstream.strict_sequence([policy_turn_upstream("resp_policy_edit_limited")]))
+      setup = gateway_setup(upstream, compact?: true)
+      register_committed_setup_cleanup!(setup)
+      {server, port} = start_public_endpoint_with_server!()
+      thread_id = Ecto.UUID.generate()
+      {conn, websocket, ref} = released_client_connect!(port, setup, thread_id)
+
+      try do
+        assert_socket_ready!(server, setup.api_key.id)
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, released_turn_frame(setup, thread_id, 1))
+        {conn, websocket, first} = receive_turn_terminal!(conn, websocket, ref)
+        assert first["type"] == "response.completed"
+
+        assert {:ok, _limited} = apply_change_on_peer!(peer, :limit_input_tokens, setup)
+        assert Repo.get!(CodexPooler.Access.APIKey, setup.api_key.id).runtime_revocation_epoch == setup.api_key.runtime_revocation_epoch
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, released_turn_frame(setup, thread_id, 2))
+        {conn, websocket, second} = receive_turn_terminal!(conn, websocket, ref)
+
+        assert %{"type" => "error", "error" => %{"code" => "api_key_policy_limit_exceeded"}} = second
+        # The socket is still open: a ping after the refusal is answered and no
+        # close frame precedes the pong.
+        {_conn, _websocket} = websocket_transport_barrier!(conn, websocket, ref)
+        assert FakeUpstream.count(upstream) == 1
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
+  defp suspend_relay_for(:relayed), do: :ok
+
+  defp suspend_relay_for(:relay_suspended) do
+    :sys.suspend(PostgresBridge)
+    on_exit(fn -> resume_if_suspended(PostgresBridge) end)
+  end
+
+  # Relayed, the edit's event alone must close the idle socket; with the relay
+  # suspended, the next released-client turn meets the durable epoch fence.
+  defp next_turn_for(:relayed, conn, websocket, _ref, _setup, _thread_id), do: {conn, websocket}
+
+  defp next_turn_for(:relay_suspended, conn, websocket, ref, setup, thread_id),
+    do: public_websocket_send_text!(conn, websocket, ref, released_turn_frame(setup, thread_id, 2))
+
   defp fence_frames(:create_then_processed, setup),
     do: [fence_create_frame(setup), fence_processed_frame()]
 
@@ -331,6 +475,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
              })
 
     peer_call!(peer, :move_key, [scope, setup.api_key.id, target_pool.id])
+  end
+
+  # The operator form submits the whole policy with the key's status; this one
+  # narrows the allowed models to one the fixture's Pool does not serve.
+  defp apply_change_on_peer!(peer, :narrow_models, setup) do
+    attrs = %{status: "active", model_mode: "selected_models", allowed_model_identifiers: ["another-model-fixture"]}
+    peer_call!(peer, :update_policy, [owner_scope!(setup), setup.api_key.id, attrs])
+  end
+
+  # A rename submitted with the fixture key's unchanged status and policy (every
+  # model, no limits), as the operator form sends it.
+  defp apply_change_on_peer!(peer, :rename_key, setup) do
+    attrs = %{display_name: "Renamed lifecycle key", status: "active", model_mode: "all_models"}
+    peer_call!(peer, :update_policy, [owner_scope!(setup), setup.api_key.id, attrs])
+  end
+
+  # A default per-request input cap of one token, below any real turn, with the
+  # key's unchanged status and model policy.
+  defp apply_change_on_peer!(peer, :limit_input_tokens, setup) do
+    attrs = %{status: "active", model_mode: "all_models", default_policy: %{max_input_tokens_per_request: 1}}
+    peer_call!(peer, :update_policy, [owner_scope!(setup), setup.api_key.id, attrs])
   end
 
   defp peer_call!(peer, function, args),
@@ -407,6 +572,111 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
           Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
       end
     end)
+  end
+
+  # The socket writes a turn's terminal before its row settles, so the rows are
+  # read once none is still open, within the detection budget.
+  defp request_statuses(setup) do
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
+    await_settled_request_statuses(setup, deadline)
+  end
+
+  defp await_settled_request_statuses(setup, deadline) do
+    statuses = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id, order_by: [asc: request.admitted_at], select: request.status))
+
+    if Enum.any?(statuses, &(&1 in ["accepted", "in_progress"])) and System.monotonic_time(:millisecond) < deadline do
+      receive do
+      after
+        10 -> await_settled_request_statuses(setup, deadline)
+      end
+    else
+      statuses
+    end
+  end
+
+  defp policy_turn_upstream(response_id) do
+    FakeUpstream.websocket_text_frames([
+      CodexPooler.JSON.encode!(%{"type" => "response.created", "response" => %{"id" => response_id, "status" => "in_progress"}}),
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => response_id, "status" => "completed", "output" => [], "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}}
+      })
+    ])
+  end
+
+  # The released client's upgrade: its session headers and no turn state yet.
+  defp released_client_connect!(port, setup, thread_id) do
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
+
+    headers = [
+      {"authorization", setup.authorization},
+      {"session-id", thread_id},
+      {"thread-id", thread_id},
+      {"x-client-request-id", thread_id},
+      {"x-codex-window-id", "#{thread_id}:0"}
+    ]
+
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, @primary_path, headers)
+    {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
+    {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
+    {conn, websocket, ref}
+  end
+
+  # The released client's turn frame. Its `x-codex-turn-metadata` makes the
+  # frame replay-eligible, so with owner forwarding on the owner's replay
+  # preflight judges it first; with forwarding off it takes the fresh path.
+  defp released_turn_frame(setup, thread_id, turn_number) do
+    turn_id = "#{thread_id}-turn-#{turn_number}"
+    window_id = "#{thread_id}:0"
+    model = setup.model.exposed_model_id
+
+    turn_metadata = %{
+      "agent_name" => "/root",
+      "context_window_id" => @released_context_window_id,
+      "installation_id" => @released_installation_id,
+      "request_kind" => "turn",
+      "session_id" => thread_id,
+      "thread_id" => thread_id,
+      "turn_id" => turn_id,
+      "root_turn_id" => turn_id,
+      "window_id" => window_id,
+      "window_number" => 0,
+      "model" => model,
+      "reasoning_effort" => "low"
+    }
+
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.create",
+      "model" => model,
+      "instructions" => "synthetic instructions",
+      "input" => native_text_input("synthetic policy edit turn #{turn_number}"),
+      "tools" => [],
+      "tool_choice" => "auto",
+      "parallel_tool_calls" => true,
+      "reasoning" => %{"effort" => "low"},
+      "store" => false,
+      "stream" => true,
+      "include" => ["reasoning.encrypted_content"],
+      "prompt_cache_key" => thread_id,
+      "client_metadata" => %{
+        "session_id" => thread_id,
+        "thread_id" => thread_id,
+        "turn_id" => turn_id,
+        "root_turn_id" => turn_id,
+        "x-codex-installation-id" => @released_installation_id,
+        "x-codex-window-id" => window_id,
+        "x-codex-turn-metadata" => CodexPooler.JSON.encode!(turn_metadata)
+      }
+    })
+  end
+
+  defp receive_turn_terminal!(conn, websocket, ref) do
+    {conn, websocket, text} = public_websocket_receive_text!(conn, websocket, ref)
+
+    case CodexPooler.JSON.decode!(text) do
+      %{"type" => type} = terminal when type in ["response.completed", "response.failed", "error"] -> {conn, websocket, terminal}
+      _progress -> receive_turn_terminal!(conn, websocket, ref)
+    end
   end
 
   defp request_count(setup) do
@@ -730,6 +1000,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
       # The operator form submits the key's status with every edit.
       def move_key(scope, api_key_id, pool_id),
         do: CodexPooler.Access.update_api_key(scope, api_key_id, %{pool_id: pool_id, status: "active"})
+
+      def update_policy(scope, api_key_id, attrs),
+        do: CodexPooler.Access.update_api_key_with_policy(scope, api_key_id, attrs)
 
       def disable_pool(scope, pool_id),
         do: CodexPooler.Pools.change_pool_status(scope, pool_id, "disabled")

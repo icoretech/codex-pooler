@@ -70,10 +70,19 @@ defmodule CodexPooler.Access.APIKeys.AuditLog do
         _resource -> false
       end
 
+    # The edit closed every open socket of the key (a pause, a move or a change
+    # of what a socket reads at the upgrade).
+    epoch_advanced? =
+      case updated_api_key do
+        %APIKey{runtime_revocation_epoch: epoch} -> epoch != previous_api_key.runtime_revocation_epoch
+        _resource -> false
+      end
+
     %{
       changed_fields: api_key_audit_changed_fields(attrs),
       previous_pool_id: previous_api_key.pool_id,
       pool_changed: pool_changed?,
+      runtime_revocation_epoch_advanced: epoch_advanced?,
       previous_status: previous_api_key.status,
       previous_dashboard_access: previous_api_key.dashboard_access,
       previous_max_active_requests: previous_api_key.max_active_requests,

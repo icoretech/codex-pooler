@@ -184,12 +184,52 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
     }
   end
 
-  # An edit that moves the key or changes its expiry changes what authorizations
-  # already open would decide, even when the submitted status disables nothing,
-  # so it has to reach them as an event that prompts a reread.
+  # An open socket judges its turns against the key it read at the upgrade:
+  # the fresh path (owner forwarding off, a frame without turn metadata, the
+  # queued dequeue) never reads these fields again. An edit that changes any of
+  # them therefore advances the runtime epoch, so the stale-epoch fence closes
+  # every open socket of the key, on every node, exactly as after a rotation,
+  # and the client reconnects under the new policy (findings#206 row 206-484).
+  # The edit is not classified as narrowing or widening: the socket's copy is
+  # wrong either way, and an enforced model, effort or tier is a substitution
+  # rather than a narrower grant. Limits, bindings and `max_active_requests`
+  # are not here, because every reservation reads them again under its own
+  # lock; an edit of those keeps open sockets serving. A policy edit that also
+  # pauses or moves the key advances the epoch once, not twice.
+  @upgrade_read_policy_fields [
+    :allowed_model_identifiers,
+    :enforced_model_identifier,
+    :enforced_reasoning_effort,
+    :maximum_reasoning_effort,
+    :enforced_service_tier
+  ]
+
+  @spec epoch_for_policy_change(epoch(), APIKey.t(), Ecto.Changeset.t()) :: epoch()
+  def epoch_for_policy_change(epoch, %APIKey{} = api_key, %Ecto.Changeset{} = changeset) do
+    if upgrade_read_policy_changed?(api_key, changeset),
+      do: max(epoch, api_key.runtime_revocation_epoch + 1),
+      else: epoch
+  end
+
+  defp upgrade_read_policy_changed?(api_key, changeset) do
+    Enum.any?(@upgrade_read_policy_fields, fn field ->
+      comparable_policy_value(Map.fetch!(api_key, field)) !=
+        comparable_policy_value(Ecto.Changeset.get_field(changeset, field))
+    end)
+  end
+
+  # An allow list is a set: reordering it grants nothing new.
+  defp comparable_policy_value(values) when is_list(values), do: values |> Enum.uniq() |> Enum.sort()
+  defp comparable_policy_value(value), do: value
+
+  # An edit that moves the key, changes its expiry or advances its runtime epoch
+  # changes what authorizations already open would decide, even when the
+  # submitted status disables nothing, so it has to reach them as an event that
+  # prompts a reread.
   @spec reread_required?(APIKey.t(), APIKey.t()) :: boolean()
   def reread_required?(%APIKey{} = previous, %APIKey{} = updated) do
     previous.pool_id != updated.pool_id or
+      previous.runtime_revocation_epoch != updated.runtime_revocation_epoch or
       not same_expiry?(previous.expires_at, updated.expires_at)
   end
 

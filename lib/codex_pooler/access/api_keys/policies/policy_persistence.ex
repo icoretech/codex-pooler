@@ -4,6 +4,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyPersistence do
   import Ecto.Query
 
   alias CodexPooler.Access.{APIKey, APIKeyPolicyBinding}
+  alias CodexPooler.Access.APIKeys.RuntimeAuthorization
   alias CodexPooler.Repo
 
   @type create_result ::
@@ -51,10 +52,14 @@ defmodule CodexPooler.Access.APIKeys.PolicyPersistence do
         runtime_revocation_epoch
       ) do
     if Repo.in_transaction?() do
+      changeset = APIKey.changeset(api_key, update_attrs)
+
       changeset =
-        api_key
-        |> APIKey.changeset(update_attrs)
-        |> Ecto.Changeset.put_change(:runtime_revocation_epoch, runtime_revocation_epoch)
+        Ecto.Changeset.put_change(
+          changeset,
+          :runtime_revocation_epoch,
+          RuntimeAuthorization.epoch_for_policy_change(runtime_revocation_epoch, api_key, changeset)
+        )
 
       with {:ok, updated_api_key} <- Repo.update(changeset),
            {_count, _rows} <-

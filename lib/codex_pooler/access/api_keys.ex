@@ -288,11 +288,12 @@ defmodule CodexPooler.Access.APIKeys do
 
   defp update_api_key_record(api_key, update_attrs, transition) do
     mutation = fn ->
-      api_key
-      |> APIKey.changeset(update_attrs)
+      changeset = APIKey.changeset(api_key, update_attrs)
+
+      changeset
       |> Ecto.Changeset.put_change(
         :runtime_revocation_epoch,
-        transition.runtime_revocation_epoch
+        RuntimeAuthorization.epoch_for_policy_change(transition.runtime_revocation_epoch, api_key, changeset)
       )
       |> Repo.update()
     end
