@@ -248,7 +248,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
            request_options.runtime.session_owner_witness,
          transport when transport in @http_transports <- request_options.transport.transport,
          true <- is_pid(Keyword.get(opts, :caller, self())) do
-      ttl_seconds = ttl_seconds(request_options)
+      ttl_seconds = ttl_seconds(opts, request_options)
       renewal_interval_ms = renewal_interval_ms(opts)
 
       {:ok,
@@ -269,6 +269,16 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     end
   end
 
+  # `:ttl_seconds` renews with a ttl other than the one the request acquired its
+  # lease with; the controller owner-lease tests use it to keep the pre-dispatch
+  # window on a long acquisition ttl while the heartbeat renews a short one.
+  defp ttl_seconds(opts, %RequestOptions{} = request_options) do
+    case Keyword.get(opts, :ttl_seconds) do
+      ttl when is_integer(ttl) and ttl > 0 -> ttl
+      _value -> ttl_seconds(request_options)
+    end
+  end
+
   defp ttl_seconds(%RequestOptions{} = request_options) do
     case request_options.continuity.bridge_owner_lease_ttl_seconds do
       ttl when is_integer(ttl) and ttl > 0 -> ttl
@@ -284,7 +294,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
       _value ->
         OwnerRenewalSchedule.base_interval_ms(
           renewal_interval_ms(opts),
-          ttl_seconds(request_options) * 1_000
+          ttl_seconds(opts, request_options) * 1_000
         ) + @call_timeout
     end
   end
@@ -483,20 +493,16 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     # Controller tests set this in the request process, the only place a
     # synchronous renewal's start options can come from on that path.
     defp test_start_options do
-      timeout_options =
-        case Process.get({__MODULE__, :renew_call_timeout_ms}) do
-          timeout when is_integer(timeout) and timeout > 0 -> [renew_call_timeout_ms: timeout]
-          _value -> []
-        end
-
-      case Process.get({__MODULE__, :renew}) do
-        renew when is_function(renew, 3) or is_function(renew, 4) ->
-          [renew: renew] ++ timeout_options
-
-        _value ->
-          timeout_options
-      end
+      [
+        renew: Process.get({__MODULE__, :renew}),
+        renew_call_timeout_ms: Process.get({__MODULE__, :renew_call_timeout_ms}),
+        ttl_seconds: Process.get({__MODULE__, :ttl_seconds})
+      ]
+      |> Enum.filter(&test_start_option?/1)
     end
+
+    defp test_start_option?({:renew, renew}), do: is_function(renew, 3) or is_function(renew, 4)
+    defp test_start_option?({_key, value}), do: is_integer(value) and value > 0
 
     defp test_observer(%RequestOptions{extra: %{session_lease_heartbeat_test_observer: observer}})
          when is_pid(observer),
