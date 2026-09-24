@@ -55,6 +55,15 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
   # charges in the same order, so a request billed twice shows as a 2.
   def expected(:unobserved_cut, topology), do: expected_unobserved(topology)
   def expected(cut, _topology) when cut in [:observed_cut, :observed_cut_exited], do: expected(:before_output)
+
+  # The cut predecessor's settlement is held past the socket's take-over wait
+  # (findings#206 row 206-580): the first retry takes the compaction over but
+  # cannot see it settle within the bound (`inherited_turn_unsettled`), meets
+  # the still-running predecessor and is refused; the released client's next
+  # retry is served as the successor, one generation per request.
+  def expected(:observed_cut_settlement_held, _topology),
+    do: %{expected(:before_output) | retries: [{409, "duplicate_turn", :inherited_turn_unsettled}, :served]}
+
   def expected(cut, _topology), do: expected(cut)
 
   defp expected(:no_cut),
@@ -240,11 +249,12 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
     retries
   end
 
-  defp cut_and_resend(cut, ctx, client, port, upstream, release_ref) when cut in [:observed_cut, :observed_cut_exited] do
+  defp cut_and_resend(cut, ctx, client, port, upstream, release_ref) when cut in [:observed_cut, :observed_cut_exited, :observed_cut_settlement_held] do
     await_barrier!(0, release_ref)
+    closing_socket = if cut == :observed_cut_settlement_held, do: attached_socket!(ctx)
     # The connection closes before the provider produced anything and the
     # Pooler sees it close; its session cleanup is held.
-    hold = hold_session_cleanups!(if(cut == :observed_cut, do: 1, else: 2), ctx.topology)
+    hold = hold_session_cleanups!(if(cut == :observed_cut_exited, do: 2, else: 1), ctx.topology)
     Mint.HTTP.close(client.conn)
     assert_receive {^hold, :held, cleanup}, @detection_timeout_ms
     # The retries meet a predecessor that is still live.
@@ -256,10 +266,11 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
       await_compaction_settled!(ctx.setup.pool.id, ["succeeded", "failed"])
     end
 
+    ctx = if cut == :observed_cut_settlement_held, do: hold_predecessor_settlement!(ctx, closing_socket), else: ctx
     retries = released_client_retries!(ctx, port, release)
     if List.last(retries) == :served, do: release.()
     release_held_compaction!(upstream, release_ref, 1)
-    retries
+    if cut == :observed_cut_settlement_held, do: retries, else: within_settlement_bound(retries, ctx)
   end
 
   defp cut_and_resend(cut, ctx, client, port, upstream, release_ref) do
@@ -296,6 +307,68 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
     retries
   end
 
+  # The socket the owner streams the running compaction to, before its client
+  # closes it.
+  defp attached_socket!(ctx) do
+    owner = owner_pid!(ctx.setup)
+    %{downstream: %{pid: socket}} = :sys.get_state(owner)
+    socket
+  end
+
+  # The first retry is served when the predecessor it took over settles within
+  # the socket's take-over wait (two seconds). Only the cut request's own
+  # settlement decides that, and on a starved machine it can come later: the
+  # first retry is then refused with the take-over logged
+  # `inherited_turn_unsettled`, and the next one is served, which is the bound
+  # the product sets and `:observed_cut_settlement_held` pins with the
+  # settlement held (findings#206 row 206-580: once in about 120 runs at a load
+  # average of 15-27). Any other refusal, or that one followed by anything but
+  # a served retry, stays in the result.
+  defp within_settlement_bound([{409, "duplicate_turn", :inherited_turn_unsettled}, :served], ctx) do
+    CodexPooler.TestDiagnostics.puts(fn -> "206-580 #{ctx.shape} #{ctx.topology}: the predecessor settled after the take-over wait" end)
+    [:served]
+  end
+
+  defp within_settlement_bound(retries, _ctx), do: retries
+
+  # Holds the cut request's settlement: the first query the closing socket's
+  # own processes (its response task, which settles the request the owner
+  # cancelled at the take-over) make once the retries start, other than its
+  # session cleanup, which `hold_session_cleanups!/2` holds. Released when the
+  # first retry has its answer, which comes only after the take-over wait. The
+  # held query keeps its connection, so only the peer topology's committed rows
+  # (a pooled connection each) can run it; on the single-node sandbox the held
+  # connection is everyone's.
+  defp hold_predecessor_settlement!(ctx, closing_socket) do
+    hold = make_ref()
+    handler_id = {__MODULE__, :settlement_hold, hold}
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    config = %{hold: hold, test: self(), socket: closing_socket, claimed: :atomics.new(1, [])}
+    :ok = :telemetry.attach(handler_id, [:codex_pooler, :repo, :query], &__MODULE__.hold_settlement_query/4, config)
+
+    Map.put(ctx, :after_first_retry, fn ->
+      :telemetry.detach(handler_id)
+      assert_received {^hold, :held, settler}, "the cut request's settlement never started while the first retry waited"
+      send(settler, {hold, :release})
+    end)
+  end
+
+  @doc false
+  def hold_settlement_query(_event, _measurements, _metadata, %{hold: hold, test: test, socket: socket, claimed: claimed}) do
+    if socket in Process.get(:"$callers", []) and not match?({CodexPoolerWeb.WebsocketControlPath, _function, _arity}, Process.get(:"$initial_call")) and
+         :atomics.add_get(claimed, 1, 1) == 1 do
+      send(test, {hold, :held, self()})
+
+      receive do
+        {^hold, :release} -> :ok
+      after
+        @detection_timeout_ms -> :ok
+      end
+    end
+
+    :ok
+  end
+
   # The released client's retry of a remote compaction it did not complete
   # (`compact_remote_v2.rs`, measured on the wire in P69 with Codex 0.156.1):
   # two websocket retries, each on a new connection with the full history,
@@ -316,7 +389,19 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
   defp websocket_retries!(_ctx, _port, 0, outcomes), do: {:refused, Enum.reverse(outcomes)}
 
   defp websocket_retries!(ctx, port, remaining, outcomes) do
-    case full_history_resend!(ctx, port) do
+    outcome = full_history_resend!(ctx, port)
+
+    ctx =
+      case Map.pop(ctx, :after_first_retry) do
+        {nil, ctx} ->
+          ctx
+
+        {after_first_retry, ctx} ->
+          after_first_retry.()
+          ctx
+      end
+
+    case outcome do
       :served -> {:served, Enum.reverse([:served | outcomes])}
       refused -> websocket_retries!(ctx, port, remaining - 1, [refused | outcomes])
     end
@@ -346,7 +431,7 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
 
           case receive_frame!(client) do
             {_client, %{"type" => "error", "status" => status, "error" => %{"code" => code}}} ->
-              {status, code}
+              {status, code, nil}
 
             {client, %{"type" => "response.output_item.done"}} ->
               {client, ["response.completed"]} = receive_until_terminal(client, [])
@@ -359,14 +444,22 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
       end)
 
     if outcome != :served do
-      for line <- String.split(log, "\n"), line =~ ~r/replay rejection|live predecessor|duplicate/ do
+      for line <- String.split(log, "\n"), line =~ ~r/replay rejection|live predecessor|duplicate|reconnect disposition/ do
         Logger.warning("refused compaction retry: " <> String.trim(line))
       end
     end
 
     :ok = WebsocketCleanupFence.await_listener_socket_cleanups!(cleanups + 1)
-    outcome
+    refused_retry(outcome, log)
   end
+
+  # A refused retry names its status and code, and the take-over disposition
+  # when the socket took the predecessor over but could not see it settle.
+  defp refused_retry({status, code, nil}, log) do
+    if log =~ "reconnect_disposition=inherited_turn_unsettled", do: {status, code, :inherited_turn_unsettled}, else: {status, code}
+  end
+
+  defp refused_retry(outcome, _log), do: outcome
 
   defp https_retries!(_ctx, 0, outcomes), do: Enum.reverse(outcomes)
 

@@ -29,6 +29,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutPeerTe
     end
   end
 
+  # The first retry's take-over cannot see the cut compaction settle within
+  # its two-second wait (the settlement is held): refused once, then served
+  # (findings#206 row 206-580, seen on this mid-turn arm under load).
+  for shape <- [:pre_turn, :mid_turn] do
+    @tag mode: "full", shape: shape, topology: :peer, cut: :observed_cut_settlement_held
+    test "full #{shape} peer admitted compaction whose settlement outlasts the take-over wait: the first retry is refused and the next is served",
+         %{mode: mode, shape: shape, topology: topology, cut: cut, peer_node: peer_node} do
+      assert Scenario.run_scenario(mode, shape, topology, cut, :on_arrival, peer_node: peer_node) == Scenario.expected(cut, topology)
+    end
+  end
+
   for shape <- [:pre_turn, :mid_turn], cut <- [:unobserved_cut, :observed_cut] do
     @tag mode: "full", shape: shape, topology: :peer, cut: cut, dispatch: :queued
     test "full #{shape} peer compaction queued behind the settling turn, #{cut}: the owner keys it and no resend is a second generation while it runs",
