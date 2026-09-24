@@ -8,6 +8,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   alias CodexPooler.AccountsFixtures
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.OwnerRenewalSchedule
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPooler.PeerRegistry
@@ -517,6 +518,35 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     assert Map.get(maximum.gateway, :upstream_token_refresh_margin_seconds) == 1_209_600
     assert maximum.gateway.upstream_connect_timeout_ms == 15_000
+  end
+
+  test "owner lease ttl keeps its 45 s default and refuses values below the derived minimum" do
+    settings = InstanceSettings.ensure_singleton!()
+    minimum = OwnerRenewalSchedule.minimum_lease_ttl_seconds()
+
+    # One 15 s pre-dispatch statement plus the synchronous renewal's interval
+    # (at most ttl / 3) and its 1 s reply allowance: ttl >= 3 / 2 * 16 s.
+    assert minimum == 24
+    assert settings.gateway.bridge_owner_lease_ttl_seconds == 45
+    assert Settings.default().gateway.bridge_owner_lease_ttl_seconds == 45
+
+    for invalid <- [minimum - 1, 3, 1, 0, -1] do
+      assert {:error, changeset} =
+               InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"bridge_owner_lease_ttl_seconds" => invalid}
+               })
+
+      assert "must be greater than or equal to #{minimum}" in errors_on(changeset).gateway.bridge_owner_lease_ttl_seconds
+    end
+
+    assert InstanceSettings.get!().lock_version == settings.lock_version
+
+    assert {:ok, at_minimum} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"bridge_owner_lease_ttl_seconds" => minimum}
+             })
+
+    assert at_minimum.gateway.bridge_owner_lease_ttl_seconds == minimum
   end
 
   test "proactive refresh defaults on and can be disabled without changing its margin" do

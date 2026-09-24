@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
   import ExUnit.CaptureLog
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.OwnerRenewalSchedule
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
@@ -252,6 +253,46 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
              })
 
     assert OperationalSettings.upstream_http_pool_options() == [conn_max_idle_time: 12_345]
+  end
+
+  test "current/0 raises a stored owner lease ttl below the minimum without rewriting it, and logs it once" do
+    minimum = OwnerRenewalSchedule.minimum_lease_ttl_seconds()
+    settings = InstanceSettings.ensure_singleton!()
+
+    # A value stored before the minimum existed: written past the changeset.
+    {1, _rows} =
+      Repo.update_all(
+        from(s in Settings,
+          where: s.singleton == true,
+          update: [set: [gateway: fragment("jsonb_set(?, '{bridge_owner_lease_ttl_seconds}', '5'::jsonb)", s.gateway)]]
+        ),
+        []
+      )
+
+    log =
+      capture_log([level: :warning], fn ->
+        InstanceSettings.reset_cache_for_test()
+        assert OperationalSettings.current().bridge_owner_lease_ttl_seconds == minimum
+        # A reload of the same stored value does not log again.
+        :ok = Cache.subscribe_applied()
+        send(Process.whereis(Cache), {Cache, {:updated, settings.lock_version}})
+        assert_receive {Cache, {:applied, _lock_version}}
+        assert OperationalSettings.current().bridge_owner_lease_ttl_seconds == minimum
+      end)
+
+    assert InstanceSettings.current().gateway.bridge_owner_lease_ttl_seconds == 5
+    assert InstanceSettings.get!().gateway.bridge_owner_lease_ttl_seconds == 5
+
+    assert [_one] =
+             Regex.scan(
+               ~r/instance setting clamped at read setting=bridge_owner_lease_ttl_seconds stored=5 effective=#{minimum}/,
+               log
+             )
+
+    for {value, expected} <- [{minimum - 1, minimum}, {minimum, minimum}, {45, 45}, {0, 45}, {nil, 45}, {"30", 45}] do
+      stale = %{settings | gateway: %{settings.gateway | bridge_owner_lease_ttl_seconds: value}}
+      assert OperationalSettings.from_instance_settings(stale).bridge_owner_lease_ttl_seconds == expected
+    end
   end
 
   test "current/0 clamps legacy cached websocket idle timeout values above the safe maximum" do

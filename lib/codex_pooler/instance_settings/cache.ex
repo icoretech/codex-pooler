@@ -7,6 +7,7 @@ defmodule CodexPooler.InstanceSettings.Cache do
 
   require Logger
 
+  alias CodexPooler.Gateway.OwnerRenewalSchedule
   alias CodexPooler.InstanceSettings.Settings
   alias Ecto.Adapters.SQL
   alias Phoenix.PubSub
@@ -267,6 +268,7 @@ defmodule CodexPooler.InstanceSettings.Cache do
 
   defp publish_success(state, %Settings{} = settings) do
     settings = settings |> Settings.mark_loaded(:database) |> clear_virtual_secrets()
+    log_clamped_owner_lease_ttl(state.cached, settings)
     :persistent_term.put(@cache_key, {@cache_version, settings})
 
     :ok =
@@ -491,6 +493,25 @@ defmodule CodexPooler.InstanceSettings.Cache do
   end
 
   defp cancel_timers(state), do: state |> cancel_retry() |> cancel_reconciliation()
+
+  # A stored owner lease ttl below the validated minimum predates the minimum;
+  # `OperationalSettings` raises it at read time. Say so once per node for each
+  # stored value, not on every reconciliation reload.
+  defp log_clamped_owner_lease_ttl(previous, %Settings{} = settings) do
+    stored = stored_owner_lease_ttl(settings)
+    minimum = OwnerRenewalSchedule.minimum_lease_ttl_seconds()
+
+    if is_integer(stored) and stored < minimum and stored != stored_owner_lease_ttl(previous) do
+      Logger.warning(fn ->
+        "instance setting clamped at read setting=bridge_owner_lease_ttl_seconds stored=#{stored} effective=#{minimum}"
+      end)
+    end
+
+    :ok
+  end
+
+  defp stored_owner_lease_ttl(%Settings{gateway: %{bridge_owner_lease_ttl_seconds: ttl}}), do: ttl
+  defp stored_owner_lease_ttl(_settings), do: nil
 
   defp log_db_failure(reason, warm_cache?) do
     Logger.warning(fn ->

@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPooler.Gateway.OwnerRenewalSchedule
+
   alias CodexPoolerWeb.Admin.SystemPageComponents.{
     BulkheadEditor,
     FormControls,
@@ -277,8 +279,8 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
             id: "instance-settings-bridge-owner-lease-ttl-seconds",
             field: :bridge_owner_lease_ttl_seconds,
             label: "Owner lease TTL (s)",
-            hint: "How long a bridge owner lease remains valid without renewal.",
-            minimum: 1,
+            hint: "How long a bridge owner lease remains valid without renewal. At least #{OwnerRenewalSchedule.minimum_lease_ttl_seconds()} s, so a request's lease outlives its pre-dispatch work; a lower stored value is raised to it.",
+            minimum: OwnerRenewalSchedule.minimum_lease_ttl_seconds(),
             unit: "s"
           }),
           gateway_setting(%{

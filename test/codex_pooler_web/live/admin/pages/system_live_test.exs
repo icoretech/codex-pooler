@@ -1830,6 +1830,26 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert persisted.gateway.websocket_idle_timeout_ms == 444_000
   end
 
+  test "renders and enforces the owner lease ttl minimum on the gateway card", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "#instance-settings-bridge-owner-lease-ttl-seconds[name='instance_settings[gateway][bridge_owner_lease_ttl_seconds]'][value='45'][min='24']"
+           )
+
+    assert has_element?(view, "#instance-settings-gateway-hint-bridge-owner-lease-ttl-seconds", "At least 24 s")
+
+    html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{"instance_settings" => %{"gateway" => %{"bridge_owner_lease_ttl_seconds" => "23"}}})
+
+    assert html =~ "Gateway controls could not be saved"
+    assert has_element?(view, "#instance-settings-bridge-owner-lease-ttl-seconds-error", "must be greater than or equal to 24")
+    assert InstanceSettings.get!().gateway.bridge_owner_lease_ttl_seconds == 45
+  end
+
   test "renders the upstream connection idle bound in the upstream timing group", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
 

@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   """
 
   alias CodexPooler.Gateway.OperationalSettings.IPRules
+  alias CodexPooler.Gateway.OwnerRenewalSchedule
   alias CodexPooler.{InstanceSettings, RouteClass}
   alias CodexPooler.Platform.OutboundHTTP
 
@@ -161,7 +162,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       file_max_size_bytes: settings.files.max_size_bytes,
       upload_ttl_seconds: settings.files.upload_ttl_seconds,
       abandoned_upload_cleanup_interval_seconds: settings.files.abandoned_upload_cleanup_interval_seconds,
-      bridge_owner_lease_ttl_seconds: settings.gateway.bridge_owner_lease_ttl_seconds,
+      bridge_owner_lease_ttl_seconds: OwnerRenewalSchedule.effective_lease_ttl_seconds(settings.gateway.bridge_owner_lease_ttl_seconds, @struct_fields[:bridge_owner_lease_ttl_seconds]),
       bridge_owner_lease_renewal_seconds: settings.gateway.bridge_owner_lease_renewal_seconds,
       expired_alias_ttl_seconds: settings.gateway.expired_alias_ttl_seconds,
       firewall_allowlist: settings.ingress.firewall_allowlist,

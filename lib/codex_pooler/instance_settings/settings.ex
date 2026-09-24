@@ -6,6 +6,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
   import Ecto.Changeset
 
   alias CodexPooler.Gateway.OperationalSettings.IPRules
+  alias CodexPooler.Gateway.OwnerRenewalSchedule
   alias CodexPooler.InstanceSettings.{AppSecretCrypto, Defaults, StaticDefaults}
   alias CodexPooler.RouteClass
 
@@ -300,7 +301,11 @@ defmodule CodexPooler.InstanceSettings.Settings do
       less_than_or_equal_to: 1_209_600
     )
     |> validate_positive_integer(:expired_alias_ttl_seconds)
-    |> validate_positive_integer(:bridge_owner_lease_ttl_seconds)
+    # A lease shorter than this cannot outlive one full pre-dispatch database
+    # statement plus the synchronous renewal; `OwnerRenewalSchedule` derives it.
+    |> validate_number(:bridge_owner_lease_ttl_seconds,
+      greater_than_or_equal_to: OwnerRenewalSchedule.minimum_lease_ttl_seconds()
+    )
     |> validate_positive_integer(:bridge_owner_lease_renewal_seconds)
     |> validate_positive_integer(:circuit_failure_threshold)
     |> validate_positive_integer(:circuit_open_seconds)
