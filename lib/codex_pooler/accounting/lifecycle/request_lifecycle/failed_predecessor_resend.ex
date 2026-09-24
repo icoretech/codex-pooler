@@ -263,11 +263,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     # transport this claim does not resend (a native HTTP fallback met by a
     # websocket or HTTPS resend) is still the turn's own predecessor: a live
     # one is `active_predecessor` and a served one `terminal_predecessor`, not
-    # a changed authorization (findings#206 row 206-534). The transport still
-    # decides admission: `undelivered_completion/3` refuses a served request
-    # outside it, and a failed one keeps `authorization_changed`, because a
-    # websocket resend's `terminal_predecessor` also looks up a recorded final
-    # refusal to relay.
+    # a changed authorization (findings#206 row 206-534). A served one is
+    # judged by `undelivered_completion/3`, whose shapes all require the
+    # websocket or the native HTTP compaction claim domain, which never holds a
+    # turn or resume chain claim; a failed one keeps `authorization_changed`,
+    # because a websocket resend's `terminal_predecessor` also looks up a
+    # recorded final refusal to relay.
     cond do
       not authorization_scoped?(request, scope) ->
         {:error, :authorization_changed}
@@ -312,7 +313,6 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     shape = undelivered_completion_shape(turn, request, attempt, scope)
 
     cond do
-      not transport_scoped?(request, scope) -> {:error, :terminal_predecessor}
       Map.get(scope, :semantic_claim?) != true and shape != :unreceived_compaction -> {:error, :terminal_predecessor}
       is_nil(shape) -> {:error, :terminal_predecessor}
       live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
