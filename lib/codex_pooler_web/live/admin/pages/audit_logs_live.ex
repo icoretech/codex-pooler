@@ -105,10 +105,17 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   # A role change or a Pool granted or revoked changes which Pools and which
   # instance events this page may show. It re-reads them at once with the Pool
   # filter options, and an open event the viewer can no longer see closes
-  # (findings#206 row 206-410).
+  # (findings#206 row 206-410). A Pool filter the viewer lost leaves the address
+  # bar too, so the URL names the list the page shows instead of a filter error
+  # the operator did not cause (206-431).
   @impl true
   def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
-    {:noreply, load_audit_logs(socket, socket.assigns.current_params)}
+    filtered_pool = socket.assigns.selected_pool
+
+    {:noreply,
+     socket
+     |> load_audit_logs(socket.assigns.current_params)
+     |> drop_lost_pool_filter(filtered_pool)}
   end
 
   @impl true
@@ -235,6 +242,14 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
         socket
     end
   end
+
+  # The page selected a Pool before the re-read and none after it, so the Pool
+  # the URL names is one the viewer lost. It leaves the URL like a filter
+  # change: the other filters stay and the window starts over on page one.
+  defp drop_lost_pool_filter(%{assigns: %{selected_pool: nil}} = socket, %{id: _pool_id}),
+    do: patch_window(socket, Map.delete(socket.assigns.current_params, "pool_id"), 1, nil)
+
+  defp drop_lost_pool_filter(socket, _filtered_pool), do: socket
 
   defp patch_window(socket, params, page, cursor) do
     push_patch(socket, to: ~p"/admin/audit-logs?#{window_params(params, page, cursor)}")

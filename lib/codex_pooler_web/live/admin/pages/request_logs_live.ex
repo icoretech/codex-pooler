@@ -187,9 +187,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   # A role change or a Pool granted or revoked changes which Pools this page
   # may read. It re-reads them with the rows, the filter options and its Pool
   # subscriptions at once, not at the next navigation, and an open request the
-  # viewer can no longer see closes (findings#206 row 206-329).
+  # viewer can no longer see closes (findings#206 row 206-329). A Pool or
+  # upstream account filter the viewer lost leaves the address bar too, so the
+  # URL names the list the page shows instead of a filter error the operator
+  # did not cause (206-431).
   def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
-    {:noreply, request_request_logs(socket, socket.assigns.current_params, :filter_patch)}
+    accepted_filters = accepted_scope_filters(socket)
+
+    {:noreply,
+     socket
+     |> request_request_logs(socket.assigns.current_params, :filter_patch)
+     |> drop_lost_scope_filters(accepted_filters)}
   end
 
   @impl true
@@ -658,6 +666,35 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
   defp cursor_params({%DateTime{} = at, id}), do: {DateTime.to_iso8601(at), id}
   defp cursor_params(_cursor), do: {nil, nil}
+
+  # The URL filters that depend on what the viewer may see, each only when the
+  # page accepted it: the Pool it selected and the upstream account it filters
+  # by. A filter the operator's own URL already got wrong is not in the list,
+  # so its error stays on screen.
+  defp accepted_scope_filters(%{assigns: %{selected_pool: selected_pool, request_log_filters: filters}}) do
+    pool = if selected_pool, do: ["pool_id"], else: []
+    upstream = if Keyword.has_key?(filters, :upstream_identity_id), do: ["upstream_identity_id"], else: []
+    pool ++ upstream
+  end
+
+  # A filter accepted before the re-read and refused after it names a Pool or
+  # an account the viewer lost. It leaves the URL like a filter change: the page
+  # window starts over on the live first page, the other filters stay, and an
+  # open request stays in the URL for the drawer's own check to close.
+  defp drop_lost_scope_filters(socket, accepted_filters) do
+    lost = accepted_filters -- accepted_scope_filters(socket)
+
+    if lost == [] do
+      socket
+    else
+      params =
+        socket.assigns.current_params
+        |> Map.drop(lost ++ ["page", @snapshot_param, @snapshot_id_param])
+        |> normalize_request_log_query_params()
+
+      push_patch(socket, to: ~p"/admin/request-logs?#{params}")
+    end
+  end
 
   defp assign_selected_request_log(socket, params) do
     case selected_request_id(params) do

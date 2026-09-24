@@ -42,6 +42,55 @@ defmodule CodexPoolerWeb.Admin.AdminPagesViewerVisibilityTest do
     assert assigns(view).subscribed_pool_ids == MapSet.new([kept.id])
   end
 
+  # A Pool or upstream account filter the viewer lost stayed in the address bar
+  # while the page answered it with a filter error (findings#206 row 206-431):
+  # the page patches the lost filters away, keeps the others, and the open
+  # request of the lost Pool still closes through its own patch.
+  test "request logs patch a Pool and upstream account filter the viewer lost out of the URL", %{scope: scope} do
+    [kept, revoked] = for label <- ["logs-filter-kept", "logs-filter-revoked"], do: pool!(scope, label)
+    kept_request = request!(kept)
+    revoked_request = request!(revoked)
+    %{identity: revoked_identity} = upstream_assignment_fixture(revoked, %{account_label: "Revoked filter upstream"})
+    %{user: admin, conn: conn} = operator_conn!(scope, "instance_admin", [kept, revoked])
+
+    params = %{"pool_id" => revoked.id, "upstream_identity_id" => revoked_identity.id, "status" => "succeeded", "selected_request_id" => revoked_request.id}
+    view = open!(conn, ~p"/admin/request-logs?#{params}")
+    assert assigns(view).selected_pool.id == revoked.id
+    assert assigns(view).request_log_filters[:upstream_identity_id] == revoked_identity.id
+    assert assigns(view).filter_errors == []
+
+    assert {:ok, _admin} = Accounts.update_operator(scope, admin, %{"pool_ids" => [kept.id]})
+
+    settle!(view)
+    assert patched_query(view, "/admin/request-logs") == %{"status" => "succeeded", "selected_request_id" => revoked_request.id}
+    settle!(view)
+    assert patched_query(view, "/admin/request-logs") == %{"status" => "succeeded"}
+    settle!(view)
+    assert assigns(view).current_params == %{"status" => "succeeded"}
+    assert assigns(view).filter_errors == []
+    assert assigns(view).selected_request_log == nil
+    assert has_element?(view, "#request-log-row-#{kept_request.id}")
+    refute has_element?(view, "#request-log-row-#{revoked_request.id}")
+  end
+
+  test "request logs keep a Pool and upstream account filter the viewer still sees", %{scope: scope} do
+    [kept, revoked] = for label <- ["logs-filter-stay", "logs-filter-gone"], do: pool!(scope, label)
+    %{identity: kept_identity} = upstream_assignment_fixture(kept, %{account_label: "Kept filter upstream"})
+    %{user: admin, conn: conn} = operator_conn!(scope, "instance_admin", [kept, revoked])
+
+    params = %{"pool_id" => kept.id, "upstream_identity_id" => kept_identity.id}
+    view = open!(conn, ~p"/admin/request-logs?#{params}")
+
+    assert {:ok, _admin} = Accounts.update_operator(scope, admin, %{"pool_ids" => [kept.id]})
+
+    settle!(view)
+    assert assigns(view).visible_pool_ids == [kept.id]
+    assert assigns(view).current_params == params
+    assert assigns(view).selected_pool.id == kept.id
+    assert assigns(view).request_log_filters[:upstream_identity_id] == kept_identity.id
+    assert assigns(view).filter_errors == []
+  end
+
   test "an owner demoted on the request logs loses the owner-only navigation", %{scope: scope} do
     pools = for label <- ["logs-nav-first", "logs-nav-second"], do: pool!(scope, label)
     %{user: second_owner, conn: conn} = operator_conn!(scope, "instance_owner")
@@ -172,6 +221,15 @@ defmodule CodexPoolerWeb.Admin.AdminPagesViewerVisibilityTest do
 
     assert {:ok, _admin} = Accounts.update_operator(scope, second_owner, %{"role" => "instance_admin"})
     assert_redirect(view, "/admin/system?tab=smtp", @detection_timeout_ms)
+  end
+
+  # The page's own patch: its path and decoded query, so the assertion does not
+  # depend on how the query string orders its keys.
+  defp patched_query(view, path) do
+    patched = assert_patch(view)
+    uri = URI.parse(patched)
+    assert uri.path == path
+    URI.decode_query(uri.query || "")
   end
 
   defp pool!(scope, label) do

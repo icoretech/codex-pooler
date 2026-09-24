@@ -53,6 +53,43 @@ defmodule CodexPoolerWeb.Admin.RemainingAdminPagesViewerVisibilityTest do
     refute has_element?(view, "#admin-nav-jobs")
   end
 
+  # The Pool filter on a revoked Pool stayed in the address bar while the page
+  # answered it with a filter error (findings#206 row 206-431): the page
+  # patches it away and keeps the other filters.
+  test "audit logs patch a Pool filter on a revoked Pool out of the URL", %{scope: scope} do
+    [kept, revoked] = for label <- ["audit-filter-kept", "audit-filter-revoked"], do: pool!(scope, label)
+    %{user: admin, conn: conn} = operator_conn!(scope, "instance_admin", [kept, revoked])
+
+    view = open!(conn, ~p"/admin/audit-logs?#{%{"pool_id" => revoked.id, "outcome" => "success"}}")
+    assert assigns(view).selected_pool.id == revoked.id
+    assert event_pool_ids(view) == [revoked.id]
+
+    assert {:ok, _admin} = Accounts.update_operator(scope, admin, %{"pool_ids" => [kept.id]})
+
+    settle!(view)
+    assert patched_query(view, "/admin/audit-logs") == %{"outcome" => "success"}
+    settle!(view)
+    assert assigns(view).current_params == %{"outcome" => "success"}
+    assert assigns(view).filter_errors == []
+    assert assigns(view).filter_values["outcome"] == "success"
+    assert event_pool_ids(view) == [kept.id]
+  end
+
+  test "audit logs keep a Pool filter on a Pool the viewer still sees", %{scope: scope} do
+    [kept, revoked] = for label <- ["audit-filter-stay", "audit-filter-gone"], do: pool!(scope, label)
+    %{user: admin, conn: conn} = operator_conn!(scope, "instance_admin", [kept, revoked])
+
+    view = open!(conn, ~p"/admin/audit-logs?#{%{"pool_id" => kept.id}}")
+
+    assert {:ok, _admin} = Accounts.update_operator(scope, admin, %{"pool_ids" => [kept.id]})
+
+    settle!(view)
+    assert Enum.map(assigns(view).pools, & &1.id) == [kept.id]
+    assert assigns(view).current_params == %{"pool_id" => kept.id}
+    assert assigns(view).selected_pool.id == kept.id
+    assert assigns(view).filter_errors == []
+  end
+
   test "alerts drop a revoked Pool's rules and close the rule editor on it", %{scope: scope} do
     [kept, revoked] = for label <- ["alerts-kept", "alerts-revoked"], do: pool!(scope, label)
     kept_rule = alert_rule_fixture(kept, %{display_name: "Kept coverage"})
