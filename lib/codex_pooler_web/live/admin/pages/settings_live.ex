@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.SettingsPageComponents
   alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.UserAuth
@@ -43,7 +44,8 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
      socket
      |> assign_datetime_preferences()
      |> assign_browser_sessions()
-     |> assign_mcp_panel()}
+     |> assign_mcp_panel()
+     |> NotificationCenterHooks.follow_viewer_visibility()}
   end
 
   @impl true
@@ -290,6 +292,13 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         {:noreply, put_flash(socket, :error, "Browser session could not be signed out")}
     end
   end
+
+  # These settings are the viewer's own and do not depend on its role or
+  # Pools; only the shell's owner-only navigation does, and it follows the
+  # scope the notification center re-read before sending this (findings#206
+  # row 206-410).
+  @impl true
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams.OAuth, as: UpstreamOAuth
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonImport
@@ -61,6 +62,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         chunk_timeout: 5_000,
         auto_upload: true
       )
+      |> NotificationCenterHooks.follow_viewer_visibility()
 
     case UpstreamCockpitReadModel.load_visible_without_request_metrics(
            socket.assigns.current_scope,
@@ -92,6 +94,35 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   # honest answer from here is to reload.
   def handle_info(:live_updates_resumed, socket) do
     {:noreply, reload_cockpit_or_defer(socket)}
+  end
+
+  # A role change or a Pool granted or revoked changes which of this account's
+  # Pool assignments, request data and dialog Pools the viewer may see. The
+  # page re-reads them at once, even behind the quota observations, closes an
+  # auth.json or OAuth relink dialog that offered a Pool the viewer lost and a
+  # request it can no longer see, and leaves for the account list when the
+  # account itself is no longer visible (findings#206 row 206-410).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    scope = socket.assigns.current_scope
+
+    case UpstreamCockpitReadModel.load_visible_without_request_metrics(scope, socket.assigns.cockpit.identity.id) do
+      {:ok, cockpit} ->
+        {socket, closed?} = close_lost_dialogs(socket, scope)
+
+        socket =
+          socket
+          |> assign_cockpit(preserve_request_metrics(socket, cockpit))
+          |> assign(:quota_observations_dirty?, false)
+          |> request_cockpit_metrics()
+
+        {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+
+      :error ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Your Pool access changed")
+         |> push_navigate(to: ~p"/admin/upstreams")}
+    end
   end
 
   @impl true
@@ -587,6 +618,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       options -> options
     end
   end
+
+  # A dialog that offered a Pool the viewer can no longer see closes; one that
+  # only gained a Pool keeps its options, so an unsubmitted choice stays. A
+  # finished relink keeps its result on screen.
+  defp close_lost_dialogs(socket, scope) do
+    visible_pool_ids = scope |> Pools.list_visible_pools() |> MapSet.new(& &1.id)
+
+    offered_pool_lost? =
+      MapSet.size(visible_pool_ids) == 0 or
+        Enum.any?(socket.assigns.dialog_pool_options, fn {_name, pool_id} -> pool_id != "" and not MapSet.member?(visible_pool_ids, pool_id) end)
+
+    request_lost? = match?(%{id: _id}, socket.assigns.selected_request_log) and is_nil(load_request_log(socket, socket.assigns.selected_request_log.id))
+
+    {socket, false}
+    |> close_if(socket.assigns.importing_auth_json and offered_pool_lost?, &AuthJsonImportWorkflow.close/1)
+    |> close_if(socket.assigns.oauth_relinking and is_nil(socket.assigns.oauth_relink_result) and offered_pool_lost?, &OAuthRelinkWorkflow.close/1)
+    |> close_if(request_lost?, &assign(&1, :selected_request_log, nil))
+  end
+
+  defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
+  defp close_if({socket, closed?}, false, _close), do: {socket, closed?}
 
   defp default_pool_id(%{assignments: %{items: [%{pool_id: pool_id} | _items]}}), do: pool_id
   defp default_pool_id(_cockpit), do: nil

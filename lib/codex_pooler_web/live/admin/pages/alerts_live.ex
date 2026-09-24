@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   alias CodexPoolerWeb.Admin.AlertsPageComponents.{Channels, Incidents, Rules}
   alias CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs, as: AlertsDialogs
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
 
   @default_tab "rules"
   @tabs ~w(rules channels incidents)
@@ -37,6 +38,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       |> assign_alert_state()
       |> reset_rule_form()
       |> reset_channel_form()
+      |> NotificationCenterHooks.follow_viewer_visibility()
 
     {:ok, socket}
   end
@@ -109,6 +111,37 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
   def handle_event("confirm_delete_channel", params, socket),
     do: {:noreply, confirm_delete_channel(socket, params)}
+
+  # A role change or a Pool granted or revoked changes which Pools, rules,
+  # channels and incidents this page may show. It re-reads them at once and
+  # closes a rule or channel editor or delete dialog on one the viewer can no
+  # longer see; a new rule's form moves off a Pool the viewer lost
+  # (findings#206 row 206-410).
+  @impl true
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    socket = assign_alert_state(socket)
+    %{rules: rules, channels: channels} = socket.assigns
+    lost_rule? = &(match?(%AlertRule{}, &1) and is_nil(find_visible_rule(rules, &1.id)))
+    lost_channel? = &(match?(%{id: _id}, &1) and is_nil(find_visible_channel(channels, &1.id)))
+
+    {socket, closed?} =
+      {socket, false}
+      |> close_if(lost_rule?.(socket.assigns.editing_rule), &cancel_rule_form/1)
+      |> close_if(lost_rule?.(socket.assigns.deleting_rule), &cancel_delete_rule/1)
+      |> close_if(lost_channel?.(socket.assigns.editing_channel), &cancel_channel_form/1)
+      |> close_if(lost_channel?.(socket.assigns.deleting_channel), &cancel_delete_channel/1)
+
+    socket = if new_rule_on_lost_pool?(socket), do: reset_rule_form(socket), else: socket
+    {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+  end
+
+  defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
+  defp close_if({socket, closed?}, false, _close), do: {socket, closed?}
+
+  defp new_rule_on_lost_pool?(%{assigns: %{rule_form_mode: :create, rule_form: form, pool_lookup: pool_lookup}}),
+    do: not Map.has_key?(pool_lookup, form.params["pool_id"])
+
+  defp new_rule_on_lost_pool?(_socket), do: false
 
   @impl true
   def render(assigns) do

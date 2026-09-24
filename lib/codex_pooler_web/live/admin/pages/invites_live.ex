@@ -8,10 +8,12 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.InviteCreationDialog
   alias CodexPoolerWeb.Admin.InvitesPageComponents
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.PoolInviteForm
   alias CodexPoolerWeb.DateTimeDisplay
+  alias Phoenix.HTML.Form
 
   @page_size 50
   @status_options [
@@ -40,7 +42,8 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
        last_invite: nil,
        mailer_configured?: Mailer.configured?(),
        revoking_invite: nil
-     )}
+     )
+     |> NotificationCenterHooks.follow_viewer_visibility()}
   end
 
   @impl true
@@ -175,6 +178,35 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   def handle_info(:live_updates_resumed, socket) do
     {:noreply, load_invites(socket, socket.assigns.filter_values)}
   end
+
+  # A role change or a Pool granted or revoked changes which Pools and invites
+  # this page may show. It re-reads them at once, closes the revoke dialog of
+  # an invite the viewer can no longer see, and closes the create dialog when
+  # the Pool it names is gone; an invite link already shown stays
+  # (findings#206 row 206-410).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    socket = load_invites(socket, socket.assigns.filter_values)
+
+    {socket, closed?} =
+      {socket, false}
+      |> close_if(lost_revoke_target?(socket), &assign(&1, revoking_invite: nil))
+      |> close_if(lost_create_pool?(socket), &close_invite_dialog/1)
+
+    {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+  end
+
+  defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
+  defp close_if({socket, closed?}, false, _close), do: {socket, closed?}
+
+  defp lost_revoke_target?(%{assigns: %{revoking_invite: %{id: invite_id}}} = socket), do: is_nil(find_invite_row(socket, invite_id))
+  defp lost_revoke_target?(_socket), do: false
+
+  defp lost_create_pool?(%{assigns: %{creating_invite: true, last_invite: nil, pools: pools, invite_form: form}}) do
+    pool_id = Form.input_value(form, :pool_id)
+    pools == [] or (pool_id not in [nil, ""] and is_nil(selected_pool(pools, pool_id)))
+  end
+
+  defp lost_create_pool?(_socket), do: false
 
   @impl true
   def render(assigns) do

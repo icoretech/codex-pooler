@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
     statics: CodexPoolerWeb.static_paths()
 
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Accounts.User
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Incidents.NotificationEvents
   alias CodexPooler.Pools
@@ -67,8 +68,9 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   send an invalidation this hook already reloads for; when that reload finds
   the viewer's role or visible Pools changed, the page receives
   `{#{inspect(__MODULE__)}, :viewer_visibility_changed}` in its
-  `handle_info/2` and re-reads what it shows with its own scope. An incident
-  invalidation that changes neither sends nothing (findings#206 row 206-325).
+  `handle_info/2` and re-reads what it shows with its own scope, which the
+  hook has re-read first. An incident invalidation that changes neither sends
+  nothing (findings#206 rows 206-325 and 206-410).
   """
   @spec follow_viewer_visibility(Socket.t()) :: Socket.t()
   def follow_viewer_visibility(%Socket{} = socket) do
@@ -206,11 +208,25 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
     case Map.fetch(private, @viewer_visibility_key) do
       {:ok, previous} ->
         current = viewer_visibility(socket)
-        if current != previous, do: send(self(), {__MODULE__, :viewer_visibility_changed})
+        socket = if current != previous, do: follow_viewer_change(socket), else: socket
         Phoenix.LiveView.put_private(socket, @viewer_visibility_key, current)
 
       :error ->
         socket
+    end
+  end
+
+  # The scope the page mounted with carries the viewer's roles and assigned
+  # Pools as they were then. Re-reading it makes every component that takes
+  # the scope render again, the admin shell's owner-only navigation included,
+  # even on a page whose own content did not change (findings#206 row
+  # 206-410). The page then re-reads what it shows with the fresh scope.
+  defp follow_viewer_change(%Socket{} = socket) do
+    send(self(), {__MODULE__, :viewer_visibility_changed})
+
+    case socket.assigns[:current_scope] do
+      %Scope{user: %User{} = user} -> assign(socket, :current_scope, Scope.for_user(user))
+      _scope -> socket
     end
   end
 

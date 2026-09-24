@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
   alias CodexPooler.Status.Events, as: StatusEvents
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.IncidentsPageComponents
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.OpenAIIncidentsReadModel
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -21,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
         :handle_info,
         &handle_status_event/2
       )
+      |> NotificationCenterHooks.follow_viewer_visibility()
 
     {:ok, socket}
   end
@@ -33,6 +35,11 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
   def handle_info(:openai_incidents_status_refresh, socket) do
     {:noreply, assign(socket, :incidents_page, OpenAIIncidentsReadModel.load())}
   end
+
+  # The public status feed is the same for every viewer; only the shell's
+  # owner-only navigation depends on the role, and it follows the scope the
+  # notification center re-read before sending this (findings#206 row 206-410).
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket), do: {:noreply, socket}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 

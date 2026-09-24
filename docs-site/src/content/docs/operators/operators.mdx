@@ -107,7 +107,7 @@ Operator roles are:
 
 Pool assignments apply only while the operator role is instance admin. Owners keep instance-wide access.
 
-A role or Pool assignment change applies to the operator's open admin pages without signing them out: Pool actions are checked against the current role and assignments, and the open Pools, Upstreams, API keys, Request logs, Stats and Operators pages and the notification center re-read what the operator can see, so a demoted owner loses the owner controls and an admin sees a newly assigned Pool at once. A dialog on a Pool, key or account the operator can no longer see closes. The Jobs and System pages reload when the operator gains or loses the owner role.
+A role or Pool assignment change applies to the operator's open admin pages without signing them out: Pool actions are checked against the current role and assignments, and every open admin page and the notification center re-read what the operator can see, so a demoted owner loses the owner controls and navigation and an admin sees a newly assigned Pool at once. A dialog on a Pool, key, account, alert rule, alert channel or invite the operator can no longer see closes, and an upstream account page whose account is no longer visible returns to the Upstreams list. The Jobs and System pages reload when the operator gains or loses the owner role.
 
 For a full side-by-side breakdown of what each role can do on every admin page, see [Roles and visibility](/operators/admin-ui/#roles-and-visibility).
 

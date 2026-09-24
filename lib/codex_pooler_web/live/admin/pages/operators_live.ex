@@ -274,12 +274,15 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   end
 
   # Operator events are their own domain, so the shared gate never sees them.
+  # A background reload that finds the viewer is no longer an owner shows the
+  # page's owner-only notice without an error flash: the viewer did nothing
+  # that failed (findings#206 row 206-410).
   def handle_info({CodexPooler.Accounts.OperatorEvents, _event}, socket) do
-    LiveUpdatesHooks.unless_paused(socket, &reload_operators/1)
+    LiveUpdatesHooks.unless_paused(socket, &reload_operators_in_background/1)
   end
 
   def handle_info(:live_updates_resumed, socket) do
-    {:noreply, reload_operators(socket)}
+    {:noreply, reload_operators_in_background(socket)}
   end
 
   # Operator management belongs to owners. When the viewer's own role changes
@@ -397,6 +400,8 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
         put_flash(socket, :error, error_message(:operator_management_denied))
     end
   end
+
+  defp reload_operators_in_background(socket), do: socket |> assign_operator_management() |> operator_management_socket()
 
   defp operator_management_socket({:ok, socket}), do: socket
   defp operator_management_socket({:error, :operator_management_denied, socket}), do: socket

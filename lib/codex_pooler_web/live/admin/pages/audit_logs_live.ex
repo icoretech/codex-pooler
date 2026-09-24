@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.LogPagination
+  alias CodexPoolerWeb.Admin.NotificationCenterHooks
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -38,7 +39,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
        filter_errors: [],
        pool_filter_options: [],
        datetime_preferences: DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
-     )}
+     )
+     |> NotificationCenterHooks.follow_viewer_visibility()}
   end
 
   @impl true
@@ -91,6 +93,15 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   @impl true
   def handle_event("close_audit_event", _params, socket) do
     {:noreply, assign(socket, selected_audit_event: nil)}
+  end
+
+  # A role change or a Pool granted or revoked changes which Pools and which
+  # instance events this page may show. It re-reads them at once with the Pool
+  # filter options, and an open event the viewer can no longer see closes
+  # (findings#206 row 206-410).
+  @impl true
+  def handle_info({NotificationCenterHooks, :viewer_visibility_changed}, socket) do
+    {:noreply, load_audit_logs(socket, socket.assigns.current_params)}
   end
 
   @impl true
