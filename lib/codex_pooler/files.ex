@@ -167,6 +167,35 @@ defmodule CodexPooler.Files do
   def response_assignment_affinities(_auth, _file_ids, _opts),
     do: {:error, error(400, :invalid_request, "authenticated pool and api key are required")}
 
+  @doc """
+  Returns the ids among `file_ids` that this Pool and API key created through the
+  file bridge, whatever their lifecycle state, in the order given.
+
+  A Responses `input_image` may carry a `file_id` the Pool never bridged (an
+  app-server host can supply one from its own attachment store); only a bridged
+  id names an upstream account the request has to reach.
+  """
+  @spec bridged_file_ids(auth(), [file_id()]) :: [file_id()]
+  def bridged_file_ids(%{pool: pool, api_key: api_key}, file_ids) when is_list(file_ids) do
+    case file_ids |> Enum.filter(&is_binary/1) |> Enum.uniq() do
+      [] ->
+        []
+
+      ids ->
+        known =
+          from(file in FileRecord,
+            where: file.pool_id == ^pool.id and file.api_key_id == ^api_key.id and file.file_id in ^ids,
+            select: file.file_id
+          )
+          |> Repo.all()
+          |> MapSet.new()
+
+        Enum.filter(ids, &MapSet.member?(known, &1))
+    end
+  end
+
+  def bridged_file_ids(_auth, _file_ids), do: []
+
   @spec record_upload_failure(auth(), file_id(), map(), file_opts()) :: {:error, file_error()}
   defdelegate record_upload_failure(auth, file_id, upload_error, opts \\ %{}),
     to: UploadLifecycle

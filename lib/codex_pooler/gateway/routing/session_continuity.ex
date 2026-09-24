@@ -159,7 +159,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   @spec attach_file_affinity(auth(), String.t(), payload(), RequestOptions.t()) ::
           {:ok, RequestOptions.t()} | {:error, gateway_error()}
   def attach_file_affinity(auth, "/backend-api/codex/responses", payload, request_options) do
-    case response_file_ids(payload) do
+    case response_file_ids(auth, payload) do
       [] ->
         {:ok, request_options}
 
@@ -730,11 +730,26 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     |> attach_http_owner_witness(session)
   end
 
-  defp response_file_ids(payload) do
-    payload
-    |> Map.get("input")
-    |> collect_input_file_ids([])
-    |> Enum.reverse()
+  # Every `input_file` id must be a file this Pool bridged. An `input_image` id
+  # joins the affinity only when the Pool bridged it: the released app-server
+  # forwards a host-supplied `fileId` verbatim, so an id the Pool never saw is
+  # passed through unpinned, as before.
+  defp response_file_ids(auth, payload) do
+    references =
+      payload
+      |> Map.get("input")
+      |> collect_input_file_ids([])
+      |> Enum.reverse()
+
+    image_ids = for {"input_image", file_id} <- references, do: file_id
+    bridged_image_ids = auth |> Files.bridged_file_ids(image_ids) |> MapSet.new()
+
+    references
+    |> Enum.filter(fn
+      {"input_file", _file_id} -> true
+      {"input_image", file_id} -> MapSet.member?(bridged_image_ids, file_id)
+    end)
+    |> Enum.map(&elem(&1, 1))
     |> Enum.uniq()
   end
 
@@ -743,10 +758,10 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     file_id = Map.get(value, "file_id") || Map.get(value, :file_id)
 
     acc =
-      if type == "input_file" and is_binary(file_id) do
+      if type in ["input_file", "input_image"] and is_binary(file_id) do
         case String.trim(file_id) do
           "" -> acc
-          file_id -> [file_id | acc]
+          file_id -> [{type, file_id} | acc]
         end
       else
         acc

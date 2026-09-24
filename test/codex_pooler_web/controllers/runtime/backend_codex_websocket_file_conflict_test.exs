@@ -10,12 +10,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Repo
 
+  # `input_image` arms: a bridged image `file_id` is held by one upstream account
+  # like an `input_file` (findings#258 row 258-11).
   for path <- ["/backend-api/codex/responses", "/v1/responses"],
-      scenario <- [:pending, :mixed_assignments, :candidate_mismatch, :session_pin] do
-    @tag file_path: path, file_scenario: scenario
-    test "#{path} rejects #{scenario} files on the wire without dispatch or reservation", %{
+      scenario <- [:pending, :mixed_assignments, :candidate_mismatch, :session_pin],
+      part_type <- ["input_file", "input_image"] do
+    @tag file_path: path, file_scenario: scenario, part_type: part_type
+    test "#{path} rejects #{scenario} #{part_type} files on the wire without dispatch or reservation", %{
       file_path: path,
-      file_scenario: scenario
+      file_scenario: scenario,
+      part_type: part_type
     } do
       upstream =
         start_upstream(
@@ -46,7 +50,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
           )
         )
 
-      setup = gateway_setup(upstream)
+      setup = gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
       other = gateway_upstream(setup.pool, upstream, "synthetic-other-token", compact?: false)
       prime_routing_quota!(other.identity)
 
@@ -90,7 +94,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
       {conn, websocket, ref} =
         if scenario == :session_pin do
           {conn, websocket} =
-            public_websocket_send_text!(conn, websocket, ref, payload(setup, [ready.file_id]))
+            public_websocket_send_text!(conn, websocket, ref, payload(setup, part_type, [ready.file_id]))
 
           {conn, _websocket} = receive_completed(conn, websocket, ref)
 
@@ -121,7 +125,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
       {{conn, websocket, frame}, logs} =
         with_log(fn ->
           {conn, websocket} =
-            public_websocket_send_text!(conn, websocket, ref, payload(setup, ids))
+            public_websocket_send_text!(conn, websocket, ref, payload(setup, part_type, ids))
 
           public_websocket_receive_text!(conn, websocket, ref)
         end)
@@ -154,7 +158,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
                0
 
       {conn, websocket} =
-        public_websocket_send_text!(conn, websocket, ref, payload(setup, [ready.file_id]))
+        public_websocket_send_text!(conn, websocket, ref, payload(setup, part_type, [ready.file_id]))
 
       {conn, _websocket} = receive_completed(conn, websocket, ref)
       assert length(FakeUpstream.requests(upstream)) == prior_sends + 1
@@ -182,7 +186,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
     end
   end
 
-  defp payload(setup, ids) do
+  defp payload(setup, part_type, ids) do
     CodexPooler.JSON.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
@@ -191,7 +195,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
         %{
           "type" => "message",
           "role" => "user",
-          "content" => Enum.map(ids, &%{"type" => "input_file", "file_id" => &1})
+          "content" => Enum.map(ids, &%{"type" => part_type, "file_id" => &1})
         }
       ]
     })

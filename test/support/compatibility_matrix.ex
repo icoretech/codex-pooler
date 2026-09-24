@@ -763,7 +763,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       routes: [%{method: :post, path: "/backend-api/codex/responses"}],
       future_routes: [],
       fixture: :unsupported_input_image_reference,
-      contract: "Responses input_image.file_id, Codex sediment:// file URIs, and unsupported URL schemes such as http:// and file:// used as input_image.image_url values are rejected before reservation or upstream dispatch"
+      contract: "Responses input_image.file_id references are forwarded unchanged on every serving mode (Lite removes only the detail hint), and one the Pool bridged pins the request to the assignment holding the file like input_file; Codex sediment:// file URIs and unsupported URL schemes such as http:// and file:// used as input_image.image_url values are rejected before reservation or upstream dispatch"
     },
     %{
       slug: :first_event_stream_retry,

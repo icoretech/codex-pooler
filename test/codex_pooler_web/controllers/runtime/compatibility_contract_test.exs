@@ -1135,7 +1135,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       feature = CompatibilityMatrix.by_slug!(:unsupported_input_image_reference)
       fixture = CompatibilityMatrix.fixture!(:unsupported_input_image_reference)
 
-      assert feature.contract =~ "input_image.file_id"
+      assert feature.contract =~ "input_image.file_id references are forwarded unchanged"
+      assert feature.contract =~ "pins the request to the assignment holding the file"
       assert feature.contract =~ "Codex sediment://"
       assert feature.contract =~ "unsupported URL schemes"
 

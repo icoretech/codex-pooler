@@ -76,6 +76,54 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       assert attached.routing.file_affinity_assignment_id == setup.pinned.assignment.id
     end
 
+    test "pins an input_image file_id the Pool bridged to the assignment that holds it" do
+      setup = active_pinned_assignment_setup()
+      api_key = active_api_key_fixture(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
+      file_id = "file-image-#{System.unique_integer([:positive])}"
+
+      insert_response_file!(setup, api_key.api_key, file_id)
+
+      for part <- [
+            %{"type" => "input_image", "file_id" => file_id, "detail" => "high"},
+            %{"type" => "function_call_output", "call_id" => "call_image", "output" => [%{"type" => "input_image", "file_id" => file_id}]}
+          ] do
+        payload = %{"input" => [%{"type" => "message", "role" => "user", "content" => [part]}]}
+        request_options = RequestOptions.build(%{}, @endpoint, payload)
+
+        assert {:ok, attached} = SessionContinuity.attach_file_affinity(auth, @endpoint, payload, request_options)
+        assert attached.routing.file_affinity_assignment_id == setup.pinned.assignment.id
+      end
+    end
+
+    test "leaves an input_image file_id the Pool never bridged unpinned" do
+      setup = active_pinned_assignment_setup()
+      api_key = active_api_key_fixture(setup.pool)
+      other_key = active_api_key_fixture(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
+      foreign_file_id = "file-image-other-key-#{System.unique_integer([:positive])}"
+
+      insert_response_file!(setup, other_key.api_key, foreign_file_id)
+
+      payload = %{
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_image", "file_id" => "file-image-unknown-#{System.unique_integer([:positive])}"},
+              %{"type" => "input_image", "file_id" => foreign_file_id}
+            ]
+          }
+        ]
+      }
+
+      request_options = RequestOptions.build(%{}, @endpoint, payload)
+
+      assert {:ok, attached} = SessionContinuity.attach_file_affinity(auth, @endpoint, payload, request_options)
+      assert attached.routing.file_affinity_assignment_id == nil
+    end
+
     test "resolves session aliases once in candidate priority order" do
       setup = active_pinned_assignment_setup()
       api_key = active_api_key_fixture(setup.pool)
