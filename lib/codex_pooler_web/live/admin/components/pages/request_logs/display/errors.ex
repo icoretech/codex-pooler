@@ -12,10 +12,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
   end
 
   defp error_display_items(errors, datetime_preferences) do
+    advised = advised_reset_at(errors)
+
     cond do
       Enum.any?(errors, &quota_exhaustion_error?/1) ->
         ["quota exhausted"] ++
-          reset_display_items(exhausted_reset_at(errors), datetime_preferences)
+          reset_display_items(advised || exhausted_reset_at(errors), datetime_preferences)
 
       Enum.any?(errors, &quota_evidence_unavailable?/1) ->
         ["quota evidence unavailable"]
@@ -24,8 +26,46 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
         errors
         |> Enum.map(&format_single_error/1)
         |> Enum.uniq()
+        |> Kernel.++(reset_display_items(advised, datetime_preferences))
     end
   end
+
+  @doc """
+  The reset a terminal usage-limit refusal advised the client and its
+  `Retry-After` seconds, from a routed refusal's `gateway_denial` or a relayed
+  provider `429`'s attempt (findings#206 rows 206-553, 206-577), or `nil`.
+  The list's failure line and the drawer render the same advice.
+  """
+  @spec advised_reset([map()] | nil) :: {String.t(), pos_integer()} | nil
+  def advised_reset(errors) when is_list(errors) do
+    Enum.find_value(errors, fn error ->
+      case {error_field(error, :advised_reset_at), error_field(error, :advised_retry_seconds)} do
+        {reset_at, seconds} when is_binary(reset_at) and is_integer(seconds) -> {reset_at, seconds}
+        _none -> nil
+      end
+    end)
+  end
+
+  def advised_reset(_errors), do: nil
+
+  @doc "The advised reset as the drawer shows it, or `nil`."
+  @spec format_advised_reset([map()] | nil, map()) :: String.t() | nil
+  def format_advised_reset(errors, datetime_preferences) do
+    case advised_reset(errors) do
+      {reset_at, seconds} -> "#{format_reset_at(reset_at, datetime_preferences)} (Retry-After #{seconds} s)"
+      nil -> nil
+    end
+  end
+
+  defp advised_reset_at(errors) do
+    case advised_reset(errors) do
+      {reset_at, _seconds} -> reset_at
+      nil -> nil
+    end
+  end
+
+  defp error_field(error, key) when is_map(error), do: Map.get(error, key) || Map.get(error, Atom.to_string(key))
+  defp error_field(_error, _key), do: nil
 
   defp reset_display_items(nil, _datetime_preferences), do: []
 

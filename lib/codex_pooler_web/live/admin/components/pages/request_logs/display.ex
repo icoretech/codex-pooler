@@ -452,6 +452,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def translated_origin(_log), do: nil
 
   defdelegate format_errors(log, datetime_preferences), to: Errors
+  defdelegate format_advised_reset(errors, datetime_preferences), to: Errors
 
   def format_integer(value) when is_integer(value) do
     value

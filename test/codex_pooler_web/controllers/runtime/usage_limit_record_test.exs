@@ -52,7 +52,8 @@ defmodule CodexPoolerWeb.Runtime.UsageLimitRecordTest do
     summaries = ErrorSummaries.build(row, row.request_metadata, [])
     advised = answered["resets_at"] |> DateTime.from_unix!() |> DateTime.to_iso8601()
     denial = Enum.find(summaries, &(summary_field(&1, :kind) == "gateway_denial"))
-    assert summary_field(denial, :reset_at) == advised
+    assert summary_field(denial, :advised_reset_at) == advised
+    assert summary_field(denial, :advised_retry_seconds) == answered["resets_in_seconds"]
   end
 
   test "/v1/responses: the routed answer's reset is on the row and the request_completed line", %{conn: conn} do

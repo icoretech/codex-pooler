@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
 
   import CodexPoolerWeb.Admin.RequestLogsDisplay,
     only: [
+      format_advised_reset: 2,
       format_api_key: 1,
       format_datetime: 2,
       format_token_counts: 1,
@@ -66,6 +67,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       detail("request-log-detail-transport", "Transport", protocol_label(log.transport)),
       detail("request-log-detail-response-status", "Response status", log.response_status_code),
       detail("request-log-detail-error-code", "Error code", log.denial_reason, mono: true),
+      detail(
+        "request-log-detail-advised-reset",
+        "Advised retry",
+        format_advised_reset(Map.get(log, :errors), datetime_preferences),
+        mono: true
+      ),
       detail("request-log-detail-retry-count", "Retries", log.retry_count),
       detail(
         "request-log-detail-admitted-at",
