@@ -1690,14 +1690,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call({:detach_downstream, pid, epoch, correlation_id}, from, state) do
-    case DownstreamState.downstream_status(state.downstream, %{
-           pid: pid,
-           epoch: epoch,
-           correlation_id: correlation_id
-         }) do
-      :active ->
-        requested_downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
+    requested_downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
 
+    case detach_downstream_status(state, requested_downstream) do
+      :active ->
         cond do
           replay_active?(state, requested_downstream) ->
             detach_replay_downstream(state, requested_downstream, from)
@@ -4655,6 +4651,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     do: true
 
   defp terminal_forwarded_to?(_state, _requested), do: false
+
+  # A closing socket detaches from its own session cleanup, which `terminate/2`
+  # waits on for only 100 ms. A socket without a response task of its own (one
+  # that inherited the running turn at its attach) exits right after that wait,
+  # so when the cleanup was slower the owner handled the socket's exit first:
+  # its monitor drops the downstream and keeps a post-visible turn running, as
+  # it must for a socket that died without detaching, whose reconnect can still
+  # inherit the turn. The socket's own detach then arrived as
+  # `stale_downstream` and nothing cancelled the turn: it ran to the provider's
+  # end, and every resend of it met the live predecessor (findings#206). A
+  # detach from exactly the downstream the running turn is still bound to,
+  # with no downstream attached since, is that socket's detach and is applied;
+  # once another socket attached, the turn is that socket's and the late
+  # detach stays stale.
+  defp detach_downstream_status(state, requested_downstream) do
+    case DownstreamState.downstream_status(state.downstream, requested_downstream) do
+      {:error, :stale_downstream} = stale ->
+        if exited_downstream_of_active_turn?(state, requested_downstream), do: :active, else: stale
+
+      status ->
+        status
+    end
+  end
+
+  defp exited_downstream_of_active_turn?(%{downstream: nil, active_turn: %{downstream: %{} = bound}}, requested_downstream),
+    do: DownstreamState.downstream_status(bound, requested_downstream) == :active
+
+  defp exited_downstream_of_active_turn?(_state, _requested_downstream), do: false
 
   defp detach_after_forwarded_terminal(state) do
     state =

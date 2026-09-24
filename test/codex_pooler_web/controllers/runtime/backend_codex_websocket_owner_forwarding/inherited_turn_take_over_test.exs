@@ -85,6 +85,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.InheritedT
     assert outcome.upstream_count == 2
   end
 
+  # The socket that inherited the running turn closes before it sends
+  # anything. It has no response task of its own, so it exits right after
+  # `terminate/2`'s 100 ms wait on its session cleanup, and a slower cleanup
+  # (held here at its first query) reaches the owner only after the owner
+  # handled the socket's exit. The owner's monitor keeps a post-visible turn
+  # running for a socket that died without detaching; the socket's own detach
+  # then came back `stale_downstream`, nothing cancelled the turn, and it ran
+  # until the provider ended it while every resend met the live predecessor
+  # (findings#206). The late detach of that exact socket is now applied.
+  # When another socket attached in between, the turn is that socket's: the
+  # late detach leaves it running and the new socket takes it over as before.
+  for topology <- [:local, :peer], successor <- [:none, :reattach] do
+    @tag topology: topology, successor: successor
+    test "a late detach of the socket that inherited a post-visible turn #{if successor == :none, do: "cancels it", else: "leaves it to the socket that re-attached"} (#{topology} owner, full)",
+         %{topology: topology, successor: successor} do
+      {outcome, _logs} = with_info_log(fn -> run_late_detach_scenario(topology, successor) end)
+
+      case successor do
+        :none ->
+          assert outcome.predecessor_status_after_late_detach == "failed"
+          assert [opening, predecessor] = outcome.requests
+          assert {opening.status, predecessor.status, predecessor.response_status_code, predecessor.last_error_code} == {"succeeded", "failed", 499, "client_disconnected"}
+          assert outcome.upstream_count == 2
+
+        :reattach ->
+          assert outcome.turn_after_late_detach == :running_on_reattached_socket
+          assert outcome.first_answer == {"response.completed", "resp_take_over_successor"}
+          assert_one_charge_each!(outcome)
+      end
+    end
+  end
+
   defp assert_one_charge_each!(outcome) do
     assert [opening, predecessor, successor] = outcome.requests
     assert {opening.status, predecessor.status, successor.status} == {"succeeded", "failed", "succeeded"}
@@ -184,6 +216,168 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.InheritedT
       requests: Enum.map(requests, &Repo.get!(Request, &1.id)),
       upstream_count: FakeUpstream.count(upstream)
     }
+  end
+
+  defp run_late_detach_scenario(topology, successor) do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence(
+          [
+            native_request(FakeUpstream.websocket_text_frames(opening_frames())),
+            native_request(FakeUpstream.barrier_websocket_frames(held_continuation_frames(), notify: self(), release_ref: release_ref))
+          ] ++ if(successor == :reattach, do: [native_request(FakeUpstream.websocket_text_frames([completed_frame("resp_take_over_successor", [])]))], else: [])
+        )
+      )
+
+    setup = topology_setup!(topology, upstream)
+    model = setup.model.exposed_model_id
+    user = synthetic_user_item("take over question")
+    port = start_public_endpoint!()
+    {conn_a, ws_a, ref_a, predecessor_id} = visible_held_continuation!(port, setup, model, user, upstream, release_ref)
+
+    # A drops; B attaches at once and inherits the running visible turn.
+    _closed = Mint.HTTP.close(conn_a)
+    _dropped = {ws_a, ref_a}
+    {conn_b, _ws_b, _ref_b} = connect!(port, setup)
+    owner = owner_pid(topology, setup)
+    await_inherited_visible_turn!(owner)
+    %{downstream: %{pid: socket_b}} = :sys.get_state(owner)
+
+    # B closes; its session cleanup is held at its first query until the owner
+    # has handled B's exit.
+    hold = hold_session_cleanup!(socket_b)
+    socket_monitor = Process.monitor(socket_b)
+    _closed = Mint.HTTP.close(conn_b)
+    assert_receive {^hold, :held, cleanup}, @detection_timeout_ms
+    assert_receive {:DOWN, ^socket_monitor, :process, ^socket_b, _reason}, @detection_timeout_ms
+    await_owner_state!(owner, &match?(%{downstream: nil, active_turn: %{downstream: %{pid: ^socket_b}, visible_output?: true}}, &1), "the owner never handled the exit of the inheriting socket")
+
+    reattached = if successor == :reattach, do: reattach!(port, setup, owner)
+    release_session_cleanup!(hold, cleanup)
+
+    case successor do
+      :none ->
+        status = await_request_settled(predecessor_id, System.monotonic_time(:millisecond) + @detection_timeout_ms)
+        _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
+        requests = settled_requests!(setup)
+        %{predecessor_status_after_late_detach: status, requests: requests, upstream_count: FakeUpstream.count(upstream)}
+
+      :reattach ->
+        {conn_c, ws_c, ref_c, socket_c} = reattached
+        turn = late_detach_turn_state(owner, socket_c, predecessor_id)
+        successor_payload = turn_payload(model, "turn-take-over", [user, function_call_item(), tool_output_item()])
+        {conn_c, ws_c} = public_websocket_send_text!(conn_c, ws_c, ref_c, encode(successor_payload))
+        {conn_c, _ws_c, answer} = receive_until_terminal!(conn_c, ws_c, ref_c)
+        last = List.last(answer)
+        _closed = Mint.HTTP.close(conn_c)
+        _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
+        requests = settled_requests!(setup)
+
+        %{
+          turn_after_late_detach: turn,
+          first_answer: {last["type"], get_in(last, ["response", "id"])},
+          requests: requests,
+          upstream_count: FakeUpstream.count(upstream)
+        }
+    end
+  end
+
+  # Socket A: the opening request, then the anchored tool continuation, held
+  # by the provider after its first visible delta.
+  defp visible_held_continuation!(port, setup, model, user, upstream, release_ref) do
+    {conn_a, ws_a, ref_a} = connect!(port, setup)
+    {conn_a, ws_a} = public_websocket_send_text!(conn_a, ws_a, ref_a, encode(turn_payload(model, "turn-take-over", [user])))
+    {conn_a, ws_a, opening} = receive_until_terminal!(conn_a, ws_a, ref_a)
+    assert List.last(opening)["type"] == "response.completed"
+
+    continuation =
+      model
+      |> turn_payload("turn-take-over", [tool_output_item()])
+      |> Map.put("previous_response_id", "resp_take_over_opening")
+
+    {conn_a, ws_a} = public_websocket_send_text!(conn_a, ws_a, ref_a, encode(continuation))
+
+    for ordinal <- [0, 1, 2] do
+      assert_receive {:fake_upstream_frame_barrier, ^ordinal, _handler, ^release_ref}, @detection_timeout_ms
+      assert :ok = FakeUpstream.release_frame(upstream, release_ref)
+    end
+
+    assert_receive {:fake_upstream_frame_barrier, 3, _handler, ^release_ref}, @detection_timeout_ms
+    {conn_a, ws_a, visible} = receive_types!(conn_a, ws_a, ref_a, 3)
+    assert visible == ["response.created", "response.output_item.added", "response.output_text.delta"]
+    assert [_opening, %Request{id: predecessor_id, status: "in_progress"}] = request_logs(setup.pool.id)
+    {conn_a, ws_a, ref_a, predecessor_id}
+  end
+
+  # C attaches after B's exit and before B's late detach, and inherits the turn.
+  defp reattach!(port, setup, owner) do
+    {conn_c, ws_c, ref_c} = connect!(port, setup)
+    await_inherited_visible_turn!(owner)
+    %{downstream: %{pid: socket_c}} = :sys.get_state(owner)
+    {conn_c, ws_c, ref_c, socket_c}
+  end
+
+  defp late_detach_turn_state(owner, socket_c, predecessor_id) do
+    case {:sys.get_state(owner), Repo.get!(Request, predecessor_id).status} do
+      {%{downstream: %{pid: ^socket_c}, active_turn: %{downstream: %{pid: ^socket_c}} = active_turn}, "in_progress"} ->
+        if Map.has_key?(active_turn, :canceled_result), do: :cancelled_by_late_detach, else: :running_on_reattached_socket
+
+      {state, status} ->
+        {:unexpected, Map.take(state, [:downstream]), status}
+    end
+  end
+
+  defp settled_requests!(setup) do
+    requests = request_logs(setup.pool.id)
+
+    for request <- requests,
+        do: assert(await_request_settled(request.id, System.monotonic_time(:millisecond) + @detection_timeout_ms) != "in_progress")
+
+    Enum.map(requests, &Repo.get!(Request, &1.id))
+  end
+
+  defp await_owner_state!(owner, condition, message) do
+    deadline_ms = System.monotonic_time(:millisecond) + @detection_timeout_ms
+
+    Stream.repeatedly(fn -> :sys.get_state(owner) end)
+    |> Enum.find(fn state -> condition.(state) or System.monotonic_time(:millisecond) >= deadline_ms or (Process.sleep(5) && false) end)
+    |> then(&assert(condition.(&1), message))
+  end
+
+  # Holds the session cleanup task of `socket` right after its first query (the
+  # owner lease read in front of its detach). The query has returned and its
+  # connection is back in the pool, so nothing else waits on the hold.
+  defp hold_session_cleanup!(socket) do
+    hold = make_ref()
+    handler_id = {__MODULE__, :session_cleanup_hold, hold}
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    :ok = :telemetry.attach(handler_id, [:codex_pooler, :repo, :query], &__MODULE__.hold_session_cleanup_query/4, %{hold: hold, test: self(), socket: socket})
+    hold
+  end
+
+  @doc false
+  def hold_session_cleanup_query(_event, _measurements, _metadata, %{hold: hold, test: test, socket: socket}) do
+    if socket in Process.get(:"$callers", []) and match?({CodexPoolerWeb.WebsocketControlPath, _function, _arity}, Process.get(:"$initial_call")) and is_nil(Process.get({__MODULE__, hold})) do
+      Process.put({__MODULE__, hold}, :held)
+      send(test, {hold, :held, self()})
+
+      receive do
+        {^hold, :release} -> :ok
+      after
+        @detection_timeout_ms -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp release_session_cleanup!(hold, cleanup) do
+    monitor = Process.monitor(cleanup)
+    send(cleanup, {hold, :release})
+    assert_receive {:DOWN, ^monitor, :process, ^cleanup, _reason}, @detection_timeout_ms
+    :telemetry.detach({__MODULE__, :session_cleanup_hold, hold})
   end
 
   # The peer shares the committed database, so its fixture is committed: the
