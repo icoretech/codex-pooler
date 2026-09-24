@@ -85,6 +85,7 @@ defmodule CodexPoolerWeb.Runtime.WithheldAdviceUsageLimitTest do
       assert_retry_after_close!(bridged, http)
       assert get_resp_header(bridged, "x-should-retry") == []
       refute bridged.resp_body =~ @provider_message
+      assert_settled!(bridge_pool)
     end
   end
 
@@ -301,7 +302,8 @@ defmodule CodexPoolerWeb.Runtime.WithheldAdviceUsageLimitTest do
         end
       end)
 
-    assert [%Request{status: "failed"}] = rows
+    # The row records the 429 the client was answered (row 206-596).
+    assert [%Request{status: "failed", response_status_code: 429}] = rows
     assert FakeUpstream.count(pool.sibling_upstream) == 0
   end
 
