@@ -530,7 +530,6 @@ defmodule CodexPooler.InstanceSettings.Cache do
     :ok
   end
 
-
   defp stored_owner_lease_renewal(%Settings{gateway: %{bridge_owner_lease_renewal_seconds: renewal}}), do: renewal
   defp stored_owner_lease_renewal(_settings), do: nil
 
