@@ -263,12 +263,25 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     |> Enum.with_index()
     |> Enum.find_value(fn
       {%{"type" => "input_image", "detail" => detail}, part_index} when not is_nil(detail) and detail not in @image_details ->
-        param = "#{path}[#{part_index}].detail"
-        {:error, Error.reason(400, "invalid_value", "invalid value for parameter #{param} (invalid_value); supported values: #{Enum.join(@image_details, ", ")}", param)}
+        {:error, invalid_image_detail("#{path}[#{part_index}].detail")}
 
       _part ->
         nil
     end)
+  end
+
+  @doc """
+  Whether `detail` is absent (nil) or one of the provider's `input_image.detail`
+  values. Shared with the Chat adapter, which validates `image_url.detail`
+  against the same enum under its own field path.
+  """
+  @spec valid_image_detail?(term()) :: boolean()
+  def valid_image_detail?(detail), do: is_nil(detail) or detail in @image_details
+
+  @doc "The Pooler-authored refusal of an image `detail` outside the provider enum, at `param`."
+  @spec invalid_image_detail(String.t()) :: Error.reason()
+  def invalid_image_detail(param) do
+    Error.reason(400, "invalid_value", "invalid value for parameter #{param} (invalid_value); supported values: #{Enum.join(@image_details, ", ")}", param)
   end
 
   @spec normalize_audio_input_items([map()]) ::
@@ -434,7 +447,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   end
 
   defp normalize_input_item(%{"content" => content} = item) when is_list(content) do
-    {:ok, item |> Map.put("type", "message") |> Map.put_new("role", "user") |> normalize_message_role()}
+    {:ok,
+     item
+     |> Map.put("type", "message")
+     |> Map.put_new("role", "user")
+     |> Map.put("content", Enum.map(content, &drop_null_image_detail/1))
+     |> normalize_message_role()}
   end
 
   defp normalize_input_item(%{"role" => _role} = item),
@@ -683,6 +701,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     do: Map.put(acc, "detail", detail)
 
   defp maybe_put_image_detail(acc, _part), do: acc
+
+  # A message image passes through as sent except for a null `detail`, which
+  # is absent here as on a tool-output image: the Codex backend accepts null
+  # (probed 2026-09-24) but the native client never serializes one
+  # (findings#206 row 206-488).
+  defp drop_null_image_detail(%{"type" => "input_image", "detail" => nil} = part),
+    do: Map.delete(part, "detail")
+
+  defp drop_null_image_detail(part), do: part
 
   defp normalize_message_role(%{"type" => "message", "role" => "system"} = item),
     do: Map.put(item, "role", "developer")

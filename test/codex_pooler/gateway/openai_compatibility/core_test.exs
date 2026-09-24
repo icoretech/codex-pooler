@@ -3271,6 +3271,98 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end
     end
 
+    # findings#206 row 206-488: the Codex backend accepts a JSON-null `detail`
+    # on a message image (probed 2026-09-24), but the native client never
+    # serializes one and a `/v1` tool-output image already drops it, so a
+    # message image drops it too: a null detail is absent on every `/v1` image.
+    test "message input_image keeps a string detail and drops a null one" do
+      breakpoint = %{"mode" => "explicit"}
+
+      assert {:ok, %{payload: payload}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "type" => "message",
+                     "role" => "user",
+                     "content" => [
+                       %{"type" => "input_text", "text" => "synthetic image question"},
+                       %{"type" => "input_image", "detail" => nil, "image_url" => "https://example.com/null.png"},
+                       %{"type" => "input_image", "detail" => nil, "file_id" => "file-fixture-null", "prompt_cache_breakpoint" => breakpoint},
+                       %{"type" => "input_image", "detail" => "original", "image_url" => "https://example.com/original.png"}
+                     ]
+                   },
+                   %{"role" => "user", "content" => [%{"type" => "input_image", "detail" => nil, "image_url" => "https://example.com/untyped.png"}]}
+                 ]
+               })
+
+      assert [%{"type" => "message", "content" => content}, %{"type" => "message", "content" => untyped}] = payload["input"]
+
+      assert content == [
+               %{"type" => "input_text", "text" => "synthetic image question"},
+               %{"type" => "input_image", "image_url" => "https://example.com/null.png"},
+               %{"type" => "input_image", "file_id" => "file-fixture-null", "prompt_cache_breakpoint" => breakpoint},
+               %{"type" => "input_image", "detail" => "original", "image_url" => "https://example.com/original.png"}
+             ]
+
+      assert untyped == [%{"type" => "input_image", "image_url" => "https://example.com/untyped.png"}]
+    end
+
+    # The public Chat Completions API accepts `image_url.detail` (gpt-6-luna,
+    # probed 2026-09-24) and the Codex backend reads `detail` on an input image,
+    # so the Chat rebuild carries it into the `input_image` like the Responses
+    # adapter does; a null detail stays absent, and Lite strips it later.
+    test "Chat image_url detail becomes the input_image detail" do
+      assert {:ok, result} =
+               Chat.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "messages" => [
+                   %{
+                     "role" => "user",
+                     "content" => [
+                       %{"type" => "text", "text" => "synthetic image question"},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/high.png", "detail" => "high"}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/original.png", "detail" => "original"}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/null.png", "detail" => nil}},
+                       %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/object.png"}},
+                       %{"type" => "image_url", "image_url" => "https://example.com/bare.png"}
+                     ]
+                   }
+                 ]
+               })
+
+      assert [%{"type" => "message", "role" => "user", "content" => content}] = result.payload["input"]
+
+      assert content == [
+               %{"type" => "input_text", "text" => "synthetic image question"},
+               %{"type" => "input_image", "image_url" => "https://example.com/high.png", "detail" => "high"},
+               %{"type" => "input_image", "image_url" => "https://example.com/original.png", "detail" => "original"},
+               %{"type" => "input_image", "image_url" => "https://example.com/null.png"},
+               %{"type" => "input_image", "image_url" => "https://example.com/object.png"},
+               %{"type" => "input_image", "image_url" => "https://example.com/bare.png"}
+             ]
+    end
+
+    test "Chat image detail outside the provider enum is refused with the Chat field path" do
+      bogus = %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/bogus.png", "detail" => "bogus"}}
+      text = %{"type" => "text", "text" => "synthetic image question"}
+
+      cases = [
+        {[%{"role" => "system", "content" => "lifted"}, %{"role" => "user", "content" => [text, bogus]}], "messages[1].content[1].image_url.detail"},
+        {[%{"role" => "user", "content" => [put_in(bogus, ["image_url", "detail"], "HIGH")]}], "messages[0].content[0].image_url.detail"},
+        {[%{"role" => "user", "content" => [put_in(bogus, ["image_url", "detail"], 3)]}], "messages[0].content[0].image_url.detail"},
+        {[%{"role" => "user", "content" => put_in(bogus, ["image_url", "detail"], "bogus")}], "messages[0].content.image_url.detail"},
+        {[%{"role" => "user", "content" => [text, %{"type" => "input_image", "image_url" => "https://example.com/bogus.png", "detail" => "bogus"}]}], "messages[0].content[1].detail"}
+      ]
+
+      for {messages, param} <- cases do
+        assert {:error, %{status: 400, code: "invalid_value", param: ^param, message: message}} =
+                 Chat.coerce(%{"model" => "gpt-fixture-text", "messages" => messages})
+
+        assert message == "invalid value for parameter #{param} (invalid_value); supported values: low, high, auto, original"
+      end
+    end
+
     # findings#258 row 258-11: the Responses SDK types a tool-output image as
     # `input_image` with `file_id` or `image_url`; the file reference is kept.
     test "function_call_output keeps an input_image file_id from Responses SDK tool output" do
