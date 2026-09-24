@@ -1601,7 +1601,18 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
       assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, 15_000
 
-      assert Repo.aggregate(Request, :count) == 0
+      # The refusal is client-visible, so it writes one rejected request row
+      # naming the code and the refusing phase; the work itself rolls back
+      # (findings#206 row 206-564).
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "rejected"
+      assert request.last_error_code == expected.code
+      assert request.response_status_code == expected.status
+      assert request.request_metadata["continuity_denial"]["denial_family"] == "session_owner_lease"
+      assert request.request_metadata["continuity_denial"]["failure_phase"] == "reservation"
+      assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+      assert Repo.aggregate(from(t in CodexTurn, where: t.request_id == ^request.id), :count) == 0
+      assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) == 0
       assert Repo.aggregate(Attempt, :count) == 0
       assert Repo.aggregate(CodexTurn, :count) == 0
       assert FakeUpstream.count(upstream) == 0
