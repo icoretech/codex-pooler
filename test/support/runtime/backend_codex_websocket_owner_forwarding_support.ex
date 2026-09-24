@@ -207,12 +207,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   # released-client upgrade resolves its session from `x-codex-window-id`, so a
   # peer owner meant for such a socket is started under that source.
   def start_remote_bridge_owner!(auth, session_header, remote_node, persistence_kind \\ :fake, session_header_source \\ "x-session-id") do
-    {:ok, session} =
-      Gateway.start_codex_session(auth, %{
-        session_header: session_header,
-        session_header_source: session_header_source,
-        owner_instance_id: Atom.to_string(remote_node)
-      })
+    start_remote_session_owner!(auth, %{session_header: session_header, session_header_source: session_header_source}, remote_node, persistence_kind)
+  end
+
+  # `session_attrs` are the continuity inputs the session is keyed by, as a
+  # socket's upgrade would resolve them (a session header, or the public `/v1`
+  # socket's `accepted_turn_state`).
+  def start_remote_session_owner!(auth, session_attrs, remote_node, persistence_kind) do
+    {:ok, session} = Gateway.start_codex_session(auth, Map.put(session_attrs, :owner_instance_id, Atom.to_string(remote_node)))
 
     persistence =
       case persistence_kind do
@@ -353,11 +355,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   # `window_id` resolves (`x-codex-window-id` keys it), with the real Repo and
   # persistence on the peer. The owner's native compaction lifecycle events
   # are relayed to the calling process as `{:admission_lifecycle, from, to}`.
-  def start_peer_window_owner!(%{authorization: authorization, identity: identity} = setup, window_id) do
+  def start_peer_window_owner!(setup, window_id),
+    do: start_peer_session_owner!(setup, %{session_header: window_id, session_header_source: "x-codex-window-id"})
+
+  # The same for any socket: `session_attrs` key the session the socket's
+  # upgrade resolves (`%{accepted_turn_state: turn_state}` for a public `/v1`
+  # socket sending `x-codex-turn-state`).
+  def start_peer_session_owner!(%{authorization: authorization, identity: identity} = setup, session_attrs) do
     BackendCodexTestSupport.register_unboxed_pool_cleanup!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(authorization)
     peer_node = start_bridge_peer!(:current, identity, repo: :real)
-    {session, owner_pid} = start_remote_bridge_owner!(auth, window_id, peer_node, :real, "x-codex-window-id")
+    {session, owner_pid} = start_remote_session_owner!(auth, session_attrs, peer_node, :real)
     assert node(owner_pid) == peer_node
     assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
 
