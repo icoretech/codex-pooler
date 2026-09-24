@@ -47,6 +47,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :pin_at, :any, default: nil
   attr :frozen?, :boolean, default: false
   attr :newer_count, :integer, default: 0
+  attr :newer_count_exact?, :boolean, default: true
 
   def request_logs_table(assigns) do
     assigns = assign(assigns, :page, LogPagination.metadata(assigns.request_logs))
@@ -101,7 +102,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
             data-role="request-log-newer-count"
             class="shrink-0 tabular-nums text-base-content/45"
           >
-            · {format_total(@newer_count)} newer
+            · {format_total(@newer_count)}{if !@newer_count_exact?, do: "+"} newer
           </span>
           <.link
             :if={@frozen?}
@@ -126,7 +127,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           <%!-- The count is the footer's job; the caption repeats it only for
           assistive tech, which reads it before the rows. --%>
           <caption class="sr-only">
-            Request logs, {format_total(@request_logs.total)} matching sanitized request logs
+            Request logs, {format_total(@request_logs.total)}{if Map.get(@request_logs, :total_exact?) == false,
+              do: " or more"} matching sanitized request logs
           </caption>
           <%!-- Transport is the only elastic column: its route, origin and client
           all truncate with the full value in a title, so it is the one that gives

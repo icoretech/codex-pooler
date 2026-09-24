@@ -3,7 +3,8 @@ defmodule CodexPooler.Accounting.RequestLogs do
   Request-log read model and safe error shaping for admin reporting.
 
   The list projection intentionally keeps the legacy request-log contract stable:
-  totals count the exact filtered visible request rows before pagination, rows are
+  totals count the exact filtered visible request rows before pagination (at most
+  `:count_limit` of them when a reader bounds the count), rows are
   ordered by `requests.admitted_at DESC, requests.id DESC`, offset pagination is
   preserved, upstream filters apply to the latest attempt only, latest attempts
   are selected by highest `attempt_number`, and settlement presentation uses the
@@ -38,6 +39,13 @@ defmodule CodexPooler.Accounting.RequestLogs do
 
   @proxy_control_route_class RouteClass.proxy_control()
   @usage_known "usage_known"
+  @doc """
+  One page of request logs and the number of rows that match.
+
+  `total` is exact unless `:count_limit` is given: then at most that many rows
+  are counted, and when more match `total` is `count_limit` and `total_exact?`
+  is `false`, so a reader can say "more than" instead of a wrong number.
+  """
   @spec list(term(), keyword()) :: map()
   def list(pool_or_id, opts \\ []) do
     pool_id = id_for(pool_or_id)
@@ -135,10 +143,26 @@ defmodule CodexPooler.Accounting.RequestLogs do
       |> maybe_filter_request_log_pool(pool_id)
       |> apply_request_log_filters(filters)
 
-    total = Repo.aggregate(query, :count, :id)
+    {total, total_exact?} = count_request_log_rows(query, Keyword.get(opts, :count_limit))
     rows = request_log_rows(query, limit, offset)
 
-    %{items: request_log_items(rows, surface), total: total, limit: limit, offset: offset}
+    %{items: request_log_items(rows, surface), total: total, total_exact?: total_exact?, limit: limit, offset: offset}
+  end
+
+  # The exact total reads every matching row: for an all-Pools page that is the
+  # whole `requests` history through an index-only scan, 600 loads cost 10M
+  # blocks on production (findings#206 row 206-385). With a `count_limit` the
+  # count stops one row past the limit, so a reader learns either the exact
+  # total or that more than `count_limit` rows match, and never pays for more.
+  # The count selects only the request id, so the planner drops every unused
+  # left join (facts, key, assignment, identity) as it does for the exact count.
+  defp count_request_log_rows(query, nil), do: {Repo.aggregate(query, :count, :id), true}
+
+  defp count_request_log_rows(query, count_limit) when is_integer(count_limit) and count_limit > 0 do
+    bounded = from([request, ...] in query, select: %{id: request.id}, limit: ^(count_limit + 1))
+    counted = Repo.one(from(row in subquery(bounded), select: count()))
+
+    if counted > count_limit, do: {count_limit, false}, else: {counted, true}
   end
 
   defp request_log_options(opts) do

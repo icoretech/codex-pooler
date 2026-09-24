@@ -37,6 +37,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   # mechanism.
   @max_page 100_000
 
+  # How far past the current page the total is counted. An exact total reads
+  # every matching row, which for the all-Pools view is the whole request
+  # history, on every load and on every live refresh (findings#206 row
+  # 206-385). Past this many rows the pager says "10000+" instead: the operator
+  # still sees that more match and can page on, and never a wrong number.
+  @count_window 10_000
+
+  # Arrivals behind a pinned page are counted up to this many; past it the
+  # banner says "1000+ newer".
+  @newer_count_limit 1_000
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -67,6 +78,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        request_log_snapshot_at: nil,
        request_log_pin_at: nil,
        request_log_newer_count: 0,
+       request_log_newer_count_exact?: true,
        selected_request_log: nil
      )}
   end
@@ -316,6 +328,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
               pin_at={@request_log_pin_at}
               frozen?={@request_log_snapshot_at != nil}
               newer_count={@request_log_newer_count}
+              newer_count_exact?={@request_log_newer_count_exact?}
             />
           </section>
         </div>
@@ -538,7 +551,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       |> assign(
         request_logs: result.request_logs,
         request_log_pin_at: result.pin_at,
-        request_log_newer_count: result.newer_count,
+        request_log_newer_count: result.newer_count.total,
+        request_log_newer_count_exact?: result.newer_count.total_exact?,
         model_filter_options: model_filter_options(result.model_filter_models, socket.assigns.filter_values["model"]),
         request_logs_loading?: false,
         request_logs_loaded?: true,
@@ -700,7 +714,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   defp request_logs(selected_pool, filters, visible_pool_ids, offset) do
     request_log_page(selected_pool, filters, visible_pool_ids,
       offset: offset,
-      limit: @page_size
+      limit: @page_size,
+      count_limit: offset + @count_window
     )
   end
 
@@ -724,7 +739,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
   # Counting arrivals uses the operator's own filters plus a lower bound at the
   # freeze, never the frozen upper bound — the two together select nothing.
-  defp newer_request_log_count(_selected_pool, _filters, _visible_pool_ids, nil), do: 0
+  defp newer_request_log_count(_selected_pool, _filters, _visible_pool_ids, nil), do: %{total: 0, total_exact?: true}
 
   defp newer_request_log_count(selected_pool, filters, visible_pool_ids, cursor) do
     # The complement of the pinned window, expressed in the same key, so the
@@ -732,13 +747,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     # on. The operator's own filters are carried through untouched.
     filters = Keyword.put(filters, :after, cursor)
 
-    # Only the total is wanted. The list query still costs its count, but asking
-    # for one row instead of fifty keeps the join and the debug projection off
-    # the debounce path; a count-only query in the facade is the real fix.
-    %{total: total} =
-      request_log_page(selected_pool, filters, visible_pool_ids, offset: 0, limit: 1)
+    # Only the total is wanted, and only up to the banner's limit. Asking for one
+    # row instead of fifty keeps the join and the debug projection off the
+    # debounce path.
+    %{total: total, total_exact?: total_exact?} =
+      request_log_page(selected_pool, filters, visible_pool_ids, offset: 0, limit: 1, count_limit: @newer_count_limit)
 
-    total
+    %{total: total, total_exact?: total_exact?}
   end
 
   # The head of the page, as a cursor: the row itself, not the moment it landed.
@@ -903,5 +918,5 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     }
   end
 
-  defp empty_request_logs, do: %{items: [], total: 0, limit: @page_size, offset: 0}
+  defp empty_request_logs, do: %{items: [], total: 0, total_exact?: true, limit: @page_size, offset: 0}
 end

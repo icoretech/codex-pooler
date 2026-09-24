@@ -11,16 +11,25 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
 
   @doc """
   Page metadata derived from a reader's `{items, total, limit, offset}` window.
+
+  A window whose `total_exact?` is `false` counted only up to `total` and more
+  rows match: its page count and range read as a lower bound ("200+",
+  "1-50 of 10000+"). A reader counts past its current page, so the next page
+  stays reachable.
   """
   @spec metadata(map()) :: map()
-  def metadata(%{total: total, limit: limit, offset: offset})
+  def metadata(%{total: total, limit: limit, offset: offset} = window)
       when is_integer(limit) and limit > 0 do
+    exact? = Map.get(window, :total_exact?, true) != false
+    total_pages = max(ceil(total / limit), 1)
+
     %{
       current_page: div(offset, limit) + 1,
-      total_pages: max(ceil(total / limit), 1),
+      total_pages: total_pages,
+      total_pages_label: bound_label(total_pages, exact?),
       has_previous_page: offset > 0,
       has_next_page: offset + limit < total,
-      range: range(total, limit, offset)
+      range: range(total, limit, offset, exact?)
     }
   end
 
@@ -29,14 +38,20 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
     %{
       current_page: 1,
       total_pages: 1,
+      total_pages_label: "1",
       has_previous_page: false,
       has_next_page: false,
       range: "0 of 0"
     }
   end
 
-  defp range(0, _limit, _offset), do: "0 of 0"
-  defp range(total, limit, offset), do: "#{offset + 1}-#{min(offset + limit, total)} of #{total}"
+  defp range(0, _limit, _offset, _exact?), do: "0 of 0"
+
+  defp range(total, limit, offset, exact?),
+    do: "#{offset + 1}-#{min(offset + limit, total)} of #{bound_label(total, exact?)}"
+
+  defp bound_label(count, true), do: Integer.to_string(count)
+  defp bound_label(count, false), do: "#{count}+"
 
   @doc """
   The last page that still has rows, for correcting a page past the end.
@@ -71,7 +86,7 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
     >
       <div class="flex items-center gap-3">
         <p data-role="pagination-status" class="hidden shrink-0 text-base-content/60 sm:block">
-          Page {@page.current_page} of {@page.total_pages}
+          Page {@page.current_page} of {@page.total_pages_label}
         </p>
 
         <div class="flex min-w-0 grow items-center gap-2 sm:justify-center">
