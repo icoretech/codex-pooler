@@ -146,7 +146,8 @@ defmodule CodexPooler.Access.APIKeyPartialPolicyUpdateTest do
   # `Access.update_api_key/3` edits the key row and never its bindings. A
   # policy field it receives goes through the same merge and validation as
   # the policy path, so the allow list is lowercased and cannot drop the
-  # stored enforced model (findings#206 row 206-505).
+  # stored enforced model (findings#206 row 206-505), and binding limits are
+  # refused rather than silently ignored.
   describe "the key-row update path" do
     test "normalizes a submitted allow list and keeps the policy fields it omits" do
       {scope, pool} = owner_scope_and_pool()
@@ -164,6 +165,25 @@ defmodule CodexPooler.Access.APIKeyPartialPolicyUpdateTest do
       assert widened.allowed_model_identifiers == nil
       assert widened.enforced_model_identifier == "gpt-beta"
       assert policy_snapshot(api_key.id).model_bindings == before.model_bindings
+    end
+
+    test "refuses binding limits instead of ignoring them" do
+      {scope, pool} = owner_scope_and_pool()
+      api_key = restricted_key!(scope, pool, "key row bindings")
+      before = policy_snapshot(api_key.id)
+
+      for attrs <- [
+            %{default_policy: %{max_tokens_per_day: 1}},
+            %{"model_policies" => [%{"model_identifier" => "gpt-alpha", "max_requests_per_minute" => 1}]},
+            %{status: "paused", model_policies: []}
+          ] do
+        assert {:error, %{code: :unsupported_field, message: message}} = Access.update_api_key(scope, api_key, attrs)
+        assert message =~ "update_api_key_with_policy"
+      end
+
+      assert policy_snapshot(api_key.id) == before
+      assert Repo.get!(APIKey, api_key.id).status == "active"
+      refute latest_update_audit(api_key.id)
     end
 
     test "refuses an allow list that drops the stored enforced model" do

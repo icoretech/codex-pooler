@@ -33,6 +33,7 @@ defmodule CodexPooler.Access.APIKeys do
   @status_active "active"
   @status_paused "paused"
   @status_revoked "revoked"
+  @binding_fields [:default_policy, "default_policy", :model_policies, "model_policies"]
   @key_row_policy_fields [
     :allowed_model_identifiers,
     :enforced_model_identifier,
@@ -211,6 +212,32 @@ defmodule CodexPooler.Access.APIKeys do
   @spec update_api_key(Scope.t(), APIKey.t() | Ecto.UUID.t(), map()) ::
           {:ok, APIKey.t()} | {:error, Ecto.Changeset.t() | access_error()}
   def update_api_key(%Scope{} = scope, %APIKey{} = api_key, attrs) when is_map(attrs) do
+    with :ok <- refuse_binding_fields(attrs) do
+      do_update_api_key(scope, api_key, attrs)
+    end
+  end
+
+  def update_api_key(%Scope{} = scope, api_key_id, attrs) when is_binary(api_key_id) do
+    with {:ok, api_key} <- get_api_key(scope, api_key_id) do
+      update_api_key(scope, api_key, attrs)
+    end
+  end
+
+  def update_api_key(_scope, _api_key, _attrs),
+    do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
+
+  # This path writes the key row only. A caller that sends binding limits
+  # would otherwise believe it changed a limit while nothing happened, so they
+  # are refused before any lock or write (findings#206 row 206-505).
+  defp refuse_binding_fields(attrs) do
+    if Enum.any?(@binding_fields, &Map.has_key?(attrs, &1)) do
+      {:error, Errors.access_error(:unsupported_field, "default_policy and model_policies change bindings; use update_api_key_with_policy")}
+    else
+      :ok
+    end
+  end
+
+  defp do_update_api_key(scope, api_key, attrs) do
     case update_api_key_transaction(scope, api_key, attrs) do
       {:ok, {updated_api_key, previous_api_key, invalidate_dashboard_sessions?, notification}} ->
         maybe_broadcast_dashboard_invalidation(
@@ -229,15 +256,6 @@ defmodule CodexPooler.Access.APIKeys do
         error
     end
   end
-
-  def update_api_key(%Scope{} = scope, api_key_id, attrs) when is_binary(api_key_id) do
-    with {:ok, api_key} <- get_api_key(scope, api_key_id) do
-      update_api_key(scope, api_key, attrs)
-    end
-  end
-
-  def update_api_key(_scope, _api_key, _attrs),
-    do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
 
   @spec update_api_key_with_policy(
           Scope.t(),
