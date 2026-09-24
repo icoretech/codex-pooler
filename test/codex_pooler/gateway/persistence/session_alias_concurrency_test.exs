@@ -1,7 +1,6 @@
 defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
   use CodexPooler.DataCase, async: false
 
-  import CodexPooler.AccountsFixtures, only: [delete_user_graph!: 1]
   import CodexPooler.PoolerFixtures
   import CodexPooler.UnboxedFixture
   import Ecto.Query
@@ -44,6 +43,25 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
     end
   end
 
+  test "cleanup preserves a creator shared with another committed pool" do
+    predecessor_slug = "alias-predecessor-#{System.unique_integer([:positive, :monotonic])}"
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(predecessor_slug) end)
+
+    predecessor =
+      run_unboxed(fn ->
+        pool = pool_fixture(%{slug: predecessor_slug})
+        active_api_key_fixture(pool, %{})
+      end)
+
+    fixture = committed_fixture!()
+    assert predecessor.api_key.created_by_user_id == fixture.auth.api_key.created_by_user_id
+
+    run_unboxed(fn -> delete_committed_fixture!(fixture.turn_state) end)
+
+    assert Repo.get!(Pool, predecessor.pool.id)
+    assert Repo.get!(CodexPooler.Accounts.User, predecessor.api_key.created_by_user_id)
+  end
+
   # Registered, never scoped. `run_concurrently/1` drives the body through linked tasks, so a
   # Postgrex error inside one of them kills the untrapped test process and a `try/after` never
   # runs; an ExUnit timeout kill loses it the same way. The pool is the whole committed graph
@@ -51,10 +69,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
   # here needs an owner, so the fixture no longer completes the `platform_bootstrap_state`
   # singleton for a shared `owner@example.com`. Keying the cleanup on the slug and registering
   # it before the commit also covers a fixture that fails partway through.
-  # `api_key_fixture/2` also commits an instance owner of its own when the instance has none,
-  # and that user is outside the pool's cascade, so the cleanup below removes it as the key's
-  # creator, with its membership and audit rows: deleting only the pool would leave a `users`
-  # row behind and break the suites that assert absolute user counts.
+  # An API key creator can be shared with another committed fixture; the pool
+  # helper deletes it only after its last reference is gone.
   defp committed_fixture! do
     slug = "alias-concurrency-#{System.unique_integer([:positive, :monotonic])}"
     register_unboxed_cleanup!(fn -> delete_committed_fixture!(slug) end)
@@ -69,18 +85,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
   end
 
   defp delete_committed_fixture!(slug) do
-    creator_ids =
-      Repo.all(
-        from api_key in "api_keys",
-          join: pool in "pools",
-          on: pool.id == api_key.pool_id,
-          where: pool.slug == ^slug and not is_nil(api_key.created_by_user_id),
-          distinct: true,
-          select: type(api_key.created_by_user_id, Ecto.UUID)
-      )
-
-    Repo.delete_all(from pool in Pool, where: pool.slug == ^slug)
-    delete_user_graph!(creator_ids)
+    pool_ids = Repo.all(from pool in Pool, where: pool.slug == ^slug, select: pool.id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!(pool_ids)
     :ok
   end
 

@@ -539,7 +539,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def gateway_setup(upstream, opts \\ []) do
-    key = active_api_key_fixture()
+    key = if slug = Keyword.get(opts, :pool_slug), do: active_api_key_fixture(pool_fixture(%{slug: slug})), else: active_api_key_fixture()
     pool = key.pool
     # Registered before the fence so it runs after it: the owners this Pool's
     # sockets start are stopped once those sockets and their cleanup are done,

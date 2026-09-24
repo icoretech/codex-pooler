@@ -18,7 +18,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
   alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Gateway.Websocket.DownstreamSession
   alias CodexPooler.Repo
+  alias CodexPooler.UnboxedFixture
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
   @budget 15_000
@@ -463,8 +465,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
 
   defp fixture do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
-    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-    Sandbox.mode(Repo, :auto)
 
     on_exit(fn ->
       Sandbox.mode(Repo, :manual)
@@ -474,16 +474,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
         else: Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
     end)
 
-    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
-    setup = gateway_setup(upstream)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+    Sandbox.mode(Repo, :auto)
 
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
-        Repo.delete!(setup.identity)
-        Repo.delete!(setup.pricing)
-      end)
-    end)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    # Allocate the cleanup key before gateway_setup/2 can commit its pool.
+    slug = "pre-attempt-#{System.unique_integer([:positive, :monotonic])}"
+    UnboxedFixture.register_unboxed_cleanup!(fn -> delete_committed_fixture!(slug) end)
+    setup = gateway_setup(upstream, pool_slug: slug)
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
@@ -494,8 +492,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
       })
 
     owner = state.websocket_owner_pid
-    on_exit(fn -> if Process.alive?(owner), do: WebsocketOwnerSession.drain_owner(owner) end)
+
+    on_exit(fn ->
+      :ok = WebsocketCleanupFence.await_session_cleanups!()
+
+      if Process.alive?(owner) do
+        monitor = Process.monitor(owner)
+        :ok = GenServer.stop(owner, :shutdown, @budget)
+        assert_receive {:DOWN, ^monitor, :process, ^owner, :shutdown}, @budget
+      end
+    end)
+
     {setup, upstream, state}
+  end
+
+  defp delete_committed_fixture!(slug) do
+    pool_ids = Repo.all(from pool in CodexPooler.Pools.Pool, where: pool.slug == ^slug, select: pool.id)
+
+    for pool_id <- pool_ids do
+      identity_ids = Repo.all(from assignment in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment, where: assignment.pool_id == ^pool_id, select: assignment.upstream_identity_id)
+      pricing_ids = Repo.all(from model in CodexPooler.Catalog.Model, join: pricing in CodexPooler.Catalog.PricingSnapshot, on: pricing.model_identifier == model.upstream_model_id, where: model.pool_id == ^pool_id, select: pricing.id)
+      Enum.each(pricing_ids, fn pricing_id -> cleanup_unboxed_pool!(%{pool: %{id: pool_id}, pricing: %{id: pricing_id}}) end)
+      Repo.delete_all(from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity, where: identity.id in ^identity_ids)
+    end
   end
 
   defp attach_commit_barrier(phase) do
