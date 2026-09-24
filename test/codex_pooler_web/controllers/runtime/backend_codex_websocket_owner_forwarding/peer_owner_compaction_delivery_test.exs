@@ -12,7 +12,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PeerOwnerC
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AccountsFixtures
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
+  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Transports.Websocket.{NativeCompactionAdmission, WebsocketOwnerSession}
   alias CodexPooler.Repo
   alias CodexPooler.TestAppEnv
 
@@ -41,6 +42,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PeerOwnerC
   @resumed_window_id "#{@thread_id}:1"
   @turn_id "019a0000-0000-7000-8000-00000000d002"
   @next_turn_id "019a0000-0000-7000-8000-00000000d006"
+  @other_turn_id "019a0000-0000-7000-8000-00000000d007"
   @installation_id "00000000-0000-4000-8000-00000000d003"
   @context_window_id "00000000-0000-4000-8000-00000000d004"
   @resumed_context_window_id "00000000-0000-4000-8000-00000000d005"
@@ -66,12 +68,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PeerOwnerC
       setup = gateway_setup(upstream, compact?: true)
       peer = start_peer_window_owner!(setup, @window_id)
       if mode == "lite", do: set_model_serving_mode!(committed_owner_scope(), setup, "lite")
-      ctx = Map.put(ctx, :setup, setup)
+      ctx = Map.merge(ctx, %{setup: setup, owner: peer.owner_pid})
       port = start_public_endpoint!()
       client = connect!(port, setup)
 
       try do
-        client = compaction_exchange!(client, ctx, peer)
+        client = compaction_exchange!(client, ctx)
         {client, frames} = receive_until_terminal(client, [])
         assert frames == ["response.output_item.done", "response.completed"]
 
@@ -96,20 +98,185 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PeerOwnerC
     end
   end
 
+  # A collected compaction the provider answers with an error is a collected
+  # delivery too: nothing follows it from the owner. Before `056995113` the
+  # socket waited for an owner `:complete` after it whenever it forwarded,
+  # which the owner sends only on its output-commit probe path, so the next
+  # turn of the connection could queue behind the failed compaction on either
+  # topology (findings#206 row 206-399). Both collected deliveries, the owner
+  # on this node (forwarding on, one node) and on a peer VM. Two provider
+  # answers, neither a transport failure: a `response.failed` terminal
+  # (`server_error`, relayed to the client as the provider's terminal) and a
+  # completed response without the compaction item (`invalid_compaction_response`,
+  # answered by the gateway). The next turn is a new ordinary turn on the same
+  # connection.
+  for failure <- [:provider_failed, :invalid_result], delivery <- [:collect_compaction, :collect_full_history], topology <- [:local_owner, :peer_owner] do
+    @tag failure: failure, delivery: delivery, topology: topology
+    test "#{topology} #{delivery} ending in #{failure} releases the connection for the next turn",
+         %{failure: failure, delivery: delivery, topology: topology} do
+      ctx = %{mode: "full", delivery: delivery, topology: topology, failure: failure}
+      sequence = failed_compaction_sequence(ctx) ++ [ordinary_turn_expectation()]
+      {ctx, upstream} = start_topology!(ctx, sequence)
+      port = start_public_endpoint!()
+      client = connect!(port, ctx.setup)
+
+      try do
+        client = compaction_exchange!(client, ctx)
+        {client, frames} = receive_terminal_frames(client, [])
+        assert_failure_terminal!(failure, frames)
+
+        # The failed compaction's response task was released: the next turn
+        # is answered on the same connection.
+        {client, frames} = client |> send_frame!(ordinary_turn_frame(ctx)) |> receive_until_terminal([])
+        assert frames == ["response.created", "response.completed"]
+
+        rows = await_settled!(ctx.setup.pool.id, failed_rows(delivery))
+        assert Enum.map(rows, &{&1.endpoint, &1.status}) == failed_rows(delivery)
+        if ctx.peer, do: assert_peer_owner_served!(ctx.peer)
+        assert FakeUpstream.http_request_count(upstream) == 0
+        assert :ok = FakeUpstream.verify!(upstream)
+        _client = client
+      after
+        Mint.HTTP.close(client.conn)
+      end
+    end
+  end
+
+  # The final turn after an admitted compaction must carry the item that
+  # compaction returned; another one is refused `409 invalid_runtime_admission`
+  # before dispatch. A remote owner's `compaction_item_mismatch` used to be
+  # folded into `owner_crashed` by the forwarder (findings#206 rows
+  # 206-397/206-400): the remote refusal must answer as the local one does.
+  for topology <- [:local_owner, :peer_owner] do
+    @tag topology: topology
+    test "#{topology} refuses a final turn carrying another compaction item with 409", %{topology: topology} do
+      ctx = %{mode: "full", delivery: :collect_compaction, topology: topology}
+      item = compaction_item()
+      {ctx, upstream} = start_topology!(ctx, Enum.take(upstream_sequence(ctx, item), 2))
+      port = start_public_endpoint!()
+      client = connect!(port, ctx.setup)
+
+      try do
+        client = compaction_exchange!(client, ctx)
+        {client, frames} = receive_until_terminal(client, [])
+        assert frames == ["response.output_item.done", "response.completed"]
+
+        other_item = %{item | "encrypted_content" => "synthetic-peer-delivery-other-compaction"}
+        {client, frame} = client |> send_frame!(resume_frame(ctx, other_item)) |> receive_frame!()
+        assert %{"type" => "error", "status" => 409, "error" => %{"code" => "invalid_runtime_admission"}} = frame
+
+        rows = await_settled!(ctx.setup.pool.id, [{@turn_endpoint, "succeeded"}, {@compact_endpoint, "succeeded"}])
+        assert Enum.map(rows, &{&1.endpoint, &1.status}) == [{@turn_endpoint, "succeeded"}, {@compact_endpoint, "succeeded"}]
+        assert FakeUpstream.count(upstream) == 2
+        if ctx.peer, do: assert_peer_owner_served!(ctx.peer)
+        assert :ok = FakeUpstream.verify!(upstream)
+        _client = client
+      after
+        Mint.HTTP.close(client.conn)
+      end
+    end
+  end
+
+  defp start_topology!(ctx, sequence) do
+    TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, false)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+    if ctx.topology == :peer_owner, do: enter_peer_owner_topology!()
+    upstream = start_upstream(FakeUpstream.strict_sequence(sequence))
+    setup = gateway_setup(upstream, compact?: true)
+    peer = if ctx.topology == :peer_owner, do: start_peer_window_owner!(setup, @window_id)
+    owner = if peer, do: peer.owner_pid, else: :local
+    {Map.merge(ctx, %{setup: setup, owner: owner, peer: peer}), upstream}
+  end
+
+  # The socket forwarded to the peer's owner instead of taking the session
+  # over: the peer owner still holds the lease and has this node's socket
+  # attached, and no owner of the session runs here.
+  defp assert_peer_owner_served!(peer) do
+    assert %{downstream: %{pid: socket_pid}} = :sys.get_state(peer.owner_pid)
+    assert node(socket_pid) == node()
+    assert Repo.get!(CodexSession, peer.session.id).owner_instance_id == Atom.to_string(peer.node)
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(peer.session.id)
+  end
+
+  defp failed_compaction_sequence(%{delivery: :collect_compaction} = ctx) do
+    [first_turn, _compaction | _rest] = upstream_sequence(ctx, compaction_item())
+
+    [
+      first_turn,
+      FakeUpstream.expect_request(
+        method: "WEBSOCKET",
+        websocket_connection_ordinal: 1,
+        json: [valid: true, equals: %{"type" => "response.create", "previous_response_id" => @anchor, "input.0.type" => "compaction_trigger"}],
+        respond: failed_frames(ctx.failure)
+      )
+    ]
+  end
+
+  defp failed_compaction_sequence(%{delivery: :collect_full_history} = ctx) do
+    [FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]], respond: failed_frames(ctx.failure))]
+  end
+
+  defp ordinary_turn_expectation,
+    do: FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]], respond: completed_frames(@final_response, []))
+
+  defp failed_frames(:provider_failed) do
+    FakeUpstream.websocket_text_frames([
+      CodexPooler.JSON.encode!(%{"type" => "response.failed", "response" => %{"id" => @compact_response, "status" => "failed", "error" => %{"code" => "server_error", "message" => "synthetic provider failure"}}})
+    ])
+  end
+
+  defp failed_frames(:invalid_result) do
+    FakeUpstream.websocket_text_frames([
+      CodexPooler.JSON.encode!(%{"type" => "response.completed", "response" => %{"id" => @compact_response, "status" => "completed", "output" => [], "usage" => usage()}})
+    ])
+  end
+
+  defp assert_failure_terminal!(:provider_failed, frames) do
+    assert Enum.map(frames, & &1["type"]) == ["response.failed"]
+    assert get_in(List.last(frames), ["response", "error", "code"]) == "server_error"
+  end
+
+  defp assert_failure_terminal!(:invalid_result, frames) do
+    assert [%{"type" => "error", "error" => %{"code" => "invalid_compaction_response"}}] = frames
+  end
+
+  defp failed_rows(:collect_compaction), do: [{@turn_endpoint, "succeeded"}, {@compact_endpoint, "failed"}, {@turn_endpoint, "succeeded"}]
+  defp failed_rows(:collect_full_history), do: [{@compact_endpoint, "failed"}, {@turn_endpoint, "succeeded"}]
+
+  # A new turn after the failed compaction: its own turn id, the full history
+  # and no compaction item, so it reserves nothing and is not a resend.
+  defp ordinary_turn_frame(ctx) do
+    metadata = %{"request_kind" => "turn", "turn_id" => @other_turn_id, "root_turn_id" => @other_turn_id}
+
+    ctx
+    |> frame(context_prefix(ctx.mode) ++ [prompt("first"), answer(), prompt("other")], @other_turn_id, @window_id)
+    |> put_in(["client_metadata", "x-codex-turn-metadata"], turn_metadata(metadata))
+    |> CodexPooler.JSON.encode!()
+  end
+
+  defp receive_terminal_frames(client, seen) do
+    {client, frame} = receive_frame!(client)
+    seen = [frame | seen]
+
+    if frame["type"] in ["response.completed", "error", "response.failed"],
+      do: {client, Enum.reverse(seen)},
+      else: receive_terminal_frames(client, seen)
+  end
+
   defp expected_rows(:collect_compaction), do: [{@turn_endpoint, "succeeded"}, {@compact_endpoint, "succeeded"}, {@turn_endpoint, "succeeded"}]
   defp expected_rows(:collect_full_history), do: [{@compact_endpoint, "succeeded"}, {@turn_endpoint, "succeeded"}]
 
   # The admitted compaction follows a first turn whose success armed the
   # admission on the peer owner; the full-history compaction opens the
   # connection, as the released client's retry does.
-  defp compaction_exchange!(client, %{delivery: :collect_compaction} = ctx, peer) do
+  defp compaction_exchange!(client, %{delivery: :collect_compaction} = ctx) do
     {client, frames} = client |> send_frame!(turn_frame(ctx)) |> receive_until_terminal([])
     assert frames == ["response.created", "response.output_item.done", "response.completed"]
-    await_owner_armed!(peer.owner_pid)
+    await_owner_armed!(ctx)
     send_frame!(client, anchored_compaction_frame(ctx))
   end
 
-  defp compaction_exchange!(client, %{delivery: :collect_full_history} = ctx, _peer), do: send_frame!(client, full_history_compaction_frame(ctx))
+  defp compaction_exchange!(client, %{delivery: :collect_full_history} = ctx), do: send_frame!(client, full_history_compaction_frame(ctx))
 
   defp upstream_sequence(%{delivery: :collect_compaction} = ctx, item) do
     [
@@ -143,9 +310,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PeerOwnerC
   defp lite(expected, "lite"), do: Map.put(expected, "client_metadata.#{@lite_marker}", "true")
   defp lite(expected, "full"), do: expected
 
-  # The peer owner arms the admission after the first turn's terminal left it,
-  # with no signal to this node; poll its state for the attached socket.
-  defp await_owner_armed!(owner) do
+  # The owner arms the admission after the first turn's terminal left it,
+  # with no signal to the socket's node; poll its state for the attached
+  # socket. A local owner is the one the socket started for the Pool's session.
+  defp await_owner_armed!(%{owner: :local, setup: setup} = ctx) do
+    await!(fn -> match?({:ok, _pid}, local_owner(setup.pool.id)) end, "the socket never started its local owner")
+    {:ok, owner} = local_owner(setup.pool.id)
+    await_owner_armed!(%{ctx | owner: owner})
+  end
+
+  defp await_owner_armed!(%{owner: owner}) do
     await!(
       fn ->
         match?(
@@ -155,6 +329,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PeerOwnerC
       end,
       "the peer owner never armed the native compaction admission for the attached socket"
     )
+  end
+
+  defp local_owner(pool_id) do
+    case Repo.all(from(session in CodexSession, where: session.pool_id == ^pool_id, select: session.id)) do
+      [session_id] -> WebsocketOwnerSession.lookup(session_id)
+      _none_or_many -> {:error, :owner_unavailable}
+    end
   end
 
   # The Pool's serving mode is written through the committed database the
