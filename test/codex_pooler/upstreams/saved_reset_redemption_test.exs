@@ -37,6 +37,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   # soon as the message arrives, so only a missing one spends it.
   @detection_timeout_ms 15_000
 
+  # A task parked at a barrier waits for the test's start or release message,
+  # which the test sends only after up to four detection budgets of its own
+  # (readiness, lock, `pg_blocking_pids` observation). The task's wait must
+  # outlast that chain, or it raises first and hides which step was late
+  # (Drone 1543); the test's `after` always sends the message, so a green run
+  # never spends this.
+  @handoff_timeout_ms 4 * @detection_timeout_ms
+
   @cohort_fixture_transaction_timeout 25_000
   @cohort_fixture_task_timeout 30_000
 
@@ -199,7 +207,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                     5_000
+                     @detection_timeout_ms
 
       reserved = Repo.reload!(identity).metadata
       replay = reserved["saved_reset_redemption"]["provider_replay"]
@@ -223,7 +231,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
 
       assert {:ok, %{status: :succeeded, applied?: true, code: "already_redeemed"}} =
-               Task.await(task, 5_000)
+               Task.await(task, @detection_timeout_ms)
 
       settled = Repo.reload!(identity).metadata
       refute Map.has_key?(settled, "saved_reset_redemption_target")
@@ -401,12 +409,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                     5_000
+                     @detection_timeout_ms
 
       update_assignment!(assignment, %{status: PoolUpstreamAssignment.paused_status()})
       send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
 
-      assert {:error, :saved_reset_dispatch_reservation_invalid} = Task.await(task, 5_000)
+      assert {:error, :saved_reset_dispatch_reservation_invalid} = Task.await(task, @detection_timeout_ms)
 
       assert [%{method: "GET", path: "/backend-api/wham/rate-limit-reset-credits"}] =
                FakeUpstream.requests(fake)
@@ -451,12 +459,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                     5_000
+                     @detection_timeout_ms
 
       update_assignment!(assignment, %{upstream_identity_id: foreign_identity.id})
       send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
 
-      assert {:error, :saved_reset_dispatch_reservation_invalid} = Task.await(task, 5_000)
+      assert {:error, :saved_reset_dispatch_reservation_invalid} = Task.await(task, @detection_timeout_ms)
 
       assert [%{method: "GET", path: "/backend-api/wham/rate-limit-reset-credits"}] =
                FakeUpstream.requests(fake)
@@ -1207,15 +1215,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           start_recovery_replica_task(parent, role, fixture)
         end
 
-      assert_receive {:recovery_replica_ready, :first}, 5_000
-      assert_receive {:recovery_replica_ready, :second}, 5_000
+      assert_receive {:recovery_replica_ready, :first}, @detection_timeout_ms
+      assert_receive {:recovery_replica_ready, :second}, @detection_timeout_ms
       Enum.each(tasks, &send(&1.pid, :start_recovery))
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, first_pid, ^first_release},
-                     5_000
+                     @detection_timeout_ms
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid, ^second_release},
-                     5_000
+                     @detection_timeout_ms
 
       send(first_pid, {:fake_upstream_release_timeout, first_release})
       send(second_pid, {:fake_upstream_release_timeout, second_release})
@@ -1290,7 +1298,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid, ^consume_release},
-                     5_000
+                     @detection_timeout_ms
 
       reserved =
         run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
@@ -1306,7 +1314,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         |> Map.put(:now, DateTime.add(DateTime.utc_now(), 31, :minute))
 
       recovery_task = start_recovery_replica_task(parent, :recovery, recovery_fixture)
-      assert_receive {:recovery_replica_ready, :recovery}, 5_000
+      assert_receive {:recovery_replica_ready, :recovery}, @detection_timeout_ms
       send(recovery_task.pid, :start_recovery)
 
       assert {:recovery, {:ok, %{status: :succeeded, applied?: true}}} =
@@ -1382,7 +1390,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, list_pid, ^list_release},
-                     5_000
+                     @detection_timeout_ms
 
       claimed =
         run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
@@ -1398,11 +1406,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         |> Map.put(:now, DateTime.add(DateTime.utc_now(), 31, :minute))
 
       recovery_task = start_recovery_replica_task(parent, :recovery, recovery_fixture)
-      assert_receive {:recovery_replica_ready, :recovery}, 5_000
+      assert_receive {:recovery_replica_ready, :recovery}, @detection_timeout_ms
       send(recovery_task.pid, :start_recovery)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid, ^consume_release},
-                     5_000
+                     @detection_timeout_ms
 
       reserved =
         run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
@@ -1464,18 +1472,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       })
 
       stale_task = start_recovery_replica_task(parent, :stale, fixture)
-      assert_receive {:recovery_replica_ready, :stale}, 5_000
+      assert_receive {:recovery_replica_ready, :stale}, @detection_timeout_ms
       send(stale_task.pid, :start_recovery)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_list_pid, ^stale_list_release},
-                     5_000
+                     @detection_timeout_ms
 
       current_task = start_recovery_replica_task(parent, :current, fixture)
-      assert_receive {:recovery_replica_ready, :current}, 5_000
+      assert_receive {:recovery_replica_ready, :current}, @detection_timeout_ms
       send(current_task.pid, :start_recovery)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_consume_pid, ^current_consume_release},
-                     5_000
+                     @detection_timeout_ms
 
       reserved =
         run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
@@ -1750,15 +1758,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           start_recovery_replica_task(parent, role, fixture)
         end
 
-      assert_receive {:recovery_replica_ready, :first}, 5_000
-      assert_receive {:recovery_replica_ready, :second}, 5_000
+      assert_receive {:recovery_replica_ready, :first}, @detection_timeout_ms
+      assert_receive {:recovery_replica_ready, :second}, @detection_timeout_ms
       Enum.each(tasks, &send(&1.pid, :start_recovery))
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, first_pid, ^first_release},
-                     5_000
+                     @detection_timeout_ms
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid, ^second_release},
-                     5_000
+                     @detection_timeout_ms
 
       send(first_pid, {:fake_upstream_release_timeout, first_release})
       send(second_pid, {:fake_upstream_release_timeout, second_release})
@@ -1805,19 +1813,19 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       })
 
       stale_task = start_recovery_replica_task(parent, :stale, fixture)
-      assert_receive {:recovery_replica_ready, :stale}, 5_000
+      assert_receive {:recovery_replica_ready, :stale}, @detection_timeout_ms
       send(stale_task.pid, :start_recovery)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_pid, ^first_release},
-                     5_000
+                     @detection_timeout_ms
 
       current_fixture = %{fixture | now: DateTime.add(fixture.now, 6, :minute)}
       current_task = start_recovery_replica_task(parent, :current, current_fixture)
-      assert_receive {:recovery_replica_ready, :current}, 5_000
+      assert_receive {:recovery_replica_ready, :current}, @detection_timeout_ms
       send(current_task.pid, :start_recovery)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_pid, ^second_release},
-                     5_000
+                     @detection_timeout_ms
 
       redemption_keys = ["saved_reset_redemption", "saved_reset_redemption_target"]
 
@@ -1904,19 +1912,19 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       })
 
       stale_task = start_recovery_replica_task(parent, :stale_list, fixture)
-      assert_receive {:recovery_replica_ready, :stale_list}, 5_000
+      assert_receive {:recovery_replica_ready, :stale_list}, @detection_timeout_ms
       send(stale_task.pid, :start_recovery)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_pid, ^list_release},
-                     5_000
+                     @detection_timeout_ms
 
       reserving_fixture = %{fixture | now: DateTime.add(fixture.now, 6, :minute)}
       reserving_task = start_recovery_replica_task(parent, :reserving, reserving_fixture)
-      assert_receive {:recovery_replica_ready, :reserving}, 5_000
+      assert_receive {:recovery_replica_ready, :reserving}, @detection_timeout_ms
       send(reserving_task.pid, :start_recovery)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, reserving_pid, ^consume_release},
-                     5_000
+                     @detection_timeout_ms
 
       redemption_keys = ["saved_reset_redemption", "saved_reset_redemption_target"]
 
@@ -2134,7 +2142,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           end)
 
         assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                       5_000
+                       @detection_timeout_ms
 
         claim = Repo.reload!(identity).metadata["saved_reset_redemption"]
         assert claim["status"] == "redeeming"
@@ -2146,11 +2154,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         persisted =
           case expected_result do
             {:settled, status, result_code} ->
-              assert {:ok, %{status: ^status, code: ^result_code}} = Task.await(task, 5_000)
+              assert {:ok, %{status: ^status, code: ^result_code}} = Task.await(task, @detection_timeout_ms)
               Repo.reload!(identity).metadata["saved_reset_redemption"]
 
             :ambiguous ->
-              assert {:error, :saved_reset_consume_outcome_ambiguous} = Task.await(task, 5_000)
+              assert {:error, :saved_reset_consume_outcome_ambiguous} = Task.await(task, @detection_timeout_ms)
               redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
               assert redemption["status"] == "redeeming"
               assert redemption["phase"] == "consuming"
@@ -2548,7 +2556,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                     5_000
+                     @detection_timeout_ms
 
       superseded = %{
         "status" => "redeeming",
@@ -2565,7 +2573,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
 
-      assert {:ok, %{status: :noop, code: "no_credit"}} = Task.await(task, 5_000)
+      assert {:ok, %{status: :noop, code: "no_credit"}} = Task.await(task, @detection_timeout_ms)
 
       persisted = Repo.reload!(identity)
       assert persisted.metadata["saved_resets"] == before_release.metadata["saved_resets"]
@@ -2622,7 +2630,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                     5_000
+                     @detection_timeout_ms
 
       newer_saved_resets =
         saved_resets_with_expirations()
@@ -2651,7 +2659,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       try do
         send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
 
-        assert {:ok, %{status: :noop, code: "no_credit"}} = Task.await(task, 5_000)
+        assert {:ok, %{status: :noop, code: "no_credit"}} = Task.await(task, @detection_timeout_ms)
 
         assert drain_identity_updates(task.pid) == 1
 
@@ -2702,7 +2710,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             receive do
               {^barrier, :start_redemption} -> :ok
             after
-              5_000 -> raise "timed out waiting to start saved-reset redemption"
+              @handoff_timeout_ms -> raise "timed out waiting to start saved-reset redemption"
             end
 
             SavedResetRedemption.redeem(fixture.assignment_id,
@@ -2711,7 +2719,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           end)
         end)
 
-      assert_receive {^barrier, :redemption_backend, redemption_backend_pid}, 5_000
+      assert_receive {^barrier, :redemption_backend, redemption_backend_pid}, @detection_timeout_ms
 
       handler_id = "saved-reset-finalizer-lock-#{System.unique_integer([:positive])}"
 
@@ -2733,7 +2741,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                 receive do
                   {^barrier, :release_finalizer} -> :ok
                 after
-                  5_000 -> raise "timed out waiting to release saved-reset finalizer"
+                  @handoff_timeout_ms -> raise "timed out waiting to release saved-reset finalizer"
                 end
               end
             end
@@ -2743,7 +2751,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       try do
         send(redemption_task.pid, {barrier, :start_redemption})
-        assert_receive {^barrier, :finalizer_locked}, 5_000
+        assert_receive {^barrier, :finalizer_locked}, @detection_timeout_ms
 
         reconciliation_task =
           Task.async(fn ->
@@ -2760,7 +2768,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             end)
           end)
 
-        assert_receive {^barrier, :reconciliation_backend, reconciliation_backend_pid}, 5_000
+        assert_receive {^barrier, :reconciliation_backend, reconciliation_backend_pid}, @detection_timeout_ms
 
         observation =
           observe_blocked_probe_claim!(reconciliation_backend_pid, redemption_backend_pid)
@@ -2771,10 +2779,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         send(redemption_task.pid, {barrier, :release_finalizer})
 
         assert {:ok, %{status: :noop, code: "no_credit"}} =
-                 Task.await(redemption_task, 5_000)
+                 Task.await(redemption_task, @detection_timeout_ms)
 
-        assert_receive {^barrier, :reconciliation_result, {:ok, %UpstreamIdentity{}}}, 5_000
-        Task.await(reconciliation_task, 5_000)
+        assert_receive {^barrier, :reconciliation_result, {:ok, %UpstreamIdentity{}}}, @detection_timeout_ms
+        Task.await(reconciliation_task, @detection_timeout_ms)
 
         persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end)
 
@@ -3949,7 +3957,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                     5_000
+                     @detection_timeout_ms
 
       consuming = Repo.reload!(identity).metadata["saved_reset_redemption"]
       assert consuming["status"] == "redeeming"
@@ -3959,7 +3967,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                Enum.sort(scheduled_decision_metadata_keys())
 
       send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
-      assert {:ok, %{status: :noop, code: "nothing_to_reset"}} = Task.await(task, 5_000)
+      assert {:ok, %{status: :noop, code: "nothing_to_reset"}} = Task.await(task, @detection_timeout_ms)
     end
 
     test "selects highest usage then latest reset for scheduled decision evidence" do
@@ -4504,14 +4512,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
               receive do
                 {^barrier, :release_assignment} -> :released
               after
-                10_000 -> raise "timed out waiting to release scheduled assignment lock"
+                @handoff_timeout_ms -> raise "timed out waiting to release scheduled assignment lock"
               end
             end)
           end)
         end)
 
       try do
-        assert_receive {^barrier, :assignment_locked, holder_backend_pid}, 5_000
+        assert_receive {^barrier, :assignment_locked, holder_backend_pid}, @detection_timeout_ms
 
         redemption_task =
           Task.async(fn ->
@@ -4527,7 +4535,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             end)
           end)
 
-        assert_receive {^barrier, :redemption_backend, redemption_backend_pid}, 5_000
+        assert_receive {^barrier, :redemption_backend, redemption_backend_pid}, @detection_timeout_ms
 
         observation = observe_blocked_probe_claim!(redemption_backend_pid, holder_backend_pid)
         assert holder_backend_pid in observation.blocking_pids
@@ -4536,11 +4544,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         refute_received {^barrier, :clock_read}
         send(assignment_holder.pid, {barrier, :release_assignment})
 
-        assert {:ok, :released} = Task.await(assignment_holder, 5_000)
-        assert_receive {^barrier, :clock_read}, 5_000
+        assert {:ok, :released} = Task.await(assignment_holder, @detection_timeout_ms)
+        assert_receive {^barrier, :clock_read}, @detection_timeout_ms
 
         assert {:ok, %{status: :noop, code: "scheduled_expiry_not_expiring"}} =
-                 Task.await(redemption_task, 5_000)
+                 Task.await(redemption_task, @detection_timeout_ms)
 
         persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end)
         refute Map.has_key?(persisted.metadata || %{}, "saved_reset_redemption")
@@ -5444,9 +5452,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       try do
         assert_receive {^barrier, :claim_ready, winner_pid, :winner, winner_backend_pid},
-                       5_000
+                       @detection_timeout_ms
 
-        assert_receive {^barrier, :claim_ready, loser_pid, :loser, loser_backend_pid}, 5_000
+        assert_receive {^barrier, :claim_ready, loser_pid, :loser, loser_backend_pid}, @detection_timeout_ms
 
         assert winner_pid == winner_task.pid
         assert loser_pid == loser_task.pid
@@ -5472,7 +5480,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                 receive do
                   {^barrier, :release_winner} -> :ok
                 after
-                  5_000 -> raise "timed out waiting to release the saved-reset probe winner"
+                  @handoff_timeout_ms -> raise "timed out waiting to release the saved-reset probe winner"
                 end
               end
             end,
@@ -5482,12 +5490,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         try do
           send(winner_task.pid, {barrier, :start_claim})
 
-          assert_receive {^barrier, :claim_started, :winner, ^winner_backend_pid}, 5_000
-          assert_receive {^barrier, :winner_lock_acquired, ^winner_backend_pid}, 5_000
+          assert_receive {^barrier, :claim_started, :winner, ^winner_backend_pid}, @detection_timeout_ms
+          assert_receive {^barrier, :winner_lock_acquired, ^winner_backend_pid}, @detection_timeout_ms
 
           send(loser_task.pid, {barrier, :start_claim})
 
-          assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, 5_000
+          assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, @detection_timeout_ms
 
           observation =
             observe_blocked_probe_claim!(loser_backend_pid, winner_backend_pid)
@@ -5497,11 +5505,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
           send(winner_task.pid, {barrier, :release_winner})
 
-          winner_result = Task.await(winner_task, 5_000)
+          winner_result = Task.await(winner_task, @detection_timeout_ms)
 
           assert {:winner, ^winner_backend_pid, {:ok, :claimed}} = winner_result
 
-          loser_result = Task.await(loser_task, 5_000)
+          loser_result = Task.await(loser_task, @detection_timeout_ms)
 
           assert {:loser, ^loser_backend_pid, {:error, :unavailable}} = loser_result
 
@@ -5621,7 +5629,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         ready =
           Enum.map(actors, fn %{role: role, task: task} ->
             task_pid = task.pid
-            assert_receive {^barrier, :ready, ^role, ^task_pid, backend_pid}, 5_000
+            assert_receive {^barrier, :ready, ^role, ^task_pid, backend_pid}, @detection_timeout_ms
             {role, backend_pid}
           end)
 
@@ -5865,7 +5873,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
               receive do
                 {^barrier, :release_claim} -> :ok
               after
-                5_000 -> raise "timed out waiting to release the reassignment probe claim"
+                @handoff_timeout_ms -> raise "timed out waiting to release the reassignment probe claim"
               end
             end
           end,
@@ -5873,8 +5881,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         )
 
       try do
-        assert_receive {^barrier, :claim_backend, claim_backend_pid}, 5_000
-        assert_receive {^barrier, :identity_locked}, 5_000
+        assert_receive {^barrier, :claim_backend, claim_backend_pid}, @detection_timeout_ms
+        assert_receive {^barrier, :identity_locked}, @detection_timeout_ms
 
         reassignment_task =
           Task.async(fn ->
@@ -5891,10 +5899,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             end)
           end)
 
-        assert_receive {^barrier, :reassignment_backend, reassignment_backend_pid}, 5_000
+        assert_receive {^barrier, :reassignment_backend, reassignment_backend_pid}, @detection_timeout_ms
         assert claim_backend_pid != reassignment_backend_pid
 
-        reassignment_result = Task.await(reassignment_task, 5_000)
+        reassignment_result = Task.await(reassignment_task, @detection_timeout_ms)
 
         assert %PoolUpstreamAssignment{
                  upstream_identity_id: ^foreign_identity_id
@@ -5902,7 +5910,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
         send(claim_task.pid, {barrier, :release_claim})
 
-        assert Task.await(claim_task, 5_000) == {:error, :unavailable}
+        assert Task.await(claim_task, @detection_timeout_ms) == {:error, :unavailable}
         assert persisted_probe!(fixture.identity_id) == nil
       after
         send(claim_task.pid, {barrier, :release_claim})
@@ -7491,7 +7499,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     receive do
       :start_recovery -> :ok
     after
-      5_000 -> raise "timed out waiting to start saved-reset recovery replica"
+      @handoff_timeout_ms -> raise "timed out waiting to start saved-reset recovery replica"
     end
 
     result =
@@ -7641,7 +7649,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           receive do
             {^barrier, :start_claim} -> :ok
           after
-            5_000 -> raise "timed out waiting to start claim behind probe completion"
+            @handoff_timeout_ms -> raise "timed out waiting to start claim behind probe completion"
           end
 
           send(parent, {barrier, :claim_started, backend_pid})
@@ -7672,14 +7680,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       )
 
     try do
-      assert_receive {^barrier, :probe_ready, probe_backend_pid}, 5_000
-      assert_receive {^barrier, :probe_locked, probe_pid}, 5_000
+      assert_receive {^barrier, :probe_ready, probe_backend_pid}, @detection_timeout_ms
+      assert_receive {^barrier, :probe_locked, probe_pid}, @detection_timeout_ms
       send(claim_task.pid, {barrier, :start_claim})
-      assert_receive {^barrier, :claim_started, claim_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_started, claim_backend_pid}, @detection_timeout_ms
       observation = observe_blocked_probe_claim!(claim_backend_pid, probe_backend_pid)
       send(probe_pid, {barrier, :release_probe})
-      {^probe_backend_pid, probe_result} = Task.await(probe_task, 10_000)
-      {^claim_backend_pid, claim_result} = Task.await(claim_task, 10_000)
+      {^probe_backend_pid, probe_result} = Task.await(probe_task, @detection_timeout_ms)
+      {^claim_backend_pid, claim_result} = Task.await(claim_task, @detection_timeout_ms)
 
       %{
         blocking_pids: observation.blocking_pids,
@@ -7727,17 +7735,17 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       )
 
     try do
-      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, 5_000
-      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, @detection_timeout_ms
+      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, @detection_timeout_ms
       send(winner_task.pid, {barrier, :start_claim})
 
-      assert_receive {^barrier, :circuit_lock, :winner, winner_lock, winner_pid}, 5_000
+      assert_receive {^barrier, :circuit_lock, :winner, winner_lock, winner_pid}, @detection_timeout_ms
       send(loser_task.pid, {barrier, :start_claim})
       observation = observe_blocked_probe_claim!(loser_backend_pid, winner_backend_pid)
       send(winner_pid, {barrier, :release_winner})
-      {:winner, ^winner_backend_pid, winner_result} = Task.await(winner_task, 10_000)
+      {:winner, ^winner_backend_pid, winner_result} = Task.await(winner_task, @detection_timeout_ms)
 
-      {:loser, ^loser_backend_pid, loser_result} = Task.await(loser_task, 10_000)
+      {:loser, ^loser_backend_pid, loser_result} = Task.await(loser_task, @detection_timeout_ms)
 
       loser_lock =
         receive do
@@ -7796,7 +7804,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           receive do
             {^barrier, :start_insert} -> :ok
           after
-            5_000 -> raise "timed out waiting to start first circuit insert"
+            @handoff_timeout_ms -> raise "timed out waiting to start first circuit insert"
           end
 
           send(parent, {barrier, :insert_started, backend_pid})
@@ -7822,7 +7830,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             receive do
               {^barrier, :release_claim} -> :ok
             after
-              10_000 -> raise "timed out waiting to release claim before first circuit insert"
+              @handoff_timeout_ms -> raise "timed out waiting to release claim before first circuit insert"
             end
           end
         end,
@@ -7830,14 +7838,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       )
 
     try do
-      assert_receive {^barrier, :claim_ready, claim_backend_pid}, 5_000
-      assert_receive {^barrier, :claim_cohort_locked, claim_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, claim_backend_pid}, @detection_timeout_ms
+      assert_receive {^barrier, :claim_cohort_locked, claim_pid}, @detection_timeout_ms
       send(insert_task.pid, {barrier, :start_insert})
-      assert_receive {^barrier, :insert_started, insert_backend_pid}, 5_000
+      assert_receive {^barrier, :insert_started, insert_backend_pid}, @detection_timeout_ms
       observation = observe_blocked_probe_claim!(insert_backend_pid, claim_backend_pid)
       send(claim_pid, {barrier, :release_claim})
-      {^claim_backend_pid, claim_result} = Task.await(claim_task, 10_000)
-      {^insert_backend_pid, insert_result} = Task.await(insert_task, 10_000)
+      {^claim_backend_pid, claim_result} = Task.await(claim_task, @detection_timeout_ms)
+      {^insert_backend_pid, insert_result} = Task.await(insert_task, @detection_timeout_ms)
 
       %{
         blocking_pids: observation.blocking_pids,
@@ -7960,7 +7968,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     receive do
       {^barrier, ^message} -> :ok
     after
-      10_000 -> raise "timed out waiting to release #{label}"
+      @handoff_timeout_ms -> raise "timed out waiting to release #{label}"
     end
   end
 
@@ -8495,7 +8503,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           receive do
             {^barrier, :start, ^role} -> :ok
           after
-            5_000 -> raise "timed out waiting to start multi-node convergence actor"
+            @handoff_timeout_ms -> raise "timed out waiting to start multi-node convergence actor"
           end
 
           send(parent, {barrier, :started, role})
@@ -8731,7 +8739,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     {message, timeout} =
       if failure == :failure,
-        do: {"injected cohort fixture failure", 5_000},
+        do: {"injected cohort fixture failure", @detection_timeout_ms},
         else: {"timed out creating committed cohort fixture", {:after_signal, barrier, 100}}
 
     ExUnit.CaptureLog.capture_log(fn ->
@@ -8895,22 +8903,22 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     :ok = attach_gateway_auto_cohort_barrier(handler_id, parent, barrier)
 
     try do
-      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, 5_000
-      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, @detection_timeout_ms
+      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, @detection_timeout_ms
       assert winner_backend_pid != loser_backend_pid
 
       send(winner_task.pid, {barrier, :start_claim})
 
       assert_receive {^barrier, :cohort_locked, :winner, winner_claim_pid, winner_lock_event},
-                     5_000
+                     @detection_timeout_ms
 
       send(loser_task.pid, {barrier, :start_claim})
-      assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, @detection_timeout_ms
 
       observation = observe_blocked_probe_claim!(loser_backend_pid, winner_backend_pid)
       send(winner_claim_pid, {barrier, :release_cohort_lock})
 
-      assert_receive {^barrier, :cohort_locked, :loser, loser_claim_pid, loser_lock_event}, 5_000
+      assert_receive {^barrier, :cohort_locked, :loser, loser_claim_pid, loser_lock_event}, @detection_timeout_ms
 
       winner_identity_id = Enum.at(fixture.identity_ids, winner_index)
 
@@ -8977,18 +8985,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     :ok = attach_gateway_auto_cohort_barrier(handler_id, parent, barrier)
 
     try do
-      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, 5_000
-      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, @detection_timeout_ms
+      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, @detection_timeout_ms
 
       send(winner_task.pid, {barrier, :start_claim})
 
       assert_receive {^barrier, :cohort_locked, :winner, winner_claim_pid, _winner_lock_event},
-                     5_000
+                     @detection_timeout_ms
 
       send(loser_task.pid, {barrier, :start_claim})
 
       assert_receive {^barrier, :cohort_locked, :loser, loser_claim_pid, _loser_lock_event},
-                     5_000
+                     @detection_timeout_ms
 
       loser_blocking_pids = blocking_pids!(loser_backend_pid)
 
@@ -9068,7 +9076,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     receive do
       {^barrier, :start_claim} -> :ok
     after
-      5_000 -> raise "timed out waiting to start gateway-auto cohort claim"
+      @handoff_timeout_ms -> raise "timed out waiting to start gateway-auto cohort claim"
     end
 
     send(parent, {barrier, :claim_started, role, backend_pid})
@@ -9100,7 +9108,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           receive do
             {^barrier, :release_cohort_lock} -> :ok
           after
-            10_000 -> raise "timed out waiting to release gateway-auto cohort lock"
+            @handoff_timeout_ms -> raise "timed out waiting to release gateway-auto cohort lock"
           end
         end
       end,
@@ -9201,7 +9209,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
       end)
 
-    failures = Enum.map(failure_tasks, &Task.await(&1, 10_000))
+    failures = Enum.map(failure_tasks, &Task.await(&1, @detection_timeout_ms))
     assert failures |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> length() == 2
     assert Enum.all?(failures, &match?({_pid, {:ok, %RoutingCircuitState{}}}, &1))
 
@@ -9224,7 +9232,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
       end)
 
-    results = Enum.map(redeemers, &Task.await(&1, 10_000))
+    results = Enum.map(redeemers, &Task.await(&1, @detection_timeout_ms))
     assert results |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> length() == 2
 
     assert Enum.all?(results, fn {_pid, result} ->
@@ -9407,7 +9415,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end)
 
     try do
-      assert_receive {^barrier, :claim_persisted, claim_pid}, 10_000
+      assert_receive {^barrier, :claim_persisted, claim_pid}, @detection_timeout_ms
       lock_events = drain_claim_locks(barrier, [])
       requests_while_locked = FakeUpstream.requests(fixture.fake)
       send(claim_pid, {barrier, :release_claim})
@@ -9432,7 +9440,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           receive do
             {^barrier, :release_claim} -> :ok
           after
-            5_000 -> raise "timed out waiting to release captured gateway-auto claim"
+            @handoff_timeout_ms -> raise "timed out waiting to release captured gateway-auto claim"
           end
 
         true ->
@@ -9634,7 +9642,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         receive do
           {^barrier, :start_claim} -> :ok
         after
-          5_000 -> raise "timed out waiting to start the saved-reset probe claim"
+          @handoff_timeout_ms -> raise "timed out waiting to start the saved-reset probe claim"
         end
 
         send(parent, {barrier, :claim_started, role, backend_pid})
@@ -9672,8 +9680,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     tasks = [winner_task, loser_task]
 
     try do
-      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, 5_000
-      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, @detection_timeout_ms
+      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, @detection_timeout_ms
       assert winner_backend_pid != loser_backend_pid
 
       handler_id = "saved-reset-automatic-lock-#{System.unique_integer([:positive])}"
@@ -9694,7 +9702,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
               receive do
                 {^barrier, :release_winner} -> :ok
               after
-                5_000 -> raise "timed out waiting to release automatic saved-reset winner"
+                @handoff_timeout_ms -> raise "timed out waiting to release automatic saved-reset winner"
               end
             end
           end,
@@ -9703,10 +9711,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       try do
         send(winner_task.pid, {barrier, :start_claim})
-        assert_receive {^barrier, :winner_lock_acquired}, 5_000
+        assert_receive {^barrier, :winner_lock_acquired}, @detection_timeout_ms
 
         send(loser_task.pid, {barrier, :start_claim})
-        assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, 5_000
+        assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, @detection_timeout_ms
 
         observation = observe_blocked_probe_claim!(loser_backend_pid, winner_backend_pid)
         assert winner_backend_pid in observation.blocking_pids
@@ -9734,7 +9742,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         receive do
           {^barrier, :start_claim} -> :ok
         after
-          5_000 -> raise "timed out waiting to start automatic saved-reset claim"
+          @handoff_timeout_ms -> raise "timed out waiting to start automatic saved-reset claim"
         end
 
         send(parent, {barrier, :claim_started, role, backend_pid})
@@ -9887,7 +9895,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         receive do
           {^handler_id, :start_redemption} -> redeem.()
         after
-          5_000 -> raise "timed out waiting to start saved-reset finalizer race"
+          @handoff_timeout_ms -> raise "timed out waiting to start saved-reset finalizer race"
         end
       end)
     end)
@@ -9935,7 +9943,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   defp await_post_consume_redemption_start!(handler_id, redemption_task, trace_probe_claim?) do
-    assert_receive {^handler_id, :redemption_backend, redeem_owner, redemption_backend_pid}, 5_000
+    assert_receive {^handler_id, :redemption_backend, redeem_owner, redemption_backend_pid}, @detection_timeout_ms
     assert redeem_owner == redemption_task.pid
     start_probe_claim_trace(redemption_task, trace_probe_claim?)
     send(redemption_task.pid, {handler_id, :start_redemption})
@@ -9955,10 +9963,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
          release_ref,
          redemption_task
        ) do
-    assert_receive {^handler_id, :dispatch_commit, ^redeem_owner}, 5_000
+    assert_receive {^handler_id, :dispatch_commit, ^redeem_owner}, @detection_timeout_ms
 
     assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
-                   5_000
+                   @detection_timeout_ms
 
     Process.put({__MODULE__, handler_id, :fake_request_pid}, fake_request_pid)
     assert Process.alive?(redemption_task.pid)
@@ -10019,7 +10027,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     assert evidence_backend_pid != redemption_backend_pid
     assert phase_while_refresh_blocked == "consuming"
     assert %AccountQuotaWindow{} = evidence_window
-    assert_receive {^handler_id, :evidence_write, evidence_owner}, 5_000
+    assert_receive {^handler_id, :evidence_write, evidence_owner}, @detection_timeout_ms
     assert evidence_owner != redemption_task.pid
     evidence_window
   end
@@ -10195,7 +10203,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {Events, %CodexPooler.Events.Event{}} ->
         assert_saved_reset_redemption_broadcast!(fixture)
     after
-      5_000 -> flunk("saved-reset finalizer did not broadcast its committed lifecycle")
+      @detection_timeout_ms -> flunk("saved-reset finalizer did not broadcast its committed lifecycle")
     end
   end
 
@@ -10259,7 +10267,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   # waiting on them would burn the whole timeout in every `after` block.
   defp release_probe_claim_task(%Task{pid: pid} = task) do
     if is_pid(pid) and Process.alive?(pid) do
-      case Task.yield(task, 5_000) do
+      case Task.yield(task, @detection_timeout_ms) do
         {:ok, _result} -> :ok
         {:exit, _reason} -> :ok
         nil -> Task.shutdown(task, :brutal_kill)
@@ -10301,7 +10309,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   defp observe_blocked_probe_claim!(waiter_pid, blocker_pid) do
-    deadline = System.monotonic_time(:millisecond) + 4_000
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
     do_observe_blocked_probe_claim!(waiter_pid, blocker_pid, deadline)
   end
 
