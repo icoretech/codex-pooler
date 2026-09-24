@@ -15,6 +15,7 @@ defmodule CodexPooler.UnboxedFixture do
   """
 
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
   # Failure-detection budget for one unboxed block, not a behaviour timer.
@@ -34,10 +35,15 @@ defmodule CodexPooler.UnboxedFixture do
 
   Must be called from the test process. The callback runs in ExUnit's on-exit
   handler after the test process is gone, including when it died from an
-  assertion that failed inside an earlier `run_unboxed/2` block.
+  assertion that failed inside an earlier `run_unboxed/2` block. It first
+  waits for every websocket session cleanup still running, since one can
+  still write rows of the fixture (findings#206 row 206-405).
   """
   @spec register_unboxed_cleanup!((-> term()), timeout()) :: :ok
   def register_unboxed_cleanup!(fun, timeout \\ @default_timeout) when is_function(fun, 0) do
-    ExUnit.Callbacks.on_exit(fn -> run_unboxed(fun, timeout) end)
+    ExUnit.Callbacks.on_exit(fn ->
+      :ok = WebsocketCleanupFence.await_session_cleanups!()
+      run_unboxed(fun, timeout)
+    end)
   end
 end

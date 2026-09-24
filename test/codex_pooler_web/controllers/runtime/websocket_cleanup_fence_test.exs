@@ -1,13 +1,17 @@
 defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFenceTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
+  alias CodexPoolerWeb.WebsocketControlPath
 
   @slow_handler :websocket_cleanup_fence_test_slow_config
   # Long enough to outlast the fence's release under load; on_exit time is
   # outside the duration guard.
   @slow_change_ms 250
   @detection_timeout_ms 5_000
+  @session_cleanup_timeout_ms 15_000
 
   # A handler whose configuration change is still running when the fence
   # releases. `:logger` runs handler additions, removals and configuration
@@ -57,6 +61,61 @@ defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFenceTest do
 
     # Registered after the fence, so it runs before the fence's release.
     on_exit(fn -> occupy_handler_queue!() end)
+  end
+
+  # `DataCase.stop_sandbox/2` calls it before the owner stops, in every test: a
+  # session cleanup deferred past `terminate/2` that outlived its test failed
+  # on a sandbox `OwnershipError` and lost its writes (findings#206 row 206-405).
+  test "await_session_cleanups!/0 returns only once an in-flight session cleanup has finished" do
+    test_pid = self()
+
+    log =
+      capture_log(fn ->
+        :ok =
+          WebsocketControlPath.cleanup(fn ->
+            send(test_pid, {:cleanup_started, self()})
+
+            receive do
+              :release -> :ok
+            end
+          end)
+      end)
+
+    assert log =~ "phase=terminate reason=cleanup_deferred"
+    assert_receive {:cleanup_started, cleanup}, @session_cleanup_timeout_ms
+    on_exit(fn -> send(cleanup, :release) end)
+
+    waiter = Task.async(fn -> WebsocketCleanupFence.await_session_cleanups!() end)
+
+    # It found the held cleanup once it monitors it; it must still be waiting.
+    assert await_monitored_by(cleanup, waiter.pid, System.monotonic_time(:millisecond) + @session_cleanup_timeout_ms)
+    assert Task.yield(waiter, 0) == nil
+
+    send(cleanup, :release)
+    assert Task.await(waiter, @session_cleanup_timeout_ms) == :ok
+    refute Process.alive?(cleanup)
+  end
+
+  defp await_monitored_by(pid, monitor_pid, deadline) do
+    monitored_by =
+      case Process.info(pid, :monitored_by) do
+        {:monitored_by, pids} -> pids
+        nil -> []
+      end
+
+    cond do
+      monitor_pid in monitored_by ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        receive do
+        after
+          1 -> await_monitored_by(pid, monitor_pid, deadline)
+        end
+    end
   end
 
   defp occupy_handler_queue! do

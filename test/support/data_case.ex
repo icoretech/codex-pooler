@@ -22,6 +22,7 @@ defmodule CodexPooler.DataCase do
   alias CodexPooler.Repo
   alias CodexPooler.RollupCoverageFence
   alias CodexPooler.TestLoggerLevel
+  alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
   using do
@@ -92,9 +93,18 @@ defmodule CodexPooler.DataCase do
   transaction must call this before deleting those rows, because the open
   sandbox transaction still holds their row locks; the exit callback then
   finds the owner already stopped and does nothing more.
+
+  Before the owner stops it waits for every websocket session cleanup still
+  running (`WebsocketCleanupFence.await_session_cleanups!/0`), in every test,
+  whether or not the test installed the websocket cleanup fence.
   """
   @spec stop_sandbox(pid(), term()) :: :ok
   def stop_sandbox(pid, settings_cache) do
+    # A websocket session cleanup deferred past `terminate/2` and still running
+    # would otherwise reach its next query after the owner stopped and lose its
+    # writes on an `OwnershipError` (findings#206 row 206-405).
+    if Process.alive?(pid), do: WebsocketCleanupFence.await_session_cleanups!()
+
     TouchDebounce.reset()
 
     # Reconciliation can still use the shared connection without changing the snapshot.

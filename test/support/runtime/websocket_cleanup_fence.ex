@@ -322,6 +322,82 @@ defmodule CodexPoolerWeb.Runtime.WebsocketCleanupFence do
   end
 
   @doc """
+  Waits until no websocket session cleanup task is in flight, within the
+  detection budget, and fails the caller if one is still running then.
+
+  `DataCase.stop_sandbox/2` calls it before it stops the sandbox owner, so it
+  applies to every test, not only to those that `install!/1` the fence: a
+  cleanup deferred past the 100 ms yield of `terminate/2`, whose socket or
+  test did not wait for it, used to reach its first query after the owner
+  stopped, fail on a sandbox `OwnershipError` (`websocket control path failed
+  phase=terminate reason=exception`) and lose its writes (findings#206 row
+  206-405). A cleanup task is a child of the websocket task supervisor that
+  `WebsocketControlPath.cleanup/1` started; the set is read again after each
+  wait, so a socket still terminating while this runs is covered once its
+  cleanup started. Lines logged during the wait are handled like the fence's
+  teardown capture: the `cleanup_deferred` warning and info lines are
+  dropped, every other line is written through.
+  """
+  @spec await_session_cleanups!() :: :ok
+  def await_session_cleanups! do
+    case session_cleanup_tasks() do
+      [] ->
+        :ok
+
+      tasks ->
+        deadline = System.monotonic_time(:millisecond) + @budget_ms
+        {result, log} = ExUnit.CaptureLog.with_log([level: :info], fn -> await_session_cleanups(tasks, deadline) end)
+        pass_through_unexpected(log)
+
+        case result do
+          :ok -> :ok
+          {:unfinished, count} -> flunk("#{count} websocket session cleanup(s) still running #{@budget_ms} ms before the sandbox owner stops")
+        end
+    end
+  end
+
+  defp await_session_cleanups([], deadline) do
+    case session_cleanup_tasks() do
+      [] -> :ok
+      tasks -> await_session_cleanups(tasks, deadline)
+    end
+  end
+
+  defp await_session_cleanups([task | rest] = tasks, deadline) do
+    monitor = Process.monitor(task)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^task, _reason} -> await_session_cleanups(rest, deadline)
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) ->
+        Process.demonitor(monitor, [:flush])
+        {:unfinished, length(tasks)}
+    end
+  end
+
+  # `WebsocketControlPath.cleanup/1` runs its operation in a task of this
+  # supervisor; the task's initial call is the anonymous function of that
+  # module (`run/2`, the module's other entry point, runs in the caller).
+  defp session_cleanup_tasks do
+    supervisor = CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor
+
+    if Process.whereis(supervisor) do
+      supervisor
+      |> Task.Supervisor.children()
+      |> Enum.filter(&session_cleanup_task?/1)
+    else
+      []
+    end
+  end
+
+  defp session_cleanup_task?(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dictionary} -> match?({CodexPoolerWeb.WebsocketControlPath, _function, _arity}, Keyword.get(dictionary, :"$initial_call"))
+      nil -> false
+    end
+  end
+
+  @doc """
   Removes the `cleanup_deferred` warning from captured logs. That line records
   only that the session cleanup outlasted the 100 ms yield, which scheduling
   alone decides; a test asserting that a path stays quiet asserts on the rest,

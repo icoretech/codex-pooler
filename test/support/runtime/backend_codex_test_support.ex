@@ -372,6 +372,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
   def register_unboxed_pool_cleanup!(%{pool: pool, pricing: _} = fixture) do
     on_exit(fn ->
+      # A session cleanup deferred past its socket's terminate can still write
+      # this Pool's rows (a ledger entry of a committed attempt); deleting them
+      # first failed on a foreign key and left the whole graph committed
+      # (findings#206 row 206-405).
+      :ok = WebsocketCleanupFence.await_session_cleanups!()
+
       unboxed_run(fn ->
         cleanup_unboxed_pool!(fixture)
       end)
