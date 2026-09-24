@@ -16,6 +16,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.QueuedResendReplayBinding
   # dequeue now binds every fresh intent the owner admits, predecessor
   # included, as the unqueued route does.
   #
+  # With owner forwarding off there is no replay: the cut resend is settled
+  # `failed client_disconnected`, a pre-visible disconnect chained onto the
+  # failed request under its turn claim, and linked to it. The next resend
+  # walks that chain, but the resend policy refused every chain node a
+  # client-retry link names, the chain's own edge included, so it met
+  # `409 duplicate_turn` and the released client ended in its retries and the
+  # HTTPS fallback (findings#206 row 206-519). The next resend is now chained
+  # onto the cut resend and served: one more request, one more dispatch.
+  #
   # One node, native websocket `/backend-api/codex/responses`, owner forwarding
   # on and off, the Pool's serving mode forced to Full and to Lite,
   # FakeUpstream. Three sockets as the released client opens them: the turn
@@ -72,16 +81,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.QueuedResendReplayBinding
              next_resend: {"response.completed", nil},
              requests: served_before(shape) ++ [{"failed", "server_error"}, {"succeeded", nil}],
              link: :retry_link,
+             cut_successor: :none,
              resend_attempts: [{0, "retryable_failed"}, {1, "succeeded"}],
              upstream_requests: length(served_before(shape)) + 3
            }
   end
 
   # Forwarding off queues nothing here and has no owner replay: the cut
-  # resend fails `client_disconnected` either way, and what follows is the
-  # same whether the prewarm's task was still tracked or not.
-  defp assert_expected!(:direct, _resend, _shape, measured) do
-    assert {measured.queued?, measured.cut_resend, measured.resend_attempts, measured.link} == {false, {:not_armed, "client_disconnected"}, [{0, "failed"}], :both}
+  # resend fails `client_disconnected` either way, and the next resend is its
+  # own successor, chained onto the cut resend under the turn claim and linked
+  # to it, and served by a dispatch of its own.
+  defp assert_expected!(:direct, _resend, shape, measured) do
+    assert measured == %{
+             queued?: false,
+             cut_resend: {:not_armed, "client_disconnected"},
+             next_resend: {"response.completed", nil},
+             requests: served_before(shape) ++ [{"failed", "server_error"}, {"failed", "client_disconnected"}, {"succeeded", nil}],
+             link: :both,
+             cut_successor: :both,
+             resend_attempts: [{0, "failed"}],
+             upstream_requests: length(served_before(shape)) + 3
+           }
   end
 
   defp served_before(:opening), do: []
@@ -139,7 +159,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.QueuedResendReplayBinding
     {conn, _websocket, next} = receive_until_terminal(conn, websocket, ref)
     Mint.HTTP.close(conn)
 
-    rows = await_rows!(setup, length(served_before(shape)) + 2)
+    rows = await_rows!(setup, length(served_before(shape)) + if(forwarding == :direct, do: 3, else: 2))
 
     %{
       queued?: queued?,
@@ -147,6 +167,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.QueuedResendReplayBinding
       next_resend: {next["type"], get_in(next, ["error", "code"])},
       requests: rows,
       link: successor_link(setup),
+      cut_successor: cut_successor_link(setup, cut_request_id),
       resend_attempts: Repo.all(from(a in Attempt, where: a.request_id == ^cut_request_id, order_by: [asc: a.attempt_number], select: {a.replay_generation, a.status})),
       upstream_requests: FakeUpstream.count(upstream)
     }
@@ -228,8 +249,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.QueuedResendReplayBinding
   defp successor_link(setup) do
     rows = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
     [failed, successor | _later] = Enum.drop_while(rows, &(&1.last_error_code != "server_error"))
-    retry_link? = Repo.exists?(from(link in RequestClientRetryLink, where: link.predecessor_request_id == ^failed.id and link.successor_request_id == ^successor.id))
-    claim? = successor.request_metadata["client_resend"]["predecessor_request_id"] == failed.id
+    link_kind(failed, successor)
+  end
+
+  # How the request admitted after the cut resend, if any, was chained onto it.
+  defp cut_successor_link(setup, cut_request_id) do
+    rows = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
+
+    case Enum.drop_while(rows, &(&1.id != cut_request_id)) do
+      [cut, successor | _later] -> link_kind(cut, successor)
+      [_cut] -> :none
+    end
+  end
+
+  defp link_kind(predecessor, successor) do
+    retry_link? = Repo.exists?(from(link in RequestClientRetryLink, where: link.predecessor_request_id == ^predecessor.id and link.successor_request_id == ^successor.id))
+    claim? = successor.request_metadata["client_resend"]["predecessor_request_id"] == predecessor.id
 
     case {retry_link?, claim?} do
       {true, false} -> :retry_link

@@ -142,11 +142,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          }}
 
       %Request{} = request ->
-        continue_chain(request, claim, scope, now, markers, depth)
+        continue_chain(request, predecessor, claim, scope, now, markers, depth)
     end
   end
 
-  defp continue_chain(request, claim, scope, now, markers, depth) do
+  defp continue_chain(request, previous, claim, scope, now, markers, depth) do
     with {:ok, derived} <-
            ClientRetry.deterministic_failed_predecessor_claim(claim, request.id),
          successor <- lock_request_by_claim(derived),
@@ -156,7 +156,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          effective_now <- if(marker, do: db_now(), else: now),
          {:ok, request_shape} <-
            validate_predecessor(request, scoped_validation, effective_now),
-         :ok <- validate_semantic_retry(request, request_shape, scoped_validation) do
+         :ok <- validate_semantic_retry(request, request_shape, scoped_validation, {previous, successor}) do
       markers = if marker, do: [marker | markers], else: markers
       resolve_chain(derived, request, request_shape, scope, now, markers, depth + 1)
     end
@@ -193,7 +193,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # (`response.failed` `server_error`, overload), the shape the owner's
   # client-retry preflight already admits with forwarding on (findings#121
   # variant B, row 232-280).
-  defp validate_semantic_retry(request, shape, %{semantic_claim?: true} = scope) do
+  #
+  # A turn has at most one successor per predecessor. A client-retry link
+  # naming the request keeps the fence unless it is one of the chain's own
+  # edges (`chain_edges_only?/2`).
+  defp validate_semantic_retry(request, shape, %{semantic_claim?: true} = scope, chain_edges) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
 
@@ -202,11 +206,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          true <- ClientRetry.original_witness_eligible?(request),
          true <- ClientRetry.witness_matches?(request.native_client_retry_digest, digest, witness.alternates) or shape == :completed_item_resend,
          true <- request.native_client_retry_auth_epoch == epoch,
-         false <-
-           Repo.exists?(
-             from l in RequestClientRetryLink,
-               where: l.predecessor_request_id == ^request.id or l.successor_request_id == ^request.id
-           ),
+         true <- chain_edges_only?(request, chain_edges),
          true <- not is_nil(turn) and turn.codex_session_id == Map.get(scope, :codex_session_id),
          true <-
            ClientRetry.verified_dead_execution?(turn, request, attempt) or
@@ -220,7 +220,29 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     end
   end
 
-  defp validate_semantic_retry(_request, _shape, _scope), do: :ok
+  defp validate_semantic_retry(_request, _shape, _scope, _chain_edges), do: :ok
+
+  # A turn-claim resend links its successor to the predecessor it chained onto,
+  # so every node of a chain longer than one carries the chain's own edges: the
+  # link from the node before it, and the link to the request holding the claim
+  # derived from it, which this walk visits next and validates in turn. With
+  # owner forwarding off a successor cut before any output reached the client
+  # is itself a pre-visible disconnect, and refusing the chain's own edge met
+  # the released client's next resend with `409 duplicate_turn` (findings#206
+  # row 206-519). Any other link names a successor admitted under another claim
+  # (the owner's `client-retry-v1:` preflight) or a predecessor outside the
+  # chain, and chaining past it would admit a second successor of one request.
+  defp chain_edges_only?(%Request{id: id}, {previous, successor}) do
+    from(l in RequestClientRetryLink,
+      where: l.predecessor_request_id == ^id or l.successor_request_id == ^id,
+      select: {l.predecessor_request_id, l.successor_request_id}
+    )
+    |> Repo.all()
+    |> Enum.all?(fn
+      {^id, successor_id} -> match?(%Request{id: ^successor_id}, successor)
+      {predecessor_id, ^id} -> match?(%Request{id: ^predecessor_id}, previous)
+    end)
+  end
 
   defp lock_request_by_claim(claim) do
     Repo.one(
