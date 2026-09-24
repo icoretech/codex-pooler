@@ -327,10 +327,16 @@ For supported Responses WebSocket routes, every change that makes a Pool API key
 3. the key reaching its expiry time
 4. disabling or archiving the key's Pool
 5. moving the key to another Pool
+6. rotating the key
+7. editing the key's allowed models, enforced model, reasoning effort policy, or enforced service tier
 
-The first four block new runtime authentication. A move does not: the key authenticates in its new Pool, but a connection opened before the move still belongs to the previous Pool. In every case the existing connections close with policy code `1008` and the reason `api key is no longer active`. The cluster notification only prompts that close; it is not the authorization authority.
+The first four block new runtime authentication. The last three do not: a moved key authenticates in its new Pool, a rotated key authenticates with its new secret, and an edited key authenticates under its new policy. A connection opened before the change still carries what it read when it opened, so it is closed as well. In every case the existing connections close with policy code `1008` and the reason `api key is no longer active`. The cluster notification only prompts that close; it is not the authorization authority.
 
-Before later work is admitted, a durable fence reads the key's persisted status, revocation generation, and expiry, together with its Pool's status. A move advances the revocation generation, so authorization from before the move no longer matches. A key that no longer exists fails the same fence. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work. That includes `response.processed` acknowledgements: one sent after the change is not passed on to the upstream account.
+A policy edit closes the key's connections whether it narrows or widens what the key may use, because the open connection judges each request against the policy it read when it opened. An edit that changes none of those fields keeps connections open: a rename, the Dashboard access switch, request and token limits, per-request caps, and the active-request cap. Limits and caps are read again for every request, so a new limit applies to the next request on an open connection without closing it. Saving the form without changing the policy does not close anything.
+
+Current Codex clients treat that close like any dropped connection: the next request is retried on a new connection without showing a message, and it sends the full conversation instead of continuing from the previous response. A request refused by the new policy then returns its usual error, such as `model_not_allowed`.
+
+Before later work is admitted, a durable fence reads the key's persisted status, revocation generation, and expiry, together with its Pool's status. A move, a rotation, and a policy edit that changes one of the fields above advance the revocation generation, so authorization from before the change no longer matches. A key that no longer exists fails the same fence. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work. That includes `response.processed` acknowledgements: one sent after the change is not passed on to the upstream account.
 
 Expiry sends no notification, because nothing is edited when the clock passes the expiry time. A connection whose key has an expiry time checks the key again when that time arrives and closes then, even if the client sends nothing. Editing the expiry, including moving it into the past, prompts the same check immediately.
 
