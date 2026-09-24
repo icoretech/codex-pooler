@@ -141,17 +141,22 @@ defmodule CodexPooler.Gateway.Runtime.ReplayPreflightRefusalCodeTest do
   # line (S18, 2026-09-24: no row and no line with owner forwarding on). The
   # queued-frame dequeue submits the frame to the ordinary checks after any
   # refusal, which record it, so it asks for no record here.
-  test "a model the key may not use is recorded and logged, and not counted as a duplicate", %{setup: setup, session: session} do
+  # This setup's model is in the Pool's catalog but no assignment serves it
+  # (it has no source assignment), so HTTP and the fresh path refuse it
+  # `invalid_model` before they read the key's policy, and so does the
+  # preflight (findings#206 row 206-549). The served model the key may not
+  # use (`model_not_allowed`) is pinned through the socket in
+  # `replay_preflight_policy_denial_record_test.exs`.
+  test "a listed but unserved model the key may not use is refused invalid_model as HTTP refuses it, recorded and logged, and not counted as a duplicate", %{setup: setup, session: session} do
     forbid_model!(setup)
     prepared = prepare(new_turn_payload(setup), session, setup)
 
     {result, log} = with_info_log(fn -> Service.prepare_replay_intent(setup.auth, prepared) end)
 
-    assert {:error, %{status: 400, code: "model_not_allowed", param: "model"}} = result
-    assert [{"rejected", "model_not_allowed", 400, "websocket", model_id}] = refused_rows(setup)
-    assert model_id == setup.model.id
-    assert log =~ "stage=runtime_replay_preflight reason_code=model_not_allowed"
-    assert log =~ "public_code=model_not_allowed"
+    assert {:error, %{status: 400, code: "invalid_model", param: "model"}} = result
+    assert [{"rejected", "invalid_model", 400, "websocket", nil}] = refused_rows(setup)
+    assert log =~ "stage=runtime_replay_preflight reason_code=invalid_model"
+    assert log =~ "public_code=invalid_model"
     refute_received {:duplicate_turn_refused, _stage, _transport}
   end
 
@@ -161,7 +166,7 @@ defmodule CodexPooler.Gateway.Runtime.ReplayPreflightRefusalCodeTest do
 
     {result, _log} = with_info_log(fn -> Service.prepare_replay_intent(setup.auth, prepared, record_model_denial: false) end)
 
-    assert {:error, %{status: 400, code: "model_not_allowed", param: "model"}} = result
+    assert {:error, %{status: 400, code: "invalid_model", param: "model"}} = result
     assert refused_rows(setup) == []
   end
 

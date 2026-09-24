@@ -1340,7 +1340,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp authorize_replay_model(api_key, pool, context) do
     with {:ok, policy} <- normalize_replay_policy(api_key),
          {:ok, effective_model} <- effective_replay_model_name(policy, context) do
-      authorize_replay_catalog_model(pool, policy, effective_model)
+      authorize_replay_catalog_model(pool, policy, effective_model, context)
     end
   end
 
@@ -1358,20 +1358,40 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  defp authorize_replay_catalog_model(pool, policy, effective_model) do
+  # HTTP and the fresh path judge the Pool's visible models before the key's
+  # policy, so a model the key does not allow that the catalog lists as active
+  # but no assignment serves is `invalid_model` there. The preflight reads the
+  # catalog row alone, so it asks for visibility before it answers
+  # `model_not_allowed`; it answered `model_not_allowed` for that model and the
+  # code depended on the forwarding mode (findings#206 row 206-549). A model
+  # the key allows is admitted on the catalog row, as before: the fresh path
+  # that runs next judges its visibility and records its own refusal.
+  defp authorize_replay_catalog_model(pool, policy, effective_model, context) do
     routing = [api_key_policy: policy, effective_model: effective_model]
 
     case Catalog.get_model_by_exposed_id(pool, effective_model) do
       %Model{status: "active"} = model ->
         case Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
           {:ok, _policy} -> {:ok, model}
-          {:error, reason} -> replay_model_denial(:gateway, model, Denials.policy_denial_error(reason), routing)
+          {:error, reason} -> refuse_replay_policy_model(pool, model, reason, routing, context)
         end
 
       _missing_or_inactive ->
-        replay_model_denial(:gateway, nil, error(400, "invalid_model", "model is not available for this pool", "model"), routing)
+        replay_invalid_model(routing)
     end
   end
+
+  defp refuse_replay_policy_model(pool, model, reason, routing, context) do
+    if replay_model_visible?(pool, Keyword.fetch!(routing, :effective_model), context),
+      do: replay_model_denial(:gateway, model, Denials.policy_denial_error(reason), routing),
+      else: replay_invalid_model(routing)
+  end
+
+  defp replay_model_visible?(pool, effective_model, context),
+    do: match?(%{visible_model: %Model{}}, visible_model_context(pool, effective_model, context.endpoint, context.request_options))
+
+  defp replay_invalid_model(routing),
+    do: replay_model_denial(:gateway, nil, error(400, "invalid_model", "model is not available for this pool", "model"), routing)
 
   defp replay_model_denial(kind, model, reason, routing), do: {:error, {:replay_model_denial, {kind, model, reason, routing}}}
 

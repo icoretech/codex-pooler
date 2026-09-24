@@ -13,6 +13,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
   # the three, so a refusal of an enforced model the Pool does not serve read
   # as a refusal of the requested model.
   #
+  # A model the key does not allow that the Pool's catalog lists as active
+  # but no assignment serves is `400 invalid_model` over HTTP and on the
+  # fresh path, which judge the Pool's visible models before the key's
+  # policy; the preflight judged the catalog row alone and answered
+  # `model_not_allowed`, so the code depended on the forwarding mode
+  # (findings#206 row 206-549).
+  #
   # One node, native websocket with owner forwarding on and off, HTTP SSE,
   # the Pool's default serving mode and a Lite override, FakeUpstream, the
   # released client's turn frame, synthetic text.
@@ -32,14 +39,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
   @context_window_id "00000000-0000-4000-8000-00000000c12a"
   @turn_endpoint "/backend-api/codex/responses"
   @enforced_model "gpt-enforced-fixture-model"
+  @unserved_model "gpt-unserved-fixture-model"
 
   # The row fields a refusal writes that do not depend on the transport, the
   # connection or the generated ids.
   @metadata_keys ~w(endpoint requested_model effective_model enforced_model gateway_denial policy_denial)
 
-  for arm <- [:model_not_allowed, :unknown_model, :retired_model, :enforced_model_not_served],
+  for arm <- [:model_not_allowed, :unknown_model, :retired_model, :enforced_model_not_served, :disallowed_unserved],
       mode <- [:default, "lite"],
-      arm == :model_not_allowed or mode == :default do
+      arm in [:model_not_allowed, :disallowed_unserved] or mode == :default do
     @tag arm: arm, serving_mode: mode
     test "websocket forwarded #{mode}: a turn refused #{arm} in the replay preflight records the row forwarding off and HTTP record", %{arm: arm, serving_mode: mode, conn: conn} do
       forwarded = websocket_row(arm, :forwarded, mode)
@@ -49,6 +57,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
       CodexPooler.TestDiagnostics.puts(fn -> "P129 #{arm} #{mode}: #{inspect(%{forwarded: forwarded, direct: direct, http: http})}" end)
 
       assert forwarded.metadata["requested_model"] == requested_model(arm)
+      assert http.last_error_code == http_code(arm)
       assert forwarded == direct
       assert forwarded == http
     end
@@ -113,7 +122,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
     }
   end
 
+  defp http_code(:model_not_allowed), do: "model_not_allowed"
+  defp http_code(_arm), do: "invalid_model"
+
   defp requested_model(:unknown_model), do: "gpt-unknown-fixture-model"
+  defp requested_model(:disallowed_unserved), do: @unserved_model
   defp requested_model(_arm), do: "gpt-test-model"
 
   defp impose!(:model_not_allowed, setup) do
@@ -135,6 +148,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
     {setup.model.exposed_model_id, fn -> :ok end}
   end
 
+  # The Pool's catalog lists a second active model that no assignment serves
+  # (no source assignment), and the key allows only the Pool's served model.
+  defp impose!(:disallowed_unserved, setup) do
+    CodexPooler.PoolerFixtures.model_fixture(setup.pool, %{exposed_model_id: @unserved_model, display_name: "Unserved fixture model", source_assignment_count: 0})
+    setup.api_key |> Ecto.Changeset.change(allowed_model_identifiers: [setup.model.exposed_model_id]) |> Repo.update!()
+    {@unserved_model, fn -> :ok end}
+  end
+
   # A stored policy the changesets would reject fails closed at
   # normalization; the upgrade refuses it, so it is stored after the upgrade.
   defp impose!(:policy_malformed, setup) do
@@ -145,7 +166,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayPreflightDenialRowP
 
   defp put_serving_mode!(setup, mode) do
     timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    Repo.insert!(%ModelServingOverride{pool_id: setup.pool.id, exposed_model_id: setup.model.exposed_model_id, mode: mode, created_at: timestamp, updated_at: timestamp})
+
+    for exposed_model_id <- [setup.model.exposed_model_id, @unserved_model] do
+      Repo.insert!(%ModelServingOverride{pool_id: setup.pool.id, exposed_model_id: exposed_model_id, mode: mode, created_at: timestamp, updated_at: timestamp})
+    end
+
     :ok
   end
 
