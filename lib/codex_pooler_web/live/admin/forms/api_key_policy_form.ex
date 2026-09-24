@@ -565,17 +565,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   defp limit_field_label("max_input_tokens_per_request"), do: "Input tokens per request"
   defp limit_field_label("max_output_tokens_per_request"), do: "Output tokens per request"
 
+  # An empty note stays empty: the textarea shows its own placeholder, and a
+  # placeholder seeded as the value was saved as the note on the next edit
+  # (findings#206 row 206-503).
   defp operator_notes(%APIKey{metadata: metadata}) when is_map(metadata) do
     metadata
     |> Map.get("operator_notes", Map.get(metadata, :operator_notes))
     |> blank_to_nil()
-    |> case do
-      nil -> "No notes"
-      notes -> notes
-    end
+    |> Kernel.||("")
   end
 
-  defp operator_notes(_api_key), do: "No notes"
+  defp operator_notes(_api_key), do: ""
 
   defp dashboard_access_errors(params) do
     if invalid_dashboard_access?(params["dashboard_access"]) do
