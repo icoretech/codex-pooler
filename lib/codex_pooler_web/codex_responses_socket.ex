@@ -2071,7 +2071,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # turn.
   defp refuse_unadmitted_native_compaction(metadata, cause, state) do
     refusal = owner_error(:owner_unavailable)
+    log_native_compaction_refusal(state, refusal, metadata, :compact, cause, :arrival)
+    {:error, refusal}
+  end
 
+  # One line for every refusal of a native compaction reservation that found
+  # no admission, whichever route decided it: on arrival (nothing tracked), at
+  # dequeue behind a tracked task, or on the active-turn reconnect route from
+  # the cause the frame met on arrival. The deferral routes used to log only
+  # the info-level replay rejection, with no cause, next to the generic
+  # failed-turn warning, so a query for this line undercounted the refusals
+  # decided after a deferral (findings#206 row 206-394). `decided_at` names
+  # the route and `reservation_phase` the reservation (`final` is the turn
+  # that continues on a compacted history, whose metadata names no compaction
+  # phase).
+  defp log_native_compaction_refusal(state, refusal, metadata, reservation_phase, cause, decided_at) do
     Logger.warning(fn ->
       "native compaction refused before dispatch " <>
         "reason=admission_unavailable " <>
@@ -2080,10 +2094,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         "status=#{refusal.status} " <>
         "compaction_phase=#{native_compaction_metadata_phase(metadata)} " <>
         "topology=#{if owner_forwarded_socket?(state), do: "forwarded", else: "direct"} " <>
+        "decided_at=#{decided_at} " <>
+        "reservation_phase=#{reservation_phase} " <>
         "codex_session_id=#{codex_session_id(state)}"
     end)
-
-    {:error, refusal}
   end
 
   defp native_compaction_metadata_phase(%NativeCodexTurnMetadata{compaction: %NativeCodexTurnMetadata.Compaction{phase: phase}}), do: phase
@@ -2454,16 +2468,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> clear_native_compaction_deferral()
       |> dispatch_owner_prepared_response(state)
     else
-      reject_deferred_native_compaction(state)
+      reject_deferred_native_compaction(prepared, state)
     end
   end
 
   defp clear_native_compaction_deferral(%PreparedWebsocketFrame{} = prepared),
     do: %{prepared | request_options: %{prepared.request_options | native_compaction_reservation: nil}}
 
-  defp reject_deferred_native_compaction(state) do
+  defp reject_deferred_native_compaction(
+         %PreparedWebsocketFrame{request_options: %RequestOptions{native_compaction_reservation: %{metadata: metadata, phase: phase, cause: cause}}},
+         state
+       ) do
     refusal = owner_error(:owner_unavailable)
     log_replay_rejection(state, :owner_unavailable, :native_compaction_deferral, refusal)
+    log_native_compaction_refusal(state, refusal, metadata, phase, cause, :reconnect)
     reject_prepared_response(refusal, state)
   end
 
@@ -3248,7 +3266,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:error, {:owner_unavailable, cause}} ->
         if unadmitted_final_runs_as_ordinary?(phase, cause, state),
           do: start_deferred_or_tracked_response(prepared, state),
-          else: refuse_deferred_native_compaction_at_dequeue(prepared, state)
+          else: refuse_deferred_native_compaction_at_dequeue(prepared, metadata, phase, cause, state)
 
       {:error, reason} ->
         start_owner_retarget_error_task(owner_error(reason), prepared, state)
@@ -3256,13 +3274,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   # The dequeue's refusal carries the stage the reconnect route's refusal logs
-  # (`reject_deferred_native_compaction/1`), so one query counts the same
+  # (`reject_deferred_native_compaction/2`), so one query counts the same
   # decision on both routes. Before, an unreachable owner at dequeue left only
   # the generic failed-turn line, the same line the ordinary run of that turn
   # writes, so nothing told the two apart (findings#206 row 206-342).
-  defp refuse_deferred_native_compaction_at_dequeue(prepared, state) do
+  defp refuse_deferred_native_compaction_at_dequeue(prepared, metadata, phase, cause, state) do
     refusal = owner_error(:owner_unavailable)
     log_replay_rejection(state, :owner_unavailable, :native_compaction_deferral, refusal)
+    log_native_compaction_refusal(state, refusal, metadata, phase, cause, :dequeue)
     start_owner_retarget_error_task(refusal, prepared, state)
   end
 
