@@ -54,6 +54,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
              RequestHealth.recent_request_event_rows(context.scope, context.identity.id, 1)
 
     assert first.id == hd(expected).id
+
+    # The identity's two newest attempts are both on the retried request: a walk
+    # of two finds one request and must go further to find the second.
+    assert Enum.map(RequestHealth.recent_request_event_rows(context.scope, context.identity, 2), & &1.id) == Enum.map(expected, & &1.id)
     assert RequestHealth.recent_request_event_rows(context.scope, nil, 10) == []
     assert RequestHealth.recent_request_event_rows(context.scope, context.identity, 0) == []
   end
@@ -218,6 +222,134 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
 
     assert attempt_reads < 1000,
            "five dense events read #{attempt_reads} attempt tuples across 2,001 attempts: #{inspect(explain)}"
+  end
+
+  # A busy account that went quiet: its own history is dense, so walking
+  # `requests` newest first looks cheap to the planner, but every request other
+  # accounts made since its last event is read and probed before the first of
+  # its own (findings#206 row 206-385; 1.2M buffers for 30 quiet days on a
+  # 1M-request rehearsal). The walk starts from the identity's own attempts.
+  test "a dense identity that went quiet does not read the newer traffic of other identities", context do
+    now = DateTime.utc_now()
+    seed = insert_request(context, "failed", DateTime.add(now, -3, :day))
+    seed_attempt = Repo.one!(from attempt in Attempt, where: attempt.request_id == ^seed.id)
+    %{assignment: other_assignment} = upstream_assignment_fixture(context.pool)
+
+    own =
+      insert_scaled!(seed, seed_attempt, context.assignment, 1_000, fn ordinal ->
+        %{status: if(rem(ordinal, 20) == 0, do: "failed", else: "succeeded"), admitted_at: DateTime.add(seed.admitted_at, -ordinal, :second)}
+      end)
+
+    _newer =
+      insert_scaled!(seed, seed_attempt, other_assignment, 3_000, fn ordinal ->
+        %{status: "succeeded", admitted_at: DateTime.add(now, -ordinal, :second)}
+      end)
+
+    Repo.query!("ANALYZE requests")
+    Repo.query!("ANALYZE attempts")
+
+    expected =
+      [seed | Enum.filter(own, &(&1.status == "failed"))]
+      |> Enum.sort_by(&{DateTime.to_unix(&1.admitted_at, :microsecond), &1.id}, :desc)
+      |> Enum.take(5)
+
+    {rows, queries} = capture_event_queries(fn -> RequestHealth.recent_request_event_rows(context.scope, context.identity, 5) end)
+    assert Enum.map(rows, & &1.id) == Enum.map(expected, & &1.id)
+    assert Enum.all?(rows, &(&1.attempt_count == 1))
+
+    request_reads =
+      Enum.sum_by(queries, fn {query, params} ->
+        %{rows: [[[explain]]]} = Repo.query!("EXPLAIN (ANALYZE, FORMAT JSON) " <> query, params)
+
+        explain["Plan"]
+        |> plan_nodes()
+        |> Enum.filter(&(&1["Relation Name"] == "requests"))
+        |> Enum.sum_by(&((&1["Actual Rows"] + Map.get(&1, "Rows Removed by Filter", 0)) * &1["Actual Loops"]))
+      end)
+
+    assert request_reads < 1_000, "five events of a quiet identity read #{request_reads} request tuples behind 3,000 newer requests"
+  end
+
+  # The walk follows the identity's attempts, which start in a different order
+  # than their requests were admitted when one waits longer before its first
+  # attempt. The rows still rank by admission: the request admitted later wins
+  # although its attempt started earlier.
+  test "recent events rank by admission even when attempts started in another order", context do
+    now = DateTime.utc_now()
+    admitted_earlier = insert_request(context, "failed", DateTime.add(now, -10, :minute))
+    admitted_later = insert_request(context, "failed", DateTime.add(now, -5, :minute))
+    move_attempt_start!(admitted_earlier, DateTime.add(now, -1, :minute))
+    move_attempt_start!(admitted_later, DateTime.add(now, -5, :minute))
+
+    assert [%{id: first_id}] = RequestHealth.recent_request_event_rows(context.scope, context.identity, 1)
+    assert first_id == admitted_later.id
+
+    assert Enum.map(RequestHealth.recent_request_event_rows(context.scope, context.identity, 2), & &1.id) == [admitted_later.id, admitted_earlier.id]
+  end
+
+  defp move_attempt_start!(request, started_at) do
+    {1, _} = Repo.update_all(from(attempt in Attempt, where: attempt.request_id == ^request.id), set: [started_at: started_at])
+  end
+
+  defp insert_scaled!(seed, seed_attempt, assignment, count, attrs_fun) do
+    request_fields = Request.__schema__(:fields)
+    attempt_fields = Attempt.__schema__(:fields)
+
+    requests =
+      for ordinal <- 1..count do
+        seed
+        |> Map.take(request_fields)
+        |> Map.merge(%{id: Ecto.UUID.generate(), correlation_id: "quiet-scale-#{System.unique_integer([:positive])}"})
+        |> Map.merge(attrs_fun.(ordinal))
+      end
+
+    requests |> Enum.chunk_every(1_000) |> Enum.each(&Repo.insert_all(Request, &1))
+
+    requests
+    |> Enum.map(fn request ->
+      seed_attempt
+      |> Map.take(attempt_fields)
+      |> Map.merge(%{
+        id: Ecto.UUID.generate(),
+        request_id: request.id,
+        upstream_identity_id: assignment.upstream_identity_id,
+        pool_upstream_assignment_id: assignment.id,
+        started_at: request.admitted_at
+      })
+    end)
+    |> Enum.chunk_every(1_000)
+    |> Enum.each(&Repo.insert_all(Attempt, &1))
+
+    requests
+  end
+
+  # Every query the call makes, with its parameters, from this process.
+  defp capture_event_queries(fun) do
+    handler = {__MODULE__, :all, self()}
+    test_pid = self()
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {:any_event_query, metadata.query, metadata.params})
+        end,
+        nil
+      )
+
+    result = fun.()
+    :telemetry.detach(handler)
+    {result, drain_event_queries([])}
+  end
+
+  defp drain_event_queries(acc) do
+    receive do
+      {:any_event_query, query, params} -> drain_event_queries([{query, params} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   def handle_query(_event, _measurements, metadata, owner) do
