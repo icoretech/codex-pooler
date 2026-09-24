@@ -45,17 +45,109 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           map()
         ) :: {:ok, map()} | {:error, Metadata.accounting_error()}
   def claim_websocket_turn(%{pool: pool, api_key: api_key}, %Model{} = model, opts) do
-    if ClientRetry.reserved_successor_claim?(attr(opts, :correlation_id)) do
-      {:error, duplicate_request_error(nil)}
-    else
-      case do_claim_websocket_turn(pool, api_key, model, opts, nil) do
-        {:error, %{code: :duplicate_request}} ->
-          claim_failed_predecessor_resend(pool, api_key, model, opts)
+    cond do
+      ClientRetry.reserved_successor_claim?(attr(opts, :correlation_id)) ->
+        {:error, duplicate_request_error(nil)}
 
-        result ->
-          result
-      end
+      await_live_semantic_predecessor(opts) == :live ->
+        {:error, duplicate_request_error(:active_predecessor)}
+
+      true ->
+        case do_claim_websocket_turn(pool, api_key, model, opts, nil) do
+          {:error, %{code: :duplicate_request}} ->
+            claim_failed_predecessor_resend(pool, api_key, model, opts)
+
+          result ->
+            result
+        end
     end
+  end
+
+  # The released client drops a socket in the middle of a streaming turn and at
+  # once sends the same turn again on a new socket, as full history without the
+  # anchor, so under a different request claim than the request still running
+  # on the dropped socket. With owner forwarding off nothing else stands between
+  # that resend and the reservation: the dropped socket's direct task keeps the
+  # predecessor turn `in_progress` until that socket's cleanup stops it (250 ms
+  # after the close, plus its settlement), and a resend claimed inside that
+  # window met the active-turn index (`codex_turns_active_semantic_turn_uq`)
+  # when its turn started, answered `500 websocket_response_task_failed` and
+  # left its claim `accepted` (findings#206 row 206-407). The claim therefore
+  # waits, bounded, until the database no longer shows such a predecessor, and
+  # a predecessor still live at the bound (its socket's close not seen yet) is
+  # refused before anything is written, as the `409 duplicate_turn` a
+  # byte-identical resend of a running request already gets. A resend carrying
+  # the running request's own claim keeps that immediate refusal. Nothing waits
+  # inside a caller's transaction.
+  @live_predecessor_wait_budget_ms 1_000
+  @live_predecessor_poll_ms 20
+
+  defp await_live_semantic_predecessor(opts) do
+    case live_predecessor_scope(opts) do
+      nil ->
+        :none
+
+      scope ->
+        started_ms = System.monotonic_time(:millisecond)
+
+        if live_semantic_predecessor?(scope) do
+          outcome =
+            if Repo.in_transaction?(),
+              do: :live,
+              else: poll_live_semantic_predecessor(scope, started_ms + @live_predecessor_wait_budget_ms)
+
+          log_live_predecessor_wait(scope, outcome, System.monotonic_time(:millisecond) - started_ms)
+          outcome
+        else
+          :none
+        end
+    end
+  end
+
+  defp live_predecessor_scope(opts) do
+    with %CodexSession{id: session_id} when is_binary(session_id) <- attr(opts, :codex_session),
+         <<_::256>> = digest <- attr(opts, :semantic_turn_digest),
+         claim when is_binary(claim) <- attr(opts, :correlation_id) do
+      %{codex_session_id: session_id, semantic_turn_digest: digest, claim: claim}
+    else
+      _no_semantic_turn -> nil
+    end
+  end
+
+  defp poll_live_semantic_predecessor(scope, deadline_ms) do
+    cond do
+      not live_semantic_predecessor?(scope) ->
+        :settled
+
+      System.monotonic_time(:millisecond) >= deadline_ms ->
+        :live
+
+      true ->
+        Process.sleep(@live_predecessor_poll_ms)
+        poll_live_semantic_predecessor(scope, deadline_ms)
+    end
+  end
+
+  # Exactly the rows the active-turn index would refuse this turn for, less the
+  # running request that carries this very claim.
+  defp live_semantic_predecessor?(scope) do
+    Repo.exists?(
+      from turn in CodexTurn,
+        join: request in Request,
+        on: request.id == turn.request_id,
+        where:
+          turn.codex_session_id == ^scope.codex_session_id and turn.semantic_turn_digest == ^scope.semantic_turn_digest and
+            turn.status == "in_progress" and request.status in ["accepted", "in_progress"] and request.correlation_id != ^scope.claim
+    )
+  end
+
+  defp log_live_predecessor_wait(scope, outcome, waited_ms) do
+    require Logger
+
+    Logger.info(
+      "websocket turn claim met a live predecessor of the same turn " <>
+        "codex_session_id=#{scope.codex_session_id} outcome=#{outcome} waited_ms=#{waited_ms}"
+    )
   end
 
   # The first insert already met `requests_correlation_id_uq`. Only a claim

@@ -212,6 +212,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       native_http_turn_progress: native_http_turn_progress(native_http_claim),
       api_key_policy: request_options.routing.api_key_policy,
       codex_session: Map.get(request_options.continuity, :codex_session),
+      semantic_turn_digest: Map.get(request_options.continuity, :semantic_turn_key),
       anchor_present?: not is_nil(Map.get(request_options.continuity, :previous_response_id)),
       request_metadata:
         request_metadata_attrs(
