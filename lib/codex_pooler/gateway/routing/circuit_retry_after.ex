@@ -13,8 +13,10 @@ defmodule CodexPooler.Gateway.Routing.CircuitRetryAfter do
   `retryable: false` gets no advice.
   """
 
+  alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
 
   @open_status "open"
@@ -40,6 +42,21 @@ defmodule CodexPooler.Gateway.Routing.CircuitRetryAfter do
   end
 
   def put(result, _candidates, _route_state, _now), do: result
+
+  @doc """
+  The same advice for a refusal raised after route filtering, when a circuit
+  refused a candidate the filter had admitted (findings#206 row 206-548): the
+  circuit states of `candidates` are read now rather than from the filter's
+  snapshot.
+  """
+  @spec put_current(term(), map(), Model.t(), [{map(), map()}], String.t()) :: term()
+  def put_current({:error, %{status: 503}} = result, auth, %Model{} = model, candidates, route_class) when is_list(candidates) and is_binary(route_class) do
+    snapshots = CircuitState.eligibility_snapshots(auth, model, candidates, route_class)
+    route_state = RouteState.put_circuit_snapshots(RouteState.new(%{visible_model: model, candidates: candidates}), snapshots)
+    put(result, candidates, route_state)
+  end
+
+  def put_current(result, _auth, _model, _candidates, _route_class), do: result
 
   defp seconds(candidates, route_state, now) do
     settings = OperationalSettings.current()

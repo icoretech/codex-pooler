@@ -13,7 +13,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility.Quota
-  alias CodexPooler.Gateway.Routing.{ModelMetadata, RouteLifecycle, RoutingSelection}
+  alias CodexPooler.Gateway.Routing.{CircuitRetryAfter, ModelMetadata, RouteLifecycle, RoutingSelection}
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
@@ -480,14 +480,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
              usage_status: "not_applicable",
              pre_attempt_phase: PreAttemptRelease.routing_rejected()
            }) do
+        # A circuit refused the candidate after route filtering admitted it:
+        # the same retry advice as the filter's refusal (findings#206 row
+        # 206-548).
         {:ok, _finalized} ->
-          {:error,
-           error(
-             503,
-             "no_eligible_backend",
-             "no healthy eligible backend is currently available",
-             "model"
-           )}
+          {:error, error(503, "no_eligible_backend", "no healthy eligible backend is currently available", "model")}
+          |> CircuitRetryAfter.put_current(context.auth, context.model, context.route_plan.candidates, context.route_class)
 
         {:error, gateway_error} ->
           {:error, gateway_error}

@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
 
   alias CodexPooler.Gateway.Routing.{
     CandidateEligibility,
+    CircuitRetryAfter,
     RouteFiltering,
     RoutePlanInput,
     RoutingSelection
@@ -88,8 +89,17 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
       {:ok, selection}
     else
       {:error, reason} ->
-        {:error, route_selection_error(reason, request_options)}
+        {:error, reason |> route_selection_error(request_options) |> circuit_retry_advice(auth, model, candidates, request_options)}
     end
+  end
+
+  # A file route refusal carries the circuit retry advice of the turn routes
+  # (findings#206 rows 206-532, 206-548), from the circuits read now: that
+  # covers the filter's circuit refusal and a circuit that refused at
+  # `select_and_begin_circuit/1` after the filter admitted the candidate.
+  defp circuit_retry_advice(error, auth, model, candidates, request_options) do
+    {:error, error} = CircuitRetryAfter.put_current({:error, error}, auth, model, candidates, RequestOptions.route_class(request_options))
+    error
   end
 
   defp require_file_candidates([], request_options) do

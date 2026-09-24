@@ -529,7 +529,9 @@ an open circuit took an account out, that `503` (and the `no_eligible_backend`
 `503` when open circuits took out every account) carries a `Retry-After` of the
 seconds until the earliest of those circuits lets a request through again,
 between 1 and 60, in the websocket error frame's `headers` too, and never
-`x-should-retry: false`, because the request can succeed then. When
+`x-should-retry: false`, because the request can succeed then. The same
+applies when a circuit opens between routing and dispatch, and to file
+uploads. When
 at least one account is still eligible, the request is routed to it as usual,
 and a provider usage-limit refusal that arrives before any output moves the
 same request to another eligible account.
