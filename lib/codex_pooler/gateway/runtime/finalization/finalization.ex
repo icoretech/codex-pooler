@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.NativeImageResult
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Runtime.Dispatch.PartitionFallback
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
@@ -335,7 +336,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       request_options: request_options
     } = context
 
-    if allow_retry? and not compact_endpoint?(endpoint) do
+    retry_reason = status_retry_reason(response, context, allow_retry? and not compact_endpoint?(endpoint))
+
+    if retry_reason do
       latency = elapsed_ms(context.started)
 
       case AttemptSettlement.record_retryable_failure(reserved.request, attempt, %{
@@ -355,7 +358,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
              end
            }) do
         {:stale_generation, finalized} -> {:ok, finalized}
-        {:ok, _attempt} -> {:retry, :retryable_status}
+        {:ok, _attempt} -> {:retry, retry_reason}
         {:error, gateway_error} -> {:error, gateway_error}
       end
     else
@@ -372,6 +375,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       )
     end
   end
+
+  # The last candidate of the selected canonical partition refused with a
+  # provider usage limit before any output, and a candidate partition selection
+  # held back can serve the model now: the dispatcher moves the turn there once,
+  # as the next request's partition selection would (findings#206 row 206-586).
+  # The refusal is recorded as the retryable 429 it is.
+  defp status_retry_reason(_response, _context, true), do: :retryable_status
+
+  defp status_retry_reason(response, context, false),
+    do: if(partition_fallback?(response, context), do: :partition_fallback)
+
+  defp partition_fallback?(%Req.Response{status: 429} = response, %SelectedCandidateContext{} = context),
+    do: not compact_endpoint?(context.endpoint) and PartitionFallback.available?(context) and ProviderUsageLimit.usage_limit_refusal?(response)
+
+  defp partition_fallback?(_response, _context), do: false
 
   defp finalize_assignment_model_unavailable(response, context, body) do
     if context.allow_retry? do

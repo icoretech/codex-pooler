@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn
   alias CodexPooler.Gateway.Runtime.Dispatch.AuthRefresh
+  alias CodexPooler.Gateway.Runtime.Dispatch.PartitionFallback
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -72,8 +73,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   defp handle_quota_exhausted_first_event(context, dispatch_request, response, failure) do
     SideEffects.observe_websocket_response(context, response)
 
-    if context.allow_retry? and first_event_retry_policy(context) == :same_assignment and
-         context.request_options.payload_context.portable_full_history? do
+    retry_reason = quota_first_event_retry_reason(context)
+
+    if retry_reason do
       response_context = retryable_websocket_response_context(context, response)
 
       case Finalization.record_retryable_first_event_stream_failure(
@@ -83,11 +85,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
              record_health?: false
            ) do
         {:stale_generation, finalized} -> {:ok, finalized}
-        {:ok, _recorded_failure} -> {:retry, :upstream_quota_exhausted}
+        {:ok, _recorded_failure} -> {:retry, retry_reason}
         {:error, _reason} = error -> error
       end
     else
       finalize_retryable_first_websocket_event(context, dispatch_request, response, failure)
+    end
+  end
+
+  defp quota_first_event_retry_reason(context) do
+    cond do
+      not (first_event_retry_policy(context) == :same_assignment and context.request_options.payload_context.portable_full_history?) -> nil
+      context.allow_retry? -> :upstream_quota_exhausted
+      # The selected partition's last candidate: the turn moves to a held-back
+      # partition once (findings#206 row 206-586).
+      PartitionFallback.available?(context) -> :partition_fallback
+      true -> nil
     end
   end
 

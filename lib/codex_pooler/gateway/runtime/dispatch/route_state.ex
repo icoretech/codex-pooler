@@ -162,12 +162,48 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   def put_route_filter_dropped(%__MODULE__{} = route_state, dropped) when is_list(dropped),
     do: %{route_state | extensions: Map.put(route_state.extensions, :route_filter_dropped, dropped)}
 
-  @doc "The kept and dropped candidates of the last route filtering."
+  @doc """
+  The kept and dropped candidates of the last route filtering, and the
+  candidates partition selection held back: the Pool a relayed provider usage
+  limit speaks for (rows 206-545, 206-586).
+  """
   @spec route_filter_candidates(t() | term()) :: [candidate()]
   def route_filter_candidates(%__MODULE__{candidates: candidates, extensions: extensions}) when is_list(candidates),
-    do: candidates ++ Map.get(extensions, :route_filter_dropped, [])
+    do: candidates ++ Map.get(extensions, :route_filter_dropped, []) ++ Map.get(extensions, :partition_fallback, [])
 
   def route_filter_candidates(_route_state), do: []
+
+  @doc """
+  Records the runtime-compatible candidates canonical partition selection held
+  back from a native turn (valid sources outside the selected partition, after
+  the file-affinity, compact and session-pin filters). A pre-output usage-limit
+  refusal of the selected partition's last candidate may move the turn to them
+  once (findings#206 row 206-586).
+  """
+  @spec put_partition_fallback(t(), [candidate()]) :: t()
+  def put_partition_fallback(%__MODULE__{} = route_state, []), do: route_state
+
+  def put_partition_fallback(%__MODULE__{} = route_state, candidates) when is_list(candidates),
+    do: %{route_state | extensions: Map.put(route_state.extensions, :partition_fallback, candidates)}
+
+  @spec partition_fallback(t() | term()) :: [candidate()]
+  def partition_fallback(%__MODULE__{extensions: %{partition_fallback: candidates}}) when is_list(candidates), do: candidates
+  def partition_fallback(_route_state), do: []
+
+  @doc """
+  The route state of the one partition fallback hop: the held-back candidates
+  become the candidates and the capacity, with quota and circuit snapshots
+  read now, and the fallback is spent.
+  """
+  @spec take_partition_fallback(t(), auth(), Model.t(), RequestOptions.t()) :: t()
+  def take_partition_fallback(%__MODULE__{} = route_state, auth, %Model{} = model, %RequestOptions{} = request_options) do
+    fallback = partition_fallback(route_state)
+
+    %{route_state | extensions: Map.delete(route_state.extensions, :partition_fallback), quota_snapshots: %{}}
+    |> put_saved_reset_auto_capacity(fallback)
+    |> put_candidates(fallback)
+    |> preload_routing_snapshots(auth, model, request_options)
+  end
 
   @spec put_quota_snapshots(t(), quota_snapshots()) :: t()
   def put_quota_snapshots(%__MODULE__{} = route_state, snapshots) when is_map(snapshots) do

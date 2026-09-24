@@ -73,6 +73,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit do
 
   def frame_error(_frame, _now), do: :unknown
 
+  @doc "True for a provider `429` whose error or headers name a usage limit, whatever its reset."
+  @spec usage_limit_refusal?(Req.Response.t()) :: boolean()
+  def usage_limit_refusal?(%Req.Response{status: 429} = response),
+    do: response |> Metadata.rejection_body() |> decode_error() |> usage_limit?(response.headers)
+
+  def usage_limit_refusal?(_response), do: false
+
   @doc """
   A pre-output usage-limit frame of the last candidate, as the socket will
   project it, with the Pool's advice in place of the refusing account's own

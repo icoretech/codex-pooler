@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Routing.CandidateEligibility.{AccountDenial, Quota, UsageLimit}
+  alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
 
   @type candidate :: {map(), map()}
@@ -40,6 +41,26 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn do
         if Enum.all?(exclusions, &is_map/1), do: UsageLimit.earliest_reset(exclusions, now), else: :unknown
     end
   end
+
+  @doc """
+  True when one of `candidates` can serve `model` now: neither quota nor a
+  workspace denial excludes it against quota evidence read now, and its
+  circuit for `route_class` admits a request (findings#206 row 206-586).
+  """
+  @spec any_routable?(map(), Model.t(), [candidate()], String.t()) :: boolean()
+  def any_routable?(auth, %Model{} = model, candidates, route_class) when is_list(candidates) and is_binary(route_class) do
+    route_state = %{visible_model: model, candidates: candidates} |> RouteState.new() |> RouteState.put_quota_snapshots(RouteState.load_quota_snapshots(candidates))
+    circuits = CircuitState.eligibility_snapshots(auth, model, candidates, route_class)
+
+    Enum.any?(candidates, fn {assignment, _identity} = candidate ->
+      is_nil(exclusion(model, candidate, route_state)) and circuit_eligible?(Map.get(circuits, assignment.id))
+    end)
+  end
+
+  def any_routable?(_auth, _model, _candidates, _route_class), do: false
+
+  defp circuit_eligible?(%{eligible?: false}), do: false
+  defp circuit_eligible?(_snapshot), do: true
 
   # Quota first, then the workspace denial, in routing's order; a candidate
   # neither excludes is routable and has no return time to advise.

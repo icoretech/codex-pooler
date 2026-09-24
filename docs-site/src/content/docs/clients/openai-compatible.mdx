@@ -534,7 +534,10 @@ applies when a circuit opens between routing and dispatch, and to file
 uploads. When
 at least one account is still eligible, the request is routed to it as usual,
 and a provider usage-limit refusal that arrives before any output moves the
-same request to another eligible account.
+same request to another eligible account. That includes an account Codex
+Pooler kept out of the request because it advertises the model with a
+different catalog shape: when the last account of the chosen shape refuses
+with a usage limit, the request moves to such an account once.
 
 When no other account is left for the request and the Codex backend's
 usage-limit refusal names the account's reset, that refusal gets the same

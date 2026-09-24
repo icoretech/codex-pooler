@@ -205,6 +205,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
         route_state
         |> RouteState.put_saved_reset_auto_capacity(request_compatible_capacity)
         |> RouteState.put_candidates(candidates)
+        |> RouteState.put_partition_fallback(partition_fallback(canonical_filter_input_candidates, candidates, visible_model_context, endpoint, request_options, model))
         |> RouteState.preload_routing_snapshots(auth, model, request_options)
         |> RouteState.put_reservation_snapshot_inputs(
           AccountingReservation.reservation_snapshot_inputs(
@@ -431,6 +432,31 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       visible_model_context.valid_canonical_assignment_ids
     else
       visible_model_context.selected_partition_assignment_ids
+    end
+  end
+
+  # The runtime-compatible candidates with a valid canonical source that the
+  # selected partition held back, passed through the same file-affinity,
+  # compact and session-pin filters as the kept ones, so a hard pin or a file
+  # affinity leaves none (findings#206 row 206-586). Translated surfaces
+  # already route over every valid source and keep none.
+  defp partition_fallback(input_candidates, kept_candidates, visible_model_context, endpoint, request_options, model) do
+    kept_ids = MapSet.new(kept_candidates, fn {assignment, _identity} -> assignment.id end)
+    valid_ids = MapSet.new(visible_model_context.valid_canonical_assignment_ids || [])
+
+    held_back =
+      Enum.filter(input_candidates, fn {assignment, _identity} ->
+        MapSet.member?(valid_ids, assignment.id) and not MapSet.member?(kept_ids, assignment.id)
+      end)
+
+    with [_ | _] <- held_back,
+         false <- OpenAICompatibility.translated_responses_surface?(request_options.openai_compatibility),
+         {:ok, [_ | _] = held_back} <- SessionContinuity.filter_file_affinity(held_back, request_options),
+         {:ok, [_ | _] = held_back} <- CandidateEligibility.maybe_filter_compact(endpoint, held_back),
+         {:ok, [_ | _] = held_back} <- SessionContinuity.apply_codex_session_assignment(held_back, request_options, model) do
+      held_back
+    else
+      _none -> []
     end
   end
 
