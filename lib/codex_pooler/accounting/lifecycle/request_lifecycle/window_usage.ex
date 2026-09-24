@@ -52,8 +52,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.WindowUsage do
     # per-request function calls or joins between materialized request sets.
     # OFFSET 0 preserves parameterized range/history scans: flattening these
     # lateral reads can scan retained history even for a tiny excluded edge.
-    # Keep terminal existence parameterized too: stale empty-table statistics
-    # can otherwise choose a quadratic unparameterized nested-loop anti join.
+    # Pending tokens are the reserved tokens of the key's live requests
+    # (`accepted`/`in_progress`, through `requests_api_key_live_idx`) that no
+    # release or settlement ended, read with one aggregate probe of each
+    # request's own ledger entries (findings#206, P106): never the key's
+    # reservation history (4.6M plain-EXPLAIN cost for the largest production
+    # key), and never a finished request's reservation that was not released,
+    # which used to add its tokens to every window forever. The lateral
+    # aggregate cannot be flattened into a join, so missing or empty planner
+    # statistics keep it a parameterized probe.
     %{rows: rows} =
       Repo.query!(
         """
@@ -147,15 +154,16 @@ defmodule CodexPooler.Accounting.RequestLifecycle.WindowUsage do
           WHERE k.api_key_id = $1::uuid AND k.bucket_started_at >= b.full_since
             AND k.bucket_started_at < b.full_until
         ), pending AS MATERIALIZED (
-          SELECT COALESCE(SUM(r.total_tokens), 0)::bigint AS tokens
-          FROM public.ledger_entries r
-          WHERE r.api_key_id = $1::uuid AND r.entry_kind = 'reservation'
-            AND r.amount_status = 'recorded' AND r.occurred_at <= $3::timestamptz
-            AND NOT EXISTS (
-              SELECT 1 FROM public.ledger_entries t WHERE t.request_id = r.request_id
-                AND t.entry_kind IN ('release', 'settlement')
-              OFFSET 0
-            )
+          SELECT COALESCE(SUM(held.tokens), 0)::bigint AS tokens
+          FROM public.requests q CROSS JOIN LATERAL (
+            SELECT SUM(e.total_tokens) FILTER (WHERE e.entry_kind = 'reservation'
+                AND e.amount_status = 'recorded' AND e.occurred_at <= $3::timestamptz) AS tokens
+            FROM public.ledger_entries e WHERE e.request_id = q.id
+            HAVING count(*) FILTER (WHERE e.entry_kind = 'reservation'
+                AND e.amount_status = 'recorded' AND e.occurred_at <= $3::timestamptz) > 0
+              AND count(*) FILTER (WHERE e.entry_kind IN ('release', 'settlement')) = 0
+          ) held
+          WHERE q.api_key_id = $1::uuid AND q.status IN ('accepted', 'in_progress')
         )
         SELECT b.ordinal, COALESCE(SUM(known_total_tokens), 0)::bigint,
           COALESCE(SUM(provisional_total_tokens), 0)::bigint,
