@@ -553,6 +553,22 @@ defmodule CodexPooler.CompatibilityMatrix do
       contract: "API keys derive unrestricted, allow_up_to, or always_use reasoning policy from their configured fields. Unrestricted preserves omission and current accepted explicit values. Allow_up_to accepts known values through its ceiling and the selected model's effective known levels, resolves omission from the permitted default or highest permitted known value, and rejects above-ceiling, unknown, custom, or empty-intersection requests before reservation or upstream work without clamping. Always_use preserves legacy exact enforcement regardless of metadata membership. Denials are status 400 reasoning_effort_not_allowed with message reasoning effort is not available for this API key and param reasoning.effort for Responses/backend/compact or reasoning_effort for Chat; model_not_allowed remains the prior status 403 decision. Upgraded response.create frames receive the same existing error frame after upgrade, not an upgrade rejection. Backend model metadata keeps the selected pristine entry with every advertised level and default whatever the policy (the policy changes only model membership there), models remain visible, and public /v1/models remains unchanged. minimal and ultra are evaluated before their backend low and max rewrites."
     },
     %{
+      slug: :api_key_reservation_policy_refusals,
+      status: :supported,
+      current: :window_429_request_cap_403,
+      categories: [:route, :auth, :error, :streaming, :ownership],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :post, path: "/v1/responses"},
+        %{method: :get, path: "/v1/responses", transport: "websocket"},
+        %{method: :post, path: "/v1/chat/completions"}
+      ],
+      future_routes: [],
+      fixture: :api_key_reservation_policy_refusals,
+      contract: "an API key policy refusal at the reservation keeps the wire code api_key_policy_limit_exceeded and the Pooler's own message on every transport, is marked as a Pooler policy denial so public /v1 never redacts it, and takes its status from what refused it: a window (max_requests_per_minute, max_tokens_per_day, max_tokens_per_week) answers 429 rate_limit_error, with a retry hint taken from the window's own boundary (60 s for the minute window, the seconds until the next 00:00 UTC for the daily window, none for the trailing week) sent as the HTTP Retry-After header and as the websocket error event's headers retry-after, plus HTTP x-should-retry false when the window frees no sooner than a minute; a per-request estimate cap (max_input_tokens_per_request, max_output_tokens_per_request) answers 403 invalid_request_error with no hint; the refused request row records the status the client received; with owner forwarding on or off the same request gets the same answer, including a chained client-retry successor refused by the key's own policy, which records its refused row under a correlation that holds no request claim; a refusal made before a request's durable claim never takes that claim, so the same request resent once the cause is gone is served instead of meeting 409 duplicate_turn"
+    },
+    %{
       slug: :reasoning_context,
       status: :supported,
       current: :openai_sdk_literal_normalization,
@@ -2396,6 +2412,27 @@ defmodule CodexPooler.CompatibilityMatrix do
         "reasoning" => %{"effort" => "ultra"}
       }
     },
+    api_key_reservation_policy_refusals: %{
+      code: "api_key_policy_limit_exceeded",
+      window: %{
+        limits: ["max_requests_per_minute", "max_tokens_per_day", "max_tokens_per_week"],
+        status: 429,
+        type: "rate_limit_error",
+        retry_after_seconds: %{minute: 60, daily: :until_next_utc_midnight, weekly: nil},
+        http_x_should_retry: %{minute: nil, daily: "false", weekly: "false"},
+        hint_surfaces: %{http: "retry-after header", websocket: "error event headers.retry-after"}
+      },
+      request_cap: %{
+        limits: ["max_input_tokens_per_request", "max_output_tokens_per_request"],
+        status: 403,
+        type: "invalid_request_error",
+        retry_hint: nil
+      },
+      recorded_status: :answered_status,
+      owner_forwarding: :same_answer,
+      retry_successor_refusal: %{recorded: true, holds_request_claim: false},
+      pre_claim_refusal_holds_request_claim: false
+    },
     api_key_reasoning_availability: %{
       modes: [:unrestricted, :allow_up_to, :always_use],
       known_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
@@ -3513,7 +3550,8 @@ defmodule CodexPooler.CompatibilityMatrix do
           "api_key_policy_malformed",
           "model_not_allowed",
           "image_generation_disabled",
-          "api_key_concurrency_limit_exceeded"
+          "api_key_concurrency_limit_exceeded",
+          "api_key_policy_limit_exceeded"
         ],
         pooler_policy_denial_marker: "pooler_policy",
         server_class_surfaces: ["responses_json", "responses_sse_terminal", "chat_streaming"],

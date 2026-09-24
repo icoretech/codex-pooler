@@ -795,8 +795,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp normalize_retry_claim_error(%Ecto.Changeset{}), do: :successor_claimed
 
-  defp normalize_retry_claim_error(%{code: :api_key_concurrency_limit_exceeded} = reason),
-    do: reason
+  # A key policy refusal is the successor's own refusal, answered and recorded
+  # as the ordinary reservation answers it, never a lost claim (findings#206
+  # row 206-428).
+  defp normalize_retry_claim_error(%{code: code} = reason)
+       when code in [:api_key_concurrency_limit_exceeded, :api_key_policy_limit_exceeded],
+       do: reason
 
   defp normalize_retry_claim_error(reason) when is_map(reason), do: :authorization_changed
   defp normalize_retry_claim_error(reason), do: reason

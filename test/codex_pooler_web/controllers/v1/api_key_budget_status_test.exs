@@ -12,7 +12,9 @@ defmodule CodexPoolerWeb.V1.APIKeyBudgetStatusTest do
 
   for endpoint <- ["/backend-api/codex/responses", "/v1/responses"],
       stream? <- [false, true] do
-    test "#{endpoint} stream=#{stream?} rejects a valid key's exhausted budget as policy denial",
+    # A daily token window is a rate limit: 429 with its reset as the hint, and
+    # no SDK retry within seconds (findings#206 row 206-427; it was 403).
+    test "#{endpoint} stream=#{stream?} rejects a valid key's exhausted budget as a policy rate limit",
          %{
            conn: conn
          } do
@@ -37,8 +39,12 @@ defmodule CodexPoolerWeb.V1.APIKeyBudgetStatusTest do
           "stream" => unquote(stream?)
         })
 
-      assert %{"error" => %{"code" => "api_key_policy_limit_exceeded"}} =
-               json_response(conn, 403)
+      assert %{"error" => %{"code" => "api_key_policy_limit_exceeded", "type" => "rate_limit_error"}} =
+               json_response(conn, 429)
+
+      assert [retry_after] = get_resp_header(conn, "retry-after")
+      assert String.to_integer(retry_after) in 1..86_400
+      assert get_resp_header(conn, "x-should-retry") == ["false"]
 
       assert FakeUpstream.requests(upstream) == []
       assert Repo.aggregate(Attempt, :count) == 0

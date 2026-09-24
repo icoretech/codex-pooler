@@ -62,6 +62,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   require Logger
 
   @backend_transcription_model "gpt-4o-transcribe"
+  # The key's own refusals of a retry successor's reservation: answered and
+  # recorded as the ordinary reservation answers them, never `409 duplicate_turn`
+  # (findings#206 row 206-428).
+  @retry_claim_policy_refusals [:api_key_concurrency_limit_exceeded, :api_key_policy_limit_exceeded]
   @native_image_endpoints [
     "/backend-api/codex/images/generations",
     "/backend-api/codex/images/edits"
@@ -2149,7 +2153,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:ok, claim} ->
           {:ok, Map.from_struct(claim)}
 
-        {:error, %{code: :api_key_concurrency_limit_exceeded}} = denial ->
+        {:error, %{code: code}} = denial when code in @retry_claim_policy_refusals ->
           denial
 
         {:error, reason} ->
@@ -2206,7 +2210,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:ok, claim} ->
         {:ok, Map.from_struct(claim)}
 
-      {:error, %{code: :api_key_concurrency_limit_exceeded}} = denial ->
+      {:error, %{code: code}} = denial when code in @retry_claim_policy_refusals ->
         denial
 
       {:error, reason} ->

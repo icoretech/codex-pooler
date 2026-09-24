@@ -47,9 +47,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimFenceReleaseTest do
 
   @refusals %{
     concurrency_cap: {429, "api_key_concurrency_limit_exceeded"},
-    # The websocket answers this refusal with status 500 today, a separate
-    # finding; only its code is pinned here.
-    token_window: {:unpinned, "api_key_policy_limit_exceeded"},
+    # A window refusal is a 429, like the cap (findings#206 row 206-427).
+    token_window: {429, "api_key_policy_limit_exceeded"},
     open_circuit: {503, "no_eligible_backend"}
   }
 
@@ -132,7 +131,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimFenceReleaseTest do
 
     {{refused, rows_after_refusal}, log} =
       ExUnit.CaptureLog.with_log(fn ->
-        refused = port |> send_once!(setup, thread_id, frame) |> refusal_of() |> unpin(refusal)
+        refused = port |> send_once!(setup, thread_id, frame) |> refusal_of()
         {refused, await_settled!(setup.pool.id, 1, &websocket?/1)}
       end)
 
@@ -343,9 +342,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimFenceReleaseTest do
   # A row that gave its claim up must still be recognised by the socket's
   # cleanup receipt, which names the claim it bound.
   defp receipt_identity_refusals(log), do: length(Regex.scan(~r/refused_clause=receipt_identity/, log))
-
-  defp unpin({_status, code}, :token_window), do: {:unpinned, code}
-  defp unpin(refused, _refusal), do: refused
 
   defp refusal_of(%{"type" => "error", "status" => status, "error" => %{"code" => code}}), do: {status, code}
   defp refusal_of(other), do: {:not_refused, other["type"]}

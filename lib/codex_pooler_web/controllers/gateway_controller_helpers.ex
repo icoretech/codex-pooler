@@ -343,6 +343,26 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
        }),
        do: put_resp_header(conn, "retry-after", "1")
 
+  # A key policy window's own boundary (findings#206 row 206-427); advice, not
+  # a promise: settling in-flight work can free the window earlier. A window
+  # that frees in a minute at the soonest (the daily window's hint, the weekly
+  # window without one) also tells the OpenAI SDKs, which retry every 429 twice
+  # within seconds when the hint exceeds their own ceiling, not to retry.
+  defp put_policy_retry_header(conn, %{pooler_policy: true, status: 429, code: "api_key_policy_limit_exceeded"} = error) do
+    case Map.get(error, :retry_after_seconds) do
+      seconds when is_integer(seconds) and seconds > 0 and seconds <= 60 ->
+        put_resp_header(conn, "retry-after", Integer.to_string(seconds))
+
+      seconds when is_integer(seconds) and seconds > 0 ->
+        conn
+        |> put_resp_header("retry-after", Integer.to_string(seconds))
+        |> put_resp_header("x-should-retry", "false")
+
+      _none ->
+        put_resp_header(conn, "x-should-retry", "false")
+    end
+  end
+
   defp put_policy_retry_header(conn, _error), do: conn
 
   defp forwarded_headers(conn) do

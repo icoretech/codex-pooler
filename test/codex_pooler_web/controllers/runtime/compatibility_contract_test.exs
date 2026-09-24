@@ -45,6 +45,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     reasoning_none
     reasoning_ultra
     api_key_reasoning_availability
+    api_key_reservation_policy_refusals
     reasoning_context
     unsupported_upstream_fields
     api_key_websocket_revocation

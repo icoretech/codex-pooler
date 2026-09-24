@@ -290,7 +290,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
 
     assert {:ok, _auth} = Access.authenticate_authorization_header(setup.authorization)
     conn = dispatch(conn, setup)
-    assert conn.status == 403
+    assert conn.status == 429
 
     assert %{"error" => %{"code" => "api_key_policy_limit_exceeded"}} =
              CodexPooler.JSON.decode!(conn.resp_body)

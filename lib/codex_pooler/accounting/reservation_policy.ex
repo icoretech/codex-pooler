@@ -124,7 +124,7 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
 
         case enforce_window_limit(limit) do
           :ok -> {:cont, :ok}
-          {:error, error} -> {:halt, {:error, error}}
+          {:error, error} -> {:halt, {:error, put_window_retry_hint(error, label, timestamp)}}
         end
     end)
   end
@@ -170,7 +170,8 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
            "request",
            estimate.input_tokens,
            policy.max_input_tokens_per_request
-         )}
+         )
+         |> Map.put(:limit_scope, :request)}
 
       positive_limit_exceeded?(policy.max_output_tokens_per_request, estimate.output_tokens) ->
         {:error,
@@ -180,7 +181,8 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
            "request",
            estimate.output_tokens,
            policy.max_output_tokens_per_request
-         )}
+         )
+         |> Map.put(:limit_scope, :request)}
 
       true ->
         :ok
@@ -198,6 +200,22 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
       :ok
     end
   end
+
+  # A window refusal admits the request again once the window moves; a
+  # per-request estimate cap never does. The retry hint is the window's own
+  # boundary: every admission the minute window counts has left it 60 s later,
+  # and the daily window restarts at 00:00 UTC. The trailing week has no
+  # boundary of its own, so it carries none; settling in-flight work can free
+  # any window earlier, so the hint is advice, never a promise.
+  defp put_window_retry_hint(error, "minute", _timestamp),
+    do: Map.merge(error, %{limit_scope: :window, retry_after_seconds: 60})
+
+  defp put_window_retry_hint(error, "daily", timestamp) do
+    next_day = timestamp |> beginning_of_day() |> DateTime.add(1, :day)
+    Map.merge(error, %{limit_scope: :window, retry_after_seconds: max(DateTime.diff(next_day, timestamp), 1)})
+  end
+
+  defp put_window_retry_hint(error, _label, _timestamp), do: Map.put(error, :limit_scope, :window)
 
   defp positive_limit_exceeded?(nil, _value), do: false
 

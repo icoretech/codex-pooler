@@ -423,6 +423,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
       "status" => status,
       "error" => error_payload(reason, status)
     }
+    |> put_policy_retry_headers(reason)
   end
 
   def websocket_error(reason) do
@@ -432,6 +433,15 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
       "error" => error_payload(reason, 500)
     }
   end
+
+  # A key policy window's retry hint travels as the wrapped error's `headers`,
+  # the field the released client reads as the HTTP response headers of a
+  # websocket error, like HTTP's `Retry-After` (findings#206 row 206-427).
+  defp put_policy_retry_headers(event, %{pooler_policy: true, status: 429, retry_after_seconds: seconds})
+       when is_integer(seconds) and seconds > 0,
+       do: Map.put(event, "headers", %{"retry-after" => Integer.to_string(seconds)})
+
+  defp put_policy_retry_headers(event, _reason), do: event
 
   @spec request_id(term()) :: String.t() | nil
   def request_id(%RequestOptions{} = opts), do: opts.request_metadata.request_id

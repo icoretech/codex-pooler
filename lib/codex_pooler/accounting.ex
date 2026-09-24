@@ -26,7 +26,12 @@ defmodule CodexPooler.Accounting do
 
   @type auth :: CodexPooler.Access.auth_context()
   @type model_ref :: Model.t() | Ecto.UUID.t() | String.t() | nil
-  @type accounting_error :: %{required(:code) => atom(), required(:message) => String.t()}
+  @type accounting_error :: %{
+          required(:code) => atom(),
+          required(:message) => String.t(),
+          optional(:limit_scope) => :window | :request,
+          optional(:retry_after_seconds) => pos_integer()
+        }
   @type request_result_row :: %{required(:request) => Request.t(), optional(atom()) => term()}
   @type request_result :: {:ok, request_result_row()} | {:error, accounting_error()}
   @type finalization_disposition :: :inserted | :replaced | :reused

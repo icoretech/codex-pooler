@@ -163,7 +163,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   # list, decides rendering, so a new marked reason renders before it is
   # listed here. Every other gateway error, including the quota 503s and every
   # upstream-derived 401/403/429, keeps the redaction.
-  @unredacted_policy_denial_codes ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed image_generation_disabled api_key_concurrency_limit_exceeded)
+  @unredacted_policy_denial_codes ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed image_generation_disabled api_key_concurrency_limit_exceeded api_key_policy_limit_exceeded)
 
   @doc false
   @spec unredacted_policy_denial_codes() :: [String.t()]

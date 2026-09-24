@@ -70,7 +70,12 @@ defmodule CodexPooler.Accounting.Metadata do
                                "token_refresh_reason_code_preview"
                              ])
 
-  @type accounting_error :: %{required(:code) => atom(), required(:message) => String.t()}
+  @type accounting_error :: %{
+          required(:code) => atom(),
+          required(:message) => String.t(),
+          optional(:limit_scope) => :window | :request,
+          optional(:retry_after_seconds) => pos_integer()
+        }
   @type request_result_row :: %{required(:request) => Request.t(), optional(atom()) => term()}
   @type request_result :: {:ok, request_result_row()} | {:error, accounting_error()}
 

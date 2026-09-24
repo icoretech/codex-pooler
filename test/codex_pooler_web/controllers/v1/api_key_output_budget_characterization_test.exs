@@ -98,7 +98,7 @@ defmodule CodexPoolerWeb.V1.APIKeyOutputBudgetCharacterizationTest do
         |> post(unquote(endpoint), payload)
 
       assert %{"error" => %{"code" => "api_key_policy_limit_exceeded"}} =
-               json_response(denied, 403)
+               json_response(denied, 429)
 
       assert length(FakeUpstream.requests(upstream)) == 1
 
@@ -182,7 +182,7 @@ defmodule CodexPoolerWeb.V1.APIKeyOutputBudgetCharacterizationTest do
         |> post(unquote(endpoint), payload)
 
       assert %{"error" => %{"code" => "api_key_policy_limit_exceeded"}} =
-               json_response(denied, 403)
+               json_response(denied, 429)
 
       assert length(FakeUpstream.requests(upstream)) == 1
     end

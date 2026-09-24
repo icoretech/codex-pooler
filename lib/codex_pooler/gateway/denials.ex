@@ -92,6 +92,20 @@ defmodule CodexPooler.Gateway.Denials do
     )
   end
 
+  # A reservation-policy refusal (`ReservationPolicy`) comes without a status:
+  # a window that admits the request again once it moves answers `429` with
+  # its retry hint, like the active-request cap; a per-request estimate cap
+  # that no resend can pass answers `403`. The websocket rendered the missing
+  # status as a `500` and HTTP as a `403`, while both recorded `400`
+  # (findings#206 row 206-427).
+  def log_gateway(
+        %Context{reason: %{code: :api_key_policy_limit_exceeded} = reason} = context,
+        turn_claim
+      )
+      when not is_map_key(reason, :status) do
+    log_gateway(%{context | reason: reservation_policy_error(reason)}, turn_claim)
+  end
+
   def log_gateway(
         %Context{
           auth: auth,
@@ -137,6 +151,25 @@ defmodule CodexPooler.Gateway.Denials do
 
     {:error, reason}
   end
+
+  @doc """
+  The status and marked denial of a reservation-policy refusal: `429` for a
+  window, with its `retry_after_seconds` when the window has a boundary of its
+  own, `403` for a per-request estimate cap (findings#206 row 206-427).
+  """
+  @spec reservation_policy_error(map()) :: map()
+  def reservation_policy_error(%{code: :api_key_policy_limit_exceeded, message: message} = reason) do
+    status = if Map.get(reason, :limit_scope) == :window, do: 429, else: 403
+
+    status
+    |> policy_error("api_key_policy_limit_exceeded", message)
+    |> maybe_put_retry_after(Map.get(reason, :retry_after_seconds))
+  end
+
+  defp maybe_put_retry_after(error, seconds) when is_integer(seconds) and seconds > 0,
+    do: Map.put(error, :retry_after_seconds, seconds)
+
+  defp maybe_put_retry_after(error, _seconds), do: error
 
   defp maybe_put_turn_claim(attrs, nil), do: attrs
   defp maybe_put_turn_claim(attrs, request), do: Map.put(attrs, :turn_claim, request)

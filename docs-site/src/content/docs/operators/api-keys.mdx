@@ -225,7 +225,16 @@ The model-scoped override is an optional single-model override. A matching activ
 
 Lowering the limit lets existing work finish and refuses new reservations until capacity is available. Replaying the same reserved execution reuses its slot; an eligible retry that creates a new successor needs a new slot. Finishing with unknown usage releases the slot even when a provisional token estimate remains.
 
-Saturation returns retryable `429 api_key_concurrency_limit_exceeded` with `rate_limit_error`. HTTP responses include `Retry-After: 1` as minimum backoff advice, not a promise that a slot will be free after one second. Websocket turns receive the corresponding error without requiring the socket to close. Authentication failures remain `401`; token or request-budget denials remain `403 api_key_policy_limit_exceeded`.
+Saturation returns retryable `429 api_key_concurrency_limit_exceeded` with `rate_limit_error`. HTTP responses include `Retry-After: 1` as minimum backoff advice, not a promise that a slot will be free after one second. Websocket turns receive the corresponding error without requiring the socket to close. Authentication failures remain `401`.
+
+### Policy limit refusals
+
+A request refused by the key's policy answers `api_key_policy_limit_exceeded` with the Pooler's own message on every route and transport, and the request log records the status the client received:
+
+- **Windows** (requests per minute, tokens per day, tokens per week) answer `429` with `rate_limit_error`, because the same request is admitted again once the window moves. The retry hint comes from the window's own boundary: `Retry-After: 60` for the minute window, the seconds until the next 00:00 UTC for the daily window, and none for the trailing week. Websocket turns carry the same value as `retry-after` in the error event's `headers`. When the window frees no sooner than a minute (daily or weekly), HTTP responses also send `x-should-retry: false`, so OpenAI SDKs do not spend their automatic retries within seconds. The hint is advice, not a promise: in-flight work that settles below its estimate can free a window earlier.
+- **Per-request estimate caps** (input or output tokens per request) answer `403` with `invalid_request_error` and no hint, because resending the same request cannot pass them.
+
+Owner forwarding does not change the answer: a resend chained onto an earlier failed request gets the same refusal as any other request.
 
 ### Token estimates and budget pressure
 
