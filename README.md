@@ -729,6 +729,8 @@ model:
 
 agent:
   image_input_mode: native
+  api_max_retries: 2
+  auto_recovery_cycles: 1
 
 image_gen:
   provider: openai
@@ -746,8 +748,6 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-  title_generation:
-    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -796,17 +796,23 @@ window. Treat that per-model endpoint value as authoritative because provider
 accounts can temporarily report different catalog ceilings. The `828400` value
 in this example is a long-profile fallback for a selected 872000-token source;
 a short 272000-token profile reports `258400` instead. Match any explicit
-fallback to `/v1/models`. With the long-profile example,
-`compression.threshold: 0.95` starts Hermes compression at 786980 tokens. Hermes context compression
-uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout:
+fallback to `/v1/models`.
+
+Hermes compresses at the lower of `compression.threshold` times the context
+window and `compression.threshold_tokens`, which defaults to 256000 tokens. With
+the long-profile example, 0.95 of the window is 786980 tokens, so the
+256000-token cap applies; on a 258400-token short profile the ratio is lower and
+applies instead. Keep the default cap, since a smaller per-turn context uses
+less quota; set `compression.threshold_tokens: null` only to compress by the
+ratio alone. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout:
 900` so large retained contexts can finish instead of cycling through the older
 120-second compression budget. This is independent from the optional MCP server
 `timeout` and from an application output cap.
 
-Hermes generates session titles with a separate auxiliary call that sends no
-reasoning effort, so the model's default effort applies. Set
-`auxiliary.title_generation.reasoning_effort: low` to keep those short calls
-on a fixed, cheap effort.
+Hermes generates session titles with a separate auxiliary call. Current Hermes
+releases send it with reasoning disabled, which overrides
+`auxiliary.title_generation.reasoning_effort`, so that key has no effect on
+titles and can be left out.
 
 Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends
 `service_tier: priority` only when the provider is `openai` on `api.openai.com`
@@ -814,7 +820,25 @@ or `openai-codex` on `chatgpt.com`. In current Hermes releases an
 `openai-api` provider pointed at Codex Pooler never sends it, even though
 `/fast` and its tip still report fast mode as on. Codex Pooler accepts
 `service_tier: priority` (and `fast` as an alias) whenever a client sends it,
-so this is a Hermes routing rule, not a Pooler limitation.
+so this is a Hermes routing rule, not a Pooler limitation. To get priority
+processing, declare a named provider under `providers:` with the same `/v1`
+base URL, `api_mode: codex_responses`, `key_env: OPENAI_API_KEY` and
+`extra_body: {service_tier: priority}`, and point `model.provider` at it; or set
+the API key's enforced service tier in Codex Pooler. Hermes adds that
+`extra_body` to main agent turns only; its auxiliary calls request no tier. See
+the [Hermes guide](https://docs.codex-pooler.com/clients/hermes/) for the
+example.
+
+When every account in a Pool is out of quota, Codex Pooler answers `429`
+`usage_limit_reached` with `resets_at` and `Retry-After`. Hermes waits for
+`Retry-After` (up to 600 seconds) before each retry and then ends the turn with
+the reset time, so `agent.api_max_retries: 2` limits a turn to one wait. A
+retryable `503` also carries `Retry-After`; `agent.auto_recovery_cycles: 1`
+keeps Hermes' recovery ladder for server errors to one extra cycle instead of
+five. If you have a second Pool API key or another Codex Pooler instance, list
+it under `fallback_providers`, using a named provider with
+`api_mode: codex_responses`; a fallback key in the same Pool does not help when
+that Pool is out of quota.
 
 Remote HTTP MCP servers require Hermes' `mcp` extra. If
 `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not
@@ -828,13 +852,27 @@ Check the one-shot model path:
 hermes -z 'Reply with exactly: hermes openai api ok' --ignore-rules
 ```
 
-Hermes can also be made to use its `openai-codex` provider against Codex
-Pooler, but this alternate path is less direct because Hermes treats `openai-codex` as an
-OAuth provider by default; add a Pool API key credential ahead of any existing
-device-code credential and keep the entry's `base_url` on `/v1`. Use this only
-when you specifically need Hermes' `openai-codex` credential-pool behavior; the
-`openai-api` configuration above is the preferred setup. This variant stores the
-key in `auth.json` because Hermes credential pools live there.
+Hermes can also reach Codex Pooler through its `openai-codex` provider pointed
+at `/v1`, as an advanced option; the `openai-api` configuration above is the
+recommended setup. On this provider a few Hermes code paths use hard-coded
+`chatgpt.com` URLs and send the credential-pool key there: the context-length
+probe, the `/model` picker and the `openai-codex` image plugin. The Pool key is
+not valid there, so those requests fail, but a successful probe would also
+replace your Pool's context window
+([icoretech/codex-pooler#430](https://github.com/icoretech/codex-pooler/issues/430));
+if you ran this setup without the precautions below, rotate the key as a
+precaution. Always set `model.context_length`, never use the `/model` picker or
+`image_gen.provider: openai-codex`, and keep the `OPENAI_*` variables pointed at
+`/v1` for images and speech-to-text. Web search switches to the provider's
+hosted `web_search` tool, no `service_tier` is ever sent, and an ingress that
+drops headers with underscores loses the `session_id` header. In return each
+Hermes session gets a Codex Pooler session, which the websocket bridge can use
+when owner forwarding is enabled; no prompt-cache gain over the recommended
+setup has been measured. Keep the base URL on `/v1`, not the native
+`/backend-api/codex` route. Hermes treats `openai-codex` as an OAuth provider,
+so add a Pool API key credential ahead of any device-code credential and keep
+the entry's `base_url` on `/v1`; this variant stores the key in `auth.json`
+because Hermes credential pools live there.
 
 ```bash
 HERMES_CODEX_BASE_URL=http://localhost:4000/v1
@@ -852,6 +890,8 @@ model:
 
 agent:
   image_input_mode: native
+  api_max_retries: 2
+  auto_recovery_cycles: 1
 
 compression:
   threshold: 0.95
@@ -859,8 +899,6 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-  title_generation:
-    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:

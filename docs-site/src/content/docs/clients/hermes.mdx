@@ -43,6 +43,8 @@ model:
 
 agent:
   image_input_mode: native
+  api_max_retries: 2
+  auto_recovery_cycles: 1
 
 compression:
   threshold: 0.95
@@ -50,8 +52,6 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-  title_generation:
-    reasoning_effort: low
 ```
 
 For local setup, use `http://localhost:4000/v1` in both the environment and model configuration.
@@ -60,16 +60,58 @@ For local setup, use `http://localhost:4000/v1` in both the environment and mode
 
 Set `model.default` to a model available to your Pool.
 
-Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/models`, flattened from the selected native raw context window and its effective percentage. Treat that per-model endpoint value as authoritative because provider accounts can temporarily report different catalog ceilings. The `828400` value in this example is a long-profile value for a Pool whose selected model source reports 872000 raw tokens; a short 272000-token profile reports `258400` instead. Match it to the Pool's `/v1/models` result rather than configuring the raw ceiling. Set `model.context_length` explicitly rather than relying on detection: without it Hermes probes `/v1/models` itself, and that probe carries an `Authorization` header only when the provider's API key resolves to a plain string, so a key supplied through a command or another indirect source probes anonymously, is refused, and is remembered as a failure for five minutes. Hermes then logs `Could not detect context length … (probe-down)` on every resolution and silently falls back to its own bundled catalog, which for these models is larger than the window your Pool actually advertises — so compression starts too late and a turn can overflow upstream. An explicit `context_length` removes the probe entirely. With the long-profile example, `compression.threshold: 0.95` starts Hermes compression at 786980 tokens. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout` and from an application output cap.
+Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/models`, flattened from the selected native raw context window and its effective percentage. Treat that per-model endpoint value as authoritative because provider accounts can temporarily report different catalog ceilings. The `828400` value in this example is a long-profile value for a Pool whose selected model source reports 872000 raw tokens; a short 272000-token profile reports `258400` instead. Match it to the Pool's `/v1/models` result rather than configuring the raw ceiling. Set `model.context_length` explicitly rather than relying on detection: without it Hermes probes `/v1/models` itself, and that probe carries an `Authorization` header only when the provider's API key resolves to a plain string, so a key supplied through a command or another indirect source probes anonymously, is refused, and is remembered as a failure for five minutes. Hermes then logs `Could not detect context length … (probe-down)` on every resolution and silently falls back to its own bundled catalog, which for these models is larger than the window your Pool actually advertises — so compression starts too late and a turn can overflow upstream. An explicit `context_length` removes the probe entirely.
 
-Hermes generates session titles with a separate auxiliary call that sends no reasoning effort, so the model's default effort applies. Set `auxiliary.title_generation.reasoning_effort: low` to keep those short calls on a fixed, cheap effort.
+Hermes compresses the conversation when it reaches the lower of two limits: `compression.threshold` times the context window, and `compression.threshold_tokens`, which defaults to 256000 tokens. With the long-profile example, 0.95 of the window is 786980 tokens, so the 256000-token cap applies. With a 258400-token short profile, 0.95 of the window is lower than the cap and applies instead. Keep the default cap: a smaller per-turn context uses less quota. Set `compression.threshold_tokens: null` only if you want Hermes to compress by the ratio alone. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout` and from an application output cap.
+
+Hermes generates session titles with a separate auxiliary call. Current Hermes releases send that call with reasoning disabled, which overrides `auxiliary.title_generation.reasoning_effort`, so the key has no effect on titles and you can leave it out; the model's default effort applies.
 
 Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends `service_tier: priority` only when the provider is `openai` on `api.openai.com` or `openai-codex` on `chatgpt.com`. Since the Hermes 0.21 releases, an `openai-api` provider pointed at Codex Pooler never sends it, even though `/fast` and its tip still report fast mode as on. Codex Pooler accepts `service_tier: priority` (and `fast` as an alias) whenever a client sends it, so this is a Hermes routing rule, not a Pooler limitation. In that setup the request log shows `tier default` with no requested tier, because nothing was requested. To get priority processing, use one of these:
 
-- In Hermes, declare a named provider under `providers:` with your Pooler `base_url` and `extra_body: {service_tier: priority}`, then point `model.provider` at it. Hermes merges `extra_body` into every request it sends to that provider. Check the rest of your setup after you switch providers, because a named provider can resolve its API mode and settings differently from `openai-api`.
+- In Hermes, declare a named provider under `providers:` with the same `/v1` base URL, `api_mode: codex_responses`, your Pool API key and `extra_body: {service_tier: priority}`, then point `model.provider` at it. The model's `context_length` and the other settings above still apply.
+
+  ```yaml title="~/.hermes/config.yaml" frame="code"
+  model:
+    default: gpt-6-sol
+    provider: codex-pooler
+    base_url: https://codex-pooler.example.com/v1
+    api_mode: codex_responses
+    context_length: 828400
+    supports_vision: true
+
+  providers:
+    codex-pooler:
+      base_url: https://codex-pooler.example.com/v1
+      api_mode: codex_responses
+      key_env: OPENAI_API_KEY
+      extra_body:
+        service_tier: priority
+  ```
+
+  Hermes adds `extra_body` to the main agent turns only. Its auxiliary calls, such as session titles and context compression, use their own `auxiliary.<task>.extra_body` and request no tier.
 - In Codex Pooler, set the API key's [enforced service tier](/operators/api-keys/) to `priority`. This needs no client change, but it only routes when the Pool's model declares that tier.
 
 Either way the request log then shows `tier default` next to `priority requested`, since the Codex backend reports `default` even for priority requests (see [service tiers](/operators/request-logs/#service-tiers)). Priority processing uses included quota faster.
+
+## Retries and fallback
+
+When every account in a Pool has used up its quota, Codex Pooler answers `429` with `usage_limit_reached`, the reset time in `resets_at`, and `Retry-After`. Hermes treats this as a rate limit: before each retry it waits for `Retry-After`, up to 600 seconds, and then ends the turn with the reset time. With the default of three attempts, a turn can wait twice while the Pool cannot recover. `agent.api_max_retries: 2` keeps it to one wait.
+
+A retryable `503`, for example while an account's circuit is open, also carries `Retry-After`. Once a turn's own retries are spent, Hermes retries server errors through a recovery ladder of up to five cycles by default. `agent.auto_recovery_cycles: 1` keeps that to one extra cycle.
+
+If you have a second Pool API key, or another Codex Pooler instance, you can list it under `fallback_providers`. Hermes switches to it once the retries on the primary provider are spent. A fallback key in the same Pool does not help when that Pool is out of quota, because it uses the same accounts.
+
+```yaml title="~/.hermes/config.yaml" frame="code"
+providers:
+  second-pool:
+    base_url: https://codex-pooler.example.com/v1
+    api_mode: codex_responses
+    key_env: SECOND_POOL_API_KEY
+
+fallback_providers:
+  - provider: second-pool
+    model: gpt-6-luna
+```
 
 ## Verify the connection
 
@@ -137,7 +179,16 @@ of OpenAI directly.
 
 ### Alternate `openai-codex` credential-pool path
 
-Hermes can also use its `openai-codex` provider against Codex Pooler, but this alternate path is less direct. The preferred setup is the `openai-api` provider above with `api_mode: codex_responses`. Hermes treats `openai-codex` as an OAuth provider by default, so add a Pool API key credential ahead of any device-code credential and keep the credential `base_url` on `/v1`.
+Use the `openai-api` setup above. Hermes can also reach Codex Pooler through its `openai-codex` provider pointed at the Pooler's `/v1` surface, but treat this as an advanced option with limits:
+
+- A few Hermes code paths on this provider use hard-coded `chatgpt.com` URLs and send the credential-pool key there as a bearer token: the model catalog and context-length probe, the `/model` picker, and the `openai-codex` image plugin. A Codex Pooler key is not valid at `chatgpt.com`, so those requests fail. When the probe does get an answer, Hermes also takes that service's context window instead of your Pool's. See [icoretech/codex-pooler#430](https://github.com/icoretech/codex-pooler/issues/430). If you have run this setup without the precautions below, rotate the Pool API key as a precaution.
+- Always set `model.context_length`, which removes the probe. Do not use the `/model` picker, and do not set `image_gen.provider: openai-codex`.
+- Web search switches to the provider's hosted `web_search` tool.
+- Hermes never sends `service_tier` on this provider, and the named-provider option above does not apply to it.
+- Image generation and speech-to-text still need the `OPENAI_*` variables pointed at the Pooler's `/v1` surface.
+- Hermes sends a `session_id` header here. An ingress proxy that drops headers containing underscores removes it.
+
+What it adds is a Codex Pooler session for each Hermes session, which the websocket bridge can use when the instance has owner forwarding enabled. We have measured no prompt-cache gain over the recommended setup. Keep the base URL on `/v1`: pointing this provider at the native `/backend-api/codex` route currently loses the prompt cache.
 
 Keep the endpoint value in the environment:
 
@@ -145,7 +196,7 @@ Keep the endpoint value in the environment:
 HERMES_CODEX_BASE_URL=https://codex-pooler.example.com/v1
 ```
 
-Set the provider in `~/.hermes/config.yaml`:
+Set the provider in `~/.hermes/config.yaml`. `context_length` is required here:
 
 ```yaml title="~/.hermes/config.yaml" frame="code"
 model:
@@ -157,6 +208,8 @@ model:
 
 agent:
   image_input_mode: native
+  api_max_retries: 2
+  auto_recovery_cycles: 1
 
 compression:
   threshold: 0.95
@@ -164,11 +217,9 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-  title_generation:
-    reasoning_effort: low
 ```
 
-Add a credential-pool entry for Codex Pooler in the Hermes `auth.json` file. This example shows only placeholders. Don't paste a real key into public docs or shared files.
+Hermes treats `openai-codex` as an OAuth provider by default, so add a Pool API key credential ahead of any device-code credential, and keep the credential's `base_url` on `/v1`. This example shows only placeholders. Don't paste a real key into public docs or shared files.
 
 ```json title="~/.hermes/auth.json" frame="code"
 {
@@ -187,8 +238,6 @@ Add a credential-pool entry for Codex Pooler in the Hermes `auth.json` file. Thi
   }
 }
 ```
-
-Use the `openai-api` path first unless you specifically need to test Hermes credential-pool behavior.
 
 ## Operator MCP (optional)
 

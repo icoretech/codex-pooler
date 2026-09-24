@@ -676,6 +676,8 @@ model:
 
 agent:
   image_input_mode: native
+  api_max_retries: 2
+  auto_recovery_cycles: 1
 
 image_gen:
   provider: openai
@@ -693,8 +695,6 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-  title_generation:
-    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -731,14 +731,20 @@ Codex 后端可能返回不同的质量或尺寸。请检查 provider 返回的�
 provider account 可能暂时报告不同目录上限，请把这个 per-model endpoint 值作为权威。
 示例中的 `828400` 是选中 872000-token source 时的 long-profile fallback；短的
 272000-token profile 会报告 `258400`。任何显式 fallback 都应与 `/v1/models` 匹配。
-在 long-profile 示例中，`compression.threshold: 0.95` 会在 786980 tokens 时开始 Hermes 压缩。Hermes 上下文
+Hermes 会在两个上限中较低的那个到达时压缩对话：`compression.threshold` 乘以上下文窗口，
+以及默认为 256000 tokens 的 `compression.threshold_tokens`。在 long-profile 示例中，
+0.95 倍窗口是 786980 tokens，因此生效的是 256000-token 上限；在 258400-token 的短 profile
+中，比例值更低，因此比例生效。请保留默认上限，因为更小的单轮上下文消耗更少配额；只有想完全按比例
+压缩时才设置 `compression.threshold_tokens: null`。Hermes 上下文
 压缩使用自己的辅助请求超时。保持 `auxiliary.compression.timeout: 900`，这样较大的
 保留上下文可以完成，而不会反复触发旧的 120 秒压缩预算。这与可选 MCP server
 `timeout` 和应用输出上限无关。
 
-Hermes 会用单独的辅助调用生成会话标题，该调用不发送 reasoning effort，因此使用模型的默认 effort。设置 `auxiliary.title_generation.reasoning_effort: low`，让这些短调用固定使用较低成本的 effort。
+Hermes 会用单独的辅助调用生成会话标题。当前的 Hermes 版本在该调用中关闭 reasoning，这会覆盖 `auxiliary.title_generation.reasoning_effort`，因此该键对标题没有作用，可以省略。
 
-Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provider 为 `api.openai.com` 上的 `openai` 或 `chatgpt.com` 上的 `openai-codex` 时才发送 `service_tier: priority`。在当前的 Hermes 版本中，指向 Codex Pooler 的 `openai-api` provider 永远不会发送它，即使 `/fast` 及其提示仍显示 fast 模式已开启。只要客户端发送 `service_tier: priority`（或别名 `fast`），Codex Pooler 就会接受，因此这是 Hermes 的路由规则，而不是 Pooler 的限制。
+Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provider 为 `api.openai.com` 上的 `openai` 或 `chatgpt.com` 上的 `openai-codex` 时才发送 `service_tier: priority`。在当前的 Hermes 版本中，指向 Codex Pooler 的 `openai-api` provider 永远不会发送它，即使 `/fast` 及其提示仍显示 fast 模式已开启。只要客户端发送 `service_tier: priority`（或别名 `fast`），Codex Pooler 就会接受，因此这是 Hermes 的路由规则，而不是 Pooler 的限制。如需 priority 处理，可以在 `providers:` 下声明一个具名 provider，使用相同的 `/v1` base URL、`api_mode: codex_responses`、`key_env: OPENAI_API_KEY` 和 `extra_body: {service_tier: priority}`，再把 `model.provider` 指向它；或者在 Codex Pooler 中设置该 API 密钥的强制 service tier。Hermes 只会把这个 `extra_body` 加到主 agent 轮次上，辅助调用不会请求任何 tier。示例见 [Hermes 指南](https://docs.codex-pooler.com/clients/hermes/)。
+
+当 Pool 中所有账号的配额都已用尽时，Codex Pooler 会返回 `429` `usage_limit_reached`，并带上 `resets_at` 和 `Retry-After`。Hermes 每次重试前都会等待 `Retry-After`（最多 600 秒），然后以重置时间结束该轮，因此 `agent.api_max_retries: 2` 会把一轮限制为只等待一次。可重试的 `503` 也带有 `Retry-After`；`agent.auto_recovery_cycles: 1` 会把 Hermes 针对服务器错误的恢复阶梯从五个周期减少为一个额外周期。如果你有第二个 Pool API 密钥或另一个 Codex Pooler 实例，可以用一个 `api_mode: codex_responses` 的具名 provider 把它列在 `fallback_providers` 下；同一个 Pool 中的备用密钥在该 Pool 配额用尽时没有帮助。
 
 远程 HTTP MCP servers 需要 Hermes 的 `mcp` extra。如果
 `hermes mcp test codex_pooler` 报告 `mcp.client.streamable_http is not available`，
@@ -751,12 +757,21 @@ Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provid
 hermes -z 'Reply with exactly: hermes openai api ok' --ignore-rules
 ```
 
-Hermes 也可以用它的 `openai-codex` provider 连接 Codex Pooler，但这条替代路径
-不够直接，因为 Hermes 默认把 `openai-codex` 当作 OAuth provider；需要在任何
-现有 device-code 凭据之前添加 Pool API 密钥凭据，并把该条目的 `base_url`
-保持在 `/v1`。只有当你明确需要 Hermes 的 `openai-codex` 凭据池行为时才使用
-这条路径；上面的 `openai-api` 配置是首选方案。这个变体把密钥存在 `auth.json`，
-因为 Hermes 凭据池位于那里。
+Hermes 也可以把它的 `openai-codex` provider 指向 `/v1` 来连接 Codex Pooler，这只是一个
+高级选项；上面的 `openai-api` 配置才是推荐方案。在这个 provider 上，Hermes 有几条代码路径使用
+写死的 `chatgpt.com` URL，并把凭据池中的密钥发送到那里：上下文长度探测、`/model` 选择器和
+`openai-codex` 图片插件。Pool 密钥在那里无效，所以这些请求会失败；但如果探测成功，还会用对方的
+上下文窗口替换你的 Pool 窗口
+（[icoretech/codex-pooler#430](https://github.com/icoretech/codex-pooler/issues/430)）。
+如果你曾在没有下列预防措施的情况下运行这种设置，请作为预防措施轮换该密钥。务必设置
+`model.context_length`，不要使用 `/model` 选择器或 `image_gen.provider: openai-codex`，
+并让图片和语音转文字所用的 `OPENAI_*` 变量继续指向 `/v1`。网页搜索会切换为 provider 托管的
+`web_search` 工具，永远不会发送 `service_tier`，而丢弃带下划线请求头的入口代理会丢失
+`session_id` 请求头。作为回报，每个 Hermes 会话都会得到一个 Codex Pooler 会话，在启用 owner
+forwarding 时可被 websocket bridge 使用；目前没有测到相对推荐方案的 prompt cache 收益。请把
+base URL 保持在 `/v1`，不要使用原生 `/backend-api/codex` 路由。Hermes 默认把 `openai-codex`
+当作 OAuth provider，因此需要在任何 device-code 凭据之前添加 Pool API 密钥凭据，并把该条目的
+`base_url` 保持在 `/v1`；这个变体把密钥存在 `auth.json`，因为 Hermes 凭据池位于那里。
 
 ```bash
 HERMES_CODEX_BASE_URL=http://localhost:4000/v1
@@ -774,6 +789,8 @@ model:
 
 agent:
   image_input_mode: native
+  api_max_retries: 2
+  auto_recovery_cycles: 1
 
 compression:
   threshold: 0.95
@@ -781,8 +798,6 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-  title_generation:
-    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
