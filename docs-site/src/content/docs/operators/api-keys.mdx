@@ -185,6 +185,8 @@ Model modes are:
 
 Catalog models are derived from current routable model metadata. Manual model identifiers support controlled exceptions when a model is not yet present in the catalog.
 
+A request for a model the key may not use returns `400 model_not_allowed` with `invalid_request_error` and `param: "model"` before reservation or upstream work, on every route and transport. The status is `400`, like the Codex backend's own refusal of a model the account cannot serve, because resending the same request cannot pass: the Codex client ends the turn on a `400`, while it resends a `403` several times and then switches the session from websocket to HTTPS. OpenAI SDKs retry neither status.
+
 Enforced request fields let the key override selected client request values:
 
 1. enforced model
@@ -232,7 +234,7 @@ Saturation returns retryable `429 api_key_concurrency_limit_exceeded` with `rate
 A request refused by the key's policy answers `api_key_policy_limit_exceeded` with the Pooler's own message on every route and transport, and the request log records the status the client received:
 
 - **Windows** (requests per minute, tokens per day, tokens per week) answer `429` with `rate_limit_error`, because the same request is admitted again once the window moves. The retry hint comes from the window's own boundary: `Retry-After: 60` for the minute window, the seconds until the next 00:00 UTC for the daily window, and none for the trailing week. Websocket turns carry the same value as `retry-after` in the error event's `headers`. When the window frees no sooner than a minute (daily or weekly), HTTP responses also send `x-should-retry: false`, so OpenAI SDKs do not spend their automatic retries within seconds. The hint is advice, not a promise: in-flight work that settles below its estimate can free a window earlier.
-- **Per-request estimate caps** (input or output tokens per request) answer `403` with `invalid_request_error` and no hint, because resending the same request cannot pass them.
+- **Per-request estimate caps** (input or output tokens per request) answer `400` with `invalid_request_error` and no hint, because resending the same request cannot pass them. The Codex client ends the turn on a `400`; it resent the `403` answered before several times and then switched the session from websocket to HTTPS.
 
 Owner forwarding does not change the answer: a resend chained onto an earlier failed request gets the same refusal as any other request.
 

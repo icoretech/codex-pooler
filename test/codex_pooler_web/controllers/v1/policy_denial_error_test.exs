@@ -95,12 +95,14 @@ defmodule CodexPoolerWeb.V1.PolicyDenialErrorTest do
       payload = unquote(payload_fun).(setup.model.exposed_model_id, unquote(stream?))
       response = conn |> auth(setup) |> post(unquote(endpoint), payload)
 
-      assert json_response(response, 403) == %{
+      # `400`, like the Codex backend's refusal of a model the account cannot
+      # serve; neither OpenAI SDK retries it (findings#206 row 206-438).
+      assert json_response(response, 400) == %{
                "error" => %{
                  "code" => "model_not_allowed",
                  "type" => "invalid_request_error",
                  "message" => "api key is not allowed to use this model",
-                 "param" => nil
+                 "param" => "model"
                }
              }
 

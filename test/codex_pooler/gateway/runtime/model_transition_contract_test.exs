@@ -107,7 +107,7 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
       |> auth(setup)
       |> post(@endpoint_path, continuation(target, anchor, call_id))
 
-    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 403)
+    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 400)
     assert FakeUpstream.count(upstream) == 1
     assert Repo.aggregate(from(r in Request, where: r.status == "succeeded"), :count) == 1
     assert Repo.aggregate(Attempt, :count) == 1

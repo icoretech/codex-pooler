@@ -2367,7 +2367,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "prompt" => "synthetic policy denial"
       })
 
-    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 403)
+    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 400)
     assert_no_native_dispatch!(upstream, setup.pool.id)
   end
 
@@ -2399,7 +2399,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "prompt" => "synthetic enforced mismatch"
       })
 
-    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 403)
+    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 400)
     assert_no_native_dispatch!(upstream, setup.pool.id)
   end
 

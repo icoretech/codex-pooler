@@ -476,9 +476,12 @@ openai-python and the Vercel AI SDK retry on the HTTP status (`408`, `409`,
 Codex's HTTP client retries `5xx` and transport errors, not `429`, with a
 default budget of four retries on a 200 ms doubling backoff; its sampling loop
 then retries any retryable turn error, including an unexpected status such as
-`409` and a `429` rate limit, up to five more times from its own error variant,
-surfacing each as a stream disconnect and falling back from websocket to HTTPS
-once that budget is spent. None of that reads the type. Keep that behaviour and use the type and `error.code` for diagnosis,
+`403` or `409` and a stream-level rate limit, up to five more times from its own
+error variant, surfacing each as a stream disconnect and falling back from
+websocket to HTTPS once that budget is spent. A `400` response or frame and a
+`429` status end the turn at once, so a Pooler policy denial that no resend can
+pass (`model_not_allowed`, a per-request token cap) answers `400`. None of that
+reads the type. Keep that behaviour and use the type and `error.code` for diagnosis,
 treating `error.code` as an open string as described below; on the
 `GET /v1/responses` frame surface there is no HTTP status, and the type is what
 a reader sees. The status and the type never disagree: a `5xx` response or frame

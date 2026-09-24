@@ -273,7 +273,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
     |> Ecto.Changeset.change(allowed_model_identifiers: ["sample-other-model"])
     |> Repo.update!()
 
-    assert dispatch(conn, setup).status == 403
+    assert dispatch(conn, setup).status == 400
     assert generation_count(upstream) == 0
     assert Repo.aggregate(Attempt, :count) == 0
   end

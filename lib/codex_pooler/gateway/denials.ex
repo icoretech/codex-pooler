@@ -66,7 +66,7 @@ defmodule CodexPooler.Gateway.Denials do
   """
   @spec policy_denial_error(atom()) :: map()
   def policy_denial_error(reason) when is_atom(reason),
-    do: policy_error(policy_status(reason), Atom.to_string(reason), policy_message(reason))
+    do: policy_error(policy_status(reason), Atom.to_string(reason), policy_message(reason), policy_param(reason))
 
   @doc """
   A policy denial the Pooler authors (never relayed from an upstream), marked
@@ -95,9 +95,9 @@ defmodule CodexPooler.Gateway.Denials do
   # A reservation-policy refusal (`ReservationPolicy`) comes without a status:
   # a window that admits the request again once it moves answers `429` with
   # its retry hint, like the active-request cap; a per-request estimate cap
-  # that no resend can pass answers `403`. The websocket rendered the missing
-  # status as a `500` and HTTP as a `403`, while both recorded `400`
-  # (findings#206 row 206-427).
+  # that no resend can pass answers `400` (findings#206 row 206-438). The
+  # websocket rendered the missing status as a `500` and HTTP as a `403`,
+  # while both recorded `400` (findings#206 row 206-427).
   def log_gateway(
         %Context{reason: %{code: :api_key_policy_limit_exceeded} = reason} = context,
         turn_claim
@@ -155,11 +155,14 @@ defmodule CodexPooler.Gateway.Denials do
   @doc """
   The status and marked denial of a reservation-policy refusal: `429` for a
   window, with its `retry_after_seconds` when the window has a boundary of its
-  own, `403` for a per-request estimate cap (findings#206 row 206-427).
+  own (findings#206 row 206-427), `400 invalid_request_error` for a
+  per-request estimate cap that no resend of the same request can pass: the
+  released Codex client ends the turn on a `400` and resent a `403` five
+  times before falling back to HTTPS (findings#206 row 206-438).
   """
   @spec reservation_policy_error(map()) :: map()
   def reservation_policy_error(%{code: :api_key_policy_limit_exceeded, message: message} = reason) do
-    status = if Map.get(reason, :limit_scope) == :window, do: 429, else: 403
+    status = if Map.get(reason, :limit_scope) == :window, do: 429, else: 400
 
     status
     |> policy_error("api_key_policy_limit_exceeded", message)
@@ -300,7 +303,16 @@ defmodule CodexPooler.Gateway.Denials do
   defp policy_status(:api_key_missing), do: 401
   defp policy_status(:api_key_disabled), do: 401
   defp policy_status(:api_key_concurrency_limit_exceeded), do: 429
+  # A model the key may not use is refused the way the Codex backend refuses a
+  # model the account cannot serve, and the way the key's own reasoning-effort
+  # policy refuses: `400`, which the released Codex client ends the turn on.
+  # It resent a `403` five times, then fell back from websocket to HTTPS and
+  # resent it again (findings#206 row 206-438).
+  defp policy_status(:model_not_allowed), do: 400
   defp policy_status(_reason), do: 403
+
+  defp policy_param(:model_not_allowed), do: "model"
+  defp policy_param(_reason), do: nil
 
   defp policy_message(:api_key_missing), do: "api key is required"
   defp policy_message(:api_key_disabled), do: "api key is disabled"

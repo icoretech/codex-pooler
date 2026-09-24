@@ -438,8 +438,8 @@ custom effort, or an omission with no permitted effort, returns `400` with code
 `reasoning effort is not available for this API key` before reservation or
 upstream dispatch. Responses, backend Responses, and compact routes return
 `param: "reasoning.effort"`; Chat Completions returns
-`param: "reasoning_effort"`. API-key model denial remains first and returns the
-existing `403 model_not_allowed` response.
+`param: "reasoning_effort"`. API-key model denial remains first and returns
+`400 model_not_allowed` with `param: "model"`.
 
 The same policy runs after websocket upgrade for every `response.create` frame.
 A forbidden frame uses the existing websocket error frame with the same status,

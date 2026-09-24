@@ -2420,7 +2420,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert {:error,
             %{
-              status: 403,
+              status: 400,
               code: "model_not_allowed",
               message: "api key is not allowed to use this model"
             }} = PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
@@ -2449,7 +2449,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         }
       )
 
-    assert {:error, %{status: 403, code: "model_not_allowed"}} =
+    assert {:error, %{status: 400, code: "model_not_allowed"}} =
              PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
   end
 
@@ -2473,7 +2473,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert {:error,
             %{
-              status: 403,
+              status: 400,
               code: "model_not_allowed",
               message: "api key is not allowed to use this model"
             }} =

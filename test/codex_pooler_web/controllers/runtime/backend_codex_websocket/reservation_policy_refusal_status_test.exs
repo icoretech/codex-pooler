@@ -11,7 +11,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
   #   so no hint; on HTTP a window that frees no sooner than a minute also
   #   says `x-should-retry: false`;
   # - a per-request estimate cap (input or output tokens) that no resend of the
-  #   same request can pass: `403`, as HTTP already answered.
+  #   same request can pass: `400 invalid_request_error`, which the released
+  #   client ends the turn on; the `403` answered before made it resend the
+  #   refused turn five times and fall back to HTTPS (findings#206 row 206-438).
   #
   # The websocket answered every one of them `500` (the refusal carried no
   # status and the socket renders a missing status as a server fault, which
@@ -52,8 +54,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
     requests_per_minute: {429, :minute},
     tokens_per_day: {429, :daily},
     tokens_per_week: {429, nil},
-    input_tokens_per_request: {403, nil},
-    output_tokens_per_request: {403, nil}
+    input_tokens_per_request: {400, nil},
+    output_tokens_per_request: {400, nil}
   }
 
   for limit <- [:requests_per_minute, :tokens_per_day, :tokens_per_week, :input_tokens_per_request, :output_tokens_per_request],
@@ -95,7 +97,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReservationPolicyRefusalS
 
     assert fixture.code == @code
     assert fixture.window.status == 429 and fixture.window.type == error_type(429)
-    assert fixture.request_cap.status == 403 and fixture.request_cap.type == error_type(403)
+    assert fixture.request_cap.status == 400 and fixture.request_cap.type == error_type(400)
     assert fixture.window.retry_after_seconds == %{minute: 60, daily: :until_next_utc_midnight, weekly: nil}
     assert fixture.window.http_x_should_retry == %{minute: nil, daily: "false", weekly: "false"}
     assert fixture.recorded_status == :answered_status
