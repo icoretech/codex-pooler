@@ -47,6 +47,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
   @compact_endpoint "/backend-api/codex/responses/compact"
   @turn_endpoint "/backend-api/codex/responses"
   @detection_timeout_ms 5_000
+  # Detection budget for every counted row to settle; no signal reaches the test.
+  @settle_timeout_ms 15_000
 
   for mode <- ["full", "lite"], topology <- [:forwarded, :direct], cut <- [:before_output, :after_output] do
     @tag mode: mode, topology: topology, cut: cut
@@ -124,7 +126,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
         Mint.HTTP.close(third.conn)
       end
 
-    rows = await_settled(setup.pool.id)
+    rows = await_no_live_requests(setup.pool.id)
 
     measured = %{
       retries: retries,
@@ -202,7 +204,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
     _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
     settled? = settled_within?(setup.pool.id, @detection_timeout_ms)
     retries = released_client_retries!(ctx, port, fn -> :ok end)
-    rows = await_settled(setup.pool.id)
+    rows = await_no_live_requests(setup.pool.id)
     compactions = Enum.filter(rows, &(&1.endpoint == @compact_endpoint))
 
     measured = %{
@@ -235,9 +237,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
     end)
   end
 
-  defp await_settled(pool_id) do
-    _settled = settled_within?(pool_id, @detection_timeout_ms)
-    pool_requests(pool_id)
+  # Every row the scenario counts must have settled before it is counted: poll
+  # until no request of the Pool is live, within the detection budget, and
+  # return the rows either way for the caller's assertion. It replaced a wait
+  # for the first compaction row only, which the ordinary scenario (no
+  # compaction row) waited out in full every run and the compaction scenarios
+  # passed at once on the already settled predecessor while the last turn
+  # could still be running (findings#206 rows 206-417, 206-422).
+  defp await_no_live_requests(pool_id) do
+    deadline = System.monotonic_time(:millisecond) + @settle_timeout_ms
+
+    Stream.repeatedly(fn -> pool_requests(pool_id) end)
+    |> Enum.reduce_while([], fn rows, _acc ->
+      cond do
+        rows != [] and not Enum.any?(rows, &(&1.status in ["accepted", "in_progress"])) -> {:halt, rows}
+        System.monotonic_time(:millisecond) >= deadline -> {:halt, rows}
+        true -> Process.sleep(10) && {:cont, rows}
+      end
+    end)
   end
 
   defp pool_requests(pool_id), do: Repo.all(from(request in Request, where: request.pool_id == ^pool_id, order_by: [asc: request.admitted_at, asc: request.id]))
