@@ -146,9 +146,11 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     open_sibling_circuit!(setup)
     {_server, port} = start_public_endpoint_with_server!()
 
-    {_event, log} = with_log([level: :info], fn -> native_turn!(port, setup) end)
+    # The line is logged after the frame went out: the capture waits for the
+    # settled row.
+    {rows, log} = with_log([level: :info], fn -> native_turn!(port, setup) && settled_requests!(setup) end)
 
-    assert [request] = settled_requests!(setup)
+    assert [request] = rows
     assert request.response_status_code == 429
     assert [attempt] = Repo.all(from(a in CodexPooler.Accounting.Attempt, where: a.request_id == ^request.id))
     refute Map.has_key?(attempt.response_metadata, "usage_limit")
