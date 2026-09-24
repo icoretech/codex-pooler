@@ -872,8 +872,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         input.replay_claim_digest
       )
 
+  # The resend chains onto the original request or onto the last of its
+  # client-retry successors (findings#206 row 206-525); either way the claim is
+  # named by the original request and the node it chains onto.
   defp successor_correlation(predecessor, _policy, _input),
-    do: ClientRetry.deterministic_successor_claim(predecessor.request)
+    do: ClientRetry.deterministic_successor_claim(predecessor.original, predecessor.request.id)
 
   defp authorize_client_retry_model!(api_key, %Model{status: "active"} = model) do
     with {:ok, policy} <- Access.normalize_api_key_policy(api_key),

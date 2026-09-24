@@ -26,6 +26,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @successor_prefix "client-retry-v1:"
   @failed_predecessor_prefix "codex-request-retry:"
   @retry_window_seconds 30
+  @max_chain_depth 16
   @task_exception_code "owner_task_exception"
   @pre_attempt_phase_key PreAttemptRelease.detail_key()
   @turn_interrupted_phase PreAttemptRelease.turn_interrupted()
@@ -187,7 +188,8 @@ defmodule CodexPooler.Accounting.ClientRetry do
           turn: CodexTurn.t() | nil,
           attempt: Attempt.t() | nil,
           db_now: DateTime.t(),
-          successor: reclaimable_successor() | nil
+          successor: reclaimable_successor() | nil,
+          original: Request.t()
         }
 
   @spec original_witness(binary(), non_neg_integer(), [binary()], [OriginalWitness.grown_candidate()]) ::
@@ -487,11 +489,18 @@ defmodule CodexPooler.Accounting.ClientRetry do
   end
 
   @spec deterministic_successor_claim(Request.t()) :: {:ok, String.t()} | {:error, atom()}
-  def deterministic_successor_claim(%Request{
-        id: request_id,
-        correlation_id: original_claim,
-        native_client_retry_digest: digest
-      })
+  def deterministic_successor_claim(%Request{id: request_id} = original),
+    do: deterministic_successor_claim(original, request_id)
+
+  # The claim of the successor chained onto `predecessor_request_id`: the
+  # original request itself, or the last of its client-retry successors
+  # (`lock_eligible_predecessor!/4`). Every hop is named by the original's
+  # claim and witness, so concurrent resends of one hop collapse on one claim.
+  @spec deterministic_successor_claim(Request.t(), Ecto.UUID.t()) :: {:ok, String.t()} | {:error, atom()}
+  def deterministic_successor_claim(
+        %Request{correlation_id: original_claim, native_client_retry_digest: digest},
+        request_id
+      )
       when is_binary(request_id) and is_binary(original_claim) and is_binary(digest) and
              byte_size(digest) == @digest_bytes do
     with {:ok, mac} <-
@@ -505,7 +514,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
     end
   end
 
-  def deterministic_successor_claim(%Request{}), do: {:error, :missing_witness}
+  def deterministic_successor_claim(%Request{}, _request_id), do: {:error, :missing_witness}
 
   @spec deterministic_compaction_successor_claim(Request.t(), CodexTurn.t(), binary()) ::
           {:ok, String.t()} | {:error, atom()}
@@ -672,12 +681,85 @@ defmodule CodexPooler.Accounting.ClientRetry do
              :reclaim_owner_validated?,
              reclaim_owner_valid?(session, owner_lease, input, db_now)
            ),
-         {:ok, successor} <- lock_compaction_successor(lineage, request, turn, input) do
-      {:ok, %{request: request, turn: turn, attempt: attempt, db_now: db_now, successor: successor}}
+         {:ok, successor} <- lock_compaction_successor(lineage, request, turn, input),
+         {:ok, tail} <- lock_chain_tail(session, request, %{request: request, turn: turn, attempt: attempt}, lineage, input, db_now) do
+      {:ok, %{request: tail.request, turn: tail.turn, attempt: tail.attempt, db_now: db_now, successor: successor, original: request}}
     else
       {:error, _reason} = error -> error
     end
   end
+
+  # A turn's client-retry successor may itself be cut before any output
+  # reached the client and settled with nothing armed: with owner forwarding
+  # on, the owner could not suspend it into a replay (the arm's transaction
+  # failed). That successor is a pre-visible disconnect like any other, and the
+  # released client resends the turn once more. The original request's link
+  # used to refuse that resend (`successor_claimed`, `409 duplicate_turn`) on
+  # every websocket retry (findings#206 row 206-525). The resend now chains onto
+  # the last successor under the same edge rule as the turn-claim chain
+  # (`FailedPredecessorResend.chain_edges_only?/2`, row 206-519): every node
+  # after the original must hold the claim derived for it from the original
+  # and the node before it, share the original's scope and the session's turn,
+  # be a verified retryable shape with no replay entitlement and nothing live,
+  # and only the node the resend chains onto is held to the retry window. A
+  # successor under any other claim, a live or served node, or an entitlement
+  # keeps `successor_claimed`.
+  defp lock_chain_tail(_session, _original, node, nil, _input, _db_now), do: {:ok, node}
+
+  defp lock_chain_tail(_session, _original, node, _lineage, %{retry_policy: :native_compaction}, _db_now),
+    do: {:ok, node}
+
+  defp lock_chain_tail(session, original, node, %RequestClientRetryLink{successor_request_id: successor_id}, input, db_now),
+    do: walk_chain(session, original, node.request, successor_id, input, db_now, 1)
+
+  defp walk_chain(_session, _original, _previous, _successor_id, _input, _db_now, depth) when depth > @max_chain_depth,
+    do: {:error, :retry_exhausted}
+
+  defp walk_chain(session, original, previous, successor_id, input, db_now, depth) do
+    request = lock_request!(successor_id)
+    turn = Repo.one(from(turn in CodexTurn, where: turn.request_id == ^request.id, lock: "FOR UPDATE"))
+    attempt = lock_attempt(if(turn, do: turn.final_attempt_id), request.id)
+
+    # One successor per predecessor and one predecessor per successor
+    # (`request_client_retry_links` is unique on each side), so the node's
+    # only other link is to its own successor, which must hold the claim
+    # derived for this node.
+    next_id =
+      Repo.one(
+        from link in RequestClientRetryLink,
+          where: link.predecessor_request_id == ^request.id,
+          select: link.successor_request_id,
+          lock: "FOR UPDATE"
+      )
+
+    with {:ok, claim} <- deterministic_successor_claim(original, previous.id),
+         true <- request.correlation_id == claim,
+         true <- chain_node_scoped?(request, original, turn, session, input),
+         nil <- lock_entitlement(request.id),
+         :ok <- validate_retry_lifecycle(turn, request, attempt),
+         :ok <- validate_chain_tail_window(next_id, request, attempt, db_now) do
+      if next_id,
+        do: walk_chain(session, original, request, next_id, input, db_now, depth + 1),
+        else: {:ok, %{request: request, turn: turn, attempt: attempt}}
+    else
+      {:error, :retry_expired} = expired -> expired
+      _refused -> {:error, :successor_claimed}
+    end
+  end
+
+  # Only the node the resend chains onto is held to the retry window.
+  defp validate_chain_tail_window(nil, request, attempt, db_now),
+    do: validate_retry_window(retry_window_start(request, attempt, db_now), db_now, @retry_window_seconds)
+
+  defp validate_chain_tail_window(_next_id, _request, _attempt, _db_now), do: :ok
+
+  defp chain_node_scoped?(request, original, %CodexTurn{} = turn, session, input) do
+    Map.take(request, [:pool_id, :api_key_id, :model_id, :requested_model, :endpoint, :transport]) ==
+      Map.take(original, [:pool_id, :api_key_id, :model_id, :requested_model, :endpoint, :transport]) and
+      turn.codex_session_id == session.id and turn.semantic_turn_digest == Map.get(input, :semantic_turn_digest)
+  end
+
+  defp chain_node_scoped?(_request, _original, _turn, _session, _input), do: false
 
   defp lock_predecessor(session, api_key, input) do
     case claimed_original(session, api_key, input) do
@@ -1225,9 +1307,19 @@ defmodule CodexPooler.Accounting.ClientRetry do
           do: @compaction_retry_window_seconds,
           else: @retry_window_seconds
 
-      validate_retry_window(retry_window_start(request, attempt, db_now), db_now, window)
+      # A request with an admitted successor is passed through by the chain
+      # walk (`lock_chain_tail/6`), which holds the node it chains onto to the
+      # window instead.
+      if chained_successor?(lineage, request.id, input),
+        do: :ok,
+        else: validate_retry_window(retry_window_start(request, attempt, db_now), db_now, window)
     end
   end
+
+  defp chained_successor?(%RequestClientRetryLink{predecessor_request_id: request_id}, request_id, input),
+    do: input[:retry_policy] != :native_compaction
+
+  defp chained_successor?(_lineage, _request_id, _input), do: false
 
   defp validate_policy_witness(_request, %{
          retry_policy: :native_compaction,
@@ -2079,23 +2171,13 @@ defmodule CodexPooler.Accounting.ClientRetry do
     )
   end
 
-  defp validate_no_lineage(lineage, request_id) do
-    case lineage do
-      %RequestClientRetryLink{predecessor_request_id: ^request_id} -> {:error, :successor_claimed}
-      %RequestClientRetryLink{} -> {:error, :retry_exhausted}
-      nil -> :ok
-    end
-  end
-
-  defp validate_policy_lineage(
-         %RequestClientRetryLink{predecessor_request_id: request_id},
-         request_id,
-         %{retry_policy: :native_compaction}
-       ),
-       do: :ok
-
-  defp validate_policy_lineage(lineage, request_id, _input),
-    do: validate_no_lineage(lineage, request_id)
+  # A request that is itself a successor has spent its retry. A request with a
+  # successor is reclaimed by the compaction policy (`lock_compaction_successor/4`)
+  # or passed through by the chain walk (`lock_chain_tail/6`), which refuses a
+  # successor that is live, served or foreign with `successor_claimed`.
+  defp validate_policy_lineage(nil, _request_id, _input), do: :ok
+  defp validate_policy_lineage(%RequestClientRetryLink{predecessor_request_id: request_id}, request_id, _input), do: :ok
+  defp validate_policy_lineage(%RequestClientRetryLink{}, _request_id, _input), do: {:error, :retry_exhausted}
 
   defp lock_compaction_successor(nil, _request, _turn, _input), do: {:ok, nil}
 
@@ -2138,6 +2220,10 @@ defmodule CodexPooler.Accounting.ClientRetry do
       _ -> {:error, :successor_claimed}
     end
   end
+
+  # Any other policy passes an admitted successor to the chain walk
+  # (`lock_chain_tail/6`).
+  defp lock_compaction_successor(_link, _request, _turn, _input), do: {:ok, nil}
 
   defp unattempted_compaction_successor?(
          %Request{status: "in_progress", completed_at: nil} = successor,
