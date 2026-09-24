@@ -1301,8 +1301,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp handle_public_owner_payload(_payload, %{public_turn_aborted?: true} = state),
     do: {:ok, state}
 
-  defp handle_public_owner_payload({:data, _data}, %{public_turn_owner_complete?: true} = state),
-    do: {:ok, state}
+  defp handle_public_owner_payload({:data, data}, %{public_turn_owner_complete?: true} = state) do
+    if public_owner_attempt_reopenable?(state),
+      do: state |> reopen_public_owner_attempt() |> then(&public_chunk_result(data, &1)),
+      else: {:ok, state}
+  end
 
   defp handle_public_owner_payload({:data, data}, state), do: public_chunk_result(data, state)
 
@@ -1461,8 +1464,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           |> put_public_turn_state(turn_state)
           |> maybe_mark_public_turn_output_committed(data)
           |> count_public_downstream_frame(data)
-          |> record_public_downstream_terminal(DeliveryReceipt.terminal_class(data))
-          |> maybe_mark_public_completed_terminal(data)
+          |> record_public_downstream_terminal(pushed_public_terminal_class(normalized, data))
+          |> maybe_mark_public_pushed_terminal(normalized, data)
 
         {:push, {:text, normalized}, state}
 
@@ -1652,6 +1655,29 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state
     end
   end
+
+  # A public turn's task can submit more than one attempt to the owner: a
+  # pre-output refusal fails over to the next candidate inside the same turn.
+  # The owner completes each attempt (`:complete`), so while that task has not
+  # finished, anything the owner sends after a `:complete` belongs to the
+  # task's next attempt; the owner's messages reach the socket in the order it
+  # sent them. A turn whose task is done and whose owner leg completed is
+  # finished at once (`maybe_finish_public_owner_turn/1`), so an open turn with
+  # a completed leg always has its task running. Keeping the leg closed dropped
+  # the next attempt's frames, so a failover the sibling served never reached
+  # the client, and ignored its output-commit probe, so the owner held a
+  # refused attempt's result until the probe timed out (findings#206 rows
+  # 206-598, 206-599).
+  defp maybe_reopen_public_owner_attempt(state) do
+    if Map.get(state, :public_turn_owner_complete?, false) and public_owner_attempt_reopenable?(state),
+      do: reopen_public_owner_attempt(state),
+      else: state
+  end
+
+  defp public_owner_attempt_reopenable?(state),
+    do: public_owner_turn_open?(state) and not public_turn_aborted?(state)
+
+  defp reopen_public_owner_attempt(state), do: Map.put(state, :public_turn_owner_complete?, false)
 
   defp finish_public_turn(state) do
     task_pid = Map.get(state, :public_response_task_pid)
@@ -4090,25 +4116,35 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp record_public_downstream_terminal(state, class),
     do: record_downstream_terminal(state, Map.get(state, :public_response_task_pid), class)
 
+  # The terminal class the client was sent: the public route rewrites a
+  # provider terminal before it pushes it (a usage-limit `response.failed`
+  # goes out as the `error` event), and the receipt names what was pushed
+  # (findings#206 row 206-598). A pushed frame that is no terminal of its own
+  # keeps the class of the provider frame it carries.
+  defp pushed_public_terminal_class(normalized, data),
+    do: DeliveryReceipt.terminal_class(normalized) || DeliveryReceipt.terminal_class(data)
+
   # The public route's own record that the client was sent its turn's
-  # `response.completed`: an SDK closes the moment that terminal arrives, while
-  # the turn's task is still settling, and the receipt of that turn used to say
-  # `aborted` (findings#225 row 225-240, openai-node `ResponsesWS`). It feeds
-  # only the termination receipt (`termination_receipt_outcome/3`), never the
-  # task's acknowledgement, which keeps reading
-  # `response_task_completed_terminals` (row 225-130 changed only the receipt).
-  defp maybe_mark_public_completed_terminal(state, data) do
+  # terminal: an SDK closes the moment that terminal arrives, while the turn's
+  # task is still settling, and the receipt of that turn used to say `aborted`
+  # (findings#225 row 225-240, openai-node `ResponsesWS`, for
+  # `response.completed`; findings#206 row 206-598 for the `error` event of a
+  # refused turn). It feeds only the termination receipt
+  # (`termination_receipt_outcome/3`), never the task's acknowledgement, which
+  # keeps reading `response_task_completed_terminals` (row 225-130 changed only
+  # the receipt).
+  defp maybe_mark_public_pushed_terminal(state, normalized, data) do
     pid = Map.get(state, :public_response_task_pid)
 
-    if is_pid(pid) and DeliveryReceipt.terminal_class(data) == "response.completed",
-      do: Map.update(state, :public_completed_terminals, MapSet.new([pid]), &MapSet.put(&1, pid)),
+    if is_pid(pid) and is_binary(pushed_public_terminal_class(normalized, data)),
+      do: Map.update(state, :public_pushed_terminals, MapSet.new([pid]), &MapSet.put(&1, pid)),
       else: state
   end
 
-  defp forget_public_completed_terminal(%{public_completed_terminals: pids} = state, pid),
-    do: %{state | public_completed_terminals: MapSet.delete(pids, pid)}
+  defp forget_public_pushed_terminal(%{public_pushed_terminals: pids} = state, pid),
+    do: %{state | public_pushed_terminals: MapSet.delete(pids, pid)}
 
-  defp forget_public_completed_terminal(state, _pid), do: state
+  defp forget_public_pushed_terminal(state, _pid), do: state
 
   defp maybe_record_skipped_downstream_terminal(state, pid, data) when is_pid(pid) do
     with true <- tracked_response_task?(state, pid),
@@ -4326,7 +4362,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> Map.update(:response_task_results_ready, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_terminals_accepted, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_completed_terminals, MapSet.new(), &MapSet.delete(&1, pid))
-        |> forget_public_completed_terminal(pid)
+        |> forget_public_pushed_terminal(pid)
         |> clear_downstream_delivery_evidence(pid)
         |> do_remove_tracked_response_task(pid)
         |> remove_native_turn_output(pid)
@@ -4414,11 +4450,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # `:aborted` (it cannot certify a settlement it did not observe, findings#225
   # row 225-105). The delivery receipt records what the client received
   # instead: when the socket already pushed and accepted the turn's completed
-  # terminal, the receipt is `delivered` even though the acknowledgement is
-  # not (findings#225 row 225-130). Only the receipt changes.
+  # terminal, or a public turn's terminal of any class, the receipt is
+  # `delivered` even though the acknowledgement is not (findings#225 rows
+  # 225-130 and 225-240, findings#206 row 206-598). Only the receipt changes.
   defp termination_receipt_outcome(state, pid, :aborted) do
     if MapSet.member?(Map.get(state, :response_task_completed_terminals, MapSet.new()), pid) or
-         MapSet.member?(Map.get(state, :public_completed_terminals, MapSet.new()), pid),
+         MapSet.member?(Map.get(state, :public_pushed_terminals, MapSet.new()), pid),
        do: :delivered,
        else: :aborted
   end
@@ -4833,6 +4870,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp maybe_put_public_stream_id(payload, _stream_id), do: payload
 
   defp handle_output_commit_probe(message, state) do
+    state = maybe_reopen_public_owner_attempt(state)
+
     with false <- public_turn_aborted?(state),
          false <- Map.get(state, :public_turn_owner_complete?, false),
          %{epoch: epoch, correlation_id: correlation_id} <-

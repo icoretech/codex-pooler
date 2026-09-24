@@ -1420,16 +1420,30 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert completed_state.public_turn_owner_complete?
 
-    assert {:ok, ^completed_state} =
+    # The owner completed an attempt while the turn's task still runs: the
+    # next frame is the task's next attempt (a pre-output failover), so it is
+    # pushed and reopens the owner leg (findings#206 row 206-599).
+    assert {:push, {:text, next_payload}, reopened_state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-shared", 8, active_task_pid, {:data, data}},
                completed_state
              )
 
-    assert {:ok, ^completed_state} =
+    assert CodexPooler.JSON.decode!(next_payload)["sequence_number"] == 1
+    refute reopened_state.public_turn_owner_complete?
+
+    assert {:ok, completed_again} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-shared", 8, active_task_pid, :complete},
-               completed_state
+               reopened_state
+             )
+
+    assert completed_again.public_turn_owner_complete?
+
+    assert {:ok, ^completed_again} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-shared", 8, active_task_pid, :complete},
+               completed_again
              )
 
     non_public_state = %{
@@ -1697,14 +1711,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert aborted.public_turn_aborted?
 
-    assert {:ok, completed} =
+    assert {:ok, finished} =
+             CodexResponsesSocket.handle_info(
+               probe.(task_pid),
+               %{base | public_response_task_pid: nil}
+             )
+
+    assert finished.public_response_task_pid == nil
+    refute_received {:websocket_owner_output_commit_ack, _, _, _, _, _, _}
+
+    # A probe after the owner completed an attempt while the turn's task still
+    # runs is the task's next attempt (a pre-output failover): it is answered
+    # and reopens the owner leg, or the owner holds the attempt's result until
+    # the probe times out (findings#206 row 206-598).
+    assert {:ok, reopened} =
              CodexResponsesSocket.handle_info(
                probe.(task_pid),
                %{base | public_turn_owner_complete?: true}
              )
 
-    assert completed.public_turn_owner_complete?
-    refute_received {:websocket_owner_output_commit_ack, _, _, _, _, _, _}
+    refute reopened.public_turn_owner_complete?
+    assert_received {:websocket_owner_output_commit_ack, "corr-probe-refuse", 22, ^task_pid, ^active_turn_ref, ^probe_ref, false}
   end
 
   test "owner-forwarded upstream interruption logs once before task completion" do
