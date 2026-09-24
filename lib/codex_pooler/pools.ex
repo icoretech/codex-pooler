@@ -156,9 +156,6 @@ defmodule CodexPooler.Pools do
   @spec list_pool_operator_ids(pool_ref()) :: [Ecto.UUID.t()]
   defdelegate list_pool_operator_ids(pool_or_id), to: Authorization
 
-  @spec scope_assigned_pool_ids(term()) :: [Ecto.UUID.t()]
-  defdelegate scope_assigned_pool_ids(scope), to: Scope, as: :assigned_pool_ids
-
   @spec list_active_pools() :: [Pool.t()]
   def list_active_pools do
     Repo.all(from p in Pool, where: p.status == ^@status_active, order_by: [asc: p.created_at])
