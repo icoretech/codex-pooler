@@ -30,7 +30,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.WindowAdva
 
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, stop_websocket_owner_session: 1, native_previous_response_retry_event: 0]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3, stop_websocket_owner_session: 1, native_previous_response_retry_event: 0, with_info_log: 1]
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_peer_window_owner!: 2]
 
   alias CodexPooler.Accounting.{LedgerEntry, Request, RequestReplayEntitlement}
@@ -39,6 +39,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.WindowAdva
   alias CodexPooler.Repo
   alias CodexPooler.TestAppEnv
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
+  alias Ecto.Adapters.SQL.Sandbox
 
   @thread_id "019a0000-0000-7000-8000-00000000c001"
   @window_0 "#{@thread_id}:0"
@@ -237,6 +238,241 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.WindowAdva
     end
   end
 
+  # Two live processes on one thread (findings#206 row 206-501; the client
+  # does not do this, but nothing stops two processes resuming one thread).
+  # The process holding window 1 has its turn in progress at the provider
+  # while a process whose socket is keyed by window 0 sends a turn naming
+  # window 1. The window stays with its holder (`kept`): the holder's own
+  # reconnect after a cut names window 1 and must reach the owner holding its
+  # replay (forwarding on) or its own settled predecessor (forwarding off).
+  # The window-0 socket's turn is served on its own session either way.
+  @guard_arms [{"lite", :forwarded, :undisturbed}, {"lite", :forwarded, :holder_cut}, {"full", :forwarded, :holder_cut}, {"full", :direct, :holder_cut}]
+
+  for {mode, topology, holder} <- @guard_arms do
+    @tag serving_mode: mode, topology: topology, holder: holder
+    test "#{mode} #{topology} #{holder}: a frame naming a window whose holder has a turn in progress leaves the window with its holder",
+         %{serving_mode: mode, topology: topology, holder: holder} do
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, topology == :forwarded)
+      release_ref = make_ref()
+      sequence = [turn_1_upstream(), compaction_upstream(), held_upstream(release_ref), served_upstream()] ++ if(holder == :holder_cut, do: [served_upstream()], else: [])
+      upstream = start_upstream(FakeUpstream.strict_sequence(sequence))
+      setup = topology_setup!(topology, upstream)
+      if mode == "lite", do: set_model_serving_mode!(model_serving_scope(), setup, "lite")
+      ctx = %{shape: :post_turn, mode: mode, topology: topology, setup: setup}
+      port = start_public_endpoint!()
+
+      # The window-0 process answers a turn and compacts on its socket; its
+      # frames now carry window 1.
+      older = connect!(port, setup, @window_0)
+      older = older |> send_frame!(turn_1_frame(ctx)) |> completed!()
+      older = older |> send_frame!(compaction_frame(ctx, :post_turn)) |> completed!()
+      older_session_id = setup.pool.id |> pool_requests() |> hd() |> Map.fetch!(:id) |> request_session_id()
+
+      # The window-1 process's turn is in progress at the provider.
+      holder_frame = window_1_frame(ctx, @turn_2, window_1_history(ctx, 2))
+      holder_socket = connect!(port, setup, @window_1) |> send_frame!(holder_frame)
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^release_ref}, @detection_timeout_ms
+      assert %Request{id: holder_request_id, status: "in_progress"} = latest_request(setup.pool.id)
+      holder_session_id = request_session_id(holder_request_id)
+      refute holder_session_id == older_session_id
+      assert window_alias_session_id(setup, @window_1) == holder_session_id
+
+      {older, logs} = with_info_log(fn -> older |> send_frame!(window_1_frame(ctx, @turn_3, window_1_history(ctx, 3))) |> completed!() end)
+      older_request = latest_request(setup.pool.id)
+      await!(fn -> Repo.get!(Request, older_request.id).status == "succeeded" end, "the window-0 socket's turn never settled")
+      older_request = Repo.get!(Request, older_request.id)
+
+      window_after_frame = window_alias_session_id(setup, @window_1)
+      assert {older_request.status, request_session_id(older_request.id)} == {"succeeded", older_session_id}
+      assert Repo.get!(Request, holder_request_id).status == "in_progress"
+      assert Repo.one!(from(turn in CodexTurn, where: turn.request_id == ^holder_request_id, select: turn.status)) == "in_progress"
+
+      outcomes =
+        case holder do
+          :undisturbed ->
+            release_held_turn!(upstream, release_ref, sequence)
+            holder_socket |> completed!() |> close!()
+            []
+
+          :holder_cut ->
+            close!(holder_socket)
+
+            if topology == :direct,
+              do: await!(fn -> Repo.get!(Request, holder_request_id).status == "failed" end, "the holder's cut turn never settled"),
+              else: await!(fn -> entitlement_status(holder_request_id) == "armed" end, "the holder's closing socket never armed its replay")
+
+            outcomes = websocket_retries!(ctx, port, holder_frame, @websocket_retries, [])
+            release_held_turn!(upstream, release_ref, sequence)
+            outcomes
+        end
+
+      close!(older)
+      rows = settled_rows(setup.pool.id)
+
+      measured = %{outcomes: outcomes, rows: Enum.map(rows, &{&1.transport, &1.status, &1.last_error_code}), entitlements: entitlement_statuses(setup.pool.id), window_after_frame: short(window_after_frame), holder: short(holder_session_id)}
+      CodexPooler.TestDiagnostics.puts(fn -> "P121 guard #{mode} #{topology} #{holder}: #{inspect(measured)}" end)
+
+      case holder do
+        :undisturbed ->
+          assert {Repo.get!(Request, holder_request_id).status, request_session_id(holder_request_id)} == {"succeeded", holder_session_id}
+
+        :holder_cut when topology == :direct ->
+          # The holder's reconnect on window 1 is served on its first send, on
+          # the holder's session, after its settled cut.
+          assert outcomes == [:served], inspect(measured)
+          assert {Repo.get!(Request, holder_request_id).status, length(rows)} == {"failed", 5}
+          assert {List.last(rows).status, request_session_id(List.last(rows).id)} == {"succeeded", holder_session_id}
+
+        :holder_cut ->
+          # The holder's reconnect on window 1 redeems the replay its owner
+          # holds on its first send.
+          assert outcomes == [:served], inspect(measured)
+          assert {Repo.get!(Request, holder_request_id).status, length(rows)} == {"succeeded", 4}
+          assert entitlement_status(holder_request_id) == "consumed"
+      end
+
+      assert Enum.all?(rows, &(&1.transport == "websocket"))
+      refute Enum.any?(rows, &(&1.status in ["accepted", "in_progress"]))
+      refute "armed" in measured.entitlements
+      assert FakeUpstream.count(upstream) == length(sequence)
+      for %Request{status: "succeeded"} = request <- rows, do: assert(charges(request) == 1)
+      assert :ok = FakeUpstream.verify!(upstream)
+
+      # The window stayed with its holder while the holder's turn ran.
+      assert window_after_frame == holder_session_id
+      assert logs =~ "websocket frame window alias codex_session_id=#{older_session_id} alias_preview=#{window_preview(@window_1)} disposition=kept"
+    end
+  end
+
+  # The frame's reservation never waits on the window's alias row (findings#206
+  # row 206-501): another transaction holding it (an upgrade resolving the
+  # window) leaves the alias as it is for this turn (`busy`), the turn is
+  # served, and the next turn frame points the window. The fixture is
+  # committed so the test's own transaction can hold the row; a watcher on
+  # `pg_blocking_pids` records any backend waiting on it and then lets it go.
+  for topology <- [:forwarded, :direct] do
+    @tag topology: topology
+    test "full #{topology} held_alias_row: a frame whose window alias row another transaction holds is served without waiting and leaves the alias",
+         %{topology: topology} do
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, topology == :forwarded)
+      upstream = start_upstream(FakeUpstream.strict_sequence([turn_1_upstream(), compaction_upstream(), resumed_upstream(), served_upstream(), served_upstream()]))
+      :ok = Sandbox.mode(Repo, :auto)
+      on_exit(fn -> :ok = Sandbox.mode(Repo, :manual) end)
+      setup = gateway_setup(upstream, compact?: true)
+      register_unboxed_pool_cleanup!(setup)
+      ctx = %{shape: :stale_resume, mode: "full", topology: topology, setup: setup}
+      port = start_public_endpoint!()
+
+      older = connect!(port, setup, @window_0)
+      older = older |> send_frame!(turn_1_frame(ctx)) |> completed!()
+      older = older |> send_frame!(compaction_frame(ctx, :post_turn)) |> completed!()
+      older_session_id = setup.pool.id |> pool_requests() |> hd() |> Map.fetch!(:id) |> request_session_id()
+
+      # Window 1's own session answered a turn and its socket closed: nothing
+      # in progress, so without the held row the window would move.
+      connect!(port, setup, @window_1) |> send_frame!(window_1_frame(ctx, @turn_2, window_1_history(ctx, 2))) |> completed!() |> close!()
+      window_session_id = request_session_id(latest_request(setup.pool.id).id)
+      refute window_session_id == older_session_id
+      before = window_alias!(setup, @window_1)
+      assert before.codex_session_id == window_session_id
+
+      holder = hold_alias_row!(before.id)
+      watcher = watch_alias_row_waiters!(holder)
+
+      {older, logs} =
+        try do
+          with_info_log(fn -> older |> send_frame!(window_1_frame(ctx, @turn_3, window_1_history(ctx, 3))) |> completed!() end)
+        after
+          waited = stop_watcher!(watcher)
+          release_alias_row!(holder)
+          assert waited == [], "the reservation waited on the held alias row: #{inspect(waited)}"
+        end
+
+      assert logs =~ "websocket frame window alias codex_session_id=#{older_session_id} alias_preview=#{window_preview(@window_1)} disposition=busy"
+      %Request{id: busy_request_id} = latest_request(setup.pool.id)
+      await!(fn -> Repo.get!(Request, busy_request_id).status == "succeeded" end, "the turn whose window alias row was held never settled")
+      assert request_session_id(busy_request_id) == older_session_id
+      assert Map.take(window_alias!(setup, @window_1), [:id, :codex_session_id, :expires_at, :last_seen_at, :metadata]) == Map.take(before, [:id, :codex_session_id, :expires_at, :last_seen_at, :metadata])
+
+      # The next turn frame points the window once the row is free.
+      {older, logs} = with_info_log(fn -> older |> send_frame!(window_1_frame(ctx, @turn_4, later_history(ctx))) |> completed!() end)
+      assert logs =~ "alias_preview=#{window_preview(@window_1)} disposition=moved"
+      assert window_alias_session_id(setup, @window_1) == older_session_id
+      close!(older)
+
+      rows = settled_rows(setup.pool.id)
+      assert Enum.map(rows, & &1.status) == List.duplicate("succeeded", 5)
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+  end
+
+  # Holds the alias row in a transaction of its own until released. The
+  # holder and the watcher use connections of their own, outside the Repo
+  # pool: in the sandbox's auto mode every process that queried keeps its
+  # pooled connection, and two more held ones starve the owner-forwarded turn.
+  defp hold_alias_row!(alias_id) do
+    parent = self()
+    connection = start_supervised!(Supervisor.child_spec({Postgrex, raw_connection_options()}, id: :alias_row_holder))
+
+    task =
+      Task.async(fn ->
+        Postgrex.transaction(connection, fn transaction ->
+          %{rows: [[backend_pid]]} = Postgrex.query!(transaction, "SELECT pg_backend_pid()", [])
+          %{num_rows: 1} = Postgrex.query!(transaction, "SELECT id FROM bridge_session_aliases WHERE id = $1 FOR UPDATE", [Ecto.UUID.dump!(alias_id)])
+          send(parent, {:alias_row_held, self(), backend_pid})
+          receive do: (:release_alias_row -> :ok)
+        end)
+      end)
+
+    on_exit(fn -> send(task.pid, :release_alias_row) end)
+    assert_receive {:alias_row_held, pid, backend_pid}, @detection_timeout_ms
+    %{task: task, pid: pid, backend_pid: backend_pid}
+  end
+
+  defp release_alias_row!(%{task: task, pid: pid}) do
+    send(pid, :release_alias_row)
+    assert {:ok, {:ok, :ok}} = Task.yield(task, @detection_timeout_ms)
+  end
+
+  # Records every backend `pg_blocking_pids` shows waiting on the holder, and
+  # releases the holder when it finds one so the waiter can finish.
+  defp watch_alias_row_waiters!(holder) do
+    connection = start_supervised!(Supervisor.child_spec({Postgrex, raw_connection_options()}, id: :alias_row_watcher))
+    Task.async(fn -> watch_alias_row_waiters(connection, holder, []) end)
+  end
+
+  defp watch_alias_row_waiters(connection, %{pid: holder_pid, backend_pid: holder_backend_pid} = holder, waited) do
+    receive do
+      {:stop_watching, from} -> send(from, {:alias_row_waiters, Enum.reverse(waited)})
+    after
+      10 ->
+        case Postgrex.query!(connection, "SELECT pid, wait_event_type FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", [holder_backend_pid]).rows do
+          [] ->
+            watch_alias_row_waiters(connection, holder, waited)
+
+          rows ->
+            send(holder_pid, :release_alias_row)
+            watch_alias_row_waiters(connection, holder, Enum.reverse(rows) ++ waited)
+        end
+    end
+  end
+
+  defp stop_watcher!(watcher) do
+    send(watcher.pid, {:stop_watching, self()})
+    assert_receive {:alias_row_waiters, waited}, @detection_timeout_ms
+    _ = Task.yield(watcher, @detection_timeout_ms)
+    waited
+  end
+
+  defp raw_connection_options, do: Keyword.take(Repo.config(), [:hostname, :port, :username, :password, :database, :socket, :socket_dir, :ssl, :ssl_opts, :parameters, :connect_timeout])
+
+  defp window_alias!(setup, window) do
+    hash = :crypto.hash(:sha256, window)
+    Repo.one!(from(alias_record in BridgeSessionAlias, where: alias_record.pool_id == ^setup.pool.id and alias_record.alias_kind == "session_header" and alias_record.alias_hash == ^hash and alias_record.status == "active"))
+  end
+
+  defp window_preview(window), do: :sha256 |> :crypto.hash(window) |> Base.encode16(case: :lower) |> String.slice(0, 16)
+
   # The peer shares the committed database, so its fixture is committed: the
   # sandbox switches to auto mode before anything is written. Its owner is the
   # one the window-0 upgrade resolves.
@@ -399,8 +635,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.WindowAdva
 
   # The held reply is released once the test is done with it; its connection
   # may already be gone (the owner stops a cut turn's task).
-  defp release_held_turn!(upstream, release_ref, shape) do
-    held = Enum.find_index(upstream_sequence(shape, release_ref), &match?({:expect_request, _opts, {:websocket_frame_barrier, _messages, _notify, _ref}}, &1))
+  defp release_held_turn!(upstream, release_ref, shape) when is_atom(shape), do: release_held_turn!(upstream, release_ref, upstream_sequence(shape, release_ref))
+
+  defp release_held_turn!(upstream, release_ref, sequence) do
+    held = Enum.find_index(sequence, &match?({:expect_request, _opts, {:websocket_frame_barrier, _messages, _notify, _ref}}, &1))
     %{websocket_connection_id: connection} = upstream |> FakeUpstream.requests() |> Enum.at(held)
     _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
     last = length(completed_messages(@cut, [answer()]))
