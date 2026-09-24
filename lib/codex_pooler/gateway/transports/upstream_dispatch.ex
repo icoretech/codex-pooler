@@ -1027,7 +1027,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       owner_request,
       forwarder_opts
     )
-    |> observe_owner_request_submission(request_options)
+    |> observe_owner_request_submission(request_options, owner_request)
   end
 
   # The public outcome stays `owner_unavailable`; the log keeps which envelope
@@ -1304,22 +1304,36 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
 
+  # The observer tells the socket that the owner's `:complete` will follow the
+  # result, and the socket waits for it before it releases the response task.
+  # The owner sends `:complete` only after relaying a turn's frames: a collected
+  # delivery (`collect_compaction`, `collect_full_history`) comes back whole in
+  # the owner's reply, and the socket writes it itself, so no `:complete`
+  # follows it. On a remote owner the socket then waited for it forever, and
+  # every later frame of the connection queued behind the parked task; a local
+  # owner hid it because that socket releases on its own accepted terminal
+  # (findings#206 row 206-334, two-node run).
   defp observe_owner_request_submission(
          {:websocket_owner_submission_accepted, result},
-         %RequestOptions{transport: %{websocket_owner_submission_observer: observer}}
+         %RequestOptions{transport: %{websocket_owner_submission_observer: observer}},
+         owner_request
        )
        when is_function(observer, 0) do
-    observe_owner_request_submission(observer)
+    if owner_completion_follows?(owner_request), do: observe_owner_request_submission(observer)
     result
   end
 
   defp observe_owner_request_submission(
          {:websocket_owner_submission_accepted, result},
-         %RequestOptions{}
+         %RequestOptions{},
+         _owner_request
        ),
        do: result
 
-  defp observe_owner_request_submission(result, %RequestOptions{}), do: result
+  defp observe_owner_request_submission(result, %RequestOptions{}, _owner_request), do: result
+
+  defp owner_completion_follows?(owner_request),
+    do: Map.get(owner_request, :websocket_delivery_mode, :relay) == :relay
 
   defp observe_owner_request_submission(observer) do
     observer.()

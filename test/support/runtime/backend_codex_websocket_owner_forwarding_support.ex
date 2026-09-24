@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   import ExUnit.Callbacks
   import ExUnit.CaptureLog
 
+  alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Attempt
@@ -40,6 +41,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  alias Ecto.Adapters.SQL.Sandbox
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
   @blocking_owner_receive_timeout_ms 5_000
@@ -200,11 +203,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     |> CodexPooler.JSON.encode!()
   end
 
-  def start_remote_bridge_owner!(auth, session_header, remote_node, persistence_kind \\ :fake) do
+  # `session_header_source` names the header the session is keyed by: a public
+  # released-client upgrade resolves its session from `x-codex-window-id`, so a
+  # peer owner meant for such a socket is started under that source.
+  def start_remote_bridge_owner!(auth, session_header, remote_node, persistence_kind \\ :fake, session_header_source \\ "x-session-id") do
     {:ok, session} =
       Gateway.start_codex_session(auth, %{
         session_header: session_header,
-        session_header_source: "x-session-id",
+        session_header_source: session_header_source,
         owner_instance_id: Atom.to_string(remote_node)
       })
 
@@ -330,6 +336,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
     peer_node
   end
+
+  # A public released-client socket on this node whose session a peer VM owns
+  # (findings#206 row 206-334: production runs clustered web pods, and a
+  # websocket turn lands on a remote owner whenever its session's owner lives
+  # on the other pod). The peer shares the committed database, so this is
+  # called before the fixture is written: it switches the sandbox to auto
+  # mode, and `start_peer_window_owner!/2` registers the committed cleanup.
+  def enter_peer_owner_topology! do
+    ensure_test_distribution_started!()
+    assert :ok = Sandbox.mode(Repo, :auto)
+    on_exit(fn -> assert :ok = Sandbox.mode(Repo, :manual) end)
+  end
+
+  # Boots the peer and starts the owner of the session a public upgrade on
+  # `window_id` resolves (`x-codex-window-id` keys it), with the real Repo and
+  # persistence on the peer. The owner's native compaction lifecycle events
+  # are relayed to the calling process as `{:admission_lifecycle, from, to}`.
+  def start_peer_window_owner!(%{authorization: authorization, identity: identity} = setup, window_id) do
+    BackendCodexTestSupport.register_unboxed_pool_cleanup!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(authorization)
+    peer_node = start_bridge_peer!(:current, identity, repo: :real)
+    {session, owner_pid} = start_remote_bridge_owner!(auth, window_id, peer_node, :real, "x-codex-window-id")
+    assert node(owner_pid) == peer_node
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+
+    handler_id = {__MODULE__, :peer_lifecycle, make_ref()}
+
+    assert :ok =
+             :erpc.call(peer_node, :telemetry, :attach, [
+               handler_id,
+               [:codex_pooler, :gateway, :native_compaction, :lifecycle],
+               &__MODULE__.relay_native_compaction_lifecycle/4,
+               self()
+             ])
+
+    %{node: peer_node, session: session, owner_pid: owner_pid}
+  end
+
+  @doc false
+  def relay_native_compaction_lifecycle(_event, _measurements, %{phase_from: from, phase_to: to}, test_pid) do
+    send(test_pid, {:admission_lifecycle, from, to})
+  end
+
+  def relay_native_compaction_lifecycle(_event, _measurements, _metadata, _test_pid), do: :ok
 
   defp trace_remote_v1_calls!(peer_node) do
     assert {:ok, tracer} =
