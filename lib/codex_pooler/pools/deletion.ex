@@ -57,7 +57,7 @@ defmodule CodexPooler.Pools.Deletion do
   ]
 
   @type state :: :in_progress | :failed
-  @type request_result :: {:ok, Pool.t()} | {:deleting, Pool.t()} | {:error, map()}
+  @type request_result :: {:ok, Pool.t()} | {:deleting, Pool.t()} | {:error, :pool_not_found | :pool_not_archived | term()}
   @type purge_result :: :done | :more
   @type finish_result :: {:ok, Pool.t()} | {:error, :pool_not_found | :pool_not_archived | term()}
 
