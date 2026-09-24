@@ -184,12 +184,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PostvisiblePartialResendT
     await_settled_receipt!(request_id, cut, closed_at)
   end
 
-  # Nothing released the provider: the receipt exists only once the original's
-  # generation was stopped (the owner's detach, or the closing socket's cleanup
-  # with forwarding off).
+  # Nothing releases the provider until the original's generation was stopped
+  # (the owner's detach, or the closing socket's cleanup with forwarding off)
+  # and the original settled. The receipt alone is not that signal: with
+  # forwarding on the socket records it before its session cleanup detaches
+  # from the owner, so when that cleanup outlasted the socket's 100 ms yield
+  # the provider was released into a turn nothing had stopped yet, and the
+  # original completed `succeeded` (findings#206 row 206-425).
   defp close_and_await_receipt!(conn, request_id, cut, :held, upstream, release_ref) when cut != :item_done do
     _closed = Mint.HTTP.close(conn)
     receipt = await_receipt!(request_id, System.monotonic_time(:millisecond) + @stopped_receipt_budget_ms)
+    _settled = await_settled!(request_id, System.monotonic_time(:millisecond) + @timeout_ms)
     :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
     receipt
   end
