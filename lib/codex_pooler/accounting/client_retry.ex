@@ -681,11 +681,74 @@ defmodule CodexPooler.Accounting.ClientRetry do
              :reclaim_owner_validated?,
              reclaim_owner_valid?(session, owner_lease, input, db_now)
            ),
+         :ok <- validate_no_turn_claim_successor(request, input),
          {:ok, successor} <- lock_compaction_successor(lineage, request, turn, input),
          {:ok, tail} <- lock_chain_tail(session, request, %{request: request, turn: turn, attempt: attempt}, lineage, input, db_now) do
       {:ok, %{request: tail.request, turn: tail.turn, attempt: tail.attempt, db_now: db_now, successor: successor, original: request}}
     else
       {:error, _reason} = error -> error
+    end
+  end
+
+  # The native HTTP claim walk steps over a zero-output request of the turn and
+  # serves the HTTPS fallback under the claim derived from it, without a link
+  # (findings#212 row 212-50). With owner forwarding on, a websocket resend of
+  # the same request afterwards met no link on the original and was admitted
+  # again: the provider generated a turn the fallback had already served
+  # (findings#206 row 206-538). A request holding that derived claim means the
+  # turn went on under its turn claim, so the owner's preflight leaves it to
+  # that chain (whose own walk refuses a served request).
+  defp validate_no_turn_claim_successor(_request, %{retry_policy: :native_compaction}), do: :ok
+
+  defp validate_no_turn_claim_successor(%Request{id: id, correlation_id: claim}, _input) do
+    with {:ok, derived} <- deterministic_failed_predecessor_claim(claim, id),
+         true <- Repo.exists?(from(request in Request, where: request.correlation_id == ^derived)) do
+      {:error, :successor_claimed}
+    else
+      _no_turn_claim_successor -> :ok
+    end
+  end
+
+  @doc """
+  The state of the owner's client-retry chain behind `request`, for a native
+  HTTP resend that is about to step over or chain onto it: `:none` when no
+  `client-retry-v1:` successor follows it, `{:armed, tail_request_id}` when the
+  last one holds an armed replay entitlement, `:live` when the last one is
+  still running or its replay was consumed, `:settled` otherwise. Locks the
+  rows it reads (findings#206 row 206-538).
+  """
+  @spec forwarded_chain_state(Request.t()) :: :none | :live | :settled | {:armed, Ecto.UUID.t()}
+  def forwarded_chain_state(%Request{id: id}), do: forwarded_chain_state(id, 0)
+
+  defp forwarded_chain_state(_request_id, depth) when depth > @max_chain_depth, do: :live
+
+  defp forwarded_chain_state(request_id, depth) do
+    successor_pattern = @successor_prefix <> "%"
+
+    successor =
+      Repo.one(
+        from request in Request,
+          join: link in RequestClientRetryLink,
+          on: link.successor_request_id == request.id,
+          where: link.predecessor_request_id == ^request_id and like(request.correlation_id, ^successor_pattern),
+          lock: "FOR UPDATE OF r0"
+      )
+
+    case successor do
+      nil when depth == 0 -> :none
+      nil -> :settled
+      %Request{} -> forwarded_tail_state(successor, depth)
+    end
+  end
+
+  defp forwarded_tail_state(%Request{id: id} = successor, depth) do
+    next? = Repo.exists?(from(link in RequestClientRetryLink, where: link.predecessor_request_id == ^id))
+
+    cond do
+      next? -> forwarded_chain_state(id, depth + 1)
+      match?(%RequestReplayEntitlement{status: "armed"}, lock_entitlement(id)) -> {:armed, id}
+      successor.status in ["accepted", "in_progress"] or is_nil(successor.completed_at) -> :live
+      true -> :settled
     end
   end
 

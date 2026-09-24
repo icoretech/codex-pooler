@@ -15,6 +15,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     PricingResolution,
     Request,
     RequestLogFacts,
+    RequestReplay,
     ReservationPolicy
   }
 
@@ -497,6 +498,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         {claim, nil}
 
       %Request{} = predecessor ->
+        :ok = retire_forwarded_chain!(predecessor)
+
         if delivered_provider_output?(predecessor) do
           resolve_native_turn_resend!(session, context, claim)
         else
@@ -504,6 +507,33 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         end
     end
   end
+
+  # With owner forwarding on, the owner's client-retry preflight chains a
+  # websocket resend onto a request of this turn (`client-retry-v1:`), outside
+  # the turn claim this walk follows. When the released client falls back to
+  # HTTPS after that successor was cut, the fallback is this turn's next
+  # generation: an armed replay of the successor is retired as a newer turn
+  # retires it (`RequestReplay.supersede/1`, the request settles `failed 499`
+  # with nothing charged), so a later websocket resend cannot redeem it and
+  # generate the served turn again, and a successor still running refuses the
+  # fallback as a live duplicate (findings#206 row 206-538).
+  defp retire_forwarded_chain!(%Request{transport: "websocket"} = predecessor) do
+    case ClientRetry.forwarded_chain_state(predecessor) do
+      {:armed, tail_request_id} ->
+        case RequestReplay.supersede(%{request_id: tail_request_id}) do
+          {:ok, _closed_or_noop} -> :ok
+          {:error, _reason} -> Repo.rollback(duplicate_request_error(:entitlement_present))
+        end
+
+      :live ->
+        Repo.rollback(duplicate_request_error(:active_predecessor))
+
+      _none_or_settled ->
+        :ok
+    end
+  end
+
+  defp retire_forwarded_chain!(%Request{}), do: :ok
 
   defp step_over_native_turn_predecessor(session, context, claim, predecessor, depth) do
     case ClientRetry.deterministic_failed_predecessor_claim(claim, predecessor.id) do

@@ -122,6 +122,37 @@ defmodule CodexPooler.Accounting.ClientRetryChainTest do
     assert Repo.aggregate(RequestClientRetryLink, :count) == 2
   end
 
+  # What a native HTTP fallback finds behind the request it steps over
+  # (findings#206 row 206-538): nothing, a successor still running, one cut
+  # and settled, or one whose replay the owner armed.
+  test "the forwarded chain state names a live, settled or armed last successor", ctx do
+    assert ClientRetry.forwarded_chain_state(ctx.original) == :none
+    assert {:ok, claim} = Accounting.claim_client_retry_successor(ctx.setup.auth, ctx.setup.model, ctx.payload, ctx.opts)
+    assert ClientRetry.forwarded_chain_state(ctx.original) == :live
+
+    successor = previsible_cut!(ctx.setup, claim.request)
+    assert ClientRetry.forwarded_chain_state(ctx.original) == :settled
+
+    insert_entitlement!(ctx, successor)
+    successor_id = successor.id
+    assert ClientRetry.forwarded_chain_state(ctx.original) == {:armed, successor_id}
+
+    # A turn-claim successor is not the owner's chain.
+    assert ClientRetry.forwarded_chain_state(foreign_request!(ctx.setup)) == :none
+  end
+
+  # The HTTPS fallback stepped over the original and was served under the claim
+  # derived from it: a later forwarded resend of the same request must not be
+  # admitted again (findings#206 row 206-538).
+  test "a request whose turn-claim successor exists is refused by the owner preflight", ctx do
+    {:ok, derived} = ClientRetry.deterministic_failed_predecessor_claim(ctx.original.correlation_id, ctx.original.id)
+    Repo.update!(Ecto.Changeset.change(foreign_request!(ctx.setup), correlation_id: derived, transport: "http_sse", status: "succeeded"))
+
+    assert {:error, :successor_claimed} = preflight(ctx)
+    assert {:error, :successor_claimed} = Accounting.claim_client_retry_successor(ctx.setup.auth, ctx.setup.model, ctx.payload, ctx.opts)
+    assert Repo.aggregate(RequestClientRetryLink, :count) == 0
+  end
+
   defp preflight(ctx), do: Accounting.client_retry_preflight_snapshot(ctx.session, ctx.setup.api_key, ctx.setup.model, ctx.opts)
 
   defp claim_and_cut!(ctx) do

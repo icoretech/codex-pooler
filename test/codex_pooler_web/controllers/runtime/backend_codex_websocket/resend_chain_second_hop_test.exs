@@ -344,6 +344,154 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendChainSecondHopTest 
     ]
   end
 
+  # Owner forwarding on, the HTTPS fallback after a forwarded chain: the turn's
+  # first request is cut after the provider's lifecycle frames (which a
+  # forwarded turn does not count as visible output), the owner's client-retry
+  # preflight admits its websocket resend (`client-retry-v1:`), which is cut
+  # before any output, and the client then falls back to HTTPS (findings#206
+  # row 206-538). `suspension` is how the owner handled the cut resend: its
+  # replay armed, or the arm failed. The native HTTP walk steps over the
+  # zero-output first request and serves the fallback once. It used to leave
+  # the forwarded chain behind it open: a websocket resend of the same request
+  # afterwards redeemed the armed replay, or chained onto the cut resend, and
+  # the provider generated the served turn a second time. The fallback now
+  # retires an armed replay of the chain (as a newer turn does) and the owner's
+  # preflight refuses a request whose turn claim already has a successor.
+  for mode <- ["full", "lite"], suspension <- [:fails, :arms] do
+    @tag serving_mode: mode, suspension: suspension
+    test "websocket forwarded #{mode}: the HTTPS fallback after a forwarded chain whose replay suspension #{suspension}", ctx do
+      measured = run_forwarded_https_fallback(ctx.serving_mode, ctx.suspension)
+      CodexPooler.TestDiagnostics.puts(fn -> "https fallback forwarded #{ctx.serving_mode} #{ctx.suspension}: #{inspect(measured)}" end)
+      assert_forwarded_fallback!(ctx.suspension, measured)
+    end
+  end
+
+  defp assert_forwarded_fallback!(suspension, measured) do
+    assert {measured.websocket_after, measured.upstream_requests_after_websocket} == {{"error", "duplicate_turn"}, 3}
+    assert measured.fallback == {200, "response.completed"}
+    assert measured.fallback_claim == :derived_from_first
+    assert measured.first_visible == [false, false, true]
+    assert measured.requests == [{"failed", "upstream_stream_error", "websocket"}, cut_resend_row(suspension), {"succeeded", nil, "http_sse"}]
+    assert measured.entitlements == [nil, if(suspension == :arms, do: "revoked"), nil]
+    assert measured.upstream_requests == 3
+    assert measured.attempts_after == [[0], [0], [0]]
+  end
+
+  defp cut_resend_row(:fails), do: {"failed", "client_disconnected", "websocket"}
+  defp cut_resend_row(:arms), do: {"failed", "websocket_replay_superseded", "websocket"}
+
+  defp run_forwarded_https_fallback(mode, suspension) do
+    put_owner_forwarding!(true)
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings issue 124 (lifecycle frames, transport close), the released client's resend cut before output and row 232-231 (its HTTPS fallback); every reply frame synthetic
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(method: "WEBSOCKET", path: "/backend-api/codex/responses", respond: lifecycle_cut_frames()),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            respond: FakeUpstream.websocket_close_without_terminal_barrier(notify: self(), release_ref: release_ref, code: 1001, reason: "synthetic pre-visible loss")
+          ),
+          FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: FakeUpstream.sse_stream(completed_events("resp_forwarded_fallback_served"))),
+          FakeUpstream.expect_request(method: "WEBSOCKET", path: "/backend-api/codex/responses", respond: completed_frames("resp_forwarded_fallback_second_generation"))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_serving_mode!(setup, mode)
+    port = start_public_endpoint!()
+    thread = "ws-forwarded-fallback-#{System.unique_integer([:positive])}"
+    frame = setup |> released_frame(thread, Ecto.UUID.generate(), native_text_input("synthetic cut turn")) |> CodexPooler.JSON.encode!()
+
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, thread)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
+    {conn, _websocket, failure} = receive_until_terminal(conn, websocket, ref)
+    assert %{"type" => "error"} = failure
+    Mint.HTTP.close(conn)
+    assert [{"failed", "upstream_stream_error"}] = await_rows!(setup, 1)
+
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, thread)
+    {conn, _websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref}, @detection_timeout_ms
+    cut_request = Repo.one!(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress"))
+    codex_session_id = Repo.one!(from(t in CodexTurn, where: t.request_id == ^cut_request.id, select: t.codex_session_id))
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(codex_session_id)
+    if suspension == :fails, do: fail_replay_suspension!(owner_pid)
+    Mint.HTTP.close(conn)
+    cut_resend = await_cut_resend!(cut_request.id)
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+
+    fallback = https_outcome(post_https_fallback!(setup, thread, frame))
+    _rows = await_rows!(setup, 3)
+    after_fallback = FakeUpstream.count(upstream)
+
+    # A websocket resend of the same request after the fallback was served.
+    websocket_after = websocket_outcome(port, setup, thread, frame)
+    rows = await_rows!(setup, 3)
+    requests = pool_requests(setup)
+
+    %{
+      cut_resend: cut_resend,
+      cut_claim: if(String.starts_with?(cut_request.correlation_id, "client-retry-v1:"), do: :client_retry, else: :other),
+      fallback: fallback,
+      requests: Enum.zip_with(rows, requests, fn {status, code}, request -> {status, code, request.transport} end),
+      links: links(requests),
+      client_resend: client_resend_indexes(requests),
+      generations: Enum.map(requests, &generations/1),
+      entitlements: Enum.map(requests, &entitlement_status/1),
+      first_visible: Enum.map(requests, &first_visible?/1),
+      fallback_claim: forwarded_fallback_claim(requests),
+      upstream_requests: after_fallback,
+      websocket_after: websocket_after,
+      upstream_requests_after_websocket: FakeUpstream.count(upstream),
+      attempts_after: Enum.map(pool_requests(setup), &generations/1)
+    }
+  end
+
+  defp first_visible?(%Request{id: id}) do
+    case Repo.get_by(CodexTurn, request_id: id) do
+      nil -> :no_turn
+      %CodexTurn{first_visible_output_at: at} -> not is_nil(at)
+    end
+  end
+
+  # The fallback's claim relative to the first request: the claim the HTTP walk
+  # derives when it steps over it, or anything else.
+  defp forwarded_fallback_claim([first, _cut, fallback]) do
+    {:ok, from_first} = ClientRetry.deterministic_failed_predecessor_claim(first.correlation_id, first.id)
+
+    cond do
+      not String.starts_with?(first.correlation_id, "codex-turn:") -> :first_without_turn_claim
+      fallback.correlation_id == from_first -> :derived_from_first
+      true -> :other
+    end
+  end
+
+  defp forwarded_fallback_claim(_requests), do: :incomplete
+
+  # The cut resend once the owner armed its replay or it settled.
+  defp await_cut_resend!(request_id) do
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
+    await_cut_resend!(request_id, deadline)
+  end
+
+  defp await_cut_resend!(request_id, deadline) do
+    case {Repo.get_by(RequestReplayEntitlement, request_id: request_id), Repo.get!(Request, request_id)} do
+      {%RequestReplayEntitlement{status: "armed"}, _request} -> :armed
+      {_entitlement, %Request{status: status, last_error_code: code}} when status not in ["accepted", "in_progress"] -> {:settled, status, code}
+      _pending -> if System.monotonic_time(:millisecond) >= deadline, do: flunk("the cut resend neither armed nor settled"), else: Process.sleep(5) && await_cut_resend!(request_id, deadline)
+    end
+  end
+
+  defp entitlement_status(%Request{id: id}) do
+    case Repo.get_by(RequestReplayEntitlement, request_id: id) do
+      nil -> nil
+      %RequestReplayEntitlement{status: status} -> status
+    end
+  end
+
   defp run_forwarded_failed_suspension(mode) do
     put_owner_forwarding!(true)
     release_ref = make_ref()

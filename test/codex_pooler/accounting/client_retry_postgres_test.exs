@@ -368,11 +368,13 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       end
 
     # Each claim samples the database clock under the key lock before reading
-    # the combined token-window snapshot. Nil active caps add no count query:
-    # 16 claims * 22 statements = 352, including one enforcement clock per claim.
+    # the combined token-window snapshot. Nil active caps add no count query.
+    # Each claim also checks that its predecessor's turn claim has no successor
+    # (findings#206 row 206-538, one indexed existence read): 16 claims * 23
+    # statements = 368, including one enforcement clock per claim.
     assert Enum.map(schedules, & &1.enforcement_clock_queries) == [16, 16, 16]
-    assert Enum.map(schedules, & &1.total) == [352, 352, 352]
-    assert Enum.map(schedules, & &1.per_operation) == [22, 22, 22]
+    assert Enum.map(schedules, & &1.total) == [368, 368, 368]
+    assert Enum.map(schedules, & &1.per_operation) == [23, 23, 23]
     assert Enum.map(schedules, & &1.operation_sources) |> Enum.uniq() |> length() == 1
   end
 
