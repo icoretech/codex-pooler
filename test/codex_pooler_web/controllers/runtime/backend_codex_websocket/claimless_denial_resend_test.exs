@@ -8,8 +8,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimlessDenialResendTest
   # websocket_response_task_failed` instead of the refusal (findings#206 row
   # 206-361). Each such refusal is now its own rejected request, as each
   # unclaimed admission already is, so a resend gets the same typed refusal
-  # again. A refusal recorded on the released client's turn claim keeps its
-  # `409 duplicate_turn` fence.
+  # again. A refusal recorded on the released client's turn claim gives that
+  # claim up (findings#206 row 206-420): nothing reached the provider, so the
+  # resend gets the same typed refusal as well, where it used to meet a
+  # permanent `409 duplicate_turn`.
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
@@ -45,13 +47,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimlessDenialResendTest
       {conn, codes} = send_times(conn, websocket, ref, frame, 3)
       Mint.HTTP.close(conn)
 
-      case client do
-        :claimless ->
-          assert codes == List.duplicate("error:503:pinned_continuation_unavailable", 3)
-
-        :released ->
-          assert codes == ["error:503:pinned_continuation_unavailable", "error:409:duplicate_turn", "error:409:duplicate_turn"]
-      end
+      assert codes == List.duplicate("error:503:pinned_continuation_unavailable", 3)
 
       assert FakeUpstream.count(sticky) == 1
       assert FakeUpstream.count(fallback) == 0
@@ -60,7 +56,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimlessDenialResendTest
       assert [%Request{status: "succeeded"} | rejected] = rows
 
       assert Enum.map(rejected, &{&1.status, &1.last_error_code, &1.transport}) ==
-               List.duplicate({"rejected", "pinned_continuation_unavailable", "websocket"}, expected_rejections(client, 3))
+               List.duplicate({"rejected", "pinned_continuation_unavailable", "websocket"}, 3)
 
       correlation_ids = Enum.map(rows, & &1.correlation_id)
       assert correlation_ids == Enum.uniq(correlation_ids)
@@ -121,9 +117,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ClaimlessDenialResendTest
       assert correlation_ids == Enum.uniq(correlation_ids)
     end
   end
-
-  defp expected_rejections(:claimless, sends), do: sends
-  defp expected_rejections(:released, _sends), do: 1
 
   # Turn 1 binds the session to the sticky account and opens the live upstream
   # websocket there; a second account is eligible from then on.

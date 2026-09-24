@@ -9,23 +9,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   alias CodexPooler.Access
 
   alias CodexPooler.Accounting.{
-    Attempt,
     ClientRetry,
-    LedgerEntry,
     Metadata,
     NativeTurnProgress,
     PricingResolution,
     Request,
-    RequestClientRetryLink,
     RequestLogFacts,
-    RequestReplayEntitlement,
     ReservationPolicy
   }
 
   alias CodexPooler.Accounting.RequestLifecycle.{
     DeadExecutionResendRecovery,
     FailedPredecessorResend,
-    LedgerEntries
+    LedgerEntries,
+    TurnClaimRelease
   }
 
   alias CodexPooler.Catalog.Model
@@ -258,13 +255,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     end)
   end
 
-  defp unreserved_turn_claim?(%Request{id: id, status: "accepted", transport: "websocket", completed_at: nil}) do
-    not (Repo.exists?(from entry in LedgerEntry, where: entry.request_id == ^id) or
-           Repo.exists?(from attempt in Attempt, where: attempt.request_id == ^id) or
-           Repo.exists?(from turn in CodexTurn, where: turn.request_id == ^id) or
-           Repo.exists?(from entitlement in RequestReplayEntitlement, where: entitlement.request_id == ^id) or
-           Repo.exists?(from link in RequestClientRetryLink, where: link.predecessor_request_id == ^id))
-  end
+  defp unreserved_turn_claim?(%Request{status: "accepted", transport: "websocket", completed_at: nil} = request),
+    do: TurnClaimRelease.claim_only?(request)
 
   defp unreserved_turn_claim?(%Request{}), do: false
 
@@ -371,14 +363,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # (findings#206 row 206-403). The holder may be a websocket opener that
   # recorded its full-history progress, which is how a steer sent over HTTPS
   # after the session fell back from the websocket is told apart (row 206-412).
-  # A holder without a recorded digest -- a row from before these releases, or a
-  # websocket request whose socket could not know its history -- keeps the bare
-  # claim and today's verdict.
+  # A different digest alone is not enough: a resend of the holder with trimmed
+  # history differs too, so the request must be further along the turn than the
+  # holder (`NativeTurnProgress.advances?/2`, row 206-423). A holder without a
+  # recorded position -- a row from before these releases, or a websocket
+  # request whose socket could not know its history -- keeps the bare claim and
+  # today's verdict.
   defp steered_continuation_claim(%{correlation_id: claim, opts: opts}) do
     with steered when is_binary(steered) <- attr(opts, :native_http_steered_claim),
-         <<_::256>> = progress <- attr(opts, :native_http_turn_progress),
-         recorded = claim |> native_turn_predecessor() |> NativeTurnProgress.recorded(),
-         true <- NativeTurnProgress.differs?(recorded, progress) do
+         {_pivot, _user_messages} = position <- attr(opts, :native_http_turn_position),
+         recorded = claim |> native_turn_predecessor() |> NativeTurnProgress.recorded_position(),
+         true <- NativeTurnProgress.advances?(recorded, position) do
       steered
     else
       _not_steered -> nil
@@ -1067,13 +1062,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     }
   end
 
+  # A refusal of a claimed turn before anything reached the provider records the
+  # refusal on the claimed row and gives the claim up (findings#206 row 206-420).
   defp insert_or_update_claimed_request!(attrs, %Request{} = turn_claim),
-    do: update_claimed_request!(turn_claim, attrs)
+    do: update_claimed_request!(turn_claim, attrs, :reservation_refused)
 
-  # A refusal records history; it never takes a claim away from the row that
-  # holds it. Its correlation id is taken already when an earlier refusal of the
-  # same socket recorded the websocket handshake request id every frame of that
-  # socket shares (a frame that names no Codex turn, or one refused before its
+  # A refusal without a claim of its own records history; it never takes a
+  # claim away from the row that holds it. Its correlation id is taken already
+  # when an earlier refusal of the same socket recorded the websocket handshake
+  # request id every frame of that socket shares (a frame that names no Codex turn, or one refused before its
   # turn was claimed), or when an earlier row holds the request claim. The
   # conflict used to escape as `Ecto.ConstraintError` and the client got `500
   # websocket_response_task_failed` instead of the refusal (findings#206 row
@@ -1100,7 +1097,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     |> Repo.insert(mode: :savepoint)
   end
 
-  defp update_claimed_request!(%Request{id: request_id}, attrs) do
+  defp update_claimed_request!(%Request{id: request_id}, attrs, release_reason \\ nil) do
     request =
       Repo.one!(
         from request in Request,
@@ -1112,13 +1109,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       # The claimed row already owns its durable claim and resend attribution:
       # a resend admitted under a derived claim keeps both rather than meeting
       # the predecessor's claim again at reservation.
-      request
-      |> Ecto.Changeset.change(
+      changes =
         attrs
         |> Map.drop([:admitted_at, :correlation_id])
         |> preserve_client_resend_metadata(request)
-      )
-      |> Repo.update!()
+
+      case release_reason do
+        nil -> request |> Ecto.Changeset.change(changes) |> Repo.update!()
+        reason -> TurnClaimRelease.close!(request, changes, reason)
+      end
     else
       Repo.rollback(Metadata.accounting_error(:request_already_finalized, "request was already finalized"))
     end

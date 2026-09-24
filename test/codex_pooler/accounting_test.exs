@@ -780,7 +780,10 @@ defmodule CodexPooler.AccountingTest do
                Accounting.recover_stale_reservations(now)
     end
 
-    test "terminalizes stale websocket turn claims without releasing their identity" do
+    # The recovered row keeps its history and gives its claim up: nothing
+    # reached the provider, so its claim protects nothing, and kept it fenced
+    # every resend of the request for good (findings#206 row 206-421).
+    test "terminalizes stale websocket turn claims and releases their claim" do
       setup = accounting_setup()
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       stale_admitted_at = DateTime.add(now, -7, :hour)
@@ -806,12 +809,12 @@ defmodule CodexPooler.AccountingTest do
                response_status_code: 499,
                last_error_code: "stale_websocket_turn_claim_recovered",
                completed_at: ^now,
-               correlation_id: ^turn_id
+               request_metadata: %{"released_turn_claim" => ^turn_id}
              } = Repo.reload!(claimed_request)
 
       assert Accounting.list_ledger_entries_for_request(claimed_request.id) == []
 
-      assert {:error, %{code: :duplicate_request}} =
+      assert {:ok, %{request: %{correlation_id: ^turn_id}}} =
                Accounting.claim_websocket_turn(setup.auth, setup.model, %{
                  endpoint: "/backend-api/codex/responses",
                  correlation_id: turn_id

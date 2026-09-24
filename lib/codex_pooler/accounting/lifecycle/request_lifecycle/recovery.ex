@@ -6,6 +6,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogFacts}
   alias CodexPooler.Accounting.PreAttemptRelease
   alias CodexPooler.Accounting.RequestLifecycle
+  alias CodexPooler.Accounting.RequestLifecycle.TurnClaimRelease
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
   alias CodexPooler.Repo
 
@@ -81,16 +82,23 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
             lock: "FOR UPDATE"
         )
 
+      # The claim is given up with the row (findings#206 row 206-421): a
+      # recovered claim-only row keeps its history under a fresh correlation
+      # id, because `stale_websocket_turn_claim_recovered` is no verdict the
+      # resend policy admits, and the row used to fence every resend of its
+      # request for good. A row that holds more than its claim keeps it.
       if stale_turn_claim?(request) do
-        request
-        |> Ecto.Changeset.change(%{
-          status: "failed",
-          usage_status: "not_applicable",
-          completed_at: now,
-          response_status_code: 499,
-          last_error_code: @turn_claim_recovery_code
-        })
-        |> Repo.update!()
+        TurnClaimRelease.close!(
+          request,
+          %{
+            status: "failed",
+            usage_status: "not_applicable",
+            completed_at: now,
+            response_status_code: 499,
+            last_error_code: @turn_claim_recovery_code
+          },
+          :stale_claim_recovered
+        )
 
         :recovered
       else

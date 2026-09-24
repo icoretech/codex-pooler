@@ -8,7 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestReplayEntitlement}
   alias CodexPooler.Accounting.PreAttemptRelease
-  alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery
+  alias CodexPooler.Accounting.RequestLifecycle.{DeadExecutionResendRecovery, TurnClaimRelease}
   alias CodexPooler.Accounting.RequestLogFacts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
@@ -99,9 +99,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     |> finalize_marker_transaction()
   end
 
+  # A claim-only row that gave its claim up (findings#206 rows 206-419/206-420)
+  # still answers to the receipt bound at claim time, which names that claim.
   defp direct_receipt_matches?(%CodexSession{} = session, %Request{} = request, receipt),
     do:
-      request.correlation_id == receipt.correlation_id and
+      is_binary(receipt.correlation_id) and
+        receipt.correlation_id in [request.correlation_id, (request.request_metadata || %{})["released_turn_claim"]] and
         request.api_key_id == receipt.api_key_id and request.pool_id == session.pool_id
 
   defp direct_receipt_matches?(_session, _request, _receipt), do: false
@@ -287,6 +290,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp mark_pre_attempt_owner_drain(request, _receipt, _reason), do: request
 
+  # A request the client left before its reservation sent nothing to the
+  # provider, so its claim protects nothing, and kept on the closed row it fenced
+  # every resend of the request with a permanent `409 duplicate_turn` (findings#206
+  # row 206-419). The row gives the claim up and stays as history. The owner's
+  # pre-attempt drain row keeps it: the drain resend chains from that row
+  # (`ClientRetry.verified_claim_only_drain?/1`).
+  defp close_claim_only_request!(%Request{request_metadata: %{"websocket_pre_attempt_drain" => true}} = request, changes),
+    do: request |> Ecto.Changeset.change(changes) |> Repo.update!()
+
+  defp close_claim_only_request!(%Request{} = request, changes),
+    do: TurnClaimRelease.close!(request, changes, :client_left_before_reservation)
+
   defp interrupt_direct_locked(scope, session, request, reason) do
     turn = Repo.get_by(CodexTurn, request_id: request.id)
     attempt = latest_attempt_for_update(request.id)
@@ -312,15 +327,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   defp do_interrupt_direct_locked(scope, session, request, turn, attempt, reason) do
     case {request.status, turn, attempt} do
       {"accepted", nil, _} ->
-        request
-        |> Ecto.Changeset.change(
-          status: "failed",
-          completed_at: ClientRetry.completion_timestamp(request, now()),
-          response_status_code: 499,
-          last_error_code: reason,
-          usage_status: "usage_unknown"
+        close_claim_only_request!(
+          request,
+          %{
+            status: "failed",
+            completed_at: ClientRetry.completion_timestamp(request, now()),
+            response_status_code: 499,
+            last_error_code: reason,
+            usage_status: "usage_unknown"
+          }
         )
-        |> Repo.update!()
 
         RequestLogFacts.record_request_created!(request)
         []
