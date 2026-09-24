@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
 
   alias CodexPooler.Accounting.{LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.{NativeCompactionAdmission, WebsocketOwnerSession}
   alias CodexPooler.Repo
@@ -109,6 +110,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     test "#{mode} #{shape} #{topology} admitted compaction #{cut} with the closed socket's cleanup held: the released client's first websocket retry is served",
          %{mode: mode, shape: shape, topology: topology, cut: cut} do
       assert run_scenario(mode, shape, topology, cut) == expected(cut, topology)
+    end
+  end
+
+  # The released client sends its compaction the moment the previous turn's
+  # `response.completed` arrives, and the Pooler's response task for that turn
+  # may still be settling it: the socket then queues the compaction and
+  # dispatches it when the task ends, without the owner preflight that records
+  # the turn it submits, and the owner could not key a compaction body (the
+  # upstream body carries no turn metadata). It ran as an `:unknown` turn that
+  # no same-turn check could match, seen on the peer owner in the observed
+  # arms (findings#206 row 206-455). Here the previous turn's response task is
+  # held after its settlement until the compaction is queued. The owner keys
+  # the queued compaction from its admission binding, and the released
+  # client's resends while it runs are never a second provider generation:
+  # the owner runs one turn at a time and refuses a resend until the running
+  # compaction settled (or takes it over from a socket that already closed),
+  # and without owner forwarding the compaction claim refuses it.
+  for {mode, shape} <- [{"full", :pre_turn}, {"lite", :pre_turn}, {"full", :mid_turn}],
+      {topology, cut} <- [{:forwarded, :unobserved_cut}, {:peer, :unobserved_cut}, {:direct, :unobserved_cut}, {:forwarded, :observed_cut}, {:peer, :observed_cut}, {:direct_committed, :observed_cut}],
+      mode == "full" or topology not in [:peer, :direct_committed] do
+    @tag mode: mode, shape: shape, topology: topology, cut: cut, dispatch: :queued
+    test "#{mode} #{shape} #{topology} compaction queued behind the settling turn, #{cut}: the owner keys it and no resend is a second generation while it runs",
+         %{mode: mode, shape: shape, topology: topology, cut: cut} do
+      assert run_scenario(mode, shape, topology, cut, :queued) == expected(cut, topology)
     end
   end
 
@@ -222,7 +247,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
       live_rows: 0
     }
 
-  defp run_scenario(mode, shape, topology, cut) do
+  defp run_scenario(mode, shape, topology, cut, dispatch \\ :on_arrival) do
     put_owner_forwarding!(topology in [:forwarded, :peer])
     release_ref = make_ref()
     ctx = %{mode: mode, shape: shape, topology: topology}
@@ -233,12 +258,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
     ctx = Map.put(ctx, :setup, setup)
     port = start_public_endpoint!()
 
+    settling = if dispatch == :queued, do: hold_turn_task_after_settlement!()
     first = connect!(port, setup)
     first = ordinary_turn!(first, turn_frame(ctx))
-    await_armed!(topology, setup)
+    # The owner arms the admission only once the turn's response task is done:
+    # a compaction queued behind that task is admitted at its dequeue.
+    if dispatch == :on_arrival, do: await_armed!(topology, setup)
     # The strict upstream expects this compaction anchored on the admitted
     # response: it is dispatched on its first send.
     first = send_frame!(first, anchored_compaction_frame(ctx))
+    if dispatch == :queued, do: dispatch_queued_compaction!(ctx, settling)
     retries = cut_and_resend(cut, ctx, first, port, upstream, release_ref)
 
     rows = await_settled!(setup.pool.id)
@@ -753,6 +782,77 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketPreTurnCompactionCutTest d
       end,
       "the owner never armed the native compaction admission for the attached socket"
     )
+  end
+
+  # Holds the first response task that settles a websocket turn from here on
+  # (the previous turn's) right after its settlement, outside any transaction,
+  # so its socket still tracks it when the compaction arrives.
+  defp hold_turn_task_after_settlement! do
+    hold = make_ref()
+    handler_id = {__MODULE__, :turn_settlement_hold, hold}
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    config = %{hold: hold, test: self(), claimed: :atomics.new(1, [])}
+    :ok = :telemetry.attach(handler_id, [:codex_pooler, :gateway, :stream, :outcome], &__MODULE__.hold_settled_turn_task/4, config)
+    hold
+  end
+
+  @doc false
+  def hold_settled_turn_task(_event, _measurements, %{outcome: "succeeded", downstream_transport: "websocket"}, %{hold: hold, test: test, claimed: claimed}) do
+    if not Repo.in_transaction?() and :atomics.add_get(claimed, 1, 1) == 1 do
+      send(test, {hold, :held, self(), Process.get(:"$callers", [])})
+
+      receive do
+        {^hold, :release} -> :ok
+      after
+        @detection_timeout_ms -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  def hold_settled_turn_task(_event, _measurements, _metadata, _config), do: :ok
+
+  # The compaction is queued behind the held task on the socket that started
+  # it; the task is then released, and the socket dispatches the compaction
+  # when the task ends. With owner forwarding the owner runs it as a turn
+  # keyed like the one the owner preflight records for an unqueued frame.
+  defp dispatch_queued_compaction!(ctx, hold) do
+    assert_receive {^hold, :held, task, callers}, @detection_timeout_ms
+    :telemetry.detach({__MODULE__, :turn_settlement_hold, hold})
+    await!(fn -> Enum.any?(callers, &compaction_queued?/1) end, "the compaction was never queued behind the settling turn")
+    send(task, {hold, :release})
+
+    if ctx.topology in [:forwarded, :peer] do
+      owner = owner_pid!(ctx.setup)
+      await!(fn -> match?(%{active_turn: %{admission_phase: phase}} when not is_nil(phase), :sys.get_state(owner)) end, "the queued compaction never reached the owner")
+      assert %{active_turn: %{descriptor: %{kind: :native, semantic_turn_key: key}}} = :sys.get_state(owner)
+      assert key == compaction_turn_key(ctx)
+    end
+
+    :ok
+  end
+
+  defp compaction_queued?(pid) do
+    pid |> :sys.get_state(1_000) |> queued_frames(6) |> Enum.any?(&match?(%{endpoint: @compact_endpoint}, &1))
+  catch
+    :exit, _not_a_socket -> false
+  end
+
+  defp queued_frames(%{queued_response_payloads: queue}, _depth), do: :queue.to_list(queue)
+  defp queued_frames(_term, 0), do: []
+  defp queued_frames(%_{} = struct, depth), do: struct |> Map.from_struct() |> queued_frames(depth)
+  defp queued_frames(map, depth) when is_map(map), do: Enum.flat_map(Map.values(map), &queued_frames(&1, depth - 1))
+  defp queued_frames(tuple, depth) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> Enum.flat_map(&queued_frames(&1, depth - 1))
+  defp queued_frames(_term, _depth), do: []
+
+  # The compaction turn's semantic key under the socket's claim scope (the
+  # client thread, bound to the session's Pool and key).
+  defp compaction_turn_key(ctx) do
+    [session] = Repo.all(from(session in CodexSession, where: session.pool_id == ^ctx.setup.pool.id))
+    scope = WebsocketTurnIdentity.claim_scope(session, @thread_id)
+    {:ok, %{semantic_turn_key: key}} = WebsocketTurnIdentity.resolve(%{"client_metadata" => %{"turn_id" => compaction_turn(ctx.shape)}}, scope)
+    key
   end
 
   defp put_owner_forwarding!(enabled?) do
