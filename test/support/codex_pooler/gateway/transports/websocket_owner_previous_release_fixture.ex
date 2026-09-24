@@ -103,9 +103,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
     :crypto.hash(:sha256, identified_beam)
   end
 
-  @spec load_synthetic_identity_lookup(node(), binary()) :: {:module, module()}
-  def load_synthetic_identity_lookup(node, identity_id)
-      when is_atom(node) and is_binary(identity_id) do
+  # `identity_ids` is one upstream identity id, or several when the peer's
+  # owner must serve a failover to another account of the Pool.
+  @spec load_synthetic_identity_lookup(node(), binary() | [binary(), ...]) :: {:module, module()}
+  def load_synthetic_identity_lookup(node, identity_id) when is_atom(node) and is_binary(identity_id),
+    do: load_synthetic_identity_lookup(node, [identity_id])
+
+  def load_synthetic_identity_lookup(node, [_ | _] = identity_ids) when is_atom(node) do
+    true = Enum.all?(identity_ids, &is_binary/1)
     module = CodexPooler.Upstreams
     fixture = __MODULE__
 
@@ -122,7 +127,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
     ]
 
     {:ok, ^module, beam} = compile_forms(forms)
-    :erpc.call(node, :persistent_term, :put, [{__MODULE__, :identity_id}, identity_id])
+    :erpc.call(node, :persistent_term, :put, [{__MODULE__, :identity_ids}, identity_ids])
     :erpc.call(node, :code, :purge, [module])
     :erpc.call(node, :code, :delete, [module])
     :erpc.call(node, :code, :load_binary, [module, ~c"synthetic_identity_fixture", beam])
@@ -314,7 +319,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
 
   @spec synthetic_identity(binary()) :: struct() | nil
   def synthetic_identity(identity_id) when is_binary(identity_id) do
-    if :persistent_term.get({__MODULE__, :identity_id}) == identity_id do
+    if identity_id in :persistent_term.get({__MODULE__, :identity_ids}, []) do
       %CodexPooler.Upstreams.Schemas.UpstreamIdentity{
         id: identity_id,
         account_label: "mixed-release-fixture",

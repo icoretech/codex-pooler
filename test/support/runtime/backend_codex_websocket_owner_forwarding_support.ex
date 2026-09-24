@@ -398,14 +398,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   # (`start_shared_bridge_peer!/0`): the peer's identity lookup names this
   # test's upstream identity, and the lifecycle relay this test attaches there
   # is detached when it ends.
-  def start_shared_peer_window_owner!(%{authorization: authorization, identity: identity} = setup, window_id, peer_node) do
+  def start_shared_peer_window_owner!(setup, window_id, peer_node),
+    do: start_shared_peer_session_owner!(setup, %{session_header: window_id, session_header_source: "x-codex-window-id"}, peer_node)
+
+  # The same for any session the socket's upgrade resolves (`session_attrs`,
+  # as for `start_peer_session_owner!/2`). `other_identities` are the Pool's
+  # other upstream identities the peer's owner must serve too, as when a turn
+  # fails over to another account (findings#206 row 206-600).
+  def start_shared_peer_session_owner!(%{authorization: authorization, identity: identity} = setup, session_attrs, peer_node, other_identities \\ []) do
     BackendCodexTestSupport.register_unboxed_pool_cleanup!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(authorization)
+    identity_ids = Enum.map([identity | other_identities], & &1.id)
 
     assert {:module, CodexPooler.Upstreams} =
-             WebsocketOwnerPreviousReleaseFixture.load_synthetic_identity_lookup(peer_node, identity.id)
+             WebsocketOwnerPreviousReleaseFixture.load_synthetic_identity_lookup(peer_node, identity_ids)
 
-    start_peer_owner_on!(auth, %{session_header: window_id, session_header_source: "x-codex-window-id"}, peer_node)
+    start_peer_owner_on!(auth, session_attrs, peer_node)
   end
 
   defp start_peer_owner_on!(auth, session_attrs, peer_node) do
