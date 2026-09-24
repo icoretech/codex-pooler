@@ -122,6 +122,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Logger 
     )
   end
 
+  # The retry of a collected compaction whose socket had closed took it over
+  # before that socket's own detach arrived, and was attached in its place
+  # (findings#206 row 206-454).
+  @spec closed_socket_collection_taken_over(map(), pos_integer(), pos_integer()) :: :ok
+  def closed_socket_collection_taken_over(state, closed_epoch, downstream_epoch) do
+    owner_event(:info, "websocket owner closed socket collection taken over",
+      codex_session_id: state.codex_session_id,
+      owner_instance_id: state.owner_instance_id,
+      owner_pid: self(),
+      closed_downstream_epoch: closed_epoch,
+      downstream_epoch: downstream_epoch
+    )
+  end
+
   @spec owner_exit_persistence_failure(atom(), map(), atom(), term()) :: :ok
   # A later turn of the session (an HTTP fallback the owner never held) was
   # already running when the owner exited, so the owner-scoped interrupt stood

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_peer_window_owner!: 2]
 
   alias CodexPooler.Accounting.{LedgerEntry, Request, RequestClientRetryLink, RequestReplayEntitlement}
   alias CodexPooler.FakeUpstream
@@ -57,6 +58,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
       assert run_scenario(mode, topology, cut) == %{
                predecessor_settled?: true,
                retries: [:served],
+               successor_chained?: true,
+               max_charges_per_request: 1,
+               upstream_compactions: 2,
+               replay_entitlements: [],
+               live_rows: 0
+             }
+    end
+  end
+
+  # The released client retries a compaction stream that failed on a new
+  # connection about 200 ms after the failure (`compact_remote_v2.rs`, two
+  # websocket retries). The cut socket's owner detach comes from its session
+  # cleanup, after a 250 ms drain and a cleanup the socket waits on for 100 ms
+  # only; here that cleanup is held at its first query until the retries
+  # resolved. A full-history compaction is collected with its request identity,
+  # so the retry's attach is handed only the next epoch and the cut socket
+  # stays the owner's downstream until its detach arrives (findings#206 row
+  # 206-454): the retry met the owner busy (`409 duplicate_turn`) and so did
+  # the second one, and the compaction was bought again over HTTPS.
+  # The `peer` arm runs the session's owner and its provider connection on a
+  # second VM sharing the committed database, the sockets on this node (Full
+  # only: the Lite override commits an owner session).
+  for {mode, topology} <- [{"full", :forwarded}, {"lite", :forwarded}, {"full", :peer}] do
+    @tag mode: mode, topology: topology, cut: :observed_cut
+    test "#{mode} #{topology} full-history compaction cut with the closed socket's cleanup held: the released client's first retry is served", %{mode: mode, topology: topology} do
+      assert run_scenario(mode, topology, :observed_cut) == %{
+               predecessor_settled?: true,
+               retries: [:served],
+               successor_chained?: true,
+               max_charges_per_request: 1,
+               upstream_compactions: 2,
+               replay_entitlements: [],
+               live_rows: 0
+             }
+    end
+  end
+
+  # The same collection handed on from a connection the Pooler has not seen
+  # close keeps the refusal: both websocket retries meet the running
+  # collection, and the HTTPS fallback, which arrives after the Pooler settled
+  # it, is its successor.
+  for {mode, topology} <- [{"full", :forwarded}, {"lite", :forwarded}, {"full", :peer}] do
+    @tag mode: mode, topology: topology, cut: :unobserved_cut
+    test "#{mode} #{topology} full-history compaction whose connection the Pooler has not seen close: the retries are refused until it settles", %{mode: mode, topology: topology} do
+      assert run_scenario(mode, topology, :unobserved_cut) == %{
+               predecessor_settled?: true,
+               retries: [{409, "duplicate_turn"}, {409, "duplicate_turn"}, :http_served],
                successor_chained?: true,
                max_charges_per_request: 1,
                upstream_compactions: 2,
@@ -160,7 +208,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
   end
 
   defp run_scenario(mode, topology, cut) do
-    put_owner_forwarding!(topology == :forwarded)
+    put_owner_forwarding!(topology in [:forwarded, :peer])
     release_ref = make_ref()
     ctx = %{mode: mode}
 
@@ -171,13 +219,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
       start_upstream(
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(method: "WEBSOCKET", json: [valid: true, equals: %{"type" => "response.create"}], respond: completed_frames(@anchor, [answer()])),
-          FakeUpstream.expect_request(method: "WEBSOCKET", json: compaction, respond: held),
-          FakeUpstream.expect_request(method: "WEBSOCKET", json: compaction, respond: compaction_frames(compaction_item("resend"), @resend_response)),
-          FakeUpstream.expect_request(method: "WEBSOCKET", json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]], respond: completed_frames(@final_response, []))
+          FakeUpstream.expect_request(method: "WEBSOCKET", json: compaction, respond: held)
+          | resend_expectations(cut, compaction)
         ])
       )
 
-    setup = gateway_setup(upstream, compact?: true)
+    setup = topology_setup!(topology, upstream)
     if mode == "lite", do: set_model_serving_mode!(model_serving_scope(), setup, "lite")
     ctx = Map.put(ctx, :setup, setup)
     port = start_public_endpoint!()
@@ -200,10 +247,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
       end
     end
 
-    Mint.HTTP.close(second.conn)
-    _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
-    settled? = settled_within?(setup.pool.id, @detection_timeout_ms)
-    retries = released_client_retries!(ctx, port, fn -> :ok end)
+    {settled?, retries} =
+      case cut do
+        :observed_cut ->
+          cut_with_cleanup_held(ctx, second, port, upstream, release_ref)
+
+        :unobserved_cut ->
+          unobserved_cut(ctx, second, port, upstream, release_ref)
+
+        _cut ->
+          Mint.HTTP.close(second.conn)
+          _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
+          settled? = settled_within?(setup.pool.id, @detection_timeout_ms)
+          {settled?, released_client_retries!(ctx, port, fn -> :ok end)}
+      end
+
     rows = await_no_live_requests(setup.pool.id)
     compactions = Enum.filter(rows, &(&1.endpoint == @compact_endpoint))
 
@@ -220,6 +278,125 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
     CodexPooler.TestDiagnostics.puts(fn -> "206-333 #{mode} #{topology} #{cut}: #{inspect(measured)}" end)
     if measured.predecessor_settled?, do: assert(:ok = FakeUpstream.verify!(upstream))
     measured
+  end
+
+  # The peer shares the committed database, so its fixture is committed: the
+  # sandbox switches to auto mode before anything is written.
+  defp topology_setup!(:peer, upstream) do
+    enter_peer_owner_topology!()
+    setup = gateway_setup(upstream, compact?: true)
+    Map.put(setup, :peer_owner, start_peer_window_owner!(setup, @window_id))
+  end
+
+  defp topology_setup!(_topology, upstream), do: gateway_setup(upstream, compact?: true)
+
+  defp resend_expectations(:unobserved_cut, _compaction) do
+    [
+      FakeUpstream.expect_request(method: "POST", path: @turn_endpoint, json: [valid: true, forbidden: ["previous_response_id", "type"]], respond: FakeUpstream.sse_stream(compaction_events(compaction_item("https"), @resend_response))),
+      FakeUpstream.expect_request(method: "POST", path: @turn_endpoint, json: [valid: true, forbidden: ["previous_response_id"]], respond: FakeUpstream.sse_stream(completed_events(@final_response)))
+    ]
+  end
+
+  defp resend_expectations(_cut, compaction) do
+    [
+      FakeUpstream.expect_request(method: "WEBSOCKET", json: compaction, respond: compaction_frames(compaction_item("resend"), @resend_response)),
+      FakeUpstream.expect_request(method: "WEBSOCKET", json: [valid: true, equals: %{"type" => "response.create"}, forbidden: ["previous_response_id"]], respond: completed_frames(@final_response, []))
+    ]
+  end
+
+  # The client gave up on the connection but the Pooler has not seen it close
+  # yet: the collection is still live when both websocket retries arrive, and
+  # the Pooler settles it before the HTTPS fallback.
+  defp unobserved_cut(ctx, client, port, upstream, release_ref) do
+    settle = fn ->
+      Mint.HTTP.close(client.conn)
+      release_held_compaction!(upstream, release_ref)
+      await!(fn -> Enum.any?(pool_requests(ctx.setup.pool.id), &(&1.endpoint == @compact_endpoint and &1.status not in ["accepted", "in_progress"])) end, "the collection never settled")
+    end
+
+    retries = released_client_retries!(ctx, port, settle)
+    {settled_within?(ctx.setup.pool.id, @detection_timeout_ms), retries}
+  end
+
+  # The connection closes before the provider produced anything and the
+  # Pooler sees it close; its session cleanup is held, so the retries meet a
+  # predecessor that is still live. The provider finishes the cut generation
+  # once the retries resolved.
+  defp cut_with_cleanup_held(ctx, client, port, upstream, release_ref) do
+    hold = hold_session_cleanup!()
+    Mint.HTTP.close(client.conn)
+    assert_receive {^hold, :held, cleanup}, @settle_timeout_ms
+    assert Enum.any?(pool_requests(ctx.setup.pool.id), &(&1.endpoint == @compact_endpoint and &1.status == "in_progress"))
+
+    release = fn ->
+      release_session_cleanup!(hold, cleanup)
+      :ok
+    end
+
+    retries = released_client_retries!(ctx, port, release)
+    if List.last(retries) == :served, do: release.()
+    release_held_compaction!(upstream, release_ref)
+    {settled_within?(ctx.setup.pool.id, @detection_timeout_ms), retries}
+  end
+
+  # The provider finishes the cut generation, as a live provider would. The
+  # Pooler may have closed that provider connection when it cancelled the
+  # generation, and then the rest of the reply is never pushed: wait until
+  # either the last frame went out or the connection is gone, and only then
+  # acknowledge the barriers the closed connection never reached.
+  defp release_held_compaction!(upstream, release_ref) do
+    %{websocket_connection_id: connection} = upstream |> FakeUpstream.requests() |> Enum.find(&compaction_request?/1)
+    _released = FakeUpstream.release_remaining_frames(upstream, release_ref)
+
+    await!(
+      fn ->
+        receive do
+          {:fake_upstream_frame_barrier, 3, _handler, ^release_ref} -> true
+        after
+          0 -> not FakeUpstream.websocket_connection_alive?(upstream, connection)
+        end
+      end,
+      "the held provider reply neither finished nor lost its connection"
+    )
+
+    for barrier <- 1..3, do: FakeUpstream.acknowledge(upstream, {:frame_barrier, release_ref, barrier})
+    :ok
+  end
+
+  # Holds the next socket session cleanup that starts from here on (the closed
+  # connection's; nothing else closes meanwhile) right after its first query
+  # made outside a transaction, whose connection is already back in the pool.
+  defp hold_session_cleanup! do
+    hold = make_ref()
+    handler_id = {__MODULE__, :session_cleanup_hold, hold}
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    config = %{hold: hold, test: self(), claimed: :atomics.new(1, [])}
+    :ok = :telemetry.attach(handler_id, [:codex_pooler, :repo, :query], &__MODULE__.hold_session_cleanup_query/4, config)
+    hold
+  end
+
+  @doc false
+  def hold_session_cleanup_query(_event, _measurements, metadata, %{hold: hold, test: test, claimed: claimed}) do
+    if match?({CodexPoolerWeb.WebsocketControlPath, _function, _arity}, Process.get(:"$initial_call")) and metadata[:query] not in ["begin", "commit"] and
+         not Repo.in_transaction?() and :atomics.add_get(claimed, 1, 1) == 1 do
+      send(test, {hold, :held, self()})
+
+      receive do
+        {^hold, :release} -> :ok
+      after
+        @settle_timeout_ms -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp release_session_cleanup!(hold, cleanup) do
+    :telemetry.detach({__MODULE__, :session_cleanup_hold, hold})
+    monitor = Process.monitor(cleanup)
+    send(cleanup, {hold, :release})
+    assert_receive {:DOWN, ^monitor, :process, ^cleanup, _reason}, @settle_timeout_ms
+    :ok
   end
 
   # No completion signal reaches the test: poll the compaction row within a
@@ -570,6 +747,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFullHistoryCompactionCutTe
         Enum.map(output, &CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => &1})) ++
         [CodexPooler.JSON.encode!(%{"type" => "response.completed", "response" => %{"id" => response_id, "status" => "completed", "output" => output, "usage" => usage()}})]
     )
+  end
+
+  defp compaction_events(item, response_id) do
+    [
+      %{"type" => "response.created", "response" => %{"id" => response_id, "status" => "in_progress"}},
+      %{"type" => "response.output_item.done", "item" => item},
+      %{"type" => "response.completed", "response" => %{"id" => response_id, "status" => "completed", "output" => [item], "usage" => usage()}}
+    ]
+  end
+
+  defp completed_events(response_id) do
+    [
+      %{"type" => "response.created", "response" => %{"id" => response_id, "status" => "in_progress"}},
+      %{"type" => "response.completed", "response" => %{"id" => response_id, "status" => "completed", "output" => [], "usage" => usage()}}
+    ]
   end
 
   defp compaction_frames(item, response_id) do
