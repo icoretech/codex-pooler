@@ -47,6 +47,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
   # A retryable `503` of a Pool with an open-circuit candidate carries the
   # seconds until that circuit admits a probe (findings#206 row 206-532).
   defp filter_candidates(filter_input, route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts) do
+    classified_candidates = filter_input.candidates
+
     with {:ok, candidates} <-
            CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state),
          circuit_excluded? = length(candidates) < length(filter_input.candidates),
@@ -82,7 +84,15 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
              request_options,
              candidates
            ) do
-      {:ok, candidates, request_options, RouteState.put_candidates(route_state, candidates)}
+      kept_ids = MapSet.new(candidates, fn {assignment, _identity} -> assignment.id end)
+      dropped = Enum.reject(classified_candidates, fn {assignment, _identity} -> MapSet.member?(kept_ids, assignment.id) end)
+
+      route_state =
+        route_state
+        |> RouteState.put_candidates(candidates)
+        |> RouteState.put_route_filter_dropped(dropped)
+
+      {:ok, candidates, request_options, route_state}
     end
   end
 

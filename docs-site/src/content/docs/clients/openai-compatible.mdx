@@ -537,7 +537,9 @@ same request to another eligible account.
 When no other account is left for the request and the Codex backend's
 usage-limit refusal names the account's reset, that refusal gets the same
 answer: `429`, `usage_limit_reached`, `quota_exhausted` and Codex Pooler's
-message, `resets_at` and `resets_in_seconds` from the backend's reset,
+message, and `resets_at` and `resets_in_seconds` for the soonest of the
+backend's reset and the resets of the other accounts, which must all be
+exhausted with a known reset (otherwise the refusal stays retryable),
 `Retry-After`, and `x-should-retry: false` when the wait is longer than 60
 seconds. The backend's own message and other fields are not relayed. A
 usage-limit refusal that names no reset still ahead keeps the redacted

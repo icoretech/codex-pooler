@@ -43,6 +43,18 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.AccountDenial do
     end
   end
 
+  @doc """
+  The exclusion this filter would record for `candidate` under
+  `route_state`'s quota snapshot, or `nil` when its account is not denied.
+  """
+  @spec candidate_exclusion(FilterInput.candidate(), RouteState.t()) :: map() | nil
+  def candidate_exclusion({assignment, identity}, %RouteState{} = route_state) do
+    case QuotaWindows.routing_account_denial(Map.get(route_state.quota_snapshots, identity.id)) do
+      nil -> nil
+      denial -> exclusion(assignment, identity, denial)
+    end
+  end
+
   # The refusal answers for the whole Pool, so it also names the candidates
   # quota eligibility already dropped: their resets bound the Pool's earliest
   # return as much as the denied ones do, for example a sibling exhausted

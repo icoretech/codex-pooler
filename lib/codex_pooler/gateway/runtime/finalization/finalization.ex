@@ -21,7 +21,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     Websocket
   }
 
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn
   alias CodexPooler.Gateway.Routing.ModelMetadata
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
 
   alias CodexPooler.Gateway.Transports.{
@@ -561,7 +563,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:ok, finalized}
 
       {:ok, _finalized} ->
-        case relayed_usage_limit(response, request_options) do
+        case relayed_usage_limit(response, context) do
           {:ok, usage_limit_error} ->
             {:error, usage_limit_error}
 
@@ -606,13 +608,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   # (findings#206 rows 206-508, 206-531). The attempt and the request row
   # above keep the provider's `429` and `upstream_rate_limited`. The native
   # compaction bridges keep their own result shapes.
-  defp relayed_usage_limit(%Req.Response{status: 429} = response, %RequestOptions{} = request_options) do
+  defp relayed_usage_limit(%Req.Response{status: 429} = response, %SelectedCandidateContext{request_options: request_options} = context) do
     if native_compaction_websocket?(request_options) or CompactionTrigger.streaming_result?(request_options),
       do: :unknown,
-      else: ProviderUsageLimit.error(response)
+      else: ProviderUsageLimit.error(response, fn -> other_candidates_return(context) end)
   end
 
-  defp relayed_usage_limit(_response, _request_options), do: :unknown
+  defp relayed_usage_limit(_response, _context), do: :unknown
+
+  # The Pool's other candidates, as route filtering classified them (findings#206 row 206-545).
+  defp other_candidates_return(%SelectedCandidateContext{model: model, route_state: route_state, assignment: assignment}),
+    do: PoolReturn.others(model, RouteState.route_filter_candidates(route_state), assignment.id, DateTime.utc_now())
 
   defp apply_failure_settlement_options(attrs, opts) do
     attrs =

@@ -20,8 +20,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit do
   those tokens are read: the provider's message, plan and body never reach the
   client, and the persisted rejection metadata is untouched.
 
-  The reset is the refused account's own: another candidate that routing had
-  already excluded with an earlier reset is not folded in.
+  The advice is the Pool's, as routing gives it one request later (row
+  206-545): the soonest of the refused account's reset and the other
+  candidates' returns (`CandidateEligibility.PoolReturn`). When another
+  candidate has no known return, the Pool is not exhausted and the relayed
+  answer is unchanged.
   """
 
   alias CodexPooler.Gateway.Contracts
@@ -37,21 +40,33 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit do
   # A monthly credit period with a margin; a later reset is not a reset.
   @max_reset_seconds 32 * 24 * 3_600
 
-  @spec error(Req.Response.t(), DateTime.t()) :: {:ok, Contracts.gateway_error()} | :unknown
-  def error(response, now \\ DateTime.utc_now())
+  @type others_return :: :none | {:ok, Contracts.usage_limit()} | :unknown
 
-  def error(%Req.Response{status: 429} = response, %DateTime{} = now) do
+  @doc """
+  The terminal refusal for `response`, or `:unknown`. `others` is called only
+  for a usage limit with a known reset, and returns when the Pool's other
+  candidates return.
+  """
+  @spec error(Req.Response.t(), (-> others_return()), DateTime.t()) :: {:ok, Contracts.gateway_error()} | :unknown
+  def error(response, others \\ fn -> :none end, now \\ DateTime.utc_now())
+
+  def error(%Req.Response{status: 429} = response, others, %DateTime{} = now) when is_function(others, 0) do
     error = response |> Metadata.rejection_body() |> decode_error()
 
     with true <- usage_limit?(error, response.headers),
-         {:ok, usage_limit} <- reset(error, now) do
+         {:ok, own} <- reset(error, now),
+         {:ok, usage_limit} <- pool_return(own, others.()) do
       {:ok, %{status: 429, code: @code, message: @message, param: "model", usage_limit: usage_limit}}
     else
       _unknown -> :unknown
     end
   end
 
-  def error(_response, _now), do: :unknown
+  def error(_response, _others, _now), do: :unknown
+
+  defp pool_return(own, :none), do: {:ok, own}
+  defp pool_return(own, {:ok, %{resets_at: resets_at} = other}), do: {:ok, if(resets_at < own.resets_at, do: other, else: own)}
+  defp pool_return(_own, :unknown), do: :unknown
 
   defp decode_error(body) when is_binary(body) and byte_size(body) <= @body_max_bytes do
     case CodexPooler.JSON.decode(body) do

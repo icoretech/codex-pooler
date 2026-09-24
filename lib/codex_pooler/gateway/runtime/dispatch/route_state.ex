@@ -150,6 +150,25 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       when is_map(snapshot_inputs),
       do: %{route_state | reservation_snapshot_inputs: snapshot_inputs}
 
+  @doc """
+  Records the candidates route filtering dropped (circuit, quota, workspace
+  denial, reasoning preference), next to the kept `candidates`: together they
+  are the Pool a relayed provider usage limit speaks for (findings#206 row
+  206-545). Nothing is recorded when filtering dropped none.
+  """
+  @spec put_route_filter_dropped(t(), [candidate()]) :: t()
+  def put_route_filter_dropped(%__MODULE__{} = route_state, []), do: route_state
+
+  def put_route_filter_dropped(%__MODULE__{} = route_state, dropped) when is_list(dropped),
+    do: %{route_state | extensions: Map.put(route_state.extensions, :route_filter_dropped, dropped)}
+
+  @doc "The kept and dropped candidates of the last route filtering."
+  @spec route_filter_candidates(t() | term()) :: [candidate()]
+  def route_filter_candidates(%__MODULE__{candidates: candidates, extensions: extensions}) when is_list(candidates),
+    do: candidates ++ Map.get(extensions, :route_filter_dropped, [])
+
+  def route_filter_candidates(_route_state), do: []
+
   @spec put_quota_snapshots(t(), quota_snapshots()) :: t()
   def put_quota_snapshots(%__MODULE__{} = route_state, snapshots) when is_map(snapshots) do
     validate_quota_snapshots!(snapshots)
