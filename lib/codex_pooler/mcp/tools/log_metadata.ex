@@ -15,6 +15,12 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
   @default_limit 25
   @max_limit 50
 
+  # The request-log total counts at most this many rows past the offset, like
+  # the admin page: an exact count of an unfiltered listing reads the whole
+  # request history on every call (findings#206 rows 206-385 and 206-411).
+  # `totalExact` says whether `total` is exact or a lower bound.
+  @request_log_count_window 10_000
+
   @read_only_annotations %{
     "readOnlyHint" => true,
     "destructiveHint" => false,
@@ -40,7 +46,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
     with {:ok, scope} <- scope_from_context(context),
          {:ok, filters} <- request_log_filters(arguments),
          {:ok, page} <- request_log_page(scope, arguments, limit, offset, filters) do
-      structured = page_output(page, &RequestLogPresenter.list_item/1)
+      structured = page |> page_output(&RequestLogPresenter.list_item/1) |> Map.put("totalExact", page.total_exact?)
       {:ok, structured, RequestLogPresenter.list_text(structured)}
     end
   end
@@ -101,7 +107,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
           use_when: "an operator needs a bounded, read-only MCP summary of runtime request logs for visible Pools",
           returns: "concise metadata rows with pool, route, status, model, usage, timing, retry, safe routing, and sanitized metadata summaries",
           never_returns: "raw URLs with secrets, query strings, files, websocket frames, raw idempotency keys, upload URLs, raw API keys, or raw gateway debug payloads",
-          filters_limits: "accepts optional pool_id, status, model, request_id, upstream_identity_id, date_from, date_to, limit, and offset; limit is clamped to 1-50 and output is sorted newest first"
+          filters_limits: "accepts optional pool_id, status, model, request_id, upstream_identity_id, date_from, date_to, limit, and offset; limit is clamped to 1-50 and output is sorted newest first; total counts at most #{@request_log_count_window} rows past offset, and totalExact false means more than total rows match"
         ),
       input_schema: request_logs_input_schema(),
       output_schema: request_logs_page_output_schema(),
@@ -221,11 +227,12 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
   defp request_logs_page_output_schema do
     %{
       "type" => "object",
-      "required" => ["items", "total", "limit", "offset", "nextOffset"],
+      "required" => ["items", "total", "totalExact", "limit", "offset", "nextOffset"],
       "additionalProperties" => false,
       "properties" => %{
         "items" => %{"type" => "array", "items" => request_log_item_output_schema()},
         "total" => %{"type" => "integer"},
+        "totalExact" => %{"type" => "boolean"},
         "limit" => %{"type" => "integer"},
         "offset" => %{"type" => "integer"},
         "nextOffset" => %{"type" => ["integer", "null"]}
@@ -396,21 +403,17 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
 
   defp request_log_page(scope, arguments, limit, offset, filters) do
     pool_id = string_arg(arguments, "pool_id")
+    opts = [limit: limit, offset: offset, filters: filters, count_limit: offset + @request_log_count_window]
 
     cond do
       is_nil(pool_id) ->
-        {:ok,
-         Accounting.list_request_logs_for_scope(scope,
-           limit: limit,
-           offset: offset,
-           filters: filters
-         )}
+        {:ok, Accounting.list_request_logs_for_scope(scope, opts)}
 
       visible_pool_id?(scope, pool_id) ->
-        {:ok, Accounting.list_request_logs(pool_id, limit: limit, offset: offset, filters: filters)}
+        {:ok, Accounting.list_request_logs(pool_id, opts)}
 
       true ->
-        {:ok, empty_page(limit, offset)}
+        {:ok, Map.put(empty_page(limit, offset), :total_exact?, true)}
     end
   end
 

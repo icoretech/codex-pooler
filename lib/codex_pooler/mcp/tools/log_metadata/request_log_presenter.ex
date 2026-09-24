@@ -93,8 +93,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   end
 
   @spec list_text(map()) :: String.t()
-  def list_text(%{"items" => items, "total" => total, "offset" => offset}) do
-    first_line = first_line(items, total, offset)
+  def list_text(%{"items" => items, "total" => total, "offset" => offset} = page) do
+    first_line = first_line(items, total_text(total, Map.get(page, "totalExact", true)), offset)
 
     if items == [] do
       first_line
@@ -118,6 +118,10 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
     "#{shown_count} request logs returned; total #{total}; offset #{offset}; statuses #{status_text}"
   end
+
+  # An inexact total is a lower bound: more rows than it match.
+  defp total_text(total, true), do: Integer.to_string(total)
+  defp total_text(total, false), do: "more than #{total}"
 
   defp text_rows(items), do: Enum.map(items, &text_row/1)
 

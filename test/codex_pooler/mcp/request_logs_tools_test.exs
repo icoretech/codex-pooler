@@ -108,10 +108,12 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
              "limit",
              "nextOffset",
              "offset",
-             "total"
+             "total",
+             "totalExact"
            ]
 
     assert structured["total"] == 1
+    assert structured["totalExact"] == true
     assert structured["limit"] == 1
     assert structured["offset"] == 0
     assert structured["nextOffset"] == nil
@@ -454,6 +456,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert result["structuredContent"] == %{
              "items" => [],
              "total" => 0,
+             "totalExact" => true,
              "limit" => 50,
              "offset" => 5,
              "nextOffset" => nil
@@ -489,6 +492,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert result["structuredContent"] == %{
              "items" => [],
              "total" => 0,
+             "totalExact" => true,
              "limit" => 20,
              "offset" => 0,
              "nextOffset" => nil
