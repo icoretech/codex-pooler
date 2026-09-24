@@ -34,7 +34,7 @@ defmodule CodexPooler.Pools.Deletion do
   @immediate_statement_timeout_ms 10_000
   @batch_statement_timeout_ms 30_000
   @final_statement_timeout_ms 60_000
-  @worker_name inspect(PoolDeletionWorker)
+  @worker_name "CodexPooler.Jobs.PoolDeletionWorker"
   @pending_job_states ~w(available scheduled executing retryable)
   @failed_job_states ~w(discarded cancelled)
 
