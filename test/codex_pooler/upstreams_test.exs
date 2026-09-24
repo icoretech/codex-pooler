@@ -11186,8 +11186,11 @@ defmodule CodexPooler.UpstreamsTest do
 
       # Values always converge on the long-reset snapshot, while observation
       # liveness follows the latest fresh same-cycle provider confirmation even
-      # when that confirmation's values were rejected. Metadata keeps the value
-      # provenance of the accepted long-reset sample.
+      # when that confirmation's values were rejected. The stored countdown is
+      # measured against the kept long reset from that latest confirmation, so
+      # it agrees with `observed_at`; it kept the countdown of the accepted
+      # sample, which froze a cycle's first countdown for the whole window
+      # (findings#206 row 206-555).
       sequences = [
         {[
            snapshot.(1, short_reset_at, observed_at),
@@ -11207,7 +11210,7 @@ defmodule CodexPooler.UpstreamsTest do
          ], one_second_later, observed_at}
       ]
 
-      for {samples, expected_observed_at, expected_value_anchor_at} <- sequences do
+      for {samples, expected_observed_at, _value_anchor_at} <- sequences do
         identity = active_identity_fixture()
 
         merged_window =
@@ -11227,7 +11230,7 @@ defmodule CodexPooler.UpstreamsTest do
         assert Decimal.equal?(merged_window.used_percent, Decimal.new("2.000"))
 
         assert merged_window.metadata["reset_after_seconds"] ==
-                 DateTime.diff(long_reset_at, expected_value_anchor_at, :second)
+                 DateTime.diff(long_reset_at, expected_observed_at, :second)
       end
     end
 

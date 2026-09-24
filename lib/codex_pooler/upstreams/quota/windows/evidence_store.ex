@@ -1842,12 +1842,29 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     |> accepted_snapshot_attrs(attrs, timestamp)
     |> Map.put(:reset_at, existing.reset_at)
     |> Map.put(:used_percent, highest_used_percent(existing.used_percent, evidence.used_percent))
-    |> preserve_existing_relative_reset_metadata(existing)
+    |> pinned_reset_countdown_metadata(existing, evidence)
   end
 
   # The canonical reset stays pinned, so the merged metadata must not adopt the
-  # incoming claim's relative countdown, which was measured against the
-  # incoming (rejected) reset and would misdescribe the pinned one.
+  # incoming claim's relative countdown verbatim: it was measured against the
+  # incoming reset, which may be the rejected one and would misdescribe the
+  # pinned reset. The countdown is measured again against the pinned reset
+  # from the incoming claim's own provider observation (`reset_at -
+  # reset_after_seconds`), which is exact when the two resets are equal.
+  # Copying the stored countdown instead kept the first countdown of a cycle
+  # for the whole window, since every same-reset poll is pinned (findings#206
+  # row 206-555). A claim without a countdown, or without a reset to measure
+  # it from, keeps the stored one.
+  defp pinned_reset_countdown_metadata(merged_attrs, existing, %Evidence{} = evidence) do
+    with %DateTime{} = pinned_reset_at <- existing.reset_at,
+         {:ok, provider_at} <- RelativeLiveness.provider_observed_at(evidence) do
+      countdown = max(DateTime.diff(pinned_reset_at, provider_at, :second), 0)
+      Map.update(merged_attrs, :metadata, %{"reset_after_seconds" => countdown}, &Map.put(&1, "reset_after_seconds", countdown))
+    else
+      _no_countdown -> preserve_existing_relative_reset_metadata(merged_attrs, existing)
+    end
+  end
+
   defp preserve_existing_relative_reset_metadata(merged_attrs, existing) do
     existing_metadata = existing.metadata || %{}
 
