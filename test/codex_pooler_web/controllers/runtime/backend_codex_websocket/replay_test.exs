@@ -278,7 +278,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     end
   end
 
-  test "qualifying native continuation denial persists the request claim without changing the turn claim" do
+  # A tool-result continuation refused before its claim never takes the turn's
+  # claim (the other requests of that turn would meet it), nor, since
+  # findings#206 row 206-429, its own request claim: nothing looks the refused
+  # row up by that claim except the resend policy, which reads a `rejected`
+  # row as a terminal predecessor, so the same continuation resent once the
+  # refusal's cause is gone met a permanent `409 duplicate_turn`. The refusal
+  # is recorded under the socket's request id.
+  test "qualifying native continuation denial takes neither the request claim nor the turn claim" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
     setup = gateway_setup(upstream)
 
@@ -325,8 +332,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "rejected"
-    assert request.correlation_id == request_claim_key
-    refute request.correlation_id == logical_identity.turn_claim_key
+    assert request.correlation_id == "qualifying-denial-frame"
+    refute request.correlation_id in [request_claim_key, logical_identity.turn_claim_key]
 
     assert request.request_metadata["gateway_denial"]["code"] == "reasoning_effort_not_allowed"
   end
