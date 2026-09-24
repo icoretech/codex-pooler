@@ -115,6 +115,69 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
     end
   end
 
+  describe "pool assignment audit" do
+    test "an edit audits each upstream account it assigns or unassigns, in the same transaction" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "assignment-audit-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "assignment-audit", name: "Assignment Audit"})
+
+      %{identity: kept_identity} = upstream_assignment_fixture(pool, %{chatgpt_account_id: "acct_audit_kept"})
+      %{identity: removed_identity, assignment: removed_assignment} = upstream_assignment_fixture(pool, %{chatgpt_account_id: "acct_audit_removed"})
+      added_identity = active_upstream_identity_fixture(%{chatgpt_account_id: "acct_audit_added"})
+
+      assert {:ok, _pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Assignment Audit",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_identity_ids" => [kept_identity.id, added_identity.id],
+                 "api_key_ids" => []
+               })
+
+      assert Repo.get!(PoolUpstreamAssignment, removed_assignment.id).status == "deleted"
+
+      assert [removed] = assignment_audit_events(pool, "pool.assignment_remove")
+      assert removed.actor_user_id == owner.id
+      assert removed.target_type == "upstream_identity"
+      assert removed.target_id == removed_identity.id
+      assert removed.details["pool_upstream_assignment_id"] == removed_assignment.id
+
+      assert [added] = assignment_audit_events(pool, "pool.assignment_add")
+      assert added.target_id == added_identity.id
+
+      assert {:ok, _pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Assignment Audit",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_identity_ids" => [kept_identity.id, added_identity.id],
+                 "api_key_ids" => []
+               })
+
+      assert length(assignment_audit_events(pool, "pool.assignment_add")) == 1
+      assert length(assignment_audit_events(pool, "pool.assignment_remove")) == 1
+    end
+
+    test "a rolled back edit leaves no assignment audit event" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "assignment-audit-rollback@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "assignment-audit-rollback", name: "Assignment Audit Rollback"})
+      %{assignment: assignment} = upstream_assignment_fixture(pool, %{chatgpt_account_id: "acct_audit_rollback"})
+
+      assert {:error, _reason} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Assignment Audit Rollback",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_identity_ids" => [],
+                 "api_key_ids" => [Ecto.UUID.generate()]
+               })
+
+      assert Repo.get!(PoolUpstreamAssignment, assignment.id).status != "deleted"
+      assert assignment_audit_events(pool, "pool.assignment_remove") == []
+    end
+  end
+
   describe "pool assignment catalog sync enqueue" do
     test "creation with upstream identity selection enqueues an immediate catalog sync" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "catalog-create-owner@example.com"})
@@ -375,5 +438,13 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
     {:ok, upstream} = FakeUpstream.start_link(mode)
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     upstream
+  end
+
+  defp assignment_audit_events(pool, action) do
+    Repo.all(
+      from event in CodexPooler.Audit.AuditEvent,
+        where: event.pool_id == ^pool.id and event.action == ^action,
+        order_by: [asc: event.occurred_at]
+    )
   end
 end

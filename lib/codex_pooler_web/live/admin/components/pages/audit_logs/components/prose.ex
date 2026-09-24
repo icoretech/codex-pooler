@@ -40,6 +40,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Prose do
     "pool.routing_update" => {:pool, "updated the routing of the Pool", nil},
     "pool.model_serving_modes_update" => {:pool, "updated the model serving modes of the Pool", nil},
     "pool.delete" => {:pool, "deleted the Pool", nil},
+    "pool.assignment_add" => {:named, "assigned the upstream account"},
+    "pool.assignment_remove" => {:named, "unassigned the upstream account"},
     "invite.create" => {:invite, "invited", "created an invite for the Pool"},
     "invite.revoke" => {:invite, "revoked the invite for", "revoked an invite for the Pool"},
     "upstream_account.import" => {:named, "imported the upstream account"},

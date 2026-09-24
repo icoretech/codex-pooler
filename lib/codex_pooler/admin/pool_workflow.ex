@@ -7,6 +7,8 @@ defmodule CodexPooler.Admin.PoolWorkflow do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Accounts.User
+  alias CodexPooler.Audit
   alias CodexPooler.Events
   alias CodexPooler.Jobs
   alias CodexPooler.Pools
@@ -29,9 +31,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
            {:ok, _settings} <-
              PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
            :ok <-
-             UpstreamAssignments.sync_pool_assignments_for_pool_edit(
-               pool,
-               selected_upstream_identity_ids(attrs),
+             sync_pool_assignments_audited(scope, pool, selected_upstream_identity_ids(attrs),
                select_by: :upstream_identity_id,
                skip_quota_priming: true
              ),
@@ -95,7 +95,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
          {:ok, _settings} <-
            PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
          :ok <-
-           UpstreamAssignments.sync_pool_assignments_for_pool_edit(pool, assignment_ids,
+           sync_pool_assignments_audited(scope, pool, assignment_ids,
              select_by: select_by,
              skip_quota_priming: true
            ),
@@ -114,7 +114,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
          {:ok, _settings} <-
            PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
          :ok <-
-           UpstreamAssignments.sync_pool_assignments_for_pool_edit(pool, assignment_ids,
+           sync_pool_assignments_audited(scope, pool, assignment_ids,
              select_by: select_by,
              skip_quota_priming: true
            ),
@@ -125,6 +125,55 @@ defmodule CodexPooler.Admin.PoolWorkflow do
       {:error, reason} -> Repo.rollback(reason)
     end
   end
+
+  # Adding or removing an upstream account in the Pool editor is audited in the transaction that
+  # changes the assignment, one event per account (findings#206 row 206-554).
+  defp sync_pool_assignments_audited(scope, pool, selected_ids, opts) do
+    live_before = live_pool_assignments(pool)
+
+    with :ok <- UpstreamAssignments.sync_pool_assignments_for_pool_edit(pool, selected_ids, opts) do
+      live_after = live_pool_assignments(pool)
+
+      added = Enum.reject(live_after, fn {id, _assignment} -> Map.has_key?(live_before, id) end)
+      removed = Enum.reject(live_before, fn {id, _assignment} -> Map.has_key?(live_after, id) end)
+
+      changes = Enum.map(added, &{"pool.assignment_add", &1}) ++ Enum.map(removed, &{"pool.assignment_remove", &1})
+      Enum.reduce_while(changes, :ok, &record_assignment_change(scope, pool, &1, &2))
+    end
+  end
+
+  defp record_assignment_change(scope, pool, {action, {_id, assignment}}, :ok) do
+    case record_assignment_audit_event(scope, pool, action, assignment) do
+      {:ok, _event} -> {:cont, :ok}
+      {:error, _reason} = error -> {:halt, error}
+    end
+  end
+
+  defp live_pool_assignments(pool) do
+    pool
+    |> UpstreamAssignments.list_pool_assignments()
+    |> Enum.reject(&(&1.status == "deleted"))
+    |> Map.new(&{&1.id, &1})
+  end
+
+  defp record_assignment_audit_event(%Scope{user: %User{} = user}, %Pool{} = pool, action, assignment) do
+    Audit.record_user_event(user, %{
+      pool_id: pool.id,
+      action: action,
+      target_type: "upstream_identity",
+      target_id: assignment.upstream_identity_id,
+      details: %{
+        pool_id: pool.id,
+        pool_name: pool.name,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: assignment.upstream_identity_id,
+        label: assignment.assignment_label,
+        status: assignment.status
+      }
+    })
+  end
+
+  defp record_assignment_audit_event(%Scope{}, _pool, _action, _assignment), do: {:ok, :no_user}
 
   defp admin_pool_for_assignment(%Pool{} = pool), do: pool
   defp admin_pool_for_assignment(id) when is_binary(id), do: Pools.get_pool(id)

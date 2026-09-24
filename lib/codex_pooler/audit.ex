@@ -34,6 +34,8 @@ defmodule CodexPooler.Audit do
     {"Pool status changed", "pool.status_update"},
     {"Pool routing updated", "pool.routing_update"},
     {"Pool model serving modes updated", "pool.model_serving_modes_update"},
+    {"Pool upstream account assigned", "pool.assignment_add"},
+    {"Pool upstream account unassigned", "pool.assignment_remove"},
     {"Pool deleted", "pool.delete"},
     {"Pool invite created", "invite.create"},
     {"Pool invite revoked", "invite.revoke"},
