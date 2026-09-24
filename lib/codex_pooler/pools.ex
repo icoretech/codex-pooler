@@ -14,6 +14,7 @@ defmodule CodexPooler.Pools do
 
   alias CodexPooler.Pools.{
     Authorization,
+    Deletion,
     Membership,
     ModelServingModes,
     OperatorPoolAssignment,
@@ -311,26 +312,33 @@ defmodule CodexPooler.Pools do
   def change_pool_status(_scope, _pool_or_id, _status),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  @spec delete_archived_pool(Scope.t(), pool_ref(), String.t() | nil) :: pool_result()
+  @doc """
+  Deletes an archived Pool after an exact slug confirmation. A Pool with little history is deleted
+  at once (`{:ok, pool}`); a larger one is handed to a background deletion job (`{:deleting, pool}`)
+  and disappears when its history is gone. Either way the `pool.delete` audit event is written in
+  the transaction that deletes the Pool row (findings#206 rows 206-550 and 206-551).
+  """
+  @spec delete_archived_pool(Scope.t(), pool_ref(), String.t() | nil) ::
+          pool_result() | {:deleting, Pool.t()}
   def delete_archived_pool(%Scope{} = scope, pool_or_id, confirmation_slug) do
     with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)),
          %Pool{} = pool <- normalize_pool(pool_or_id),
          :ok <- ensure_archived_pool(pool),
          :ok <- ensure_confirmation_slug(pool, confirmation_slug) do
-      record_pool_audit_event(scope, "pool.delete", pool)
-
       # The Pool's alert incident targets go with it by database cascade.
-      Alerts.invalidate_notifications_after_cascade({:pool, pool.id}, fn -> Repo.delete(pool) end)
-      |> tap(fn
+      Alerts.invalidate_notifications_after_cascade({:pool, pool.id}, fn -> request_deletion(scope, pool) end)
+      |> case do
         {:ok, deleted_pool} ->
-          Events.broadcast_pools(deleted_pool.id, "pool_deleted", %{
-            pool_id: deleted_pool.id,
-            status: deleted_pool.status
-          })
+          broadcast_pool_deleted(deleted_pool)
+          {:ok, deleted_pool}
 
-        _result ->
-          :ok
-      end)
+        {:error, {:deleting, pool}} ->
+          Events.broadcast_pools(pool.id, "pool_deletion_started", %{pool_id: pool.id})
+          {:deleting, pool}
+
+        {:error, _reason} = error ->
+          error
+      end
     else
       nil -> {:error, access_error(:pool_not_found, "pool was not found")}
       {:error, _reason} = error -> error
@@ -339,6 +347,84 @@ defmodule CodexPooler.Pools do
 
   def delete_archived_pool(_scope, _pool_or_id, _confirmation_slug),
     do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  # A scheduled deletion deleted nothing yet, so it leaves the notification centers alone.
+  defp request_deletion(scope, pool) do
+    case Deletion.request(scope_user(scope), pool) do
+      {:deleting, pool} -> {:error, {:deleting, pool}}
+      {:error, reason} -> {:error, deletion_error(reason)}
+      {:ok, _deleted} = deleted -> deleted
+    end
+  end
+
+  @doc """
+  Continues a scheduled Pool deletion for `CodexPooler.Jobs.PoolDeletionWorker`: deletes history
+  batches until `deadline` (monotonic milliseconds), then the Pool row with its audit event.
+  Returns `:more` while history is left, `:deleted` when the Pool is gone, `:gone` when there was
+  nothing to delete, `{:cancel, reason}` when the Pool is no longer archived.
+  """
+  @spec continue_pool_deletion(Ecto.UUID.t(), Ecto.UUID.t() | nil, integer()) ::
+          :more | :deleted | :gone | {:cancel, :pool_not_archived} | {:error, term()}
+  def continue_pool_deletion(pool_id, requested_by_user_id, deadline) when is_binary(pool_id) do
+    case Repo.get(Pool, pool_id) do
+      nil ->
+        :gone
+
+      %Pool{status: @status_archived} ->
+        with :done <- Deletion.purge_history(pool_id, deadline) do
+          finish_pool_deletion(pool_id, requested_by_user_id)
+        end
+
+      %Pool{} ->
+        {:cancel, :pool_not_archived}
+    end
+  rescue
+    error in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, error}
+  end
+
+  defp finish_pool_deletion(pool_id, requested_by_user_id) do
+    Alerts.invalidate_notifications_after_cascade({:pool, pool_id}, fn -> Deletion.finish(pool_id, requested_by_user_id) end)
+    |> case do
+      {:ok, deleted_pool} ->
+        broadcast_pool_deleted(deleted_pool)
+        :deleted
+
+      {:error, :pool_not_found} ->
+        :gone
+
+      {:error, :pool_not_archived} ->
+        {:cancel, :pool_not_archived}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  @doc "Tells open admin pages that a Pool's deletion job gave up; the Pool stays archived."
+  @spec broadcast_pool_deletion_failed(Ecto.UUID.t()) :: term()
+  def broadcast_pool_deletion_failed(pool_id) when is_binary(pool_id),
+    do: Events.broadcast_pools(pool_id, "pool_deletion_failed", %{pool_id: pool_id})
+
+  @doc """
+  The deletion state of each listed Pool that has one: `:in_progress` while a deletion job owns
+  it, `:failed` when its last deletion job gave up and the Pool is still archived.
+  """
+  @spec pool_deletion_states([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => Deletion.state()}
+  defdelegate pool_deletion_states(pool_ids), to: Deletion, as: :states
+
+  defp broadcast_pool_deleted(%Pool{} = deleted_pool) do
+    Events.broadcast_pools(deleted_pool.id, "pool_deleted", %{
+      pool_id: deleted_pool.id,
+      status: deleted_pool.status
+    })
+  end
+
+  defp scope_user(%Scope{user: %User{} = user}), do: user
+  defp scope_user(%Scope{}), do: nil
+
+  defp deletion_error(:pool_not_found), do: access_error(:pool_not_found, "pool was not found")
+  defp deletion_error(:pool_not_archived), do: access_error(:pool_not_archived, "pool must be archived before deletion")
+  defp deletion_error(reason), do: reason
 
   @doc """
   Invalidates the notification centers after a committed Pool status change,
@@ -477,7 +563,8 @@ defmodule CodexPooler.Pools do
           pool_result()
   defp update_pool_and_revoke_archived_assignments(%Pool{} = pool, attrs, now) do
     Repo.transaction(fn ->
-      with {:ok, pool} <-
+      with :ok <- ensure_not_being_deleted(pool, Map.get(attrs, :status)),
+           {:ok, pool} <-
              pool
              |> Pool.changeset(attrs)
              |> Repo.update(),
@@ -492,6 +579,19 @@ defmodule CodexPooler.Pools do
     end)
     |> normalize_pool_lifecycle_transaction()
   end
+
+  # A deletion job removes an archived Pool's history in batches; the Pool must not come back
+  # half-deleted. The Pool row lock orders this check against `Deletion.schedule/2`.
+  defp ensure_not_being_deleted(%Pool{id: pool_id, status: @status_archived}, status)
+       when is_binary(status) and status != @status_archived do
+    _locked = Repo.one(from pool in Pool, where: pool.id == ^pool_id, lock: "FOR UPDATE", select: pool.id)
+
+    if Deletion.pending?(pool_id),
+      do: {:error, access_error(:pool_deletion_in_progress, "the Pool is being deleted")},
+      else: :ok
+  end
+
+  defp ensure_not_being_deleted(%Pool{}, _status), do: :ok
 
   defp delete_dashboard_sessions_for_inactive_pool(%Pool{}, nil), do: []
   defp delete_dashboard_sessions_for_inactive_pool(%Pool{}, @status_active), do: []

@@ -5,12 +5,26 @@ defmodule CodexPooler.PoolsTest do
   alias CodexPooler.Accounts.User
   alias CodexPooler.Admin.PoolWorkflow
   alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, BridgeSessionAlias, CodexSession}
+  alias CodexPooler.Jobs.PoolDeletionWorker
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.{Membership, OperatorPoolAssignment, RoutingSettings}
+  alias CodexPooler.Pools.{Membership, OperatorPoolAssignment, Pool, RoutingSettings}
   alias CodexPooler.Repo
+  alias CodexPooler.TestAppEnv
 
   import CodexPooler.AccountsFixtures
-  import CodexPooler.PoolerFixtures, only: [operator_pool_assignment_fixture: 3]
+
+  import CodexPooler.PoolerFixtures,
+    only: [
+      active_api_key_fixture: 1,
+      attempt_fixture: 2,
+      ledger_entry_fixture: 1,
+      operator_pool_assignment_fixture: 3,
+      pool_fixture: 0,
+      pool_fixture: 1,
+      request_fixture: 1,
+      upstream_assignment_fixture: 1
+    ]
 
   describe "pool lifecycle" do
     test "instance owners create normalized pools and list active pools" do
@@ -823,6 +837,223 @@ defmodule CodexPooler.PoolsTest do
 
       assert message =~ "node admins"
     end
+  end
+
+  describe "archived Pool deletion" do
+    setup do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "deletion-owner@example.com"})
+      %{owner: owner, scope: Scope.for_user(owner, ["instance_owner"])}
+    end
+
+    test "a Pool with little history is deleted at once with its history and one audit event", %{owner: owner, scope: scope} do
+      pool = pool_fixture()
+      history = pool_history!(pool)
+      pool = archive!(pool)
+      other_pool = pool_fixture()
+      other_history = pool_history!(other_pool)
+
+      assert {:ok, %Pool{id: pool_id}} = Pools.delete_archived_pool(scope, pool, pool.slug)
+      assert pool_id == pool.id
+
+      refute Repo.get(Pool, pool.id)
+      assert history_counts(pool, history) == empty_history_counts()
+      assert history_counts(other_pool, other_history) == full_history_counts()
+
+      assert [%AuditEvent{actor_user_id: actor_id, pool_id: nil, target_id: target_id}] = pool_delete_audit_events(pool)
+      assert actor_id == owner.id
+      assert target_id == pool.id
+      refute_enqueued(worker: PoolDeletionWorker, args: %{"pool_id" => pool.id})
+    end
+
+    test "the immediate delete runs under its own statement timeout", %{scope: scope} do
+      Repo.query!("CREATE TEMPORARY TABLE pool_delete_statement_timeouts (setting text) ON COMMIT DROP")
+
+      Repo.query!("""
+      CREATE FUNCTION pg_temp.record_pool_delete_statement_timeout() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        INSERT INTO pool_delete_statement_timeouts VALUES (current_setting('statement_timeout'));
+        RETURN OLD;
+      END $$
+      """)
+
+      Repo.query!("CREATE TRIGGER record_pool_delete_statement_timeout BEFORE DELETE ON pools FOR EACH ROW EXECUTE FUNCTION pg_temp.record_pool_delete_statement_timeout()")
+
+      pool = pool_fixture(%{status: "archived"})
+
+      assert {:ok, _deleted} = Pools.delete_archived_pool(scope, pool, pool.slug)
+      assert Repo.query!("SELECT setting FROM pool_delete_statement_timeouts").rows == [["10s"]]
+    end
+
+    test "a cancelled delete writes no audit event and hands the Pool to the deletion job", %{scope: scope} do
+      Repo.query!("""
+      CREATE FUNCTION pg_temp.cancel_pool_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'canceling statement due to user request' USING ERRCODE = 'query_canceled';
+      END $$
+      """)
+
+      Repo.query!("CREATE TRIGGER cancel_pool_delete BEFORE DELETE ON pools FOR EACH ROW EXECUTE FUNCTION pg_temp.cancel_pool_delete()")
+
+      pool = pool_fixture()
+      history = pool_history!(pool)
+      pool = archive!(pool)
+
+      assert {:deleting, %Pool{id: pool_id}} = Pools.delete_archived_pool(scope, pool, pool.slug)
+      assert pool_id == pool.id
+
+      assert Repo.get!(Pool, pool.id).status == "archived"
+      assert history_counts(pool, history) == full_history_counts()
+      assert pool_delete_audit_events(pool) == []
+      assert_enqueued(worker: PoolDeletionWorker, args: %{"pool_id" => pool.id})
+    end
+
+    test "a Pool with a large history is deleted by the job in batches, and only then audited", %{owner: owner, scope: scope} do
+      TestAppEnv.restore_on_exit(:pool_deletion_immediate_request_limit)
+      Application.put_env(:codex_pooler, :pool_deletion_immediate_request_limit, 2)
+
+      pool = pool_fixture()
+      history = pool_history!(pool)
+      pool = archive!(pool)
+      other_pool = pool_fixture()
+      other_history = pool_history!(other_pool)
+
+      assert {:deleting, %Pool{}} = Pools.delete_archived_pool(scope, pool, pool.slug)
+      assert Pools.pool_deletion_states([pool.id, other_pool.id]) == %{pool.id => :in_progress}
+      assert {:deleting, %Pool{}} = Pools.delete_archived_pool(scope, pool, pool.slug)
+      assert [%Oban.Job{args: args}] = all_enqueued(worker: PoolDeletionWorker, args: %{"pool_id" => pool.id})
+      assert args == %{"pool_id" => pool.id, "requested_by_user_id" => owner.id}
+
+      assert {:error, %{code: :pool_deletion_in_progress}} = Pools.change_pool_status(scope, pool, "active")
+      assert Repo.get!(Pool, pool.id).status == "archived"
+      assert pool_delete_audit_events(pool) == []
+
+      assert Pools.continue_pool_deletion(pool.id, owner.id, System.monotonic_time(:millisecond) - 1) == :more
+      assert history_counts(pool, history) == full_history_counts()
+
+      assert :ok = perform_job(PoolDeletionWorker, args)
+
+      refute Repo.get(Pool, pool.id)
+      assert history_counts(pool, history) == empty_history_counts()
+      assert history_counts(other_pool, other_history) == full_history_counts()
+      assert [%AuditEvent{actor_user_id: actor_id}] = pool_delete_audit_events(pool)
+      assert actor_id == owner.id
+
+      assert :ok = perform_job(PoolDeletionWorker, args)
+      assert length(pool_delete_audit_events(pool)) == 1
+    end
+
+    test "a deletion job leaves a Pool that is no longer archived alone and reports a failed job" do
+      pool = pool_fixture(%{status: "active"})
+      history = pool_history!(pool)
+
+      assert {:cancel, :pool_not_archived} = perform_job(PoolDeletionWorker, %{"pool_id" => pool.id})
+      assert history_counts(pool, history) == full_history_counts()
+
+      %{"pool_id" => pool.id}
+      |> PoolDeletionWorker.new()
+      |> Oban.insert!()
+      |> Ecto.Changeset.change(state: "discarded")
+      |> Repo.update!()
+
+      assert Pools.pool_deletion_states([pool.id]) == %{pool.id => :failed}
+    end
+  end
+
+  defp archive!(pool), do: pool |> Ecto.Changeset.change(status: "archived") |> Repo.update!()
+
+  defp pool_history!(pool) do
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request_ids =
+      for _index <- 1..3 do
+        request = request_fixture(%{pool: pool, api_key: api_key})
+        attempt_fixture(request, assignment)
+        ledger_entry_fixture(request)
+        request.id
+      end
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    session =
+      Repo.insert!(%CodexSession{
+        pool_id: pool.id,
+        api_key_id: api_key.id,
+        session_key: "deletion-session-#{System.unique_integer([:positive])}",
+        pool_upstream_assignment_id: assignment.id,
+        status: "active",
+        created_at: now,
+        updated_at: now
+      })
+
+    %BridgeSessionAlias{}
+    |> BridgeSessionAlias.changeset(%{
+      codex_session_id: session.id,
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      alias_kind: "turn_state",
+      alias_hash: :crypto.hash(:sha256, "deletion-alias-#{System.unique_integer([:positive])}"),
+      status: "active",
+      expires_at: DateTime.add(now, 3_600, :second),
+      metadata: %{},
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+
+    %BridgeOwnerLease{}
+    |> BridgeOwnerLease.changeset(%{
+      codex_session_id: session.id,
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      pool_upstream_assignment_id: assignment.id,
+      owner_instance_id: "node-a",
+      lease_token: Ecto.UUID.generate(),
+      status: "active",
+      acquired_at: now,
+      renewed_at: now,
+      expires_at: DateTime.add(now, 45, :second),
+      metadata: %{},
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+
+    %{api_key_id: api_key.id, assignment_id: assignment.id, request_ids: request_ids, session_id: session.id}
+  end
+
+  # Rows of the Pool's history, counted by the ids the fixture created and by the Pool id.
+  defp history_counts(pool, history) do
+    request_ids = Enum.map(history.request_ids, &Ecto.UUID.dump!/1)
+    pool_id = Ecto.UUID.dump!(pool.id)
+
+    [row] =
+      Repo.query!(
+        """
+        SELECT (SELECT count(*) FROM requests WHERE id = ANY($1)),
+               (SELECT count(*) FROM attempts WHERE request_id = ANY($1)),
+               (SELECT count(*) FROM ledger_entries WHERE request_id = ANY($1)),
+               (SELECT count(*) FROM codex_sessions WHERE pool_id = $2),
+               (SELECT count(*) FROM bridge_session_aliases WHERE pool_id = $2),
+               (SELECT count(*) FROM bridge_owner_leases WHERE pool_id = $2),
+               (SELECT count(*) FROM api_keys WHERE pool_id = $2),
+               (SELECT count(*) FROM pool_upstream_assignments WHERE pool_id = $2)
+        """,
+        [request_ids, pool_id]
+      ).rows
+
+    Enum.zip(~w(requests attempts ledger_entries codex_sessions bridge_session_aliases bridge_owner_leases api_keys pool_upstream_assignments)a, row)
+    |> Map.new()
+  end
+
+  defp full_history_counts do
+    %{requests: 3, attempts: 3, ledger_entries: 3, codex_sessions: 1, bridge_session_aliases: 1, bridge_owner_leases: 1, api_keys: 1, pool_upstream_assignments: 1}
+  end
+
+  defp empty_history_counts, do: Map.new(full_history_counts(), fn {table, _count} -> {table, 0} end)
+
+  defp pool_delete_audit_events(pool) do
+    Repo.all(from event in AuditEvent, where: event.action == "pool.delete" and event.target_id == ^pool.id)
   end
 
   defp user_fixture(attrs) do

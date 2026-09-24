@@ -422,6 +422,22 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
               >
                 {@pool_row.pool.status}
               </span>
+              <span
+                :if={Map.get(@pool_row, :deletion) == :in_progress}
+                id={"pool-row-#{@pool_row.pool.id}-deletion"}
+                class={AdminBadges.lifecycle_chip_class("paused")}
+                title="A background job is removing this Pool's history; the Pool disappears when it finishes"
+              >
+                deleting
+              </span>
+              <span
+                :if={Map.get(@pool_row, :deletion) == :failed}
+                id={"pool-row-#{@pool_row.pool.id}-deletion"}
+                class={AdminBadges.lifecycle_chip_class("deleted")}
+                title="The last deletion attempt gave up; delete the Pool again to resume"
+              >
+                deletion failed
+              </span>
               <.pool_action_menu
                 pool_row={@pool_row}
                 can_manage_pools?={@can_manage_pools?}
@@ -714,6 +730,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             variant={:positive}
             phx-click="reactivate_pool"
             phx-value-id={@pool_row.pool.id}
+            disabled={Map.get(@pool_row, :deletion) == :in_progress}
           />
         </li>
         <li :if={!@can_manage_pools? && @can_operate_pools?}>
@@ -733,7 +750,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             variant={:danger}
             phx-click="delete_pool"
             phx-value-id={@pool_row.pool.id}
-            disabled={@pool_row.pool.status != "archived"}
+            disabled={@pool_row.pool.status != "archived" or Map.get(@pool_row, :deletion) == :in_progress}
             title={PoolForm.delete_title(@pool_row.pool)}
           />
         </li>

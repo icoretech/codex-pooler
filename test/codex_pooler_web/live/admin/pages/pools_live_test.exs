@@ -1,5 +1,6 @@
 defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   use CodexPoolerWeb.ConnCase, async: false
+  use Oban.Testing, repo: CodexPooler.Repo
 
   import Phoenix.LiveViewTest
   import Ecto.Query
@@ -4762,6 +4763,44 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-row-#{pool.id}")
     refute has_element?(view, "#pool-delete-dialog")
     _ = await_pool_traffic(view)
+  end
+
+  test "a Pool with a large history shows as deleting until its deletion job removes it", %{conn: conn, scope: scope} do
+    CodexPooler.TestAppEnv.restore_on_exit(:pool_deletion_immediate_request_limit)
+    Application.put_env(:codex_pooler, :pool_deletion_immediate_request_limit, 1)
+
+    pool = pool_fixture(%{slug: "large-history-pool", name: "Large History Pool"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    _request = request_fixture(%{pool: pool, api_key: api_key})
+    pool = pool |> Ecto.Changeset.change(status: "archived") |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    view |> element("#delete-pool-#{pool.id}") |> render_click()
+
+    view
+    |> element("#pool-delete-form")
+    |> render_submit(%{"pool_delete" => %{"id" => pool.id, "confirmation_slug" => pool.slug}})
+
+    assert has_element?(view, "#flash-info", "Pool deletion started")
+    refute has_element?(view, "#flash-info", "Pool deleted")
+    refute has_element?(view, "#pool-delete-dialog")
+    assert has_element?(view, "#pool-row-#{pool.id}-deletion", "deleting")
+    assert has_element?(view, "#delete-pool-#{pool.id}[disabled]")
+    assert has_element?(view, "#reactivate-pool-#{pool.id}[disabled]")
+    assert Repo.get(Pool, pool.id)
+    refute Repo.get_by(AuditEvent, action: "pool.delete", target_id: pool.id)
+
+    assert {:error, %{code: :pool_deletion_in_progress}} = Pools.change_pool_status(scope, pool, "active")
+
+    assert [job] = all_enqueued(worker: CodexPooler.Jobs.PoolDeletionWorker, args: %{"pool_id" => pool.id})
+    assert :ok = perform_job(CodexPooler.Jobs.PoolDeletionWorker, job.args)
+
+    refute Repo.get(Pool, pool.id)
+    assert Repo.get_by(AuditEvent, action: "pool.delete", target_id: pool.id)
+    _ = await_pool_traffic(view)
+    refute has_element?(view, "#pool-row-#{pool.id}")
   end
 
   test "rejects missing-scope pool mutations", %{scope: scope} do

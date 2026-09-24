@@ -383,11 +383,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     confirmation_slug = pool_params["confirmation_slug"]
 
     with :ok <- ensure_can_manage_pools(socket),
-         {:ok, _pool} <-
+         {status, _pool} when status in [:ok, :deleting] <-
            Pools.delete_archived_pool(socket.assigns.current_scope, pool_id, confirmation_slug) do
+      # A Pool with a large history is deleted by a background job; its card shows it as
+      # deleting until the job removes it (findings#206 row 206-550).
+      message =
+        if status == :ok,
+          do: "Pool deleted",
+          else: "Pool deletion started. The Pool disappears once its request history has been removed."
+
       {:noreply,
        socket
-       |> put_flash(:info, "Pool deleted")
+       |> put_flash(:info, message)
        |> clear_pool_traffic_refresh()
        |> clear_deleting()
        |> load_structural()
