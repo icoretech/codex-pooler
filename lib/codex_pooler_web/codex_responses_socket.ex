@@ -5807,7 +5807,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           state = put_drained_response_task_activity(state, pid, token)
           do_await_response_tasks(state, reason, tasks, monitors, deadline)
 
-        {:codex_response_done, pid, result} ->
+        # Only a result of a task this drain awaits, as in the pre-cleanup
+        # drain: a result from any other pid is not this socket's to take
+        # (findings#206 row 206-437).
+        {:codex_response_done, pid, result} when is_map_key(monitors, pid) ->
           pending = Map.get(state, :pending_cleanup_activities, %{})
 
           state =
